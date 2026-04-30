@@ -103,3 +103,36 @@ def test_rainbow_low_end_is_blue_high_end_is_red() -> None:
     )
     assert b0 > r0
     assert r1 > b1
+
+
+def test_rainbow_lightness_is_monotonic_non_decreasing() -> None:
+    """A spot at a higher temperature must not read visually darker
+    than a cooler spot. Brightness is approximated by the channel sum.
+    Allow tiny rounding wobble (<= 3) per step so anchor-stop
+    quantisation does not fail us; the trend across the LUT must rise.
+    """
+
+    lut = palette_lut("rainbow")
+    prev = lut[0] + lut[1] + lut[2]
+    max_dip = 0
+    for i in range(1, PALETTE_SIZE):
+        cur = lut[i * 3] + lut[i * 3 + 1] + lut[i * 3 + 2]
+        if cur < prev:
+            max_dip = max(max_dip, prev - cur)
+        prev = cur
+    assert max_dip <= 3, f"rainbow palette has a {max_dip}-unit lightness dip"
+    last = lut[(PALETTE_SIZE - 1) * 3] + lut[(PALETTE_SIZE - 1) * 3 + 1] + lut[(PALETTE_SIZE - 1) * 3 + 2]
+    first = lut[0] + lut[1] + lut[2]
+    assert last > first
+
+
+def test_ironbow_lightness_is_monotonic_non_decreasing() -> None:
+    lut = palette_lut("ironbow")
+    prev = lut[0] + lut[1] + lut[2]
+    max_dip = 0
+    for i in range(1, PALETTE_SIZE):
+        cur = lut[i * 3] + lut[i * 3 + 1] + lut[i * 3 + 2]
+        if cur < prev:
+            max_dip = max(max_dip, prev - cur)
+        prev = cur
+    assert max_dip <= 3, f"ironbow palette has a {max_dip}-unit lightness dip"

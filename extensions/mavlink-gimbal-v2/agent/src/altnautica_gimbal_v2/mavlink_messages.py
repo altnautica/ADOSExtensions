@@ -90,14 +90,21 @@ def encode_gimbal_manager_pitchyaw(
     flags: int = 0,
     gimbal_device_id: int = 0,
     target_system: int = 1,
-    target_component: int = 154,
+    target_component: int = 1,
 ) -> CommandLong:
     """Compose ``MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW`` (1000).
 
-    Pitch and yaw are degrees relative to the vehicle. Rates are
-    degrees per second and are zero for pure-position commands. The
-    flags field selects body or earth frame and stabilisation modes.
-    Gimbal device id 0 means "the primary gimbal".
+    Pitch and yaw are degrees in the gimbal manager's reference frame.
+    By default the manager treats yaw as absolute (earth-frame, north
+    referenced); ``flags`` toggles body-relative or pitch/yaw-lock
+    behaviour. Rates are degrees per second and are zero for
+    pure-position commands. Gimbal device id 0 means "the primary
+    gimbal". ``target_component`` defaults to 1 (the autopilot's
+    built-in gimbal manager); override after discovering an alternate
+    manager via ``GIMBAL_MANAGER_INFORMATION``.
+
+    Param slots (per MAVLink common.xml): p1 pitch, p2 yaw, p3 pitch
+    rate, p4 yaw rate, p5 flags, p6 reserved (0), p7 gimbal_device_id.
     """
 
     return _build_long(
@@ -109,8 +116,8 @@ def encode_gimbal_manager_pitchyaw(
         pitch_rate_dps,
         yaw_rate_dps,
         float(flags),
-        float(gimbal_device_id),
         0.0,
+        float(gimbal_device_id),
     )
 
 
@@ -119,15 +126,20 @@ def encode_gimbal_manager_configure(
     primary_compid: int,
     secondary_sysid: int = 0,
     secondary_compid: int = 0,
-    flags: int = 0,
     gimbal_device_id: int = 0,
     target_system: int = 1,
-    target_component: int = 154,
+    target_component: int = 1,
 ) -> CommandLong:
     """Compose ``MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE`` (1001).
 
-    Used to assign which component holds primary or secondary control
-    of the gimbal. The default arguments leave secondary unassigned.
+    Assigns which component holds primary or secondary control of the
+    gimbal. The default arguments leave secondary unassigned.
+    ``target_component`` defaults to 1 (the autopilot's built-in
+    gimbal manager).
+
+    Param slots (per MAVLink common.xml): p1 sysid_primary, p2
+    compid_primary, p3 sysid_secondary, p4 compid_secondary, p5
+    reserved (0), p6 reserved (0), p7 gimbal_device_id.
     """
 
     return _build_long(
@@ -138,7 +150,7 @@ def encode_gimbal_manager_configure(
         float(primary_compid),
         float(secondary_sysid),
         float(secondary_compid),
-        float(flags),
+        0.0,
         0.0,
         float(gimbal_device_id),
     )
@@ -149,8 +161,8 @@ def encode_set_roi_location(
     lon_deg: float,
     alt_m: float,
     target_system: int = 1,
-    target_component: int = 154,
-    frame: int = 3,
+    target_component: int = 1,
+    frame: int = 6,
     gimbal_device_id: int = 0,
 ) -> CommandInt:
     """Compose ``MAV_CMD_DO_SET_ROI_LOCATION`` (195) as ``COMMAND_INT``.
@@ -197,20 +209,19 @@ def encode_set_roi_location(
 
 def encode_set_roi_none(
     target_system: int = 1,
-    target_component: int = 154,
-    gimbal_device_id: int = 0,
+    target_component: int = 1,
 ) -> CommandLong:
     """Compose ``MAV_CMD_DO_SET_ROI_NONE`` (197).
 
-    A bare release. Param1 carries the gimbal device id so the manager
-    knows which device to release; everything else is zero.
+    A bare release. Per MAVLink common.xml the command takes no
+    parameters; all seven payload slots are zero.
     """
 
     return _build_long(
         MAV_CMD_DO_SET_ROI_NONE,
         target_system,
         target_component,
-        float(gimbal_device_id),
+        0.0,
         0.0,
         0.0,
         0.0,

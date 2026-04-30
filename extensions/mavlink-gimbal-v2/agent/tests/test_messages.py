@@ -29,43 +29,57 @@ def test_pitchyaw_basic_command_id_and_params() -> None:
     assert cmd.param2 == 45.0
     assert cmd.param3 == 0.0
     assert cmd.param4 == 0.0
-    assert cmd.param6 == 0.0  # gimbal device id
-    assert cmd.target_component == 154
+    assert cmd.param5 == 0.0  # default flags
+    assert cmd.param6 == 0.0  # reserved
+    assert cmd.param7 == 0.0  # default gimbal device id
+    assert cmd.target_component == 1
 
 
-def test_pitchyaw_payload_decodes_back_to_inputs() -> None:
+def test_pitchyaw_payload_param_slots_match_spec() -> None:
     cmd = encode_gimbal_manager_pitchyaw(
         pitch_deg=-30.0,
         yaw_deg=45.0,
         pitch_rate_dps=1.5,
         yaw_rate_dps=-2.5,
         flags=7,
+        gimbal_device_id=2,
         target_system=1,
-        target_component=154,
+        target_component=1,
     )
     layout = "<fffffffHBBB"
     fields = struct.unpack(layout, cmd.payload)
-    assert fields[0] == -30.0
-    assert fields[1] == 45.0
-    assert fields[2] == 1.5
-    assert fields[3] == -2.5
-    assert fields[4] == 7.0
-    assert fields[7] == 1000
-    assert fields[8] == 1
-    assert fields[9] == 154
+    assert fields[0] == -30.0  # p1 pitch
+    assert fields[1] == 45.0  # p2 yaw
+    assert fields[2] == 1.5  # p3 pitch rate
+    assert fields[3] == -2.5  # p4 yaw rate
+    assert fields[4] == 7.0  # p5 flags
+    assert fields[5] == 0.0  # p6 reserved
+    assert fields[6] == 2.0  # p7 gimbal device id
+    assert fields[7] == 1000  # command id
+    assert fields[8] == 1  # target system
+    assert fields[9] == 1  # target component
 
 
-def test_pitchyaw_emits_24_byte_float_block_plus_command_metadata() -> None:
+def test_pitchyaw_emits_command_long_byte_length() -> None:
     cmd = encode_gimbal_manager_pitchyaw(pitch_deg=0.0, yaw_deg=0.0)
     assert len(cmd.payload) == struct.calcsize("<fffffffHBBB")
 
 
-def test_configure_command_id_and_routing() -> None:
-    cmd = encode_gimbal_manager_configure(primary_sysid=1, primary_compid=190)
+def test_configure_param_slots_match_spec() -> None:
+    cmd = encode_gimbal_manager_configure(
+        primary_sysid=1,
+        primary_compid=190,
+        gimbal_device_id=2,
+    )
     assert cmd.command == MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
     assert cmd.command == 1001
     assert cmd.param1 == 1.0
     assert cmd.param2 == 190.0
+    assert cmd.param3 == 0.0
+    assert cmd.param4 == 0.0
+    assert cmd.param5 == 0.0  # reserved
+    assert cmd.param6 == 0.0  # reserved
+    assert cmd.param7 == 2.0  # gimbal device id
 
 
 def test_set_roi_location_uses_command_int_with_scaled_lat_lon() -> None:
@@ -75,8 +89,8 @@ def test_set_roi_location_uses_command_int_with_scaled_lat_lon() -> None:
     assert cmd.x == 129710000
     assert cmd.y == 775940000
     assert cmd.z == 50.0
-    assert cmd.frame == 3
-    assert cmd.target_component == 154
+    assert cmd.frame == 6  # MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+    assert cmd.target_component == 1
 
 
 def test_set_roi_location_payload_carries_int32_lat_lon() -> None:
@@ -90,10 +104,11 @@ def test_set_roi_location_payload_carries_int32_lat_lon() -> None:
     assert fields[7] == 195  # command id
 
 
-def test_set_roi_none_command_id_and_zero_params() -> None:
+def test_set_roi_none_takes_no_parameters() -> None:
     cmd = encode_set_roi_none()
     assert cmd.command == MAV_CMD_DO_SET_ROI_NONE
     assert cmd.command == 197
+    assert cmd.param1 == 0.0
     assert cmd.param2 == 0.0
     assert cmd.param3 == 0.0
     assert cmd.param4 == 0.0
@@ -102,6 +117,6 @@ def test_set_roi_none_command_id_and_zero_params() -> None:
     assert cmd.param7 == 0.0
 
 
-def test_pitchyaw_target_component_defaults_to_gimbal_id() -> None:
+def test_default_target_component_is_autopilot_manager() -> None:
     cmd = encode_gimbal_manager_pitchyaw(pitch_deg=0, yaw_deg=0)
-    assert cmd.target_component == 154
+    assert cmd.target_component == 1

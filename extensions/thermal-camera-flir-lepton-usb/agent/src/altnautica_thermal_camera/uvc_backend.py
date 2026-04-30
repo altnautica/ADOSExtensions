@@ -76,10 +76,10 @@ class LibUvcBackend(Protocol):
     """The slice of libuvc the driver depends on.
 
     A concrete backend must implement ``enumerate``, ``open``,
-    ``close``, ``frames``, ``set_radiometry``, ``trigger_ffc``, and
-    ``firmware_version``. Implementations may be synchronous; the
-    driver wraps them in ``asyncio.to_thread`` calls when the host
-    runs the iterator from an async loop.
+    ``close``, ``frames``, ``set_radiometry``, ``set_tlinear_resolution``,
+    ``trigger_ffc``, and ``firmware_version``. Implementations may be
+    synchronous; the driver wraps them in ``asyncio.to_thread`` calls
+    when the host runs the iterator from an async loop.
     """
 
     def enumerate(self) -> list[UvcDeviceInfo]: ...
@@ -91,6 +91,17 @@ class LibUvcBackend(Protocol):
     def frames(self, device: UvcDeviceInfo) -> Iterator[UvcFrame]: ...
 
     def set_radiometry(self, device: UvcDeviceInfo, enabled: bool) -> None: ...
+
+    def set_tlinear_resolution(
+        self, device: UvcDeviceInfo, k_per_count: float
+    ) -> None:
+        """Lock the camera's TLinear resolution to a known value.
+
+        The Lepton 3.5 supports two resolutions: ``0.01`` K per count
+        (the default) and ``0.1`` K per count. The driver MUST call
+        this on open so frames carry temperatures in a known unit
+        regardless of any sticky setting from a prior session.
+        """
 
     def trigger_ffc(self, device: UvcDeviceInfo) -> None: ...
 
@@ -136,6 +147,7 @@ class MockUvcBackend:
         self._sequence = 0
         self._radiometry_enabled: dict[str, bool] = {}
         self._ffc_calls: dict[str, int] = {}
+        self._tlinear_resolution: dict[str, float] = {}
 
     @property
     def opened_devices(self) -> set[str]:
@@ -179,6 +191,21 @@ class MockUvcBackend:
 
     def set_radiometry(self, device: UvcDeviceInfo, enabled: bool) -> None:
         self._radiometry_enabled[device.serial] = enabled
+
+    def set_tlinear_resolution(
+        self, device: UvcDeviceInfo, k_per_count: float
+    ) -> None:
+        if k_per_count not in (0.01, 0.1):
+            raise ValueError(
+                "Lepton 3.5 TLinear resolution must be 0.01 or 0.1 K per count"
+            )
+        self._tlinear_resolution[device.serial] = k_per_count
+
+    @property
+    def tlinear_resolutions(self) -> dict[str, float]:
+        """Per-device locked resolution. Test helper."""
+
+        return dict(self._tlinear_resolution)
 
     def trigger_ffc(self, device: UvcDeviceInfo) -> None:
         self._ffc_calls[device.serial] = self._ffc_calls.get(device.serial, 0) + 1

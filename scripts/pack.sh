@@ -53,9 +53,10 @@ if [[ -d "${ext_dir}/gcs" ]]; then
   (cd "${ext_dir}/gcs" && pnpm build)
 fi
 
-# Read plugin id and version from the manifest.
-plugin_id="$(grep -E '^  id:' "${manifest_src}" | head -n1 | sed -E 's/.*id:[[:space:]]*//; s/[[:space:]]*$//')"
-plugin_version="$(grep -E '^  version:' "${manifest_src}" | head -n1 | sed -E 's/.*version:[[:space:]]*"?([^"]*)"?/\1/')"
+# Read plugin id and version from the manifest. Both live at column 0
+# in the flat schema-compliant format.
+plugin_id="$(grep -E '^id:' "${manifest_src}" | head -n1 | sed -E 's/^id:[[:space:]]*//; s/[[:space:]]*$//')"
+plugin_version="$(grep -E '^version:' "${manifest_src}" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
 
 if [[ -z "${plugin_id}" || -z "${plugin_version}" ]]; then
   echo "could not parse plugin id/version from manifest" >&2
@@ -85,42 +86,6 @@ rsync -a \
   --exclude 'src' \
   --exclude 'package.json' \
   "${ext_dir}/" "${stage}/"
-
-# Re-write asset hashes inside manifest.yaml using sha256 of the staged files.
-manifest_dest="${stage}/manifest.yaml"
-python3 - "${stage}" "${manifest_dest}" <<'PY'
-import hashlib
-import re
-import sys
-from pathlib import Path
-
-stage = Path(sys.argv[1])
-manifest = Path(sys.argv[2])
-text = manifest.read_text()
-
-def hash_for(rel: str) -> str:
-    p = stage / rel
-    if not p.exists():
-        raise SystemExit(f"asset listed in manifest but not staged: {rel}")
-    return hashlib.sha256(p.read_bytes()).hexdigest()
-
-# Match: - path: "<path>"\n    role: "..."\n    sha256: "<computed-by-pack.sh>"
-pattern = re.compile(
-    r'(- path:\s*"(?P<path>[^"]+)"\n\s+role:\s*"[^"]+"\n\s+sha256:\s*")<computed-by-pack\.sh>(")',
-)
-
-def repl(match: re.Match[str]) -> str:
-    rel = match.group("path")
-    # Group 1 = full prefix up to and including the opening quote of the
-    # sha256 value. Group 2 = the named `path` (inner). Group 3 = the
-    # closing quote after the placeholder.
-    return f'{match.group(1)}{hash_for(rel)}{match.group(3)}'
-
-new_text, n = pattern.subn(repl, text)
-if n == 0:
-    print("warning: no asset hashes were rewritten", file=sys.stderr)
-manifest.write_text(new_text)
-PY
 
 (cd "${stage}" && zip -qr "${archive_path}" .)
 

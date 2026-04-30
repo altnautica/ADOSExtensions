@@ -23,12 +23,17 @@ const IRONBOW_STOPS: ReadonlyArray<Stop> = [
   [255, 255, 255],
 ];
 
+// Rainbow palette: cool to hot ramp with strictly increasing perceived
+// lightness. Endpoints stay blue-dominant (cool) and red-dominant (hot)
+// so a spot at higher temperature reads visually brighter than a
+// cooler spot. Mirrors the Python LUT in palettes.py.
 const RAINBOW_STOPS: ReadonlyArray<Stop> = [
-  [0, 0, 200],
-  [0, 200, 255],
-  [0, 200, 0],
-  [255, 220, 0],
-  [255, 30, 0],
+  [0, 0, 80],
+  [0, 60, 180],
+  [60, 140, 200],
+  [160, 180, 100],
+  [240, 180, 80],
+  [255, 220, 200],
 ];
 
 function clip(v: number): number {

@@ -21,7 +21,7 @@ from altnautica_thermal_camera.uvc_backend import (
 
 
 def _run(coro: Any) -> Any:
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 @pytest.fixture
@@ -125,6 +125,71 @@ def test_firmware_meets_handles_short_versions() -> None:
     assert _firmware_meets("1.2.1", (1, 2, 2)) is False
     assert _firmware_meets("1.2", (1, 2, 0)) is True
     assert _firmware_meets("garbage", (1, 2, 2)) is False
+
+
+def test_open_locks_default_tlinear_resolution(
+    driver: LeptonUvcDriver, backend: MockUvcBackend
+) -> None:
+    candidates = asyncio.run(driver.discover())
+    session = asyncio.run(driver.open(candidates[0], {}))
+    assert backend.tlinear_resolutions[session.device.serial] == 0.01
+    assert session.tlinear_resolution_k_per_count == 0.01
+
+
+def test_open_honours_configured_tlinear_resolution(
+    driver: LeptonUvcDriver, backend: MockUvcBackend
+) -> None:
+    candidates = asyncio.run(driver.discover())
+    session = asyncio.run(
+        driver.open(candidates[0], {"tlinear_resolution_k_per_count": 0.1})
+    )
+    assert backend.tlinear_resolutions[session.device.serial] == 0.1
+    assert session.tlinear_resolution_k_per_count == 0.1
+
+
+def test_open_rejects_unsupported_tlinear_resolution(
+    driver: LeptonUvcDriver,
+) -> None:
+    candidates = asyncio.run(driver.discover())
+    with pytest.raises(Exception) as excinfo:
+        asyncio.run(
+            driver.open(candidates[0], {"tlinear_resolution_k_per_count": 0.5})
+        )
+    assert "tlinear" in str(excinfo.value).lower()
+
+
+def test_set_param_tlinear_resolution_runtime_change(
+    driver: LeptonUvcDriver, backend: MockUvcBackend
+) -> None:
+    candidates = asyncio.run(driver.discover())
+    session = asyncio.run(driver.open(candidates[0], {}))
+    asyncio.run(driver.set_param(session, "tlinear_resolution", 0.1))
+    assert session.tlinear_resolution_k_per_count == 0.1
+    assert backend.tlinear_resolutions[session.device.serial] == 0.1
+
+
+def test_frame_iterator_stamps_resolution_into_metadata(
+    driver: LeptonUvcDriver,
+) -> None:
+    async def first_frame() -> Any:
+        candidates = await driver.discover()
+        session = await driver.open(candidates[0], {})
+        try:
+            agen = await driver.frame_iterator(session)
+            async for frame in agen:
+                return frame
+        finally:
+            await driver.close(session)
+        raise AssertionError("frame_iterator yielded nothing")
+
+    frame = asyncio.run(first_frame())
+    assert frame.metadata is not None
+    assert (
+        frame.metadata["tlinear_resolution_k_per_count"] == 0.01
+    ), "default tlinear resolution should propagate"
+    assert frame.pixel_format == "Y16"
+    assert frame.width > 0 and frame.height > 0
+    assert len(bytes(frame.data)) == frame.width * frame.height * 2
 
 
 class _FakePeripheralManager:

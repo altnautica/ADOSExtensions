@@ -47,14 +47,28 @@ def _ironbow_lut() -> list[int]:
 
 
 def _rainbow_lut() -> list[int]:
-    """Build the 256-entry rainbow LUT (blue -> cyan -> green -> yellow -> red)."""
+    """Build the 256-entry rainbow LUT.
+
+    Cool to hot ramp with strictly increasing perceived lightness so a
+    spot at higher temperature reads visually brighter than a cooler
+    spot. Endpoints stay blue-dominant (cool) and red-dominant (hot).
+    Stops:
+
+    * (0, 0, 80)      dark blue
+    * (0, 60, 180)    medium blue
+    * (60, 140, 200)  cyan-blue
+    * (160, 180, 100) yellow-green
+    * (240, 180, 80)  orange
+    * (255, 220, 200) warm pink-white
+    """
 
     stops: list[tuple[int, int, int]] = [
-        (0, 0, 200),
-        (0, 200, 255),
-        (0, 200, 0),
-        (255, 220, 0),
-        (255, 30, 0),
+        (0, 0, 80),
+        (0, 60, 180),
+        (60, 140, 200),
+        (160, 180, 100),
+        (240, 180, 80),
+        (255, 220, 200),
     ]
     return _gradient(stops)
 

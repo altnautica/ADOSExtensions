@@ -119,6 +119,8 @@ STREAMING_PROTOCOL = "uvc"
 LEPTON_BIT_DEPTH = 14
 MIN_FIRMWARE_VERSION = (1, 2, 2)
 ITAR_CAPPED_FPS = 8.0
+DEFAULT_TLINEAR_RESOLUTION_K = 0.01
+ALLOWED_TLINEAR_RESOLUTIONS = (0.01, 0.1)
 
 
 @dataclass
@@ -135,6 +137,7 @@ class LeptonUvcSession(CameraSession):
     radiometric: bool
     fps: float
     open_timestamp_ns: int
+    tlinear_resolution_k_per_count: float
 
 
 class LeptonUvcDriver(CameraDriver):
@@ -185,10 +188,25 @@ class LeptonUvcDriver(CameraDriver):
                 f"required {'.'.join(str(p) for p in MIN_FIRMWARE_VERSION)}."
             )
 
+        tlinear_k = float(
+            config.get(
+                "tlinear_resolution_k_per_count",
+                DEFAULT_TLINEAR_RESOLUTION_K,
+            )
+        )
+        if tlinear_k not in ALLOWED_TLINEAR_RESOLUTIONS:
+            raise DriverError(
+                "tlinear_resolution_k_per_count must be 0.01 or 0.1, "
+                f"got {tlinear_k}"
+            )
+
         await asyncio.to_thread(self._backend.open, device)
         try:
             await asyncio.to_thread(
                 self._backend.set_radiometry, device, True
+            )
+            await asyncio.to_thread(
+                self._backend.set_tlinear_resolution, device, tlinear_k
             )
         except Exception:
             await asyncio.to_thread(self._backend.close, device)
@@ -202,6 +220,7 @@ class LeptonUvcDriver(CameraDriver):
             radiometric=device.radiometric,
             fps=capped_fps,
             open_timestamp_ns=time.monotonic_ns(),
+            tlinear_resolution_k_per_count=tlinear_k,
         )
 
     async def close(self, session: CameraSession) -> None:
@@ -229,8 +248,11 @@ class LeptonUvcDriver(CameraDriver):
     ) -> AsyncIterator[FrameBuffer]:
         if not isinstance(session, LeptonUvcSession):
             raise DriverError("session is not a LeptonUvcSession")
-        device = session.device
-        return _async_frames(self._backend, device)
+        return _async_frames(
+            self._backend,
+            session.device,
+            session.tlinear_resolution_k_per_count,
+        )
 
     async def set_param(
         self, session: CameraSession, param: str, value: Any
@@ -257,6 +279,18 @@ class LeptonUvcDriver(CameraDriver):
             )
             session.radiometric = enabled
             return
+        if param == "tlinear_resolution":
+            k = float(value)
+            if k not in ALLOWED_TLINEAR_RESOLUTIONS:
+                raise ValueError(
+                    "tlinear_resolution must be 0.01 or 0.1, got "
+                    f"{value!r}"
+                )
+            await asyncio.to_thread(
+                self._backend.set_tlinear_resolution, session.device, k
+            )
+            session.tlinear_resolution_k_per_count = k
+            return
         raise ValueError(f"unknown parameter {param!r}")
 
     async def _resolve_device(self, candidate: CameraCandidate) -> UvcDeviceInfo:
@@ -270,36 +304,48 @@ class LeptonUvcDriver(CameraDriver):
 
 
 async def _async_frames(
-    backend: LibUvcBackend, device: UvcDeviceInfo
+    backend: LibUvcBackend,
+    device: UvcDeviceInfo,
+    tlinear_resolution_k_per_count: float,
 ) -> AsyncIterator[FrameBuffer]:
     """Bridge a synchronous backend iterator into the SDK's async surface."""
 
     sync_iter = await asyncio.to_thread(backend.frames, device)
-    while True:
-        try:
-            uvc_frame = await asyncio.to_thread(_pull_one, sync_iter)
-        except StopIteration:
-            return
-        if uvc_frame is None:
-            return
-        # The Y16 tuple becomes a contiguous bytes buffer the SDK can
-        # hand to consumers as a memoryview without copying again.
-        raw = bytes()
-        b = bytearray(len(uvc_frame.y16) * 2)
-        for i, v in enumerate(uvc_frame.y16):
-            b[i * 2] = v & 0xFF
-            b[i * 2 + 1] = (v >> 8) & 0xFF
-        raw = bytes(b)
-        yield FrameBuffer(
-            timestamp_ns=uvc_frame.timestamp_ns,
-            sequence=uvc_frame.sequence,
-            width=uvc_frame.width,
-            height=uvc_frame.height,
-            pixel_format=PIXEL_FORMAT_Y16,
-            data=memoryview(raw),
-            radiometric_k=None,
-            metadata=dict(uvc_frame.metadata),
-        )
+    try:
+        while True:
+            try:
+                uvc_frame = await asyncio.to_thread(_pull_one, sync_iter)
+            except StopIteration:
+                return
+            if uvc_frame is None:
+                return
+            # The Y16 tuple becomes a contiguous bytes buffer the SDK can
+            # hand to consumers as a memoryview without copying again.
+            b = bytearray(len(uvc_frame.y16) * 2)
+            for i, v in enumerate(uvc_frame.y16):
+                b[i * 2] = v & 0xFF
+                b[i * 2 + 1] = (v >> 8) & 0xFF
+            raw = bytes(b)
+            metadata = dict(uvc_frame.metadata)
+            metadata["tlinear_resolution_k_per_count"] = (
+                tlinear_resolution_k_per_count
+            )
+            yield FrameBuffer(
+                timestamp_ns=uvc_frame.timestamp_ns,
+                sequence=uvc_frame.sequence,
+                width=uvc_frame.width,
+                height=uvc_frame.height,
+                pixel_format=PIXEL_FORMAT_Y16,
+                data=memoryview(raw),
+                radiometric_k=None,
+                metadata=metadata,
+            )
+    finally:
+        # Release the underlying generator on cancel or GC so the
+        # backend can shut down cleanly.
+        close = getattr(sync_iter, "close", None)
+        if callable(close):
+            close()
 
 
 def _pull_one(iterator: Any) -> Any:

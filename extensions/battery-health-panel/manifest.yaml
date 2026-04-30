@@ -1,32 +1,28 @@
-plugin:
-  id: com.altnautica.battery-health-panel
-  name: "ADOS Battery Health Panel"
-  version: "1.0.0"
-  author: "Altnautica"
-  license: "GPL-3.0-or-later"
-  description: "Cell-level battery diagnostics, predictive time-to-min, and anomaly alerts."
-  homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/battery-health-panel"
-  source: "https://github.com/altnautica/ADOSExtensions"
-  tags: ["battery", "telemetry", "fc"]
+schema_version: 1
+id: com.altnautica.battery-health-panel
+name: "ADOS Battery Health Panel"
+version: "1.0.0"
+description: "Cell-level battery diagnostics, predictive time-to-min, and anomaly alerts."
+author: "Altnautica"
+homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/battery-health-panel"
+license: "GPL-3.0-or-later"
+risk: low
 
 compatibility:
   ados_version: ">=0.10.0"
   gcs_version: ">=0.5.0"
-  python_version: ">=3.11"
-  min_tier: 0
   supported_boards: ["*"]
-  profiles: ["drone"]
 
 gcs:
-  bundle: "gcs/plugin.bundle.js"
-  isolation: "iframe-sandbox"
+  entrypoint: "gcs/plugin.bundle.js"
+  isolation: iframe
   permissions:
-    - ui.slot.fc-tab
-    - ui.slot.notification
-    - ui.slot.settings-section
-    - telemetry.subscribe.battery
-    - telemetry.subscribe.mavlink
-    - recording.write
+    - id: ui.slot.fc-tab
+    - id: ui.slot.notification
+    - id: ui.slot.settings-section
+    - id: telemetry.subscribe.battery
+    - id: telemetry.subscribe.mavlink
+    - id: recording.write
   contributes:
     panels:
       - id: battery-health-tab
@@ -38,30 +34,5 @@ gcs:
       - id: battery-anomaly
         title: "Battery anomaly"
         severity: warning
-    settings_sections:
-      - id: battery-health-settings
-        title: "Battery Health"
-    locales:
-      - "en"
-
-assets:
-  - path: "gcs/plugin.bundle.js"
-    role: "gcs-bundle"
-    sha256: "<computed-by-pack.sh>"
-  - path: "gcs/plugin.css"
-    role: "gcs-style"
-    sha256: "<computed-by-pack.sh>"
-  - path: "icon.png"
-    role: "icon"
-    sha256: "<computed-by-pack.sh>"
-  - path: "config-schema.json"
-    role: "config-schema"
-    sha256: "<computed-by-pack.sh>"
-  - path: "locales/en.json"
-    role: "gcs-locale"
-    sha256: "<computed-by-pack.sh>"
-
-signing:
-  signature: "<computed-by-sign.sh>"
-  signer_key_id: "altnautica-2026-A"
-  algorithm: "ed25519"
+  locales:
+    - en
