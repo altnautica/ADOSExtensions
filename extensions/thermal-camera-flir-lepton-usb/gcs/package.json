@@ -1,0 +1,20 @@
+{
+  "name": "@altnautica/thermal-camera-flir-lepton-usb-gcs",
+  "version": "1.0.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/plugin.ts --bundle --format=esm --target=es2022 --outfile=plugin.bundle.js --minify",
+    "test": "vitest run",
+    "lint:manifest": "node ../../../scripts/lint-manifest.mjs ../manifest.yaml"
+  },
+  "dependencies": {
+    "@altnautica/plugin-sdk": "workspace:^"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

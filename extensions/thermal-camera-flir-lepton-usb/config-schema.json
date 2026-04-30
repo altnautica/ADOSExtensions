@@ -1,0 +1,60 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Thermal Camera",
+  "properties": {
+    "palette": {
+      "type": "string",
+      "title": "Palette",
+      "default": "ironbow",
+      "enum": ["ironbow", "rainbow", "grayscale"]
+    },
+    "agc": {
+      "type": "string",
+      "title": "Auto-gain control",
+      "default": "linear",
+      "enum": ["linear", "histogram", "fixed"]
+    },
+    "fixedRange": {
+      "type": "object",
+      "title": "Fixed range (when AGC is fixed)",
+      "properties": {
+        "minC": { "type": "number", "default": 0, "minimum": -40, "maximum": 200 },
+        "maxC": { "type": "number", "default": 100, "minimum": -40, "maximum": 400 }
+      }
+    },
+    "spotMeter": {
+      "type": "object",
+      "title": "Spot meter",
+      "properties": {
+        "x": { "type": "integer", "default": 80, "minimum": 0, "maximum": 159 },
+        "y": { "type": "integer", "default": 60, "minimum": 0, "maximum": 119 }
+      }
+    },
+    "isotherm": {
+      "type": "object",
+      "title": "Isotherm bands",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "lowerC": { "type": "number", "default": 30 },
+        "upperC": { "type": "number", "default": 60 }
+      }
+    },
+    "alarm": {
+      "type": "object",
+      "title": "Max-temperature alarm",
+      "properties": {
+        "enabled": { "type": "boolean", "default": false },
+        "thresholdC": { "type": "number", "default": 80 }
+      }
+    },
+    "ffc": {
+      "type": "object",
+      "title": "Flat-field correction",
+      "properties": {
+        "autoOnDisarm": { "type": "boolean", "default": true },
+        "autoIntervalMinutes": { "type": "integer", "default": 5, "minimum": 0, "maximum": 60 }
+      }
+    }
+  }
+}

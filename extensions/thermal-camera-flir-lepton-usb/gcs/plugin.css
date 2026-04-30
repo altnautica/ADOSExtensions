@@ -1,0 +1,92 @@
+/* Minimal styling for the thermal overlay and configuration tab.
+   The host injects its theme CSS variables; we only define plugin-local
+   structure. The canvas sizes itself to its container. */
+
+.thm-root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  font: var(--ados-font-body, 13px sans-serif);
+  color: var(--ados-color-text, #e0e0e0);
+}
+
+.thm-overlay {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.thm-overlay__canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+}
+
+.thm-overlay__readout {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 4px 8px;
+  background: var(--ados-color-overlay-bg, rgba(0, 0, 0, 0.55));
+  border-radius: 4px;
+}
+
+.thm-overlay__readout--hot {
+  border-left: 3px solid var(--ados-color-warning, #ff8a00);
+}
+
+.thm-spot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border: 2px solid var(--ados-color-spot, #ffffff);
+  border-radius: 50%;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.thm-action-rail {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 6px;
+  padding: 4px 6px;
+  background: var(--ados-color-overlay-bg, rgba(0, 0, 0, 0.55));
+  border-radius: 4px;
+}
+
+.thm-action-rail__button {
+  background: transparent;
+  color: inherit;
+  border: 1px solid var(--ados-color-border, #444);
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.thm-action-rail__button:hover {
+  background: var(--ados-color-hover, rgba(255, 255, 255, 0.08));
+}
+
+.thm-config {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.thm-config__section h3 {
+  margin: 0 0 4px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.thm-config__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}

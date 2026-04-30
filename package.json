@@ -4,7 +4,9 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "build:battery-health": "pnpm --filter ./extensions/battery-health-panel/gcs build",
-    "test:battery-health": "pnpm --filter ./extensions/battery-health-panel/gcs test"
+    "test:battery-health": "pnpm --filter ./extensions/battery-health-panel/gcs test",
+    "build:thermal-camera": "pnpm --filter ./extensions/thermal-camera-flir-lepton-usb/gcs build",
+    "test:thermal-camera": "pnpm --filter ./extensions/thermal-camera-flir-lepton-usb/gcs test"
   },
   "engines": {
     "pnpm": ">=9"

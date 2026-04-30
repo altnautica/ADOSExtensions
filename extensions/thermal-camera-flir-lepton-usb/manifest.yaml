@@ -1,0 +1,111 @@
+plugin:
+  id: com.altnautica.thermal-flir-lepton-usb
+  name: "ADOS Thermal Camera FLIR Lepton USB UVC"
+  version: "1.0.0"
+  author: "Altnautica"
+  license: "GPL-3.0-or-later"
+  description: "FLIR Lepton 3.5 radiometric thermal imaging via PureThermal 2 USB UVC dongle. Adds video overlay, FC config tab, MAVLink camera component, and thermal survey mission template."
+  homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/thermal-camera-flir-lepton-usb"
+  source: "https://github.com/altnautica/ADOSExtensions"
+  tags: ["camera", "thermal", "flir", "lepton", "uvc", "radiometric"]
+
+compatibility:
+  ados_version: ">=0.10.0"
+  gcs_version: ">=0.5.0"
+  python_version: ">=3.11"
+  min_tier: 2
+  supported_boards: ["cm4", "cm5", "rk3582", "rk3576", "rk3566", "x86"]
+  profiles: ["drone"]
+
+agent:
+  entry_point: "altnautica_thermal_camera.plugin:ThermalUsbPlugin"
+  package: "altnautica-thermal-camera-flir-lepton"
+  isolation: "subprocess"
+  permissions:
+    - hardware.usb.uvc
+    - sensor.camera.register
+    - telemetry.extend
+    - event.publish
+    - event.subscribe
+    - recording.write
+    - mavlink.component.camera
+  mavlink_components:
+    - component_id: 100
+      component_kind: "camera"
+      sub_id: 1
+  resources:
+    max_ram_mb: 192
+    max_cpu_percent: 35
+    max_disk_mb: 500
+    max_pids: 16
+  events:
+    publishes:
+      - sensor.thermal.frame
+      - sensor.thermal.alarm
+      - sensor.thermal.spot_temperature
+    subscribes:
+      - vehicle.armed
+      - vehicle.disarmed
+      - mavlink.attitude
+  network:
+    outbound: false
+    domains: []
+  config_schema_ref: "config-schema.json"
+
+gcs:
+  bundle: "gcs/plugin.bundle.js"
+  isolation: "iframe-sandbox"
+  permissions:
+    - ui.slot.fc-tab
+    - ui.slot.video-overlay
+    - ui.slot.mission-template
+    - ui.slot.notification
+    - ui.slot.settings-section
+    - telemetry.subscribe.thermal
+    - telemetry.subscribe.mavlink
+    - mission.read
+    - mission.write
+    - recording.write
+  contributes:
+    panels:
+      - id: thermal-overlay
+        slot: video.overlay
+        title: "Thermal"
+        icon: "thermometer"
+      - id: thermal-config
+        slot: fc.tab
+        title: "Thermal Camera"
+        icon: "camera"
+        order: 50
+    notifications:
+      - id: thermal-alarm
+        title: "Thermal alarm"
+        severity: warning
+    mission_template:
+      id: thermal-survey-grid
+      label: "Thermal survey grid"
+      icon: "grid"
+    settings_sections:
+      - id: thermal-camera-settings
+        title: "Thermal Camera"
+    locales:
+      - "en"
+
+assets:
+  - path: "gcs/plugin.bundle.js"
+    role: "gcs-bundle"
+    sha256: "<computed-by-pack.sh>"
+  - path: "gcs/plugin.css"
+    role: "gcs-style"
+    sha256: "<computed-by-pack.sh>"
+  - path: "config-schema.json"
+    role: "config-schema"
+    sha256: "<computed-by-pack.sh>"
+  - path: "locales/en.json"
+    role: "gcs-locale"
+    sha256: "<computed-by-pack.sh>"
+
+signing:
+  signature: "<computed-by-sign.sh>"
+  signer_key_id: "altnautica-2026-A"
+  algorithm: "ed25519"
