@@ -11,8 +11,10 @@
 #
 # The signed archive carries a separate `SIGNATURE` text file with two
 # lines: the signer key id, then the base64-encoded Ed25519 signature
-# over the manifest body. This matches the agent's archive reader,
-# which expects the SIGNATURE file alongside manifest.yaml.
+# over the canonical payload hash. The payload hash is sha256 over the
+# sorted concatenation of `<path>\n<sha256-hex>\n` for every archive
+# entry except SIGNATURE itself. This matches the agent's archive
+# reader at ados.plugins.archive._canonical_payload_hash.
 
 set -euo pipefail
 
