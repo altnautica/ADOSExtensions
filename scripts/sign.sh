@@ -59,6 +59,7 @@ unzip -qq "${archive}" -d "${stage}"
 
 python3 - "${stage}" "${key_path}" "${key_id}" <<'PY'
 import base64
+import hashlib
 import sys
 from pathlib import Path
 
@@ -71,8 +72,24 @@ stage = Path(sys.argv[1])
 key_path = Path(sys.argv[2])
 key_id = sys.argv[3]
 
-manifest_path = stage / "manifest.yaml"
-manifest_bytes = manifest_path.read_bytes()
+# Compute the canonical payload hash the agent verifies against:
+# sort entries by archive path (POSIX), exclude the SIGNATURE file
+# itself, concatenate `<path>\n<sha256-hex>\n` for each, then sha256
+# the concatenation. Signs the 32-byte digest, not the manifest body.
+files: list[tuple[str, bytes]] = []
+for path in sorted(stage.rglob("*")):
+    if not path.is_file():
+        continue
+    rel = path.relative_to(stage).as_posix()
+    if rel == "SIGNATURE":
+        continue
+    files.append((rel, path.read_bytes()))
+
+aggregate = hashlib.sha256()
+for rel, data in sorted(files, key=lambda item: item[0]):
+    digest = hashlib.sha256(data).hexdigest()
+    aggregate.update(f"{rel}\n{digest}\n".encode("utf-8"))
+payload_hash = aggregate.digest()
 
 key_bytes = key_path.read_bytes()
 try:
@@ -84,7 +101,7 @@ except ValueError:
 if not isinstance(private, Ed25519PrivateKey):
     raise SystemExit("expected an Ed25519 private key")
 
-signature = private.sign(manifest_bytes)
+signature = private.sign(payload_hash)
 sig_b64 = base64.b64encode(signature).decode("ascii")
 
 (stage / "SIGNATURE").write_text(f"{key_id}\n{sig_b64}\n")
