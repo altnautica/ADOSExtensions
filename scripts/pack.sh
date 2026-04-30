@@ -3,10 +3,12 @@
 # Pack a built extension into a .adosplug archive.
 #
 # Usage:
-#   scripts/pack.sh <extension-folder>
+#   scripts/pack.sh <extension-folder-or-path>
 #
-# Example:
-#   scripts/pack.sh battery-health-panel
+# Examples:
+#   scripts/pack.sh battery-health-panel        # resolves to extensions/battery-health-panel
+#   scripts/pack.sh ./my-plugin                 # any directory containing manifest.yaml
+#   scripts/pack.sh /abs/path/to/my-plugin      # absolute path also accepted
 #
 # The script:
 #   1. Builds the GCS half (esbuild -> plugin.bundle.js)
@@ -19,16 +21,23 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  echo "usage: pack.sh <extension-folder>" >&2
+  echo "usage: pack.sh <extension-folder-or-path>" >&2
   exit 2
 fi
 
-ext_name="$1"
+arg="$1"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
-ext_dir="${repo_root}/extensions/${ext_name}"
 
-if [[ ! -d "${ext_dir}" ]]; then
-  echo "extension not found: ${ext_dir}" >&2
+# Resolve the extension directory. If the argument is a path to an existing
+# directory containing a manifest.yaml, use it directly. Otherwise treat it
+# as a folder name under the monorepo's extensions/ tree.
+if [[ -d "${arg}" && -f "${arg}/manifest.yaml" ]]; then
+  ext_dir="$(cd "${arg}" && pwd)"
+elif [[ -d "${repo_root}/extensions/${arg}" ]]; then
+  ext_dir="${repo_root}/extensions/${arg}"
+else
+  echo "extension not found: ${arg}" >&2
+  echo "  tried: ${arg} and ${repo_root}/extensions/${arg}" >&2
   exit 2
 fi
 

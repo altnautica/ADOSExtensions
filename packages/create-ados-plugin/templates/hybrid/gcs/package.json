@@ -9,7 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@altnautica/plugin-sdk": "^1.0.0"
+    "@altnautica/plugin-sdk": "workspace:^"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",

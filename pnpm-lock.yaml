@@ -8,7 +8,27 @@ importers:
 
   .: {}
 
+  extensions/battery-health-panel: {}
+
   extensions/battery-health-panel/gcs:
+    dependencies:
+      '@altnautica/plugin-sdk':
+        specifier: workspace:^
+        version: link:../../../packages/plugin-sdk
+    devDependencies:
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9
+
+  extensions/quickstart-smoke: {}
+
+  extensions/quickstart-smoke/gcs:
     dependencies:
       '@altnautica/plugin-sdk':
         specifier: workspace:^
