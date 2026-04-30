@@ -1,0 +1,116 @@
+plugin:
+  id: com.altnautica.mavlink-gimbal-v2
+  name: "ADOS MAVLink Gimbal v2 Controller"
+  version: "1.0.0"
+  author: "Altnautica"
+  license: "GPL-3.0-or-later"
+  description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, follow-me, mission templates, pre-arm safety check."
+  homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/mavlink-gimbal-v2"
+  source: "https://github.com/altnautica/ADOSExtensions"
+  tags: ["gimbal", "mavlink", "v2", "simplebgc", "storm32", "gremsy"]
+
+compatibility:
+  ados_version: ">=0.10.0"
+  gcs_version: ">=0.5.0"
+  python_version: ">=3.11"
+  min_tier: 1
+  supported_boards: ["*"]
+  profiles: ["drone"]
+
+agent:
+  entry_point: "altnautica_gimbal_v2.plugin:GimbalV2Plugin"
+  package: "altnautica-mavlink-gimbal-v2"
+  isolation: "subprocess"
+  permissions:
+    - hardware.uart
+    - mavlink.read
+    - mavlink.write
+    - mavlink.component.gimbal
+    - event.publish
+    - event.subscribe
+    - telemetry.extend
+  mavlink_components:
+    - component_id: 154
+      component_kind: "gimbal"
+      sub_id: 0
+  resources:
+    max_ram_mb: 64
+    max_cpu_percent: 15
+    max_disk_mb: 100
+    max_pids: 8
+  events:
+    publishes:
+      - sensor.gimbal.attitude
+      - sensor.gimbal.health
+      - sensor.gimbal.alarm
+    subscribes:
+      - vehicle.armed
+      - vehicle.disarmed
+      - mavlink.attitude
+      - mavlink.global_position
+      - mavlink.command
+  network:
+    outbound: false
+    domains: []
+  config_schema_ref: "config-schema.json"
+
+gcs:
+  bundle: "gcs/plugin.bundle.js"
+  isolation: "iframe-sandbox"
+  permissions:
+    - ui.slot.fc-tab
+    - ui.slot.video-overlay
+    - ui.slot.mission-template
+    - ui.slot.notification
+    - ui.slot.settings-section
+    - telemetry.subscribe.gimbal
+    - telemetry.subscribe.mavlink
+    - mission.read
+    - mission.write
+    - command.send
+  contributes:
+    panels:
+      - id: gimbal-control
+        slot: fc.tab
+        title: "Gimbal"
+        icon: "gimbal"
+        order: 60
+      - id: gimbal-reticle
+        slot: video.overlay
+        title: "Gimbal reticle"
+        icon: "crosshair"
+    notifications:
+      - id: gimbal-health
+        title: "Gimbal health"
+        severity: warning
+    mission_template:
+      id: orbit-and-hold-camera-on-target
+      label: "Orbit and hold camera on target"
+      icon: "orbit"
+    settings_sections:
+      - id: gimbal-controller-settings
+        title: "Gimbal Controller"
+    locales:
+      - "en"
+
+assets:
+  - path: "gcs/plugin.bundle.js"
+    role: "gcs-bundle"
+    sha256: "<computed-by-pack.sh>"
+  - path: "gcs/plugin.css"
+    role: "gcs-style"
+    sha256: "<computed-by-pack.sh>"
+  - path: "icon.png"
+    role: "icon"
+    sha256: "<computed-by-pack.sh>"
+  - path: "config-schema.json"
+    role: "config-schema"
+    sha256: "<computed-by-pack.sh>"
+  - path: "locales/en.json"
+    role: "gcs-locale"
+    sha256: "<computed-by-pack.sh>"
+
+signing:
+  signature: "<computed-by-sign.sh>"
+  signer_key_id: "altnautica-2026-A"
+  algorithm: "ed25519"

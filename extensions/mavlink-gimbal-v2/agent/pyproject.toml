@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "altnautica-mavlink-gimbal-v2"
+version = "1.0.0"
+description = "ADOS plugin: MAVLink Gimbal v2 Controller (agent half)."
+readme = "../README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.11"
+authors = [{ name = "Altnautica" }]
+keywords = ["ados", "plugin", "gimbal", "mavlink"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.entry-points."ados.plugins"]
+"com.altnautica.mavlink-gimbal-v2" = "altnautica_gimbal_v2.plugin:GimbalV2Plugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/altnautica_gimbal_v2"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

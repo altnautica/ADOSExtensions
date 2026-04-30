@@ -24,11 +24,32 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^2.1.4
-        version: 2.1.9
+        version: 2.1.9(happy-dom@15.11.7)
 
-  extensions/quickstart-smoke: {}
+  extensions/mavlink-gimbal-v2: {}
 
-  extensions/quickstart-smoke/gcs:
+  extensions/mavlink-gimbal-v2/gcs:
+    dependencies:
+      '@altnautica/plugin-sdk':
+        specifier: workspace:^
+        version: link:../../../packages/plugin-sdk
+    devDependencies:
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      happy-dom:
+        specifier: ^15.7.4
+        version: 15.11.7
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(happy-dom@15.11.7)
+
+  extensions/thermal-camera-flir-lepton-usb: {}
+
+  extensions/thermal-camera-flir-lepton-usb/gcs:
     dependencies:
       '@altnautica/plugin-sdk':
         specifier: workspace:^
@@ -42,7 +63,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^2.1.4
-        version: 2.1.9
+        version: 2.1.9(happy-dom@15.11.7)
 
   packages/create-ados-plugin: {}
 
@@ -53,7 +74,7 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^2.1.4
-        version: 2.1.9
+        version: 2.1.9(happy-dom@15.11.7)
 
 packages:
 
@@ -534,6 +555,10 @@ packages:
     resolution: {integrity: sha512-h5k/5U50IJJFpzfL6nO9jaaumfjO/f2NjK/oYB2Djzm4p9L+3T9qWpZqZ2hAbLPuuYq9wrU08WQyBTL5GbPk5Q==}
     engines: {node: '>=6'}
 
+  entities@4.5.0:
+    resolution: {integrity: sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw==}
+    engines: {node: '>=0.12'}
+
   es-module-lexer@1.7.0:
     resolution: {integrity: sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA==}
 
@@ -558,6 +583,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  happy-dom@15.11.7:
+    resolution: {integrity: sha512-KyrFvnl+J9US63TEzwoiJOQzZBJY7KgBushJA8X61DMbNsH+2ONkDuLDnCnwUiPTF42tLoEmrPyoqbenVA5zrg==}
+    engines: {node: '>=18.0.0'}
 
   loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}
@@ -688,6 +717,14 @@ packages:
         optional: true
       jsdom:
         optional: true
+
+  webidl-conversions@7.0.0:
+    resolution: {integrity: sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g==}
+    engines: {node: '>=12'}
+
+  whatwg-mimetype@3.0.0:
+    resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
+    engines: {node: '>=12'}
 
   why-is-node-running@2.3.0:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
@@ -979,6 +1016,8 @@ snapshots:
 
   deep-eql@5.0.2: {}
 
+  entities@4.5.0: {}
+
   es-module-lexer@1.7.0: {}
 
   esbuild@0.21.5:
@@ -1043,6 +1082,12 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  happy-dom@15.11.7:
+    dependencies:
+      entities: 4.5.0
+      webidl-conversions: 7.0.0
+      whatwg-mimetype: 3.0.0
 
   loupe@3.2.1: {}
 
@@ -1143,7 +1188,7 @@ snapshots:
     optionalDependencies:
       fsevents: 2.3.3
 
-  vitest@2.1.9:
+  vitest@2.1.9(happy-dom@15.11.7):
     dependencies:
       '@vitest/expect': 2.1.9
       '@vitest/mocker': 2.1.9(vite@5.4.21)
@@ -1165,6 +1210,8 @@ snapshots:
       vite: 5.4.21
       vite-node: 2.1.9
       why-is-node-running: 2.3.0
+    optionalDependencies:
+      happy-dom: 15.11.7
     transitivePeerDependencies:
       - less
       - lightningcss
@@ -1175,6 +1222,10 @@ snapshots:
       - sugarss
       - supports-color
       - terser
+
+  webidl-conversions@7.0.0: {}
+
+  whatwg-mimetype@3.0.0: {}
 
   why-is-node-running@2.3.0:
     dependencies:

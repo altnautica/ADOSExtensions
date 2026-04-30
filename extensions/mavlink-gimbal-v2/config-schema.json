@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Gimbal Controller",
+  "properties": {
+    "transport": {
+      "type": "string",
+      "title": "Gimbal transport",
+      "default": "mavlink",
+      "enum": ["mavlink", "sbgc-uart", "storm32-uart", "gremsy-uart", "simulated"]
+    },
+    "uart": {
+      "type": "object",
+      "title": "UART (serial drivers)",
+      "properties": {
+        "device": {
+          "type": "string",
+          "title": "Device path",
+          "default": "/dev/ttyACM0"
+        },
+        "baudrate": {
+          "type": "integer",
+          "title": "Baud rate",
+          "default": 115200,
+          "minimum": 9600,
+          "maximum": 921600
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "title": "Axis limits",
+      "properties": {
+        "pitch_min_deg": {
+          "type": "number",
+          "title": "Pitch min (deg)",
+          "default": -90,
+          "minimum": -180,
+          "maximum": 0
+        },
+        "pitch_max_deg": {
+          "type": "number",
+          "title": "Pitch max (deg)",
+          "default": 30,
+          "minimum": 0,
+          "maximum": 180
+        },
+        "yaw_min_deg": {
+          "type": "number",
+          "title": "Yaw min (deg)",
+          "default": -180,
+          "minimum": -360,
+          "maximum": 0
+        },
+        "yaw_max_deg": {
+          "type": "number",
+          "title": "Yaw max (deg)",
+          "default": 180,
+          "minimum": 0,
+          "maximum": 360
+        },
+        "roll_min_deg": {
+          "type": "number",
+          "title": "Roll min (deg)",
+          "default": -45,
+          "minimum": -90,
+          "maximum": 0
+        },
+        "roll_max_deg": {
+          "type": "number",
+          "title": "Roll max (deg)",
+          "default": 45,
+          "minimum": 0,
+          "maximum": 90
+        }
+      }
+    },
+    "behavior": {
+      "type": "object",
+      "title": "Behaviour",
+      "properties": {
+        "retract_on_disarm": {
+          "type": "boolean",
+          "title": "Retract on disarm",
+          "default": true
+        },
+        "deploy_on_arm": {
+          "type": "boolean",
+          "title": "Deploy on arm",
+          "default": true
+        },
+        "follow_me_default_smoothing_s": {
+          "type": "number",
+          "title": "Follow-me smoothing (s)",
+          "default": 0.5,
+          "minimum": 0.0,
+          "maximum": 5.0
+        }
+      }
+    },
+    "prearm": {
+      "type": "object",
+      "title": "Pre-arm safety",
+      "properties": {
+        "require_healthy_gimbal": {
+          "type": "boolean",
+          "title": "Require healthy gimbal",
+          "default": true
+        },
+        "max_calibration_age_seconds": {
+          "type": "integer",
+          "title": "Max calibration age (seconds)",
+          "default": 86400,
+          "minimum": 60,
+          "maximum": 2592000
+        }
+      }
+    }
+  }
+}

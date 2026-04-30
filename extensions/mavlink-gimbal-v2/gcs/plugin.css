@@ -1,0 +1,105 @@
+/* Gimbal control panel styles. Inherits theme variables broadcast by
+   the host on plugin mount via the `theme.changed` event. Scoped class
+   names keep the panel isolated from host CSS. */
+
+.agm-root {
+  font-family: var(--agm-font, system-ui, sans-serif);
+  font-size: 12px;
+  color: var(--agm-fg, #e6e6e6);
+  background: var(--agm-bg, #0c0c0c);
+  padding: 12px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.agm-empty {
+  color: var(--agm-muted, #a0a0a0);
+  font-style: italic;
+}
+
+.agm-readout,
+.agm-manual,
+.agm-roi {
+  border: 1px solid var(--agm-border, #2a2a2a);
+  margin-bottom: 12px;
+  padding: 8px;
+}
+
+.agm-section-title {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agm-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.agm-key {
+  color: var(--agm-muted, #a0a0a0);
+}
+
+.agm-readout-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.agm-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.agm-slider-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.agm-slider-row input[type="range"] {
+  flex: 1;
+}
+
+.agm-slider-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 60px;
+  text-align: right;
+}
+
+.agm-roi-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.agm-roi-field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agm-roi-field input {
+  background: var(--agm-input-bg, #1a1a1a);
+  color: var(--agm-fg, #e6e6e6);
+  border: 1px solid var(--agm-border, #2a2a2a);
+  padding: 4px;
+}
+
+.agm-roi-submit,
+.agm-roi-release {
+  grid-column: span 2;
+  padding: 6px;
+  background: var(--agm-button-bg, #1f1f1f);
+  color: var(--agm-fg, #e6e6e6);
+  border: 1px solid var(--agm-border, #2a2a2a);
+  cursor: pointer;
+}
+
+.agm-roi-status {
+  margin: 8px 0 0 0;
+  color: var(--agm-muted, #a0a0a0);
+  font-size: 11px;
+}

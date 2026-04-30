@@ -1,0 +1,11 @@
+{
+  "name": "@altnautica/mavlink-gimbal-v2",
+  "version": "1.0.0",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "scripts": {
+    "build": "pnpm -C gcs build",
+    "test": "pnpm -C gcs test",
+    "pack": "../../scripts/pack.sh mavlink-gimbal-v2"
+  }
+}
