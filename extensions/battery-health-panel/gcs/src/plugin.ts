@@ -1,13 +1,11 @@
 /**
- * Plugin entry point. Loaded by the GCS plugin host inside a sandboxed
- * iframe (sandbox=allow-scripts, null origin). All host I/O round-trips
- * through `postMessage` envelopes; we never reach into `window.top`.
- *
- * The entry registers with the host, subscribes to telemetry, runs the
- * store + rule engine, emits anomaly notifications, and renders a
- * minimal panel. The panel UI is intentionally light at v1.0; richer
- * components arrive in a follow-up release.
+ * Plugin entry point. Built into `plugin.bundle.js` and loaded by the
+ * GCS plugin host inside a sandboxed iframe. The Altnautica plugin
+ * SDK wraps the postMessage RPC envelope; this module just wires the
+ * battery store to telemetry, notifications, and recording markers.
  */
+
+import { definePlugin } from "@altnautica/plugin-sdk";
 
 import { createBatteryStore } from "./batteryStore";
 import {
@@ -24,121 +22,61 @@ import {
   type StatustextMessage,
 } from "./types";
 
-interface RpcEnvelope {
-  id: string;
-  type: "request" | "response" | "event";
-  method: string;
-  capability: string;
-  args: unknown;
-  version: 1;
-  error?: { code: string; message: string };
-}
-
-const PROTOCOL_VERSION = 1;
-
 const store = createBatteryStore(DEFAULT_CONFIG);
 let rootEl: HTMLElement | null = null;
 
-function callHost<T = unknown>(
-  method: string,
-  capability: string,
-  args: unknown,
-): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const id = crypto.randomUUID();
-    const onMessage = (ev: MessageEvent<RpcEnvelope>): void => {
-      const data = ev.data;
-      if (!data || data.id !== id || data.type !== "response") return;
-      window.removeEventListener("message", onMessage);
-      if (data.error) {
-        reject(new Error(`${data.error.code}: ${data.error.message}`));
-        return;
-      }
-      resolve(data.args as T);
-    };
-    window.addEventListener("message", onMessage);
-    const env: RpcEnvelope = {
-      id,
-      type: "request",
-      method,
-      capability,
-      args,
-      version: PROTOCOL_VERSION,
-    };
-    window.parent.postMessage(env, "*");
-  });
-}
-
-function listenHostEvents(handler: (env: RpcEnvelope) => void): () => void {
-  const onMessage = (ev: MessageEvent<RpcEnvelope>): void => {
-    const data = ev.data;
-    if (!data || data.type !== "event") return;
-    handler(data);
-  };
-  window.addEventListener("message", onMessage);
-  return () => window.removeEventListener("message", onMessage);
-}
-
-async function bootstrap(): Promise<void> {
-  rootEl = document.getElementById("battery-health-root");
-  if (!rootEl) {
-    rootEl = document.createElement("div");
-    rootEl.id = "battery-health-root";
-    document.body.appendChild(rootEl);
-  }
-  render();
-
-  store.onAnomaly(async (fired) => {
-    for (const event of fired) {
-      try {
-        await callHost("notification.publish", "ui.slot.notification", {
-          channelId: "battery-anomaly",
-          severity: event.severity,
-          title: event.title,
-          body: event.body,
-          meta: { packId: event.packId, ruleId: event.ruleId },
-        });
-        await callHost("recording.mark", "recording.write", {
-          label: event.title,
-          meta: { packId: event.packId, ruleId: event.ruleId },
-        });
-      } catch {
-        // Host denied or no recording active. Anomaly stays in the
-        // panel regardless.
-      }
+definePlugin({
+  id: "com.altnautica.battery-health-panel",
+  version: "1.0.0",
+  async mount(ctx) {
+    rootEl = document.getElementById("battery-health-root");
+    if (!rootEl) {
+      rootEl = document.createElement("div");
+      rootEl.id = "battery-health-root";
+      document.body.appendChild(rootEl);
     }
-  });
+    render();
 
-  store.subscribe(render);
+    store.subscribe(render);
+    store.onAnomaly(async (fired) => {
+      for (const event of fired) {
+        try {
+          await ctx.notifications.publish({
+            channelId: "battery-anomaly",
+            severity: event.severity,
+            title: event.title,
+            body: event.body,
+            meta: { packId: event.packId, ruleId: event.ruleId },
+          });
+          await ctx.recording.mark({
+            label: event.title,
+            meta: { packId: event.packId, ruleId: event.ruleId },
+          });
+        } catch {
+          // Host denied or no recording active. Anomaly stays in the
+          // panel regardless.
+        }
+      }
+    });
 
-  await callHost(
-    "telemetry.subscribe",
-    "telemetry.subscribe.battery",
-    { topic: "battery" },
-  );
-  await callHost(
-    "telemetry.subscribe",
-    "telemetry.subscribe.mavlink",
-    { topic: "mavlink.STATUSTEXT" },
-  );
-
-  listenHostEvents((env) => {
-    if (env.method === "telemetry.battery") {
-      const sample = env.args as BatterySample;
+    await ctx.telemetry.subscribe<BatterySample>("battery", (sample) => {
       if (sample && Array.isArray(sample.cellVoltagesV)) {
         store.ingest(sample);
       }
-    } else if (env.method === "telemetry.mavlink.STATUSTEXT") {
-      const msg = env.args as StatustextMessage;
-      if (msg && typeof msg.text === "string") {
-        store.ingestStatustext(msg);
-      }
-    } else if (env.method === "config.changed") {
-      const next = env.args as BatteryHealthConfig | undefined;
-      if (next) store.setConfig(next);
-    }
-  });
-}
+    });
+    await ctx.telemetry.subscribe<StatustextMessage>(
+      "mavlink.STATUSTEXT",
+      (msg) => {
+        if (msg && typeof msg.text === "string") {
+          store.ingestStatustext(msg);
+        }
+      },
+    );
+    ctx.config.onChange<BatteryHealthConfig>((next) => {
+      store.setConfig(next);
+    });
+  },
+});
 
 function render(): void {
   if (!rootEl) return;
@@ -156,9 +94,7 @@ function render(): void {
 
     const sample = pack.latestSample;
     if (sample) {
-      card.appendChild(
-        kv("Total", formatVolts(sample.totalVoltageV), "bhp-row"),
-      );
+      card.appendChild(kv("Total", formatVolts(sample.totalVoltageV)));
       card.appendChild(kv("Current", formatAmps(sample.currentA)));
       card.appendChild(kv("Remaining", formatPercent(sample.remainingPercent)));
       card.appendChild(kv("Temp", formatCelsius(sample.temperatureC)));
@@ -199,9 +135,9 @@ function text(tag: keyof HTMLElementTagNameMap, body: string): HTMLElement {
   return el;
 }
 
-function kv(label: string, value: string, cls = "bhp-row"): HTMLElement {
+function kv(label: string, value: string): HTMLElement {
   const row = document.createElement("div");
-  row.className = cls;
+  row.className = "bhp-row";
   const k = document.createElement("span");
   k.className = "bhp-key";
   k.textContent = label;
@@ -211,14 +147,6 @@ function kv(label: string, value: string, cls = "bhp-row"): HTMLElement {
   row.appendChild(k);
   row.appendChild(v);
   return row;
-}
-
-if (typeof window !== "undefined") {
-  if (document.readyState === "complete" || document.readyState === "interactive") {
-    void bootstrap();
-  } else {
-    window.addEventListener("DOMContentLoaded", () => void bootstrap());
-  }
 }
 
 export { store as __testStore };

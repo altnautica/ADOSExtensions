@@ -1,0 +1,15 @@
+{
+  "name": "create-ados-plugin",
+  "version": "1.0.0",
+  "license": "GPL-3.0-or-later",
+  "description": "Scaffold a new ADOS plugin: gcs-only, agent-only, or hybrid.",
+  "type": "module",
+  "bin": {
+    "create-ados-plugin": "./bin/cli.mjs"
+  },
+  "files": [
+    "bin/",
+    "templates/",
+    "README.md"
+  ]
+}
