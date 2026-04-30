@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Battery Health Panel",
+  "properties": {
+    "thresholds": {
+      "type": "object",
+      "title": "Alert thresholds",
+      "properties": {
+        "lowCellVoltageV": {
+          "type": "number",
+          "title": "Low cell voltage (V)",
+          "default": 3.5,
+          "minimum": 2.5,
+          "maximum": 4.2
+        },
+        "criticalCellVoltageV": {
+          "type": "number",
+          "title": "Critical cell voltage (V)",
+          "default": 3.3,
+          "minimum": 2.5,
+          "maximum": 4.0
+        },
+        "cellDivergenceMv": {
+          "type": "integer",
+          "title": "Cell divergence (mV)",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 500
+        },
+        "voltageDropRateVPerSec": {
+          "type": "number",
+          "title": "Voltage drop rate (V/s)",
+          "default": 0.5,
+          "minimum": 0.1,
+          "maximum": 5.0
+        },
+        "tempSpikeRateCPerSec": {
+          "type": "number",
+          "title": "Temperature spike rate (deg C/s)",
+          "default": 5.0,
+          "minimum": 0.5,
+          "maximum": 20.0
+        }
+      }
+    },
+    "predictive": {
+      "type": "object",
+      "title": "Predictive time-to-reserve",
+      "properties": {
+        "windowSeconds": {
+          "type": "integer",
+          "title": "Discharge-rate window (seconds)",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 300
+        },
+        "minimumPercent": {
+          "type": "integer",
+          "title": "Target minimum percent",
+          "default": 25,
+          "minimum": 5,
+          "maximum": 50
+        }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "title": "Audio alerts",
+      "properties": {
+        "warning": {
+          "type": "boolean",
+          "title": "Play warning tone on anomaly",
+          "default": true
+        },
+        "critical": {
+          "type": "boolean",
+          "title": "Play critical tone on critical anomaly",
+          "default": true
+        }
+      }
+    }
+  }
+}

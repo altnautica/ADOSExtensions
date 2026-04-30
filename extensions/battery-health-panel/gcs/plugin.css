@@ -1,0 +1,81 @@
+/* Minimal panel styles. Inherits theme variables broadcast by the host
+   on plugin mount via the `theme.changed` event. The plugin keeps its
+   own scoped class names (.bhp-*) so it never collides with host CSS. */
+
+#battery-health-root {
+  font-family: var(--bhp-font, system-ui, sans-serif);
+  font-size: 12px;
+  color: var(--bhp-fg, #e6e6e6);
+  background: var(--bhp-bg, #0c0c0c);
+  padding: 12px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.bhp-pack {
+  border: 1px solid var(--bhp-border, #2a2a2a);
+  margin-bottom: 12px;
+  padding: 8px;
+}
+
+.bhp-pack h2 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.bhp-row {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+
+.bhp-key {
+  color: var(--bhp-muted, #a0a0a0);
+}
+
+.bhp-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.bhp-cells {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.bhp-cells li {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
+
+.bhp-anomalies {
+  list-style: none;
+  margin: 8px 0 0 0;
+  padding: 0;
+}
+
+.bhp-anomaly {
+  padding: 4px 6px;
+  margin-bottom: 4px;
+  border-left: 2px solid;
+}
+
+.bhp-anomaly--info {
+  border-left-color: #4a90e2;
+  background: rgba(74, 144, 226, 0.06);
+}
+
+.bhp-anomaly--warning {
+  border-left-color: #e2a44a;
+  background: rgba(226, 164, 74, 0.08);
+}
+
+.bhp-anomaly--critical {
+  border-left-color: #e24a4a;
+  background: rgba(226, 74, 74, 0.10);
+  font-weight: 600;
+}

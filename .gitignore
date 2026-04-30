@@ -6,3 +6,4 @@ __pycache__/
 *.adosplug
 *.tsbuildinfo
 .DS_Store
+extensions/*/gcs/plugin.bundle.js

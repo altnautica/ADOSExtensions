@@ -1,0 +1,71 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "battery-health-panel-v*"
+      - "thermal-camera-flir-lepton-v*"
+      - "mavlink-gimbal-v2-v*"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Pick the extension from the tag
+        id: route
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          # Tag form: <ext>-v<semver>
+          ext="${tag%-v*}"
+          version="${tag##*-v}"
+          echo "ext=${ext}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile=false
+          pip install cryptography
+
+      - name: Run extension tests
+        run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" test
+
+      - name: Pack archive
+        run: ./scripts/pack.sh "${{ steps.route.outputs.ext }}"
+
+      - name: Sign archive
+        env:
+          ADOS_SIGNING_KEY: ${{ secrets.ADOS_SIGNING_KEY }}
+          ADOS_SIGNING_KEY_INLINE: "1"
+          ADOS_SIGNING_KEY_ID: ${{ secrets.ADOS_SIGNING_KEY_ID }}
+        run: |
+          archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | head -n1)"
+          ./scripts/sign.sh "${archive}"
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
+            extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md
