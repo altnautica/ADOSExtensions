@@ -1,0 +1,12 @@
+[project]
+name = "ados-extensions"
+version = "0.1.0"
+description = "First-party ADOS plugin extensions"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.11"
+
+[tool.uv.workspace]
+members = [
+  "extensions/*/agent",
+]
+exclude = []

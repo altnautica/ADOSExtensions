@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.pnpm-store/
+.venv/
+__pycache__/
+*.adosplug
+*.tsbuildinfo
+.DS_Store
