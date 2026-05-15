@@ -15,6 +15,7 @@ dependencies = [
   "opencv-python-headless>=4.9",
   "pyserial>=3.5",
   "smbus2>=0.4",
+  "pydantic>=2.5",
 ]
 
 [project.optional-dependencies]
