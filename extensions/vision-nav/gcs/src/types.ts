@@ -13,9 +13,22 @@ export interface VisionNavTelemetry {
   vioState?: "active" | "degraded" | "lost" | "absent";
   vioResetCounter?: number;
   vioQuality?: number;
-  companionState?: "active" | "critical" | "terminating" | "absent";
+  companionState?: "active" | "critical" | "terminating" | "inactive";
   opticalFlowSupported: boolean;
   vioSupported: boolean;
+  /**
+   * Where the rangefinder is wired. Mirrors the agent's
+   * ``RangefinderConfig.topology`` field. The cloud relay validator
+   * accepts ``"companion" | "fc" | "both" | null`` so the GCS keeps
+   * the same union.
+   */
+  rangefinderTopology?: "companion" | "fc" | "both" | null;
+  /**
+   * Camera device id the agent suggests as the primary capture source.
+   * Surfaced verbatim in the GCS so the operator can confirm the path
+   * the agent picked.
+   */
+  recommendedCameraId?: string | null;
 }
 
 export type FirmwareType = "ardupilot" | "px4" | "betaflight" | "inav";

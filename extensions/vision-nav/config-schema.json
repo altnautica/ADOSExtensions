@@ -19,7 +19,8 @@
           "type": "string",
           "title": "Device path",
           "description": "V4L2 or CSI device node (for example /dev/video0).",
-          "default": "/dev/video0"
+          "default": "/dev/video0",
+          "pattern": "^/dev/video[0-9]+$"
         },
         "bus_type": {
           "type": "string",
@@ -72,7 +73,8 @@
         "device": {
           "type": "string",
           "title": "Device node",
-          "description": "Serial device or I2C bus path. Optional when topology is fc or none."
+          "description": "Serial device path (for example /dev/ttyUSB0) for UART drivers, or an I2C bus identifier (digit such as \"1\" or path such as /dev/i2c-1) for I2C drivers. Optional when topology is fc or none.",
+          "pattern": "^/dev/(ttyS|ttyUSB|ttyAMA|ttyACM|serial)[0-9]+$|^[0-9]+$|^/dev/i2c-[0-9]+$"
         },
         "baud": {
           "type": "integer",

@@ -41,6 +41,8 @@ export function useVisionNavTelemetry(
           vioResetCounter: next.vioResetCounter,
           vioQuality: next.vioQuality,
           companionState: next.companionState,
+          rangefinderTopology: next.rangefinderTopology,
+          recommendedCameraId: next.recommendedCameraId,
         }));
       })
       .then((unsubscribe) => {

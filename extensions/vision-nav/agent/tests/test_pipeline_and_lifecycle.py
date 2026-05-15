@@ -10,8 +10,8 @@ hardware:
 * a fake MAVLink facade that records every ``send`` call.
 
 Each fake exposes only what the production code paths reach into; the
-goal is to test the orchestration logic, not the OpenCV math (which
-is covered by the Wave 6.B test file).
+goal is to test the orchestration logic, not the OpenCV math (which is
+covered by the capture/processor test file).
 """
 
 from __future__ import annotations
@@ -256,6 +256,94 @@ class TestConfig:
         # Other fields still default.
         assert cfg.camera.height == 480
         assert cfg.camera.fps == 30
+
+    def test_config_rejects_invalid_camera_device_path(self) -> None:
+        """An attacker cannot redirect the capture path at an arbitrary
+        device by smuggling a non-video node through the per-drone
+        config."""
+
+        with pytest.raises(ValidationError):
+            load_config({"camera": {"device_path": "/dev/sda"}})
+        with pytest.raises(ValidationError):
+            load_config({"camera": {"device_path": "/etc/passwd"}})
+        with pytest.raises(ValidationError):
+            load_config({"camera": {"device_path": "/dev/video0; rm -rf /"}})
+
+    def test_config_accepts_valid_camera_device_path(self) -> None:
+        cfg = load_config({"camera": {"device_path": "/dev/video2"}})
+        assert cfg.camera.device_path == "/dev/video2"
+
+    def test_config_rejects_invalid_rangefinder_device(self) -> None:
+        """The UART rangefinder driver opens any path as a tty; the
+        schema must keep operators from pointing it at a sensitive
+        file or block device."""
+
+        with pytest.raises(ValidationError):
+            load_config(
+                {
+                    "rangefinder": {
+                        "topology": "companion",
+                        "driver": "tfluna_uart",
+                        "device": "/etc/shadow",
+                    }
+                }
+            )
+        with pytest.raises(ValidationError):
+            load_config(
+                {
+                    "rangefinder": {
+                        "topology": "companion",
+                        "driver": "tfluna_uart",
+                        "device": "/dev/sda",
+                    }
+                }
+            )
+        with pytest.raises(ValidationError):
+            load_config(
+                {
+                    "rangefinder": {
+                        "topology": "companion",
+                        "driver": "tfluna_uart",
+                        "device": "../../etc/shadow",
+                    }
+                }
+            )
+
+    def test_config_accepts_valid_rangefinder_uart_device(self) -> None:
+        cfg = load_config(
+            {
+                "rangefinder": {
+                    "topology": "companion",
+                    "driver": "tfluna_uart",
+                    "device": "/dev/ttyUSB0",
+                }
+            }
+        )
+        assert cfg.rangefinder.device == "/dev/ttyUSB0"
+
+    def test_config_accepts_valid_rangefinder_i2c_bus_identifier(self) -> None:
+        # I2C drivers consume the same ``device`` field as either a bare
+        # bus number or the conventional path form.
+        cfg_digit = load_config(
+            {
+                "rangefinder": {
+                    "topology": "companion",
+                    "driver": "vl53l1x_i2c",
+                    "device": "1",
+                }
+            }
+        )
+        assert cfg_digit.rangefinder.device == "1"
+        cfg_path = load_config(
+            {
+                "rangefinder": {
+                    "topology": "companion",
+                    "driver": "garmin_lidarlite_i2c",
+                    "device": "/dev/i2c-3",
+                }
+            }
+        )
+        assert cfg_path.rangefinder.device == "/dev/i2c-3"
 
 
 # ---------------------------------------------------------------------------

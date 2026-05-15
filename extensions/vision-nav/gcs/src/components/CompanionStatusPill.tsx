@@ -15,11 +15,11 @@ const TONES: Record<NonNullable<VisionNavTelemetry["companionState"]>, Tone> = {
   active: { dot: "var(--vn-ok, #34d399)", label: "Active" },
   critical: { dot: "var(--vn-error, #ef4444)", label: "Critical" },
   terminating: { dot: "var(--vn-error, #ef4444)", label: "Terminating" },
-  absent: { dot: "var(--vn-muted, #6b7280)", label: "Offline" },
+  inactive: { dot: "var(--vn-muted, #6b7280)", label: "Offline" },
 };
 
 export function CompanionStatusPill({ state }: Props): JSX.Element {
-  const tone = state ? TONES[state] : TONES.absent;
+  const tone = state ? TONES[state] : TONES.inactive;
   const pillStyle: CSSProperties = {
     display: "inline-flex",
     alignItems: "center",
@@ -42,7 +42,7 @@ export function CompanionStatusPill({ state }: Props): JSX.Element {
     <span
       style={pillStyle}
       data-testid="vn-companion-pill"
-      data-state={state ?? "absent"}
+      data-state={state ?? "inactive"}
     >
       <span style={dotStyle} aria-hidden="true" />
       <span>Companion: {tone.label}</span>

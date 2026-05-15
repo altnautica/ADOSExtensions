@@ -28,7 +28,12 @@ class CameraConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    device_path: str = "/dev/video0"
+    device_path: str = Field(
+        default="/dev/video0",
+        pattern=r"^/dev/video[0-9]+$",
+        description="V4L2 or CSI video node. Constrained so a malformed "
+        "config cannot point the capture path at an arbitrary device.",
+    )
     bus_type: Literal["uvc", "csi"] = "uvc"
     width: int = Field(default=640, ge=64, le=4096)
     height: int = Field(default=480, ge=64, le=4096)
@@ -53,7 +58,15 @@ class RangefinderConfig(BaseModel):
         "vl53l1x_i2c",
         "fc_relay",
     ] = "fc_relay"
-    device: Optional[str] = None
+    device: Optional[str] = Field(
+        default=None,
+        pattern=r"^/dev/(ttyS|ttyUSB|ttyAMA|ttyACM|serial)[0-9]+$|"
+        r"^[0-9]+$|^/dev/i2c-[0-9]+$",
+        description="UART device path for serial drivers or an I2C bus "
+        "identifier (digit or /dev/i2c-N path) for I2C drivers. "
+        "Constrained so an operator-supplied config cannot open an "
+        "unrelated file as a tty or SMBus.",
+    )
     baud: Optional[int] = Field(default=None, ge=1200, le=1_000_000)
 
 

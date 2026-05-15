@@ -68,7 +68,12 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
       </header>
       <FlowHealthCard telemetry={telemetry} />
       <PreArmStatus telemetry={telemetry} />
-      <EkfSourceSwitcher firmware={props.firmware} ctx={props.ctx} />
+      <EkfSourceSwitcher
+        firmware={props.firmware}
+        ctx={props.ctx}
+        companionState={telemetry.companionState}
+        flowQuality={telemetry.flowQuality}
+      />
       {props.firmware === "ardupilot" ? (
         <ArduPilotVisionParams />
       ) : props.firmware === "px4" ? (

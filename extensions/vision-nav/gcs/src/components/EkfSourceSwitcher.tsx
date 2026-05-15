@@ -2,11 +2,29 @@ import { useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import type { EkfSourceOption, EkfSourceSet, FirmwareType } from "../types";
+import type {
+  EkfSourceOption,
+  EkfSourceSet,
+  FirmwareType,
+  VisionNavTelemetry,
+} from "../types";
 
 interface Props {
   firmware: FirmwareType;
   ctx: PluginContext;
+  /**
+   * Companion process state from the agent heartbeat. The VIO and OF
+   * options are only safe to engage when the companion is "active";
+   * any other state (or undefined) keeps them disabled so a runtime
+   * source switch does not feed the EKF stale or absent data.
+   */
+  companionState?: VisionNavTelemetry["companionState"];
+  /**
+   * Optical-flow quality from the agent heartbeat (0..255). Mirrors the
+   * pre-arm gate at 50: below that, the EKF would receive frames it
+   * would have to reject, triggering an innovation spike on switch.
+   */
+  flowQuality?: number;
 }
 
 const OPTIONS: EkfSourceOption[] = [
@@ -15,11 +33,37 @@ const OPTIONS: EkfSourceOption[] = [
   { set: 3, label: "OF", description: "Optical flow primary." },
 ];
 
-export function EkfSourceSwitcher({ firmware, ctx }: Props): JSX.Element {
+const FLOW_QUALITY_GATE = 50;
+
+export function EkfSourceSwitcher({
+  firmware,
+  ctx,
+  companionState,
+  flowQuality,
+}: Props): JSX.Element {
   const [pending, setPending] = useState<EkfSourceSet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastSwitched, setLastSwitched] = useState<EkfSourceSet | null>(null);
-  const disabled = firmware !== "ardupilot";
+  const isArdu = firmware === "ardupilot";
+  const px4Note = firmware === "px4";
+  const visionHealthy =
+    companionState === "active" && (flowQuality ?? 0) >= FLOW_QUALITY_GATE;
+  // GPS is the revert path; always available on ArduPilot regardless of
+  // vision health.
+  const gpsAlwaysReady = isArdu;
+  const vioReady = isArdu && visionHealthy;
+  const ofReady = isArdu && visionHealthy;
+
+  function readyFor(opt: EkfSourceOption): boolean {
+    if (opt.set === 1) return gpsAlwaysReady;
+    if (opt.set === 2) return vioReady;
+    if (opt.set === 3) return ofReady;
+    return false;
+  }
+
+  const visionUnhealthyTooltip = `Vision not healthy. Companion state: ${
+    companionState ?? "unknown"
+  }, flow quality: ${flowQuality ?? 0}/255.`;
 
   async function confirm(): Promise<void> {
     if (pending === null) return;
@@ -54,7 +98,10 @@ export function EkfSourceSwitcher({ firmware, ctx }: Props): JSX.Element {
     gap: "0.5rem",
     flexWrap: "wrap",
   };
-  const button = (active: boolean): CSSProperties => ({
+  const button = (
+    active: boolean,
+    isDisabled: boolean = !isArdu,
+  ): CSSProperties => ({
     padding: "0.5rem 0.875rem",
     background: active
       ? "var(--vn-accent, #2563eb)"
@@ -63,8 +110,8 @@ export function EkfSourceSwitcher({ firmware, ctx }: Props): JSX.Element {
     border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
     borderRadius: "0.375rem",
     fontSize: "0.8125rem",
-    cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.5 : 1,
+    cursor: isDisabled ? "not-allowed" : "pointer",
+    opacity: isDisabled ? 0.5 : 1,
     fontWeight: 500,
   });
   const tooltip: CSSProperties = {
@@ -90,25 +137,41 @@ export function EkfSourceSwitcher({ firmware, ctx }: Props): JSX.Element {
     <section style={card} data-testid="vn-ekf-switcher">
       <h3 style={heading}>EKF source set</h3>
       <div style={row}>
-        {OPTIONS.map((opt) => (
-          <button
-            key={opt.set}
-            type="button"
-            style={button(lastSwitched === opt.set)}
-            disabled={disabled}
-            onClick={() => setPending(opt.set)}
-            data-testid={`vn-ekf-button-${opt.label.toLowerCase()}`}
-            aria-disabled={disabled}
-            title={opt.description}
-          >
-            {opt.label}
-          </button>
-        ))}
+        {OPTIONS.map((opt) => {
+          const ready = readyFor(opt);
+          const optDisabled = !ready;
+          // GPS is always available on ArduPilot; only VIO and OF carry
+          // the vision-health gate. PX4 stays fully disabled and the
+          // px4Note below explains why.
+          const gatedByHealth = isArdu && opt.set !== 1 && !visionHealthy;
+          const title = gatedByHealth
+            ? visionUnhealthyTooltip
+            : opt.description;
+          return (
+            <button
+              key={opt.set}
+              type="button"
+              style={button(lastSwitched === opt.set, optDisabled)}
+              disabled={optDisabled}
+              onClick={() => setPending(opt.set)}
+              data-testid={`vn-ekf-button-${opt.label.toLowerCase()}`}
+              aria-disabled={optDisabled}
+              title={title}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
       </div>
-      {disabled ? (
+      {px4Note ? (
         <p style={tooltip} data-testid="vn-ekf-px4-note">
           PX4 does not support runtime source-set switching. Update parameters
           and restart the EKF.
+        </p>
+      ) : null}
+      {isArdu && !visionHealthy ? (
+        <p style={tooltip} data-testid="vn-ekf-vision-unhealthy-note">
+          {visionUnhealthyTooltip}
         </p>
       ) : null}
       {pending !== null ? (
