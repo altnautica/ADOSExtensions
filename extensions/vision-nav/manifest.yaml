@@ -1,0 +1,66 @@
+schema_version: 2
+id: com.altnautica.vision-nav
+name: "ADOS Vision Navigation"
+version: "0.1.0"
+description: "GPS-denied navigation via downward optical flow. Supports ArduPilot (FLOW_TYPE=5) and PX4 (EKF2_OF_CTRL) on USB UVC or CSI cameras."
+author: "Altnautica"
+homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/vision-nav"
+license: "GPL-3.0-or-later"
+risk: high
+contains_vendor_binary: false
+
+compatibility:
+  ados_version: ">=0.13.0"
+  gcs_version: ">=0.12.0"
+  supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "pi-zero-2w"]
+
+agent:
+  entrypoint: "altnautica_vision_nav.plugin:VisionNavPlugin"
+  isolation: subprocess
+  per_drone_config: true
+  permissions:
+    - id: hardware.usb.uvc
+    - id: hardware.camera.csi
+    - id: hardware.uart
+    - id: hardware.i2c
+    - id: sensor.camera.register
+    - id: sensor.depth.register
+    - id: telemetry.extend
+    - id: event.publish
+    - id: event.subscribe
+    - id: mavlink.read
+    - id: mavlink.write
+    - id: mavlink.component.vio
+    - id: estimator.pose.inject
+  resources:
+    max_ram_mb: 256
+    max_cpu_percent: 60
+    max_pids: 16
+  mavlink_components:
+    - component_id: 198
+      component_kind: peripheral
+      sub_id: 1
+
+gcs:
+  entrypoint: "gcs/plugin.bundle.js"
+  isolation: iframe
+  permissions:
+    - id: ui.slot.drone-detail-tab
+    - id: ui.slot.video-overlay
+    - id: ui.slot.notification-channel
+    - id: telemetry.subscribe
+    - id: command.send
+  contributes:
+    panels:
+      - id: vision-nav-tab
+        slot: drone.detail.tab
+        title: "Vision Nav"
+        icon: "compass"
+        order: 60
+    notifications:
+      - id: vision-nav-degraded
+        title: "Vision navigation degraded"
+        severity: warning
+
+locales:
+  - en

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "altnautica-vision-nav"
+version = "0.1.0"
+description = "ADOS plugin: optical-flow GPS-denied navigation (agent half)."
+readme = "../README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+authors = [{ name = "Altnautica" }]
+keywords = ["ados", "plugin", "vision", "optical-flow", "mavlink"]
+dependencies = [
+  "opencv-python-headless>=4.9",
+  "pyserial>=3.5",
+  "smbus2>=0.4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23"]
+
+[project.entry-points."ados.plugins"]
+"com.altnautica.vision-nav" = "altnautica_vision_nav.plugin:VisionNavPlugin"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/altnautica_vision_nav"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,139 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Vision Navigation",
+  "description": "Per-drone configuration for the ADOS Vision Navigation plugin.",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "Operating mode. Optical flow is the only mode in this release.",
+      "default": "off",
+      "enum": ["off", "optical_flow"]
+    },
+    "camera": {
+      "type": "object",
+      "title": "Camera",
+      "properties": {
+        "device_path": {
+          "type": "string",
+          "title": "Device path",
+          "description": "V4L2 or CSI device node (for example /dev/video0).",
+          "default": "/dev/video0"
+        },
+        "bus_type": {
+          "type": "string",
+          "title": "Bus type",
+          "default": "uvc",
+          "enum": ["uvc", "csi"]
+        },
+        "width": {
+          "type": "integer",
+          "title": "Capture width",
+          "default": 640,
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "height": {
+          "type": "integer",
+          "title": "Capture height",
+          "default": 480,
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "fps": {
+          "type": "integer",
+          "title": "Frames per second",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 240
+        }
+      },
+      "required": ["bus_type"]
+    },
+    "rangefinder": {
+      "type": "object",
+      "title": "Rangefinder",
+      "description": "Distance source used to scale optical flow into metric velocity.",
+      "properties": {
+        "topology": {
+          "type": "string",
+          "title": "Topology",
+          "description": "Where the rangefinder is wired. companion = plugin reads it; fc = flight controller already publishes DISTANCE_SENSOR; none = no rangefinder.",
+          "default": "companion",
+          "enum": ["companion", "fc", "none"]
+        },
+        "driver": {
+          "type": "string",
+          "title": "Driver",
+          "default": "tfluna_uart",
+          "enum": ["tfluna_uart", "garmin_lidarlite_i2c", "vl53l1x_i2c", "fc_relay"]
+        },
+        "device": {
+          "type": "string",
+          "title": "Device node",
+          "description": "Serial device or I2C bus path. Optional when topology is fc or none."
+        },
+        "baud": {
+          "type": "integer",
+          "title": "Baud rate",
+          "description": "Only used for UART-based drivers.",
+          "default": 115200,
+          "minimum": 1200,
+          "maximum": 1000000
+        }
+      },
+      "required": ["topology"]
+    },
+    "firmware": {
+      "type": "object",
+      "title": "Flight firmware",
+      "properties": {
+        "type": {
+          "type": "string",
+          "title": "Firmware",
+          "default": "ardupilot",
+          "enum": ["ardupilot", "px4"]
+        },
+        "ekf_source_set_index": {
+          "type": "integer",
+          "title": "EKF source set index",
+          "description": "ArduPilot EK3_SRCn set (1-3) that selects the vision-flow source group.",
+          "minimum": 1,
+          "maximum": 3
+        }
+      },
+      "required": ["type"]
+    },
+    "pre_arm": {
+      "type": "object",
+      "title": "Pre-arm origin",
+      "description": "Optional pre-arm helper that pushes a synthetic origin when the firmware refuses to arm without one.",
+      "properties": {
+        "auto_set_origin": {
+          "type": "boolean",
+          "title": "Auto-set EKF origin",
+          "default": false
+        },
+        "origin_lat": {
+          "type": "number",
+          "title": "Origin latitude (deg)",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "origin_lon": {
+          "type": "number",
+          "title": "Origin longitude (deg)",
+          "minimum": -180,
+          "maximum": 180
+        },
+        "origin_alt_m": {
+          "type": "number",
+          "title": "Origin altitude (m AMSL)",
+          "default": 0
+        }
+      }
+    }
+  },
+  "required": ["mode", "camera", "firmware"]
+}
