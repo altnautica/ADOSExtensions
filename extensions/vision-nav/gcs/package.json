@@ -5,14 +5,19 @@
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/plugin.ts --bundle --format=esm --target=es2022 --outfile=plugin.bundle.js --minify",
+    "build": "esbuild src/plugin.tsx --bundle --format=esm --target=es2022 --jsx=automatic --outfile=plugin.bundle.js --minify",
     "test": "vitest run",
     "lint:manifest": "node ../../../scripts/lint-manifest.mjs ../manifest.yaml"
   },
   "dependencies": {
-    "@altnautica/plugin-sdk": "workspace:^"
+    "@altnautica/plugin-sdk": "workspace:^",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.0.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
     "esbuild": "^0.24.0",
     "happy-dom": "^15.7.4",
     "typescript": "^5.6.3",
