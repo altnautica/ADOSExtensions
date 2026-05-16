@@ -172,9 +172,18 @@ class VisionNavPlugin:
 
         topology = self._topology_label(self._config)
         recommended_camera = self._config.camera.device_path or None
+        # The registry import is local to keep the plugin module light
+        # at import time. The registry currently advertises the two
+        # estimator keys actually wired ("off", "optical_flow");
+        # rangefinder-free OF and VIO entries surface automatically as
+        # new estimators land in the registry.
+        from altnautica_vision_nav.estimators import available_estimators
+
         self._health = HealthPublisher(
             rangefinder_topology=topology,
             recommended_camera_id=recommended_camera,
+            mode=self._config.mode,
+            available_estimators=available_estimators(),
         )
         self._health.start(ctx)
         self._health.update_companion_state(CompanionState.INACTIVE)

@@ -25,9 +25,15 @@ interface Props {
    * would have to reject, triggering an innovation spike on switch.
    */
   flowQuality?: number;
+  /**
+   * Whether the agent advertises a working VIO estimator. The VIO
+   * source set is hidden entirely when this is false so the operator
+   * never sees a button that will silently fail.
+   */
+  vioSupported?: boolean;
 }
 
-const OPTIONS: EkfSourceOption[] = [
+const ALL_OPTIONS: EkfSourceOption[] = [
   { set: 1, label: "GPS", description: "Default. GPS + baro + compass." },
   { set: 2, label: "VIO", description: "Visual-inertial odometry primary." },
   { set: 3, label: "OF", description: "Optical flow primary." },
@@ -40,6 +46,7 @@ export function EkfSourceSwitcher({
   ctx,
   companionState,
   flowQuality,
+  vioSupported,
 }: Props): JSX.Element {
   const [pending, setPending] = useState<EkfSourceSet | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +55,9 @@ export function EkfSourceSwitcher({
   const px4Note = firmware === "px4";
   const visionHealthy =
     companionState === "active" && (flowQuality ?? 0) >= FLOW_QUALITY_GATE;
+  const OPTIONS = ALL_OPTIONS.filter(
+    (opt) => opt.set !== 2 || vioSupported === true,
+  );
   // GPS is the revert path; always available on ArduPilot regardless of
   // vision health.
   const gpsAlwaysReady = isArdu;

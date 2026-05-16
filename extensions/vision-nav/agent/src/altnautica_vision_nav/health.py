@@ -25,6 +25,32 @@ log = logging.getLogger(__name__)
 
 TICK_INTERVAL_S = 1.0
 
+# Map the comp-198 companion state to the GCS-facing estimator state.
+# The mapping mirrors how the operator reads the card today: when the
+# companion is active the OF estimator is steady-state, when it is
+# critical the OF samples are being dropped (so the estimator is
+# degraded), and when the companion is offline there is no estimator.
+_COMPANION_TO_ESTIMATOR_STATE = {
+    CompanionState.INACTIVE: "off",
+    CompanionState.ACTIVE: "converged",
+    CompanionState.CRITICAL: "degraded",
+    CompanionState.TERMINATING: "failed",
+}
+
+
+def _scale_source_for_topology(topology: Optional[str]) -> Optional[str]:
+    """Derive the flow-scale-source label from the rangefinder topology.
+
+    Today this only emits ``"rangefinder"`` (when a rangefinder of
+    any topology is present) or ``None``. Once the rangefinder-free
+    estimator lands and the active scale source is known per-sample,
+    ``"baro"`` / ``"gps"`` / ``"vision"`` join the value set.
+    """
+
+    if topology in ("companion", "fc", "both"):
+        return "rangefinder"
+    return None
+
 
 class HealthPublisher:
     """Periodically publish a ``navigation`` block on the agent telemetry bus.
@@ -40,9 +66,15 @@ class HealthPublisher:
         *,
         rangefinder_topology: Optional[str] = None,
         recommended_camera_id: Optional[str] = None,
+        mode: Optional[str] = None,
+        available_estimators: Optional[list[str]] = None,
     ) -> None:
         self._rangefinder_topology = rangefinder_topology
         self._recommended_camera_id = recommended_camera_id
+        self._mode = mode
+        self._available_estimators = (
+            list(available_estimators) if available_estimators else []
+        )
         self._latest_flow_quality: Optional[int] = None
         self._latest_flow_rate_hz: Optional[float] = None
         self._latest_distance_m: Optional[float] = None
@@ -67,6 +99,27 @@ class HealthPublisher:
         """Set the camera id surfaced as the GCS recommended device."""
 
         self._recommended_camera_id = camera_id
+
+    def set_mode(self, mode: Optional[str]) -> None:
+        """Set the active estimator-mode label surfaced on the heartbeat.
+
+        Values mirror the config ``mode`` literal (``"off"``,
+        ``"optical_flow"`` today; ``"optical_flow_degraded"`` and the
+        VIO modes are added in later phases). The GCS mode picker
+        renders this as the currently-selected option.
+        """
+
+        self._mode = mode
+
+    def set_available_estimators(self, estimators: list[str]) -> None:
+        """Set the list of estimator keys this plugin instance can run.
+
+        Mirrors the registry at start-up. The GCS uses this to gate the
+        mode-picker options so the operator never sees an estimator the
+        agent can't instantiate.
+        """
+
+        self._available_estimators = list(estimators)
 
     def update_companion_state(self, state: CompanionState) -> None:
         """Mirror the comp 198 companion state into the heartbeat block."""
@@ -125,6 +178,10 @@ class HealthPublisher:
         renders a stable card even when no frames have flown yet.
         """
 
+        estimator_state = _COMPANION_TO_ESTIMATOR_STATE.get(
+            self._companion_state, "off"
+        )
+        scale_source = _scale_source_for_topology(self._rangefinder_topology)
         return {
             "opticalFlowSupported": True,
             "vioSupported": False,
@@ -137,6 +194,14 @@ class HealthPublisher:
             "vioResetCounter": 0,
             "vioQuality": None,
             "companionState": self._companion_state.name.lower(),
+            # Additive fields from the estimator-framework. All
+            # optional on the GCS side so an older GCS render path
+            # stays correct, and so this snapshot stays a strict
+            # superset of the previous shape.
+            "mode": self._mode,
+            "availableEstimators": list(self._available_estimators),
+            "estimatorState": estimator_state,
+            "flowScaleSource": scale_source,
         }
 
     # ------------------------------------------------------------------

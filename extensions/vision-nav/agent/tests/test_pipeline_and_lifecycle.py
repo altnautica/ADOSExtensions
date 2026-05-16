@@ -552,7 +552,11 @@ class TestHealthPublisher:
         health.update_companion_state(CompanionState.ACTIVE)
 
         snapshot = health.snapshot()
-        # Field names are camelCase end-to-end.
+        # Field names are camelCase end-to-end. The four additive
+        # keys (mode, availableEstimators, estimatorState,
+        # flowScaleSource) come from the estimator-framework scaffold
+        # and ride alongside the legacy fields; the GCS normalizer
+        # treats them as optional so a rolling upgrade keeps working.
         expected_keys = {
             "opticalFlowSupported",
             "vioSupported",
@@ -565,6 +569,10 @@ class TestHealthPublisher:
             "vioResetCounter",
             "vioQuality",
             "companionState",
+            "mode",
+            "availableEstimators",
+            "estimatorState",
+            "flowScaleSource",
         }
         assert set(snapshot.keys()) == expected_keys
         # Snake case must not leak into the payload.

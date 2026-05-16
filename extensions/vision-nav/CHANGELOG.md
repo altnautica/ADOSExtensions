@@ -78,6 +78,6 @@ ArduPilot and PX4 GPS-denied flight.
 - Stereo cameras are unsupported.
 - The plugin requires a rangefinder; fully visual-only operation is
   not supported.
-- Auto-takeoff with vision navigation has been bench-validated at
-  ground clearances of 1.5 m to 3 m. Higher takeoff altitudes work
-  but are not bench-validated.
+- Production-flight validation has not yet been performed. Behaviour
+  under real flight loads will be characterised in a published
+  validation matrix before the next release.
