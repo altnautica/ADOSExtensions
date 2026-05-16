@@ -16,7 +16,7 @@ vendor_attribution:
   - name: "OpenVINS"
     license: "GPL-3.0-only"
     source_url: "https://github.com/rpng/open_vins"
-    upstream_version: "v2.7.1"
+    upstream_version: "v2.7"
     notice: "VIO mode ``vio_openvins`` uses the OpenVINS estimator from the Robot Perception and Navigation Group at the University of Delaware."
   - name: "VINS-Fusion"
     license: "GPL-3.0-only"
