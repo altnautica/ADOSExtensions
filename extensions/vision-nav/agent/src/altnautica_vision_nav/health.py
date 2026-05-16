@@ -68,6 +68,10 @@ class HealthPublisher:
         recommended_camera_id: Optional[str] = None,
         mode: Optional[str] = None,
         available_estimators: Optional[list[str]] = None,
+        suggested_mode: Optional[str] = None,
+        suggested_mode_reason: Optional[str] = None,
+        detected_camera_count: Optional[int] = None,
+        detected_rangefinder_driver: Optional[str] = None,
     ) -> None:
         self._rangefinder_topology = rangefinder_topology
         self._recommended_camera_id = recommended_camera_id
@@ -75,6 +79,10 @@ class HealthPublisher:
         self._available_estimators = (
             list(available_estimators) if available_estimators else []
         )
+        self._suggested_mode = suggested_mode
+        self._suggested_mode_reason = suggested_mode_reason
+        self._detected_camera_count = detected_camera_count
+        self._detected_rangefinder_driver = detected_rangefinder_driver
         self._latest_flow_quality: Optional[int] = None
         self._latest_flow_rate_hz: Optional[float] = None
         self._latest_distance_m: Optional[float] = None
@@ -120,6 +128,28 @@ class HealthPublisher:
         """
 
         self._mode = mode
+
+    def set_autodetect_summary(
+        self,
+        *,
+        suggested_mode: Optional[str],
+        suggested_mode_reason: Optional[str],
+        detected_camera_count: Optional[int],
+        detected_rangefinder_driver: Optional[str],
+    ) -> None:
+        """Record the auto-detect result for the heartbeat.
+
+        Called once at start-up after the auto-detect pass; the GCS
+        renders the suggested mode as the default ModeCard selection
+        when the operator has not picked one explicitly. The detected
+        counts surface on the SensorsCard so the operator sees what the
+        agent found.
+        """
+
+        self._suggested_mode = suggested_mode
+        self._suggested_mode_reason = suggested_mode_reason
+        self._detected_camera_count = detected_camera_count
+        self._detected_rangefinder_driver = detected_rangefinder_driver
 
     def set_available_estimators(self, estimators: list[str]) -> None:
         """Set the list of estimator keys this plugin instance can run.
@@ -262,6 +292,10 @@ class HealthPublisher:
             "cameraImuSyncOffsetMs": self._read_sync_offset_ms(),
             "cameraIntrinsicsLoaded": self._intrinsics_loaded,
             "preArmReport": self._read_pre_arm_report(),
+            "suggestedMode": self._suggested_mode,
+            "suggestedModeReason": self._suggested_mode_reason,
+            "detectedCameraCount": self._detected_camera_count,
+            "detectedRangefinderDriver": self._detected_rangefinder_driver,
         }
 
     def _read_pre_arm_report(self) -> Optional[dict]:

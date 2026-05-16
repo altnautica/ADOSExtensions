@@ -6,6 +6,20 @@ All notable changes to the Vision Navigation extension.
 
 ### Added
 
+- **Hardware auto-detect on start-up.** New
+  `altnautica_vision_nav.autodetect` package probes the host profile
+  (refusing to enable on ground-station-profile hosts), enumerates
+  `/dev/video*` cameras with a CSI hint, scans I2C buses for
+  LIDAR-Lite (0x62) and VL53L1X (0x29), probes UART for TF-Luna at
+  115200, and derives a `suggestedMode` from the detected hardware.
+  The plugin merges detected defaults into config when the operator
+  has left a field unset (operator-set values always win).
+- **Auto-flip from `optical_flow` to `optical_flow_degraded`** when
+  no rangefinder is detected, with a log line explaining the flip.
+- **Four new heartbeat fields**: `suggestedMode`, `suggestedModeReason`,
+  `detectedCameraCount`, `detectedRangefinderDriver`. The GCS
+  ModeCard renders a "Suggested" badge on the recommended mode when
+  it does not match the active selection.
 - **In-app calibration wizard.** Tapping Calibrate on the sensors
   card now opens a seven-step guided flow inside the Vision Nav tab:
   target check (with the bundled AprilGrid PDF), live camera preview

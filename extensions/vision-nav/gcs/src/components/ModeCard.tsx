@@ -150,6 +150,8 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
         {renderable.map((opt) => {
           const selected = opt.id === selectedNow;
           const isPending = pendingMode === opt.id && current !== opt.id;
+          const isSuggested =
+            telemetry.suggestedMode === opt.id && current !== opt.id;
           return (
             <button
               key={opt.id}
@@ -157,7 +159,11 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
               style={button(selected)}
               data-testid={`vn-mode-button-${opt.id}`}
               aria-pressed={selected}
-              title={`${opt.description}\n\n${opt.needs}`}
+              title={
+                isSuggested && telemetry.suggestedModeReason
+                  ? `${opt.description}\n\n${opt.needs}\n\nSuggested: ${telemetry.suggestedModeReason}`
+                  : `${opt.description}\n\n${opt.needs}`
+              }
               onClick={() => {
                 void handleModeClick(opt.id);
               }}
@@ -165,6 +171,14 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
               <div style={btnLabel}>
                 {opt.label}
                 {isPending ? " ..." : null}
+                {isSuggested && !isPending ? (
+                  <span
+                    style={suggestedBadge}
+                    data-testid={`vn-mode-suggested-${opt.id}`}
+                  >
+                    {tr(t, "navigation.modeCard.suggested", "Suggested")}
+                  </span>
+                ) : null}
               </div>
               <div style={btnNeeds}>{opt.needs}</div>
             </button>
@@ -268,7 +282,23 @@ const button = (active: boolean): CSSProperties => ({
   textAlign: "left",
   fontSize: "0.8125rem",
 });
-const btnLabel: CSSProperties = { fontWeight: 600 };
+const btnLabel: CSSProperties = {
+  fontWeight: 600,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "0.375rem",
+  flexWrap: "wrap",
+};
+const suggestedBadge: CSSProperties = {
+  fontSize: "0.6rem",
+  fontWeight: 700,
+  padding: "0.0625rem 0.375rem",
+  borderRadius: "0.25rem",
+  background: "var(--vn-accent-soft, rgba(37,99,235,0.18))",
+  color: "var(--vn-accent, #2563eb)",
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+};
 const btnNeeds: CSSProperties = {
   fontSize: "0.7rem",
   color: "var(--vn-text-muted, #94a3b8)",

@@ -39,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -121,6 +122,22 @@ def _i2c_bus_number(device: str, default: int) -> int:
     return default
 
 
+@dataclass(frozen=True)
+class _AutoDetectSummary:
+    """Compact result of the start-up auto-detect pass.
+
+    Wired into the health publisher so the heartbeat surfaces every
+    field directly. The plugin keeps this internal-only; the GCS sees
+    the data via the heartbeat shape rather than this dataclass.
+    """
+
+    camera_count: int
+    picked_camera_path: Optional[str]
+    rangefinder_driver: Optional[str]
+    suggested_mode: str
+    suggested_reason: str
+
+
 class VisionNavPlugin:
     """Plugin entry point loaded by the agent supervisor."""
 
@@ -154,7 +171,30 @@ class VisionNavPlugin:
         self._log_info(ctx, "vision_nav_installed", version=PLUGIN_VERSION)
 
     async def on_enable(self, ctx: object) -> None:
-        self._log_info(ctx, "vision_nav_enabled")
+        # Refuse to enable on ground-station-profile hosts. The plugin
+        # owns a video capture device + an FC MAVLink channel; both are
+        # exclusive resources a ground station does not have. The host
+        # profile check happens here (not in on_start) so the
+        # supervisor's enable-failed surface reaches the GCS install
+        # dialog directly.
+        from altnautica_vision_nav.autodetect import (
+            detect_host_profile,
+            is_drone_profile,
+        )
+
+        profile = detect_host_profile()
+        if not is_drone_profile(profile):
+            self._log_warning(
+                ctx,
+                "vision_nav_refused_on_ground_station",
+                profile=profile.profile,
+                source=profile.source,
+            )
+            raise RuntimeError(
+                "vision-nav is a drone-side plugin and cannot enable on a "
+                f"{profile.profile} host"
+            )
+        self._log_info(ctx, "vision_nav_enabled", profile=profile.profile)
 
     async def on_configure(self, ctx: object, config: object) -> None:
         raw = config if isinstance(config, dict) else {}
@@ -187,6 +227,12 @@ class VisionNavPlugin:
         if self._config is None:
             self._config = load_config({})
         self._ctx = ctx
+
+        # Auto-detect hardware + merge into config. Runs before any
+        # capture or peripheral opens so the picked camera + auto-flip
+        # mode are the values the rest of the start-up sees.
+        autodetect_summary = self._auto_detect_hardware(ctx)
+        self._auto_flip_mode_for_hardware(ctx, autodetect_summary)
 
         # MAVLink components register first so subscribers see the
         # peripherals on the bus before the first emit.
@@ -229,6 +275,10 @@ class VisionNavPlugin:
             recommended_camera_id=recommended_camera,
             mode=self._config.mode,
             available_estimators=available_estimators(),
+            suggested_mode=autodetect_summary.suggested_mode,
+            suggested_mode_reason=autodetect_summary.suggested_reason,
+            detected_camera_count=autodetect_summary.camera_count,
+            detected_rangefinder_driver=autodetect_summary.rangefinder_driver,
         )
         self._health.attach_imu_source(self._imu_source)
         self._health.attach_time_aligner(self._time_aligner)
@@ -610,6 +660,114 @@ class VisionNavPlugin:
         if not callable(spawn):
             return None
         return spawn
+
+    # ------------------------------------------------------------------
+    # Hardware auto-detect
+    # ------------------------------------------------------------------
+
+    def _auto_detect_hardware(self, ctx: object) -> "_AutoDetectSummary":
+        """Probe cameras, rangefinder, IMU; merge into the live config.
+
+        Returns a small typed summary the heartbeat surfaces verbatim.
+        Side effects: when the operator's config left
+        ``camera.device_path`` at the default ``/dev/video0`` and a
+        camera was actually found at a different node, the detected
+        path wins. The rangefinder topology + driver get the same
+        treatment when the operator's config is at the defaults.
+        """
+
+        from altnautica_vision_nav.autodetect import (
+            derive_suggested_mode,
+            detect_cameras,
+            detect_rangefinder,
+        )
+        from altnautica_vision_nav.autodetect.camera import pick_camera_for_mode
+
+        config = self._config
+        assert config is not None  # callers set this in on_start
+
+        cameras = detect_cameras()
+        picked = pick_camera_for_mode(cameras, config.mode)
+        rangefinder = detect_rangefinder()
+
+        # Merge picked camera path into config when the operator left
+        # it at the default. Operator-set paths always win.
+        if picked is not None:
+            cfg_default = config.camera.device_path in ("", "/dev/video0")
+            if cfg_default and picked.device_path != config.camera.device_path:
+                # Pydantic v2: rebuild the camera sub-model with the
+                # picked device path.
+                config.camera = config.camera.model_copy(
+                    update={"device_path": picked.device_path}
+                )
+                self._log_info(
+                    ctx,
+                    "vision_nav_auto_picked_camera",
+                    device=picked.device_path,
+                    kind=picked.kind,
+                )
+
+        # Merge detected rangefinder when the operator left topology
+        # at the default ("none").
+        if rangefinder is not None and config.rangefinder.topology == "none":
+            config.rangefinder = config.rangefinder.model_copy(
+                update={
+                    "topology": rangefinder.topology,
+                    "driver": rangefinder.driver,
+                }
+            )
+            self._log_info(
+                ctx,
+                "vision_nav_auto_picked_rangefinder",
+                driver=rangefinder.driver,
+                bus=rangefinder.bus,
+            )
+
+        suggestion = derive_suggested_mode(
+            has_camera=picked is not None,
+            has_rangefinder=rangefinder is not None,
+            # Future hooks: forward-camera and NPU-board detection
+            # roll in once the HAL board fingerprint becomes
+            # available to the plugin via ctx.hal. For v1 the
+            # suggestion only differentiates OF / OF-degraded / off.
+            has_forward_camera=False,
+            has_npu_board=False,
+        )
+
+        return _AutoDetectSummary(
+            camera_count=len(cameras),
+            picked_camera_path=picked.device_path if picked else None,
+            rangefinder_driver=(
+                rangefinder.driver if rangefinder is not None else None
+            ),
+            suggested_mode=suggestion.mode,
+            suggested_reason=suggestion.reason,
+        )
+
+    def _auto_flip_mode_for_hardware(
+        self, ctx: object, summary: "_AutoDetectSummary"
+    ) -> None:
+        """Flip the active mode when the hardware does not support it.
+
+        The single auto-flip today: ``optical_flow`` -> ``optical_flow_degraded``
+        when no rangefinder was detected. The plugin logs the flip so
+        the operator sees it in the agent journal; the GCS surfaces it
+        via the suggestedMode mismatch with the active mode.
+        """
+
+        config = self._config
+        if config is None:
+            return
+        if (
+            config.mode == "optical_flow"
+            and summary.rangefinder_driver is None
+        ):
+            self._log_info(
+                ctx,
+                "vision_nav_auto_flip_to_degraded",
+                reason="no rangefinder detected; falling back to OF degraded",
+            )
+            config.mode = "optical_flow_degraded"
 
     # ------------------------------------------------------------------
     # IMU

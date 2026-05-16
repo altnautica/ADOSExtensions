@@ -583,6 +583,10 @@ class TestHealthPublisher:
             "cameraImuSyncOffsetMs",
             "cameraIntrinsicsLoaded",
             "preArmReport",
+            "suggestedMode",
+            "suggestedModeReason",
+            "detectedCameraCount",
+            "detectedRangefinderDriver",
         }
         assert set(snapshot.keys()) == expected_keys
         # Snake case must not leak into the payload.
