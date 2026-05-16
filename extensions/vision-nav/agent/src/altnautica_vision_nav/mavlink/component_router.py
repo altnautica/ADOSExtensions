@@ -83,6 +83,13 @@ class MavlinkComponentRouter:
             await self._emit_of(sample)
         elif sample.output_mode == "vio":
             await self._emit_vio(sample)
+            # Hybrid mode rides a co-emitted OF sample in extras so a
+            # single hybrid tick produces wire emissions on both
+            # MAVLink components (197 + 198). The OF emission is
+            # silent if the OF sub-estimator did not produce output.
+            of_extra = sample.extras.get("of_output") if sample.extras else None
+            if of_extra is not None:
+                await self._emit_of(of_extra)
         # "none" outputs are deliberately silent.
 
     async def _emit_of(self, sample: EstimatorOutput) -> None:

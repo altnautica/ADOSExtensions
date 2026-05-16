@@ -2,6 +2,131 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [Unreleased]
+
+The plugin's estimator framework is now modular. Optical flow, the
+rangefinder-free degraded mode, and two visual-inertial odometry
+engines (OpenVINS and VINS-Fusion) all plug in behind one
+`BaseEstimator` ABC. A hybrid mode runs an OF estimator and a VIO
+estimator side-by-side. The VIO engines spawn vendor binaries via
+the plugin host's subprocess sandbox; the Python plumbing, GCS
+surfaces, pre-arm gate, and component router ship in this release.
+Vendor-binary builds and on-rig validation are pending.
+
+### Added
+
+- **Estimator framework.** `BaseEstimator` ABC + `EstimatorOutput`
+  dataclass + `ESTIMATOR_REGISTRY` that maps each config mode to a
+  concrete estimator class. Adding a new estimator is a single file
+  plus a registry entry.
+- **`optical_flow_degraded` mode.** Runs the same Lucas-Kanade
+  tracker but pulls scale from a four-rung baro/GPS/static fallback
+  ladder when no rangefinder is wired. Per-rung quality multipliers
+  (0.7 / 0.6 / 0.4 / 0.2) so the EKF auto-de-weights degraded scale
+  sources.
+- **`vio_openvins` and `vio_vins_fusion` modes.** Monocular visual-
+  inertial odometry. The Python shim spawns a vendor binary
+  (`ados_openvins_shim` or `ados_vins_fusion_shim`) via the plugin
+  host's `process.spawn` allowlist; frames flow through a shared-
+  memory ring and IMU + pose messages flow through a Unix-domain
+  socket encoded as length-prefixed msgpack. Heartbeat watchdog
+  restarts the binary on silence.
+- **`hybrid_of_plus_vio` mode.** Runs an OF child + a VIO child on
+  independent cameras. The component router emits on both MAVLink
+  components in parallel; the combined state is the worse of the
+  two child estimators.
+- **Full IMU subscription.** The new `imu/` package replaces the
+  gyro-only tap with a full gyro+accel reader. Prefers
+  `SCALED_IMU2` (100 Hz) when the FC publishes it; falls back to
+  `RAW_IMU`. A `TimeAligner` pairs each camera frame with the
+  closest IMU sample and tracks the rolling residual offset.
+- **Camera-IMU time-sync drift bands.** Green (≤10 ms residual),
+  yellow (10 to 30 ms), red (>30 ms). VIO pre-arm refuses to arm
+  when the band is red; the GCS sensors card colour-codes the live
+  residual.
+- **Calibration loaders.** Kalibr-compatible `camchain.yaml` loaders
+  for both intrinsics (pinhole + radtan / equidistant / none) and
+  camera-IMU extrinsics (SE(3) transform + scalar time offset).
+  Both layouts accepted (`cam0` wrapper or bare block); multi-camera
+  files accepted with the extra cameras ignored.
+- **`VISION_POSITION_ESTIMATE` MAVLink emission.** The component
+  router emits message 102 on MAVLink component 197
+  (`MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY`) at 30 Hz when a VIO mode
+  is active. ArduPilot's EKF3 fuses these when `EK3_SRC1_*` are set
+  to `ExternalNav`.
+- **Pre-arm gate.** Mode-aware arm-readiness evaluator. For OF
+  modes: companion active + flow quality ≥ 50 + rangefinder or
+  scale source. For VIO modes: companion active + estimator
+  converged + intrinsics + extrinsics + sync offset ≤ 30 ms +
+  feature count ≥ 20. Hybrid runs both check sets. Heartbeat
+  surfaces the full per-check report so the GCS pre-arm card
+  renders the live status.
+- **GCS mode picker.** The Navigation tab now hosts a segmented
+  mode picker filtered against the agent's `availableEstimators`.
+  Operator selects the mode at runtime; the heartbeat updates on
+  the next tick.
+- **GCS sensors card.** Camera row (device + resolution + FPS +
+  Calibrate CTA), IMU row (source + rate + sync-offset pill),
+  rangefinder row (driver + last reading + freshness).
+- **GCS estimator card.** Engine + state pill + flow quality + VIO
+  rows (features, drift, resets) + sync offset trend.
+- **GCS telemetry charts.** Inline-SVG sparklines for flow quality,
+  sync offset, feature count, and drift over a rolling 60-second
+  window.
+- **GCS fallback banner.** Appears when the estimator is degraded
+  or failed. Names the most likely cause (low flow quality, sync
+  drift, missing scale source, low feature count) and suggests a
+  concrete next action.
+- **Mode-aware fleet pill.** The Mission Control drone-card pill
+  reads the active mode and renders the right short label: "OF",
+  "OF*" (degraded), "VIO", or "Hybrid". Falls back to "GPS-denied"
+  for older agents that predate the mode field.
+- **Heartbeat schema additive fields.** `mode`,
+  `availableEstimators`, `estimatorState`, `flowScaleSource`,
+  `imuSource`, `imuRateHz`, `cameraImuSyncOffsetMs`,
+  `cameraIntrinsicsLoaded`, `estimatorFeatureCount`,
+  `estimatorDriftEstimateM`, `preArmReport`. All optional; older
+  GCS instances ignore them without breaking.
+
+### Changed
+
+- The MAVLink `EkfSourceSwitcher` now strict-gates the VIO button
+  on `vioSupported`. The button is hidden, not greyed, when no VIO
+  engine is wired so the operator never sees an option that
+  silently fails.
+- The `mode` config field grew from `off | optical_flow` to all six
+  modes.
+- `max_ram_mb` raised to 512 (was 256) to accommodate the VIO
+  engines when active.
+- The plugin now declares `contains_vendor_binary: true` with a
+  `vendor_attribution` block covering OpenVINS and VINS-Fusion per
+  GPL §6.
+
+### Documentation
+
+Four new pages on `docs.altnautica.com`:
+
+- [Modes](https://docs.altnautica.com/drone-agent/vision-nav-modes)
+  — per-mode breakdown + pre-arm matrix + fallback ladder.
+- [Calibration](https://docs.altnautica.com/drone-agent/vision-nav-calibration)
+  — Kalibr YAML format + capture workflow + time-sync drift bands.
+- [Troubleshooting](https://docs.altnautica.com/drone-agent/vision-nav-troubleshooting)
+  — decision trees for the four common failure families.
+- [Architecture](https://docs.altnautica.com/drone-agent/vision-nav-architecture)
+  — module map + EstimatorOutput contract + IPC protocol + "adding
+  a new estimator" recipe.
+
+### Known limitations
+
+- Vendor binaries (`ados_openvins_shim`, `ados_vins_fusion_shim`)
+  ship from a separate CI job. Without them the plugin runs the
+  OF modes; selecting a `vio_*` mode without the binary surfaces a
+  clear error.
+- On-rig validation is pending. Behaviour under real flight loads
+  will be characterised in a published matrix before the modes
+  are marked validated. The documentation does not claim
+  bench-validation for any case until the matrix lands.
+
 ## [0.1.0] - 2026-05-16
 
 Initial release. Optical flow capture and MAVLink emission for

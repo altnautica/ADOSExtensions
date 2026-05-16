@@ -23,6 +23,7 @@ from altnautica_vision_nav.estimators.base import (
     OutputMode,
     ScaleSource,
 )
+from altnautica_vision_nav.estimators.hybrid import HybridEstimator
 from altnautica_vision_nav.estimators.null_estimator import NullEstimator
 from altnautica_vision_nav.estimators.optical_flow import OpticalFlowEstimator
 from altnautica_vision_nav.estimators.optical_flow_no_range import (
@@ -39,17 +40,20 @@ from altnautica_vision_nav.estimators.vio_engine import (
 # bespoke routing. Adding a new estimator is a single line here plus
 # the implementation file; the pipeline picks it up automatically.
 #
-# The two VIO entries map to thin subclasses of :class:`VioEstimator`
-# that only differ in ``estimator_id`` so the registry-key contract
-# (key == class identifier) holds. The engine choice (OpenVINS vs
-# VINS-Fusion) is still a runtime parameter constructed by the
-# pipeline, not by these classes.
+# VIO entries map to thin subclasses that only differ in
+# ``estimator_id`` so the registry-key contract (key == class
+# identifier) holds. The engine choice (OpenVINS vs VINS-Fusion) is
+# still a runtime parameter constructed by the pipeline, not by these
+# classes. The hybrid entry composes an OF estimator + a VIO
+# estimator at construction time; the registry-key contract holds
+# through ``HybridEstimator.estimator_id``.
 ESTIMATOR_REGISTRY: dict[str, type[BaseEstimator]] = {
     "off": NullEstimator,
     "optical_flow": OpticalFlowEstimator,
     "optical_flow_degraded": OpticalFlowNoRangeEstimator,
     "vio_openvins": VioOpenvinsEstimator,
     "vio_vins_fusion": VioVinsFusionEstimator,
+    "hybrid_of_plus_vio": HybridEstimator,
 }
 
 
@@ -68,6 +72,7 @@ __all__ = [
     "EstimatorOutput",
     "EstimatorState",
     "ESTIMATOR_REGISTRY",
+    "HybridEstimator",
     "NullEstimator",
     "OpticalFlowEstimator",
     "OpticalFlowNoRangeEstimator",

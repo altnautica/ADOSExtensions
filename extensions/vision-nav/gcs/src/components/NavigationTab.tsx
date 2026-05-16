@@ -15,6 +15,7 @@ import { ModeCard } from "./ModeCard";
 import { PreArmStatus } from "./PreArmStatus";
 import { Px4VisionParams } from "./Px4VisionParams";
 import { SensorsCard } from "./SensorsCard";
+import { TelemetryCharts } from "./TelemetryCharts";
 
 export interface NavigationTabProps {
   ctx: PluginContext;
@@ -74,6 +75,7 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
       <ModeCard ctx={props.ctx} telemetry={telemetry} />
       <SensorsCard ctx={props.ctx} telemetry={telemetry} />
       <EstimatorCard ctx={props.ctx} telemetry={telemetry} />
+      <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
       <FlowHealthCard telemetry={telemetry} />
       <PreArmStatus telemetry={telemetry} />
       <EkfSourceSwitcher
