@@ -247,7 +247,7 @@ const subhead: CSSProperties = {
 };
 const row: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeatr(t,auto-fit, minmax(180px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
   gap: "0.5rem",
 };
 const button = (active: boolean): CSSProperties => ({

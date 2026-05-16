@@ -23,9 +23,8 @@ interface Props {
  * Three-row sensor health card: camera, IMU, rangefinder. Each row
  * shows the source identity, the live rate / value, and a colour
  * indicator (green / yellow / red / muted) that the operator reads
- * at a glance. The Calibrate CTA on the camera row launches the
- * calibration wizard added in a follow-on phase; today it is a
- * placeholder that surfaces a tooltip.
+ * at a glance. The Calibrate CTA on the camera row opens the guided
+ * calibration wizard.
  */
 export function SensorsCard({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;

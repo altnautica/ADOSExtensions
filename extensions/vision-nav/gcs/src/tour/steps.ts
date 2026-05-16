@@ -44,8 +44,9 @@ export const TOUR_STEPS: TourStep[] = [
     bodyKey: "navigation.tour.sensorsBody",
     bodyFallback:
       "Camera, IMU, and rangefinder health at a glance. The " +
-      "Calibrate button on the camera row uploads a Kalibr-style " +
-      "camera-IMU calibration file.",
+      "Calibrate button on the camera row opens a guided wizard " +
+      "that captures frames, fits the camera-IMU timeshift, and " +
+      "applies the result.",
   },
   {
     id: "estimator-card",
@@ -87,17 +88,6 @@ export const TOUR_STEPS: TourStep[] = [
     bodyFallback:
       "Runtime EKF source switch on ArduPilot. The escape hatch " +
       "back to GPS if vision goes degraded mid-flight.",
-  },
-  {
-    id: "fallback-preview",
-    targetTestId: "vn-tour-fallback-preview",
-    titleKey: "navigation.tour.fallbackTitle",
-    titleFallback: "Fallback banner",
-    bodyKey: "navigation.tour.fallbackBody",
-    bodyFallback:
-      "If anything goes wrong, a banner appears here with a " +
-      "suggested next action. This step shows you what it looks " +
-      "like.",
   },
 ];
 
