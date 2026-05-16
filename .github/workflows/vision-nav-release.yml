@@ -187,6 +187,9 @@ jobs:
           pnpm install --frozen-lockfile=false
           pip install cryptography
 
+      - name: Build workspace SDK
+        run: pnpm --filter @altnautica/plugin-sdk build
+
       - name: Build GCS bundle
         run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" build
 
