@@ -104,7 +104,11 @@ class VisionNavConfig(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    mode: Literal["off", "optical_flow"] = "optical_flow"
+    mode: Literal[
+        "off",
+        "optical_flow",
+        "optical_flow_degraded",
+    ] = "optical_flow"
     camera: CameraConfig = Field(default_factory=CameraConfig)
     rangefinder: RangefinderConfig = Field(default_factory=RangefinderConfig)
     firmware: FirmwareConfig = Field(default_factory=FirmwareConfig)

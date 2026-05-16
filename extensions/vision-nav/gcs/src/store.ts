@@ -43,6 +43,19 @@ export function useVisionNavTelemetry(
           companionState: next.companionState,
           rangefinderTopology: next.rangefinderTopology,
           recommendedCameraId: next.recommendedCameraId,
+          // Estimator framework + IMU + calibration fields. All
+          // optional; an older agent that does not emit them leaves
+          // the new cards in their "awaiting wiring" empty state.
+          mode: next.mode,
+          availableEstimators: next.availableEstimators,
+          estimatorState: next.estimatorState,
+          flowScaleSource: next.flowScaleSource,
+          estimatorFeatureCount: next.estimatorFeatureCount,
+          estimatorDriftEstimateM: next.estimatorDriftEstimateM,
+          imuSource: next.imuSource,
+          imuRateHz: next.imuRateHz,
+          cameraIntrinsicsLoaded: next.cameraIntrinsicsLoaded,
+          cameraImuSyncOffsetMs: next.cameraImuSyncOffsetMs,
         }));
       })
       .then((unsubscribe) => {

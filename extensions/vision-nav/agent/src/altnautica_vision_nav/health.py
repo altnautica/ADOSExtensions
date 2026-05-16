@@ -79,6 +79,15 @@ class HealthPublisher:
         self._latest_flow_rate_hz: Optional[float] = None
         self._latest_distance_m: Optional[float] = None
         self._companion_state: CompanionState = CompanionState.INACTIVE
+        # The IMU source + aligner are attached when the estimator
+        # framework wires the full IMU pipeline. Each is None until
+        # then; the snapshot reads ``None`` through to the wire, and
+        # the GCS knows to render the sensors card as "not yet wired"
+        # rather than as an empty / zeroed state.
+        self._imu_source_id: Optional[str] = None
+        self._imu_rate_hz_provider: Optional[object] = None
+        self._sync_offset_provider: Optional[object] = None
+        self._intrinsics_loaded: bool = False
         self._task: Optional[asyncio.Task[None]] = None
         self._ctx: object | None = None
 
@@ -120,6 +129,41 @@ class HealthPublisher:
         """
 
         self._available_estimators = list(estimators)
+
+    def attach_imu_source(self, imu_source: Optional[object]) -> None:
+        """Attach an :class:`BaseImuSource` so its id + rate ride the heartbeat.
+
+        ``None`` detaches and the snapshot reports ``imuSource = None``
+        and ``imuRateHz = None`` so the GCS renders the sensors card
+        as awaiting wiring rather than as a zeroed-out state.
+        """
+
+        if imu_source is None:
+            self._imu_source_id = None
+            self._imu_rate_hz_provider = None
+            return
+        source_id = getattr(imu_source, "source_id", None)
+        self._imu_source_id = source_id if isinstance(source_id, str) else None
+        self._imu_rate_hz_provider = imu_source
+
+    def attach_time_aligner(self, aligner: Optional[object]) -> None:
+        """Attach the :class:`TimeAligner` so its rolling residual rides the heartbeat.
+
+        The GCS surfaces ``cameraImuSyncOffsetMs`` in the sensors card
+        and gates the VIO pre-arm check on the drift band.
+        """
+
+        self._sync_offset_provider = aligner
+
+    def set_intrinsics_loaded(self, loaded: bool) -> None:
+        """Set whether camera intrinsics have been loaded from calibration.
+
+        The VIO pre-arm gate refuses to arm when intrinsics are not
+        loaded; the GCS sensors card shows a Calibrate CTA when this
+        is false.
+        """
+
+        self._intrinsics_loaded = bool(loaded)
 
     def update_companion_state(self, state: CompanionState) -> None:
         """Mirror the comp 198 companion state into the heartbeat block."""
@@ -202,7 +246,45 @@ class HealthPublisher:
             "availableEstimators": list(self._available_estimators),
             "estimatorState": estimator_state,
             "flowScaleSource": scale_source,
+            "imuSource": self._imu_source_id,
+            "imuRateHz": self._read_imu_rate_hz(),
+            "cameraImuSyncOffsetMs": self._read_sync_offset_ms(),
+            "cameraIntrinsicsLoaded": self._intrinsics_loaded,
         }
+
+    def _read_imu_rate_hz(self) -> Optional[float]:
+        """Read the IMU rate via the source's ``rate_hz()`` if attached."""
+
+        provider = self._imu_rate_hz_provider
+        if provider is None:
+            return None
+        rate = getattr(provider, "rate_hz", None)
+        if not callable(rate):
+            return None
+        try:
+            value = rate()
+        except Exception:  # noqa: BLE001 - never let a probe break the tick
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
+
+    def _read_sync_offset_ms(self) -> Optional[float]:
+        """Read the rolling sync residual via the aligner if attached."""
+
+        provider = self._sync_offset_provider
+        if provider is None:
+            return None
+        residual = getattr(provider, "mean_residual_ms", None)
+        if not callable(residual):
+            return None
+        try:
+            value = residual()
+        except Exception:  # noqa: BLE001 - never let a probe break the tick
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        return None
 
     # ------------------------------------------------------------------
     # Internals

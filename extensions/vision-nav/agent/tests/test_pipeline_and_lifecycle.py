@@ -557,6 +557,11 @@ class TestHealthPublisher:
         # flowScaleSource) come from the estimator-framework scaffold
         # and ride alongside the legacy fields; the GCS normalizer
         # treats them as optional so a rolling upgrade keeps working.
+        # IMU + calibration fields land alongside the estimator-framework
+        # additive set. All four are optional and default to None when
+        # the corresponding source has not been attached, which keeps
+        # the legacy callers (no IMU source, no aligner) producing a
+        # snapshot the cloud relay validator accepts.
         expected_keys = {
             "opticalFlowSupported",
             "vioSupported",
@@ -573,6 +578,10 @@ class TestHealthPublisher:
             "availableEstimators",
             "estimatorState",
             "flowScaleSource",
+            "imuSource",
+            "imuRateHz",
+            "cameraImuSyncOffsetMs",
+            "cameraIntrinsicsLoaded",
         }
         assert set(snapshot.keys()) == expected_keys
         # Snake case must not leak into the payload.

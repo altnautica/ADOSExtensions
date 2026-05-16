@@ -1,10 +1,36 @@
 /**
  * Shared types for the vision-nav GCS plugin. The shape of
  * VisionNavTelemetry mirrors the agent heartbeat's navigation
- * capability block: optical flow stats, optional VIO stats, and the
- * companion process state. The agent emits these as a single object
- * on the "navigation" telemetry topic.
+ * capability block: optical flow stats, optional VIO stats, the
+ * companion process state, the selected estimator mode, and the
+ * camera + IMU + calibration health every estimator now reports.
+ * The agent emits this as a single object on the "navigation"
+ * telemetry topic.
  */
+
+export type EstimatorMode =
+  | "off"
+  | "optical_flow"
+  | "optical_flow_degraded"
+  | "vio_openvins"
+  | "vio_vins_fusion"
+  | "hybrid_of_plus_vio";
+
+export type EstimatorState =
+  | "off"
+  | "init"
+  | "converging"
+  | "converged"
+  | "degraded"
+  | "failed";
+
+export type ScaleSource = "rangefinder" | "baro" | "gps" | "vision";
+
+export type ImuSourceId =
+  | "mavlink-raw-imu"
+  | "mavlink-scaled-imu2"
+  | "direct-i2c"
+  | "direct-dronecan";
 
 export interface VisionNavTelemetry {
   flowQuality?: number;
@@ -29,6 +55,30 @@ export interface VisionNavTelemetry {
    * the agent picked.
    */
   recommendedCameraId?: string | null;
+  /**
+   * Currently-selected estimator key. Mirrors the agent ``mode``
+   * config field. Free-form string so a new estimator can land on the
+   * agent without a GCS release.
+   */
+  mode?: EstimatorMode | string;
+  /** Estimator keys the running plugin instance can actually run. */
+  availableEstimators?: string[];
+  /** Estimator state machine, mirrored from the BaseEstimator contract. */
+  estimatorState?: EstimatorState | string;
+  /** Where the optical-flow scale comes from this tick. */
+  flowScaleSource?: ScaleSource | null;
+  /** Features tracked by the VIO estimator. ``null`` for non-VIO. */
+  estimatorFeatureCount?: number;
+  /** Rolling drift estimate from the VIO estimator, in metres. */
+  estimatorDriftEstimateM?: number;
+  /** Which IMU source the estimator is currently consuming. */
+  imuSource?: ImuSourceId | string;
+  /** IMU sample rate in Hz, smoothed by the source's EMA. */
+  imuRateHz?: number;
+  /** Whether camera intrinsics have been loaded from calibration. */
+  cameraIntrinsicsLoaded?: boolean;
+  /** Rolling residual between camera frames and IMU samples in ms. */
+  cameraImuSyncOffsetMs?: number;
 }
 
 export type FirmwareType = "ardupilot" | "px4" | "betaflight" | "inav";

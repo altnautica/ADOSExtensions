@@ -25,6 +25,9 @@ from altnautica_vision_nav.estimators.base import (
 )
 from altnautica_vision_nav.estimators.null_estimator import NullEstimator
 from altnautica_vision_nav.estimators.optical_flow import OpticalFlowEstimator
+from altnautica_vision_nav.estimators.optical_flow_no_range import (
+    OpticalFlowNoRangeEstimator,
+)
 
 # Registry: estimator key -> class. Keys mirror the config ``mode``
 # values so a config flip selects the matching estimator without
@@ -33,6 +36,7 @@ from altnautica_vision_nav.estimators.optical_flow import OpticalFlowEstimator
 ESTIMATOR_REGISTRY: dict[str, type[BaseEstimator]] = {
     "off": NullEstimator,
     "optical_flow": OpticalFlowEstimator,
+    "optical_flow_degraded": OpticalFlowNoRangeEstimator,
 }
 
 
@@ -53,6 +57,7 @@ __all__ = [
     "ESTIMATOR_REGISTRY",
     "NullEstimator",
     "OpticalFlowEstimator",
+    "OpticalFlowNoRangeEstimator",
     "OutputMode",
     "ScaleSource",
     "available_estimators",
