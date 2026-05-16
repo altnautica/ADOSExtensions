@@ -61,33 +61,24 @@ jobs:
         # The aarch64 sysroot needs Eigen, OpenCV, Boost, msgpack,
         # plus Ceres for the VINS-Fusion build. The GitHub-hosted
         # runner's default Ubuntu mirror only carries amd64 + i386;
-        # arm64 packages live on ports.ubuntu.com. We pin every
-        # existing source to [arch=amd64] (both http:// and https://),
-        # also handle deb822 .sources files (Architectures: amd64),
-        # then add the ports mirror for the arm64 architecture before
-        # the post-add-architecture apt-get update.
+        # arm64 packages live on ports.ubuntu.com. Replace the
+        # existing apt sources entirely with an explicit dual-arch
+        # setup: archive.ubuntu.com for amd64, ports.ubuntu.com for
+        # arm64. This avoids the runner's mirror+file: scheme that
+        # leaks security.ubuntu.com lookups for the wrong architecture.
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            # Pin both http and https sources to amd64.
-            sudo sed -i -E 's|^deb (https?://)|deb [arch=amd64] \1|g' /etc/apt/sources.list
-            sudo find /etc/apt/sources.list.d/ -name '*.list' -print0 \
-              | sudo xargs -0 -r -I{} sed -i -E 's|^deb (https?://)|deb [arch=amd64] \1|g' {}
-            # deb822 (.sources) files: append Architectures: amd64 if missing.
-            for f in /etc/apt/sources.list.d/*.sources; do
-              [ -f "$f" ] || continue
-              if ! grep -q '^Architectures:' "$f"; then
-                # Insert in-stanza after the Types: header; appending
-                # at the file tail would create a malformed empty
-                # stanza.
-                sudo sed -i '/^Types:/a Architectures: amd64' "$f"
-              fi
-            done
-            sudo tee /etc/apt/sources.list.d/ports.list >/dev/null <<'PORTS'
+            sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+            sudo tee /etc/apt/sources.list >/dev/null <<'SOURCES'
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-backports main restricted universe multiverse
-          PORTS
+          SOURCES
             sudo dpkg --add-architecture arm64
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
