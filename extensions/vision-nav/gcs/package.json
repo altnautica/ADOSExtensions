@@ -10,6 +10,7 @@
     "lint:manifest": "node ../../../scripts/lint-manifest.mjs ../manifest.yaml"
   },
   "dependencies": {
+    "@altnautica/extension-ui": "workspace:*",
     "@altnautica/plugin-sdk": "workspace:^",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
