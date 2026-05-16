@@ -92,7 +92,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
               libeigen3-dev:arm64 libopencv-dev:arm64 \
-              libboost-all-dev:arm64 libmsgpack-cxx-dev:arm64 \
+              libboost-all-dev:arm64 libmsgpack-dev:arm64 \
               libceres-dev:arm64 libgoogle-glog-dev:arm64 libgflags-dev:arm64
           else
             sudo apt-get update
