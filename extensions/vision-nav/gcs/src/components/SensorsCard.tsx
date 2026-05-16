@@ -1,8 +1,9 @@
-import { useRef, useState, type CSSProperties } from "react";
+import { useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
 import type { VisionNavTelemetry } from "../types";
+import { CalibrationWizard } from "./CalibrationWizard";
 
 // The plugin SDK's i18n.t() returns the key itself when no host
 // translation is available. ``tr`` substitutes a literal fallback so
@@ -28,32 +29,7 @@ interface Props {
  */
 export function SensorsCard({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;
-  const [uploadStatus, setUploadStatus] = useState<
-    "idle" | "uploading" | "error"
-  >("idle");
-  const [uploadError, setUploadError] = useState<string | null>(null);
-
-  async function handleCalibrationFile(file: File): Promise<void> {
-    setUploadStatus("uploading");
-    setUploadError(null);
-    try {
-      const text = await file.text();
-      // Generic RPC escape hatch on the SDK. The plugin host routes
-      // ``vision-nav.upload_calibration`` to the matching agent-side
-      // plugin which validates the YAML and persists it.
-      await ctx.client.request(
-        "vision-nav.upload_calibration",
-        "vehicle.command",
-        { camchain_yaml: text },
-      );
-      // Success: the next heartbeat sets cameraIntrinsicsLoaded true
-      // and the pill flips automatically.
-      setUploadStatus("idle");
-    } catch (err) {
-      setUploadStatus("error");
-      setUploadError(err instanceof Error ? err.message : String(err));
-    }
-  }
+  const [wizardOpen, setWizardOpen] = useState(false);
 
   return (
     <section style={card} data-testid="vn-sensors-card">
@@ -62,22 +38,17 @@ export function SensorsCard({ ctx, telemetry }: Props): JSX.Element {
         <CameraRow
           telemetry={telemetry}
           t={t}
-          uploadStatus={uploadStatus}
-          onCalibrate={handleCalibrationFile}
+          onCalibrate={() => setWizardOpen(true)}
         />
         <ImuRow telemetry={telemetry} t={t} />
         <RangefinderRow telemetry={telemetry} t={t} />
       </div>
-      {uploadError !== null ? (
-        <p style={errorText} data-testid="vn-sensors-upload-error">
-          {tr(
-            t,
-            "navigation.sensorsCard.uploadError",
-            "Calibration upload failed",
-          )}
-          {": "}
-          {uploadError}
-        </p>
+      {wizardOpen ? (
+        <CalibrationWizard
+          ctx={ctx}
+          telemetry={telemetry}
+          onClose={() => setWizardOpen(false)}
+        />
       ) : null}
     </section>
   );
@@ -89,42 +60,22 @@ interface RowProps {
 }
 
 interface CameraRowProps extends RowProps {
-  uploadStatus: "idle" | "uploading" | "error";
-  onCalibrate: (file: File) => Promise<void>;
+  onCalibrate: () => void;
 }
 
 function CameraRow({
   telemetry,
   t,
-  uploadStatus,
   onCalibrate,
 }: CameraRowProps): JSX.Element {
-  const inputRef = useRef<HTMLInputElement | null>(null);
   const device = telemetry.recommendedCameraId ?? "—";
   const loaded = telemetry.cameraIntrinsicsLoaded === true;
-  const uploading = uploadStatus === "uploading";
   const tone: Tone = loaded
     ? { kind: "ok", label: tr(t, "navigation.sensorsCard.calibrated", "Calibrated") }
     : {
         kind: "warn",
         label: tr(t, "navigation.sensorsCard.notCalibrated", "Not calibrated"),
       };
-
-  function handleClick(): void {
-    if (uploading) return;
-    inputRef.current?.click();
-  }
-
-  function handleFileChange(
-    event: React.ChangeEvent<HTMLInputElement>,
-  ): void {
-    const file = event.target.files?.[0];
-    if (file) {
-      void onCalibrate(file);
-    }
-    // Reset so the same file can be picked again after a retry.
-    event.target.value = "";
-  }
 
   return (
     <div style={rowContainer} data-testid="vn-sensors-camera">
@@ -139,27 +90,16 @@ function CameraRow({
           style={cta(!loaded)}
           title={tr(t,
             "navigation.sensorsCard.calibrateHint",
-            "Upload a Kalibr-style camchain.yaml. " +
-              "Drag and drop or click to pick a file.",
+            "Open the guided calibration wizard. " +
+              "Captures frames + IMU motion, solves intrinsics + timeshift, applies the result.",
           )}
           data-testid="vn-camera-calibrate-cta"
-          onClick={handleClick}
-          disabled={uploading}
+          onClick={onCalibrate}
         >
-          {uploading
-            ? tr(t, "navigation.sensorsCard.uploading", "Uploading...")
-            : loaded
-              ? tr(t, "navigation.sensorsCard.recalibrate", "Recalibrate")
-              : tr(t, "navigation.sensorsCard.calibrate", "Calibrate")}
+          {loaded
+            ? tr(t, "navigation.sensorsCard.recalibrate", "Recalibrate")
+            : tr(t, "navigation.sensorsCard.calibrate", "Calibrate")}
         </button>
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".yaml,.yml"
-          style={{ display: "none" }}
-          onChange={handleFileChange}
-          data-testid="vn-camera-calibrate-input"
-        />
       </div>
     </div>
   );

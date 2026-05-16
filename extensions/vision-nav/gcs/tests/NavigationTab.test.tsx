@@ -109,7 +109,10 @@ describe("NavigationTab", () => {
       <NavigationTab
         ctx={ctx}
         firmware="ardupilot"
-        telemetryOverride={mkTelemetry()}
+        telemetryOverride={mkTelemetry({
+          vioSupported: true,
+          flowQuality: 200,
+        })}
       />,
     );
     expect(screen.getByTestId("vn-ardupilot-params")).toBeTruthy();
@@ -127,7 +130,7 @@ describe("NavigationTab", () => {
       <NavigationTab
         ctx={ctx}
         firmware="px4"
-        telemetryOverride={mkTelemetry()}
+        telemetryOverride={mkTelemetry({ vioSupported: true })}
       />,
     );
     expect(screen.getByTestId("vn-px4-params")).toBeTruthy();

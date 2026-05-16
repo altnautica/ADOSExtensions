@@ -4,6 +4,56 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+### Added
+
+- **In-app calibration wizard.** Tapping Calibrate on the sensors
+  card now opens a seven-step guided flow inside the Vision Nav tab:
+  target check (with the bundled AprilGrid PDF), live camera preview
+  with tag-corner overlay, per-frame quality-gated capture (sharpness
+  + tag count + tag-area span + exposure), IMU motion segment with
+  live gyro and accel sparklines, submit, wait with substep progress
+  driven by agent heartbeat events, and a verify-and-compare result
+  page that diffs the new intrinsics against any previously-loaded
+  calibration. Apply persists the camchain to the plugin data
+  directory and applies the new timeshift to the live time aligner
+  on the next tick.
+- **Pose coverage map.** Captured frames are scored for pose
+  diversity (tilt + rotation buckets); a 5x5 heatmap surfaces which
+  view zones still need coverage before the wizard advances.
+- **Agent-side calibration runner.** New
+  `altnautica_vision_nav.calibration.runner` module decodes the
+  captured frame bundle, runs `cv2.aruco` AprilTag detection,
+  `cv2.calibrateCamera` for monocular pinhole + radial-tangential
+  intrinsics, and a golden-section search over the candidate
+  timeshift band to fit the joint camera-IMU offset against the
+  recorded IMU window. Substeps publish progress events back to the
+  wizard live (`tag_detection`, `intrinsics_solve`,
+  `extrinsics_solve`, `timeshift_solve`, `complete`).
+- **Two new event topics.**
+  `com.altnautica.vision-nav.start_calibration` carries the captured
+  frame bundle + the IMU recording window from the wizard to the
+  agent. `com.altnautica.vision-nav.calibration_progress` and
+  `com.altnautica.vision-nav.calibration_complete` are the agent's
+  return path with substep progress and the final result.
+- **Calibration quality scorer + pose clusterer.** New TS modules
+  under `gcs/src/calibration/` produce the per-frame GOOD / OK /
+  DROP verdicts and the pose-diversity buckets the wizard renders.
+  Pure functions so the demo-mode harness can drive them with
+  synthetic signals.
+
+### Changed
+
+- `SensorsCard` Calibrate CTA now opens the in-app wizard instead
+  of the YAML file picker. The Kalibr YAML upload path is still
+  honoured for operators with an existing `camchain.yaml` (the
+  agent's `upload_calibration` event accepts the same wire shape it
+  always has).
+- Agent dependency bumped from `opencv-python-headless` to
+  `opencv-contrib-python-headless` to bring in the aruco module the
+  calibration runner needs.
+
+## [vision-nav-v0.1.x]
+
 The plugin's estimator framework is now modular. Optical flow, the
 rangefinder-free degraded mode, and two visual-inertial odometry
 engines (OpenVINS and VINS-Fusion) all plug in behind one

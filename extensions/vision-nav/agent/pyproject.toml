@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 authors = [{ name = "Altnautica" }]
 keywords = ["ados", "plugin", "vision", "optical-flow", "mavlink"]
 dependencies = [
-  "opencv-python-headless>=4.9",
+  "opencv-contrib-python-headless>=4.9",
   "pyserial>=3.5",
   "smbus2>=0.4",
   "pydantic>=2.5",

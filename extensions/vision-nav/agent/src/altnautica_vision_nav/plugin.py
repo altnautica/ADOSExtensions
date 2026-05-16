@@ -102,6 +102,9 @@ SENSOR_ID = 0
 
 EVENT_SET_MODE = "com.altnautica.vision-nav.set_mode"
 EVENT_UPLOAD_CALIBRATION = "com.altnautica.vision-nav.upload_calibration"
+EVENT_START_CALIBRATION = "com.altnautica.vision-nav.start_calibration"
+EVENT_CALIBRATION_PROGRESS = "com.altnautica.vision-nav.calibration_progress"
+EVENT_CALIBRATION_COMPLETE = "com.altnautica.vision-nav.calibration_complete"
 
 
 def _i2c_bus_number(device: str, default: int) -> int:
@@ -646,10 +649,14 @@ class VisionNavPlugin:
         async def _on_upload(payload: Any) -> None:
             await self._handle_upload_calibration_event(ctx, payload)
 
+        async def _on_start_cal(payload: Any) -> None:
+            await self._handle_start_calibration_event(ctx, payload)
+
         try:
             unsub_a = subscribe(EVENT_SET_MODE, _on_set_mode)
             unsub_b = subscribe(EVENT_UPLOAD_CALIBRATION, _on_upload)
-            for unsub in (unsub_a, unsub_b):
+            unsub_c = subscribe(EVENT_START_CALIBRATION, _on_start_cal)
+            for unsub in (unsub_a, unsub_b, unsub_c):
                 if asyncio.iscoroutine(unsub):
                     unsub = await unsub
                 if callable(unsub):
@@ -718,6 +725,129 @@ class VisionNavPlugin:
             fy=intrinsics.fy,
             timeshift=extrinsics.timeshift_cam_imu,
         )
+
+    async def _handle_start_calibration_event(
+        self, ctx: object, payload: Any
+    ) -> None:
+        """Bridge the GCS ``start_calibration`` event into the runner.
+
+        Constructs a :class:`RunnerHooks` adapter that publishes
+        progress + completion events back to the same plugin event
+        bus, fetches the IMU samples from the live :class:`MavlinkRawImu`
+        buffer for the captured window, and persists the resulting
+        camchain.yaml. The runner then walks substeps (tag detection,
+        intrinsics solve, timeshift fit) at its own pace; substep
+        updates surface on the wizard's progress bar live.
+        """
+
+        from altnautica_vision_nav.calibration.runner import (
+            CalibrationProgress,
+            CalibrationResult,
+            RunnerHooks,
+            run_calibration,
+        )
+        from altnautica_vision_nav.calibration.runner import (
+            _ImuSample as _RunnerImuSample,
+        )
+
+        if not isinstance(payload, dict):
+            self._log_warning(ctx, "vision_nav_start_cal_invalid_payload")
+            return
+
+        event_bus = getattr(ctx, "event", None) or getattr(ctx, "events", None)
+        if event_bus is None or not callable(
+            getattr(event_bus, "publish", None)
+        ):
+            self._log_warning(ctx, "vision_nav_start_cal_no_publish")
+            return
+
+        async def _publish_progress(p: CalibrationProgress) -> None:
+            try:
+                result = event_bus.publish(
+                    EVENT_CALIBRATION_PROGRESS,
+                    {
+                        "type": "calibration_progress",
+                        "stage": p.stage,
+                        "percent": p.percent,
+                        "detail": p.detail,
+                    },
+                )
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as exc:  # noqa: BLE001
+                self._log_warning(
+                    ctx, "vision_nav_cal_publish_failed", error=str(exc)
+                )
+
+        async def _publish_complete(
+            result: CalibrationResult | None,
+            error: str | None,
+        ) -> None:
+            payload_out: dict[str, Any] = {
+                "type": "calibration_complete",
+                "result": result.to_dict() if result is not None else None,
+            }
+            if error is not None:
+                payload_out["error"] = error
+            try:
+                outcome = event_bus.publish(
+                    EVENT_CALIBRATION_COMPLETE, payload_out
+                )
+                if asyncio.iscoroutine(outcome):
+                    await outcome
+            except Exception as exc:  # noqa: BLE001
+                self._log_warning(
+                    ctx, "vision_nav_cal_complete_publish_failed",
+                    error=str(exc),
+                )
+            # Apply intrinsics + timeshift on success so the live
+            # estimator picks them up on the next tick.
+            if result is not None:
+                if self._health is not None:
+                    self._health.set_intrinsics_loaded(True)
+                if self._time_aligner is not None:
+                    self._time_aligner.set_timeshift(
+                        result.timeshift_cam_imu_s
+                    )
+
+        def _fetch_imu_window(
+            start_ns: int, end_ns: int
+        ) -> list[_RunnerImuSample]:
+            source = self._imu_source
+            if source is None:
+                return []
+            samples = []
+            for s in source.recent():
+                if start_ns <= s.ts_ns <= end_ns:
+                    samples.append(
+                        _RunnerImuSample(
+                            timestamp_ns=s.ts_ns,
+                            gyro=(s.xgyro, s.ygyro, s.zgyro),
+                            accel=(s.xacc, s.yacc, s.zacc),
+                        )
+                    )
+            return samples
+
+        def _persist(yaml_text: str) -> Path:
+            cam_dir = self._calibration_dir(ctx)
+            cam_dir.mkdir(parents=True, exist_ok=True)
+            path = cam_dir / "camchain.yaml"
+            path.write_text(yaml_text, encoding="utf-8")
+            return path
+
+        hooks = RunnerHooks(
+            publish_progress=_publish_progress,
+            publish_complete=_publish_complete,
+            fetch_imu_window=_fetch_imu_window,
+            persist_camchain_yaml=_persist,
+        )
+        try:
+            await run_calibration(payload, hooks)
+        except Exception as exc:  # noqa: BLE001
+            self._log_warning(
+                ctx, "vision_nav_cal_runner_crashed", error=str(exc)
+            )
+            await _publish_complete(None, f"runner crashed: {exc}")
 
     def _try_load_persisted_calibration(self, ctx: object) -> None:
         """Load a previously-uploaded calibration on plugin start."""
