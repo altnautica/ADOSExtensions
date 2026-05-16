@@ -106,6 +106,7 @@ EVENT_UPLOAD_CALIBRATION = "com.altnautica.vision-nav.upload_calibration"
 EVENT_START_CALIBRATION = "com.altnautica.vision-nav.start_calibration"
 EVENT_CALIBRATION_PROGRESS = "com.altnautica.vision-nav.calibration_progress"
 EVENT_CALIBRATION_COMPLETE = "com.altnautica.vision-nav.calibration_complete"
+EVENT_RECALIBRATE_IMU_BIASES = "com.altnautica.vision-nav.recalibrate_imu_biases"
 
 
 def _i2c_bus_number(device: str, default: int) -> int:
@@ -172,11 +173,12 @@ class VisionNavPlugin:
 
     async def on_enable(self, ctx: object) -> None:
         # Refuse to enable on ground-station-profile hosts. The plugin
-        # owns a video capture device + an FC MAVLink channel; both are
-        # exclusive resources a ground station does not have. The host
-        # profile check happens here (not in on_start) so the
-        # supervisor's enable-failed surface reaches the GCS install
-        # dialog directly.
+        # owns a video capture device + an FC MAVLink channel; both
+        # are exclusive resources a ground station does not have.
+        # Raising here causes the plugin host runner to log a
+        # plugin_runtime_error and exit before on_start runs, which is
+        # the behaviour we want: a misplaced install refuses to take
+        # over the host's hardware.
         from altnautica_vision_nav.autodetect import (
             detect_host_profile,
             is_drone_profile,
@@ -774,6 +776,36 @@ class VisionNavPlugin:
     # ------------------------------------------------------------------
 
     def _build_imu_source(self, ctx: object) -> Optional[BaseImuSource]:
+        # Pick the highest-rate IMU source the host exposes. The
+        # selector probes I2C buses for a BMI088 chip-id and falls
+        # back to MAVLink RAW_IMU when no direct bus answers.
+        from altnautica_vision_nav.autodetect.imu import (
+            detect_preferred_imu_source,
+        )
+        from altnautica_vision_nav.imu.direct_i2c import DirectI2cImu
+
+        preferred = detect_preferred_imu_source()
+
+        if preferred.source_id == "direct-i2c-bmi088" and preferred.bus_num is not None:
+            try:
+                source = DirectI2cImu(preferred.bus_num)
+                source.start()
+                self._log_info(
+                    ctx,
+                    "vision_nav_imu_direct_i2c_started",
+                    bus=preferred.bus_num,
+                )
+                return source
+            except Exception as exc:  # noqa: BLE001
+                # Direct-I2C failed (chip-id mismatch, permission, etc).
+                # Fall through to the MAVLink path so the plugin keeps
+                # working even when the bench IMU is misbehaving.
+                self._log_warning(
+                    ctx,
+                    "vision_nav_imu_direct_i2c_failed",
+                    error=str(exc),
+                )
+
         mavlink = getattr(ctx, "mavlink", None)
         if mavlink is None or not callable(
             getattr(mavlink, "subscribe", None)
@@ -810,11 +842,15 @@ class VisionNavPlugin:
         async def _on_start_cal(payload: Any) -> None:
             await self._handle_start_calibration_event(ctx, payload)
 
+        async def _on_recal_imu(_payload: Any) -> None:
+            self._trigger_imu_bias_recalibration(ctx)
+
         try:
             unsub_a = subscribe(EVENT_SET_MODE, _on_set_mode)
             unsub_b = subscribe(EVENT_UPLOAD_CALIBRATION, _on_upload)
             unsub_c = subscribe(EVENT_START_CALIBRATION, _on_start_cal)
-            for unsub in (unsub_a, unsub_b, unsub_c):
+            unsub_d = subscribe(EVENT_RECALIBRATE_IMU_BIASES, _on_recal_imu)
+            for unsub in (unsub_a, unsub_b, unsub_c, unsub_d):
                 if asyncio.iscoroutine(unsub):
                     unsub = await unsub
                 if callable(unsub):
@@ -1006,6 +1042,35 @@ class VisionNavPlugin:
                 ctx, "vision_nav_cal_runner_crashed", error=str(exc)
             )
             await _publish_complete(None, f"runner crashed: {exc}")
+
+    def _trigger_imu_bias_recalibration(self, ctx: object) -> None:
+        """Forward the GCS-side recalibrate event to the IMU source.
+
+        Only the direct-I2C source supports bias calibration; the
+        MAVLink path uses the FC's own calibration tooling. The
+        method is a no-op when the active source is anything other
+        than :class:`DirectI2cImu`.
+        """
+
+        from altnautica_vision_nav.imu.direct_i2c import DirectI2cImu
+
+        source = self._imu_source
+        if not isinstance(source, DirectI2cImu):
+            self._log_warning(
+                ctx,
+                "vision_nav_recalibrate_ignored_non_direct_imu",
+                source=type(source).__name__,
+            )
+            return
+        try:
+            source.start_bias_calibration()
+            self._log_info(ctx, "vision_nav_recalibrate_imu_biases_started")
+        except Exception as exc:  # noqa: BLE001
+            self._log_warning(
+                ctx,
+                "vision_nav_recalibrate_imu_biases_failed",
+                error=str(exc),
+            )
 
     def _try_load_persisted_calibration(self, ctx: object) -> None:
         """Load a previously-uploaded calibration on plugin start."""

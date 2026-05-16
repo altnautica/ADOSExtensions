@@ -29,6 +29,27 @@ interface Props {
 export function SensorsCard({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [biasState, setBiasState] = useState<"idle" | "running" | "error">(
+    "idle",
+  );
+
+  async function handleBiasRecalibrate(): Promise<void> {
+    setBiasState("running");
+    try {
+      await ctx.client.request(
+        "vision-nav.recalibrate_imu_biases",
+        "vehicle.command",
+        { type: "recalibrate_imu_biases" },
+      );
+      // The agent does the averaging on its own poll thread; the
+      // next heartbeat shows the new bias. Reset to idle after a
+      // short delay so the operator sees the action took effect.
+      window.setTimeout(() => setBiasState("idle"), 3000);
+    } catch {
+      setBiasState("error");
+      window.setTimeout(() => setBiasState("idle"), 5000);
+    }
+  }
 
   return (
     <section style={card} data-testid="vn-sensors-card">
@@ -39,7 +60,12 @@ export function SensorsCard({ ctx, telemetry }: Props): JSX.Element {
           t={t}
           onCalibrate={() => setWizardOpen(true)}
         />
-        <ImuRow telemetry={telemetry} t={t} />
+        <ImuRow
+          telemetry={telemetry}
+          t={t}
+          biasState={biasState}
+          onRecalibrate={handleBiasRecalibrate}
+        />
         <RangefinderRow telemetry={telemetry} t={t} />
       </div>
       {wizardOpen ? (
@@ -104,11 +130,26 @@ function CameraRow({
   );
 }
 
-function ImuRow({ telemetry, t }: RowProps): JSX.Element {
+interface ImuRowProps extends RowProps {
+  biasState: "idle" | "running" | "error";
+  onRecalibrate: () => Promise<void>;
+}
+
+function ImuRow({
+  telemetry,
+  t,
+  biasState,
+  onRecalibrate,
+}: ImuRowProps): JSX.Element {
   const source = telemetry.imuSource ?? "—";
   const rate = telemetry.imuRateHz;
   const offset = telemetry.cameraImuSyncOffsetMs;
   const syncTone = syncOffsetTone(offset, t);
+  // Bias recalibration is only meaningful on direct-bus IMU sources
+  // (BMI088 over I2C today; future DroneCAN). The MAVLink path uses
+  // the FC's own calibration tooling.
+  const isDirectSource =
+    typeof source === "string" && source.startsWith("direct-");
   return (
     <div style={rowContainer} data-testid="vn-sensors-imu">
       <RowLabel
@@ -123,6 +164,36 @@ function ImuRow({ telemetry, t }: RowProps): JSX.Element {
           }
         />
         <Pill tone={syncTone} />
+        {isDirectSource ? (
+          <button
+            type="button"
+            style={cta(biasState === "idle")}
+            onClick={() => {
+              void onRecalibrate();
+            }}
+            disabled={biasState === "running"}
+            data-testid="vn-imu-recalibrate-cta"
+            title={tr(
+              t,
+              "navigation.sensorsCard.recalibrateBiasHint",
+              "Place the drone level and still, then tap to recompute the gyro and accel biases.",
+            )}
+          >
+            {biasState === "running"
+              ? tr(
+                  t,
+                  "navigation.sensorsCard.recalibrating",
+                  "Recalibrating...",
+                )
+              : biasState === "error"
+                ? tr(t, "navigation.sensorsCard.retry", "Retry")
+                : tr(
+                    t,
+                    "navigation.sensorsCard.recalibrate",
+                    "Recalibrate",
+                  )}
+          </button>
+        ) : null}
       </div>
     </div>
   );

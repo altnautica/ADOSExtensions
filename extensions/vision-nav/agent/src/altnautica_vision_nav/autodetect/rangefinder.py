@@ -111,20 +111,21 @@ def _default_i2c_probe(bus_num: int, address: int) -> bool:
         import smbus2  # type: ignore[import-untyped]
     except ImportError:
         return False
+    bus = None
     try:
         bus = smbus2.SMBus(bus_num)
-    except (OSError, PermissionError):
-        return False
-    try:
         bus.read_byte(address)
         return True
-    except OSError:
+    except Exception:  # noqa: BLE001
+        # Probe failures should never crash the plugin start-up path;
+        # treat any exception as device-absent.
         return False
     finally:
-        try:
-            bus.close()
-        except OSError:
-            pass
+        if bus is not None:
+            try:
+                bus.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _default_uart_probe(device: str) -> bool:
@@ -132,18 +133,20 @@ def _default_uart_probe(device: str) -> bool:
         import serial  # type: ignore[import-untyped]
     except ImportError:
         return False
+    port = None
     try:
         port = serial.Serial(device, baudrate=115200, timeout=0.1)
-    except (OSError, serial.SerialException):  # type: ignore[attr-defined]
-        return False
-    try:
         port.write(b"\x5a\x05\x00\x01\x60")  # TF-Luna trigger
         data = port.read(9)
         return len(data) == 9 and data[0:2] == b"\x59\x59"
-    except (OSError, serial.SerialException):  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        # The probe must never raise into the plugin's start-up path.
+        # Any exception (OSError, ValueError, vendor library quirks)
+        # means the device is not a TF-Luna; report absence.
         return False
     finally:
-        try:
-            port.close()
-        except OSError:
-            pass
+        if port is not None:
+            try:
+                port.close()
+            except Exception:  # noqa: BLE001
+                pass

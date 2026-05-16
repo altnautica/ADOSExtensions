@@ -1,0 +1,26 @@
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 3, 29 June 2007
+
+ Copyright (C) 2007 Free Software Foundation, Inc. <https://fsf.org/>
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+This vendor directory hosts the build recipe for ``ados_openvins_shim``,
+an executable that links against the OpenVINS estimator from the
+Robot Perception and Navigation Group at the University of Delaware
+(https://github.com/rpng/open_vins). OpenVINS is licensed under
+GPL-3.0; the binary built from this directory inherits those terms.
+
+The verbatim text of the GNU General Public License v3 is available
+at https://www.gnu.org/licenses/gpl-3.0.txt and is also distributed
+as the LICENSE file in the OpenVINS upstream repository.
+
+This file points to the canonical text rather than embedding it in
+full so the licence stays in sync with upstream. The plugin install
+flow surfaces the OpenVINS attribution at the install-confirmation
+dialog (via the manifest's vendor_attribution block) so operators
+acknowledge the GPL-3.0 terms before the binary executes.
+
+The Altnautica-authored adapter code in this directory (CMakeLists,
+main.cpp, ipc_channel.{hpp,cpp}, shm_ring.{hpp,cpp}, BUILD.md) is
+itself GPL-3.0-or-later, matching the plugin's overall licence.

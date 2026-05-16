@@ -6,6 +6,52 @@ All notable changes to the Vision Navigation extension.
 
 ### Added
 
+- **Vendor build scaffold for the two VIO binaries.** New
+  `extensions/vision-nav/vendor/openvins/` and
+  `extensions/vision-nav/vendor/vins-fusion/` trees host the
+  CMakeLists, the C++ adapter sources (`main.cpp` + `ipc_channel.{hpp,cpp}`
+  + `shm_ring.{hpp,cpp}`), per-binary `BUILD.md` recipes (native +
+  cross-compile), and GPL-3.0 LICENSE pointers to the upstream
+  projects. The adapter sources speak the existing shim IPC wire
+  format documented at
+  `agent/src/altnautica_vision_nav/shim/ipc.py` (length-prefixed
+  msgpack over UDS + a fixed-capacity SHM frame ring). The upstream
+  estimator integrations are TODOs at the binary's `run()` entry
+  point; the binaries currently exit with a "vendor binary not yet
+  built" message until the on-rig build phase lands.
+- **CI workflow** `.github/workflows/vision-nav-vendor-binaries.yml`.
+  Triggers on `vision-nav-v*` tags and on `workflow_dispatch`.
+  Matrix builds `aarch64-unknown-linux-gnu` + `x86_64-unknown-linux-gnu`
+  for both binaries with native cross-compile (rockchip BSP variant
+  added once the sysroot drops are mirrored). Runs the conformance
+  flag on the x86_64 build, signs each tarball with the existing
+  `ADOS_SIGNING_KEY` Ed25519 secret, and attaches the signed
+  artefacts to the GitHub release.
+
+- **Direct-I2C BMI088 IMU source.** New
+  `altnautica_vision_nav.imu.direct_i2c.DirectI2cImu` reads the
+  Bosch BMI088 accel + gyro dies directly off an I2C bus at ~400 Hz,
+  bypassing the FC's MAVLink stream rate cap (typically 50-200 Hz).
+  The auto-detect probe walks every `/dev/i2c-*` bus checking the
+  accel and gyro chip-id registers; when both match, the plugin
+  instantiates the direct source instead of `MavlinkRawImu`. Stationary
+  bias calibration is operator-triggered from the GCS sensors card.
+- **`Recalibrate` button on the IMU row** of the sensors card.
+  Renders only when the active source is a direct-bus IMU; tapping
+  publishes `vision-nav.recalibrate_imu_biases`. The agent's direct
+  source averages 200 stationary samples and overwrites its bias
+  offsets.
+- **Cloud relay navigation schema** extended with 13 optional fields
+  the plugin's enriched heartbeat has been emitting since the
+  estimator framework landed (mode, availableEstimators, estimatorState,
+  estimator{Feature,Drift}*, flowScaleSource, imuSource, imuRateHz,
+  cameraImuSyncOffsetMs, cameraIntrinsicsLoaded, preArmReport, plus
+  the auto-detect summary). Without this schema update the cloud
+  relay was silently dropping every enriched field at validation
+  time. Applies to both `ADOSMissionControl/convex/schema.ts` and
+  `website/convex/schema.ts`; `npx convex deploy` required from a
+  dev machine before the new fields land in the live database.
+
 - **Hardware auto-detect on start-up.** New
   `altnautica_vision_nav.autodetect` package probes the host profile
   (refusing to enable on ground-station-profile hosts), enumerates
