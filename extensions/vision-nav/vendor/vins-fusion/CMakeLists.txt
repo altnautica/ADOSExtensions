@@ -4,30 +4,19 @@ project(ados_vins_fusion_shim LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Pin the upstream commit. The CI workflow passes this in on the
-# command line so a release tag locks the exact source revision.
-# VINS-Fusion does not publish formal release tags; the canonical
-# pin is a commit sha on the master branch. Update the default below
-# only via a release-bump PR with a one-line rationale.
-set(VINS_FUSION_REF "be55a937a57436548ddfb1bd324bc1e9a9e828e0" CACHE STRING "VINS-Fusion upstream ref")
+# Informational upstream pin. The shim is a scaffold (see
+# src/main.cpp `run_conformance`) and does not currently link against
+# VINS-Fusion; the upstream is a ROS package, not a standalone CMake
+# library export. Real integration is future work — the shim ships
+# pre-built, signed, and exits with the "not yet implemented"
+# sentinel that the conformance gate accepts.
+set(VINS_FUSION_REF "be55a937a57436548ddfb1bd324bc1e9a9e828e0" CACHE STRING "VINS-Fusion upstream ref (informational)")
 
-include(FetchContent)
-FetchContent_Declare(
-  vins_fusion
-  GIT_REPOSITORY https://github.com/HKUST-Aerial-Robotics/VINS-Fusion.git
-  GIT_TAG ${VINS_FUSION_REF}
-)
-
-# Same dependency set as OpenVINS plus Ceres for the bundle
-# adjustment back-end.
 find_package(Eigen3 REQUIRED)
 find_package(OpenCV 4 REQUIRED)
 find_package(Boost REQUIRED COMPONENTS system thread filesystem)
 find_package(Ceres REQUIRED)
 find_package(Threads REQUIRED)
-find_package(msgpack REQUIRED)
-
-FetchContent_MakeAvailable(vins_fusion)
 
 add_executable(ados_vins_fusion_shim
   src/main.cpp
@@ -50,7 +39,6 @@ target_link_libraries(ados_vins_fusion_shim PRIVATE
   Boost::filesystem
   ${CERES_LIBRARIES}
   Threads::Threads
-  msgpackc-cxx
 )
 
 install(TARGETS ados_vins_fusion_shim DESTINATION bin)

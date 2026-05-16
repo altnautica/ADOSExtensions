@@ -128,7 +128,10 @@ jobs:
           out="build/${binary_name}-${{ matrix.target }}.tar.gz"
           tar -czf "$out" -C build "$binary_name"
           if [ -n "$ADOS_SIGNING_KEY" ]; then
-            echo "$ADOS_SIGNING_KEY" > /tmp/signing.key
+            # The secret is base64-encoded PEM (so the main release
+            # path's sign.sh works with ADOS_SIGNING_KEY_INLINE=1).
+            # Decode before handing to cryptography.load_pem_private_key.
+            echo "$ADOS_SIGNING_KEY" | base64 -d > /tmp/signing.key
             python3 -m pip install --quiet cryptography
             python3 - "$out" /tmp/signing.key <<'PY'
           import base64, sys
