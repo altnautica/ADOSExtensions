@@ -21,6 +21,7 @@ vendor_attribution:
   - name: "VINS-Fusion"
     license: "GPL-3.0-only"
     source_url: "https://github.com/HKUST-Aerial-Robotics/VINS-Fusion"
+    upstream_version: "be55a937a57436548ddfb1bd324bc1e9a9e828e0"
     notice: "VIO mode ``vio_vins_fusion`` uses the VINS-Fusion estimator from the HKUST Aerial Robotics Group."
 
 compatibility:

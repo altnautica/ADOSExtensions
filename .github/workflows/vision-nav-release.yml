@@ -1,3 +1,24 @@
+# vision-nav-release
+#
+# End-to-end pipeline that fires on a `vision-nav-v*` tag push:
+#   1. `vendor-binaries` matrix job builds the OpenVINS and VINS-Fusion shim
+#      binaries for every supported target. Artifacts are uploaded as same-run
+#      artifacts (no cross-run download dance).
+#   2. `build-and-release` waits on the matrix via `needs:`, downloads the
+#      vendor-binary tarballs, runs the agent + GCS tests, packs and signs the
+#      .adosplug archive, and attaches both the .adosplug and the vendor
+#      tarballs to the GitHub Release.
+#
+# Consolidating both halves into one workflow removes the cross-workflow
+# artifact download race the previous split-workflow design had: the release
+# job no longer needs to guess which run produced the vendor binaries, because
+# they live in the same run.
+#
+# The standalone `vision-nav-vendor-binaries.yml` workflow is kept for manual
+# rebuilds via `workflow_dispatch` (founder can rebuild vendor binaries against
+# any commit ref without cutting a release tag) but no longer fires on tag
+# pushes; the release pipeline below owns the on-tag path end to end.
+
 name: vision-nav-release
 
 on:
@@ -6,7 +27,128 @@ on:
       - "vision-nav-v*"
 
 jobs:
+  vendor-binaries:
+    name: build ${{ matrix.binary }} (${{ matrix.target }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        binary: [openvins, vins-fusion]
+        target:
+          - aarch64-unknown-linux-gnu
+          - x86_64-unknown-linux-gnu
+        # The rockchip-specific aarch64 variant builds against a
+        # different sysroot (Radxa BSP libc + OpenCV pins). The
+        # bench validation gate adds it back once the Rock 5C Lite
+        # sysroot drops are mirrored.
+        # - aarch64-rockchip-linux-gnu
+    env:
+      BINARY_DIR: extensions/vision-nav/vendor/${{ matrix.binary }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Install cross-compile toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake build-essential git \
+            crossbuild-essential-arm64
+
+      - name: Install sysroot dependencies
+        # The aarch64 sysroot needs Eigen, OpenCV, Boost, msgpack,
+        # plus Ceres for the VINS-Fusion build. We use Ubuntu's
+        # arm64 multi-arch packages for the dev sysroot.
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            sudo dpkg --add-architecture arm64
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              libeigen3-dev:arm64 libopencv-dev:arm64 \
+              libboost-all-dev:arm64 libmsgpack-cxx-dev:arm64 \
+              libceres-dev:arm64 libgoogle-glog-dev:arm64 libgflags-dev:arm64
+          else
+            sudo apt-get install -y --no-install-recommends \
+              libeigen3-dev libopencv-dev libboost-all-dev \
+              libmsgpack-cxx-dev libceres-dev \
+              libgoogle-glog-dev libgflags-dev
+          fi
+
+      - name: Configure
+        working-directory: ${{ env.BINARY_DIR }}
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            cmake -S . -B build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_C_COMPILER=/usr/bin/aarch64-linux-gnu-gcc \
+              -DCMAKE_CXX_COMPILER=/usr/bin/aarch64-linux-gnu-g++ \
+              -DCMAKE_SYSTEM_NAME=Linux \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64
+          else
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          fi
+
+      - name: Build
+        working-directory: ${{ env.BINARY_DIR }}
+        run: cmake --build build -j$(nproc) --verbose
+
+      - name: Conformance (x86_64 only)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: ${{ env.BINARY_DIR }}
+        run: |
+          binary_name="ados_$(echo ${{ matrix.binary }} | tr '-' '_')_shim"
+          # Capture stderr so we can distinguish the intentional
+          # "not yet implemented" scaffold exit from a real
+          # crash. The grep check is the conformance gate until the
+          # upstream integration lands and the binary returns 0.
+          set +e
+          ./build/${binary_name} --conformance 2> conformance.log
+          status=$?
+          set -e
+          cat conformance.log
+          if grep -q "not yet implemented" conformance.log; then
+            echo "scaffold exit accepted"
+            exit 0
+          fi
+          exit $status
+
+      - name: Sign artefact
+        working-directory: ${{ env.BINARY_DIR }}
+        env:
+          ADOS_SIGNING_KEY: ${{ secrets.ADOS_SIGNING_KEY }}
+        run: |
+          binary_name="ados_$(echo ${{ matrix.binary }} | tr '-' '_')_shim"
+          out="build/${binary_name}-${{ matrix.target }}.tar.gz"
+          tar -czf "$out" -C build "$binary_name"
+          if [ -n "$ADOS_SIGNING_KEY" ]; then
+            echo "$ADOS_SIGNING_KEY" > /tmp/signing.key
+            python3 -m pip install --quiet cryptography
+            python3 - "$out" /tmp/signing.key <<'PY'
+          import base64, sys
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from cryptography.hazmat.primitives.serialization import load_pem_private_key
+          payload = open(sys.argv[1], "rb").read()
+          key = load_pem_private_key(open(sys.argv[2], "rb").read(), password=None)
+          assert isinstance(key, Ed25519PrivateKey)
+          sig = key.sign(payload)
+          open(sys.argv[1] + ".sig", "wb").write(base64.b64encode(sig))
+          PY
+          else
+            echo "ADOS_SIGNING_KEY not set; skipping signature"
+          fi
+
+      - name: Upload artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.target }}
+          path: |
+            ${{ env.BINARY_DIR }}/build/*.tar.gz
+            ${{ env.BINARY_DIR }}/build/*.tar.gz.sig
+
   build-and-release:
+    needs: vendor-binaries
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -67,19 +209,10 @@ jobs:
           pip install build
           python -m build --wheel --outdir ../dist
 
-      # TODO(founder): vision-nav-vendor-binaries.yml triggers on the same
-      # vision-nav-v* tag and runs in parallel with this workflow, so the
-      # vendor-binary tarballs are not guaranteed to exist on the runner
-      # when pack.sh runs. Options to resolve:
-      #   (a) switch this workflow to `on: workflow_run` of vendor-binaries,
-      #   (b) add a polling/download step that fetches the matching
-      #       vendor-binaries run artifacts via the GitHub API, or
-      #   (c) merge both workflows into a single multi-job pipeline.
-      # Until then, the presence check below will fail the release when the
-      # vendor binaries are absent, which is the safer default (refuse to
-      # ship an .adosplug missing its allowlisted shim binaries).
-      - name: Stage vendor binaries from sibling workflow
-        continue-on-error: true
+      - name: Stage vendor binaries from matrix
+        # Vendor binaries are produced by the `vendor-binaries` job in this
+        # same run. `needs:` guarantees they exist; the download step pulls
+        # every matrix artifact into one directory.
         uses: actions/download-artifact@v4
         with:
           path: extensions/${{ steps.route.outputs.ext }}/vendor/_staged
@@ -87,16 +220,26 @@ jobs:
           merge-multiple: true
 
       - name: Extract staged vendor tarballs
-        if: hashFiles(format('extensions/{0}/vendor/_staged/**/*.tar.gz', steps.route.outputs.ext)) != ''
         run: |
           set -e
           staged_dir="extensions/${{ steps.route.outputs.ext }}/vendor/_staged"
-          for tarball in $(find "${staged_dir}" -name '*.tar.gz' 2>/dev/null); do
+          if [ ! -d "${staged_dir}" ]; then
+            echo "::error::Vendor staging directory missing: ${staged_dir}"
+            exit 1
+          fi
+          shopt -s nullglob
+          found=0
+          while IFS= read -r tarball; do
             target_dir="extensions/${{ steps.route.outputs.ext }}/vendor/$(basename "${tarball}" .tar.gz)"
             mkdir -p "${target_dir}"
             tar -xzf "${tarball}" -C "${target_dir}"
             echo "extracted ${tarball} -> ${target_dir}"
-          done
+            found=$((found + 1))
+          done < <(find "${staged_dir}" -name '*.tar.gz' 2>/dev/null)
+          if [ "${found}" -eq 0 ]; then
+            echo "::error::No vendor tarballs found under ${staged_dir}"
+            exit 1
+          fi
 
       - name: Verify vendor binaries present
         run: |
@@ -111,7 +254,7 @@ jobs:
             fi
           done
           if [ ${missing} -gt 0 ]; then
-            echo "::error::${missing} vendor binary(ies) missing. Run vision-nav-vendor-binaries.yml workflow first to produce them."
+            echo "::error::${missing} vendor binary(ies) missing despite vendor-binaries matrix completing. Inspect the matrix job logs."
             exit 1
           fi
 
@@ -127,9 +270,20 @@ jobs:
           archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.adosplug$' | head -n1)"
           ./scripts/sign.sh "${archive}"
 
+      - name: Stage vendor tarballs for release upload
+        run: |
+          set -e
+          staged_dir="extensions/${{ steps.route.outputs.ext }}/vendor/_staged"
+          release_dir="extensions/${{ steps.route.outputs.ext }}/dist/vendor-tarballs"
+          mkdir -p "${release_dir}"
+          find "${staged_dir}" \( -name '*.tar.gz' -o -name '*.tar.gz.sig' \) \
+            -exec cp -v {} "${release_dir}/" \;
+
       - name: Upload to GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
+            extensions/${{ steps.route.outputs.ext }}/dist/vendor-tarballs/*.tar.gz
+            extensions/${{ steps.route.outputs.ext }}/dist/vendor-tarballs/*.tar.gz.sig
             extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md

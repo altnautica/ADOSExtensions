@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # VINS-Fusion does not publish formal release tags; the canonical
 # pin is a commit sha on the master branch. Update the default below
 # only via a release-bump PR with a one-line rationale.
-set(VINS_FUSION_REF "master" CACHE STRING "VINS-Fusion upstream ref")
+set(VINS_FUSION_REF "be55a937a57436548ddfb1bd324bc1e9a9e828e0" CACHE STRING "VINS-Fusion upstream ref")
 
 include(FetchContent)
 FetchContent_Declare(

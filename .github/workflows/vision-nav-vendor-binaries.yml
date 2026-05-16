@@ -1,9 +1,12 @@
 name: vision-nav vendor binaries
 
+# Manual-only workflow for rebuilding OpenVINS / VINS-Fusion shim binaries
+# against an arbitrary commit ref without cutting a release tag. The on-tag
+# path is owned end-to-end by vision-nav-release.yml, which runs the same
+# matrix as an upstream job and consumes the artifacts in the same run; this
+# file used to also trigger on `vision-nav-v*` tag pushes which produced a
+# parallel run whose artifacts the release workflow could not reliably reach.
 on:
-  push:
-    tags:
-      - "vision-nav-v*"
   workflow_dispatch:
     inputs:
       ref:
@@ -135,18 +138,6 @@ jobs:
             ${{ env.BINARY_DIR }}/build/*.tar.gz
             ${{ env.BINARY_DIR }}/build/*.tar.gz.sig
 
-  release:
-    name: attach to release
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/vision-nav-v')
-    runs-on: ubuntu-22.04
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: artefacts
-          merge-multiple: true
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            artefacts/*.tar.gz
-            artefacts/*.tar.gz.sig
+  # NOTE: the on-tag release-upload path is owned by vision-nav-release.yml.
+  # Manual rebuilds via workflow_dispatch only produce same-run artifacts
+  # downloadable from the run page — they do not attach to any GitHub Release.
