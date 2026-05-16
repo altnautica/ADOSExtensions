@@ -4,7 +4,7 @@ on:
   push:
     tags:
       - "battery-health-panel-v*"
-      - "thermal-camera-flir-lepton-v*"
+      - "thermal-camera-flir-lepton-usb-v*"
       - "mavlink-gimbal-v2-v*"
 
 jobs:
