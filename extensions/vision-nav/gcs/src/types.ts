@@ -79,6 +79,23 @@ export interface VisionNavTelemetry {
   cameraIntrinsicsLoaded?: boolean;
   /** Rolling residual between camera frames and IMU samples in ms. */
   cameraImuSyncOffsetMs?: number;
+  /** Aggregate pre-arm report from the gate. The GCS pre-arm card
+   * renders each check with its severity and detail string. */
+  preArmReport?: PreArmReport;
+}
+
+export type PreArmCheckSeverity = "ok" | "pending" | "blocking";
+
+export interface PreArmCheck {
+  id: string;
+  severity: PreArmCheckSeverity;
+  detail: string;
+}
+
+export interface PreArmReport {
+  mode: string;
+  armable: boolean;
+  checks: PreArmCheck[];
 }
 
 export type FirmwareType = "ardupilot" | "px4" | "betaflight" | "inav";

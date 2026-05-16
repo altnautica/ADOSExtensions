@@ -88,6 +88,7 @@ class HealthPublisher:
         self._imu_rate_hz_provider: Optional[object] = None
         self._sync_offset_provider: Optional[object] = None
         self._intrinsics_loaded: bool = False
+        self._pre_arm_report: Optional[object] = None
         self._task: Optional[asyncio.Task[None]] = None
         self._ctx: object | None = None
 
@@ -164,6 +165,16 @@ class HealthPublisher:
         """
 
         self._intrinsics_loaded = bool(loaded)
+
+    def set_pre_arm_report(self, report: Optional[object]) -> None:
+        """Attach the latest :class:`PreArmReport` from the gate.
+
+        The heartbeat publishes ``preArmReport`` as a structured dict
+        the GCS pre-arm card reads. ``None`` clears the field so an
+        outdated report does not linger across mode changes.
+        """
+
+        self._pre_arm_report = report
 
     def update_companion_state(self, state: CompanionState) -> None:
         """Mirror the comp 198 companion state into the heartbeat block."""
@@ -250,7 +261,30 @@ class HealthPublisher:
             "imuRateHz": self._read_imu_rate_hz(),
             "cameraImuSyncOffsetMs": self._read_sync_offset_ms(),
             "cameraIntrinsicsLoaded": self._intrinsics_loaded,
+            "preArmReport": self._read_pre_arm_report(),
         }
+
+    def _read_pre_arm_report(self) -> Optional[dict]:
+        """Coerce the attached report into a plain dict for the wire.
+
+        Accepts a :class:`PreArmReport` (which has an :meth:`as_dict`
+        helper) or a raw dict for tests. Returns ``None`` when no
+        report has been set so the GCS treats the row as "unknown"
+        rather than rendering an empty card.
+        """
+
+        report = self._pre_arm_report
+        if report is None:
+            return None
+        as_dict = getattr(report, "as_dict", None)
+        if callable(as_dict):
+            try:
+                return as_dict()
+            except Exception:  # noqa: BLE001 - never let a probe break the tick
+                return None
+        if isinstance(report, dict):
+            return report
+        return None
 
     def _read_imu_rate_hz(self) -> Optional[float]:
         """Read the IMU rate via the source's ``rate_hz()`` if attached."""

@@ -1,10 +1,11 @@
 """Plugin-side MAVLink encoders + emit helpers.
 
-Three messages cover the optical-flow + range injection surface:
+Four messages cover the optical-flow + range + VIO injection surface:
 
-* OPTICAL_FLOW (#100)        — flow-sensor scalar output.
-* OPTICAL_FLOW_RAD (#106)    — angular-rate flow (PX4FLOW class).
-* DISTANCE_SENSOR (#132)     — downward rangefinder injection.
+* OPTICAL_FLOW (#100)            — flow-sensor scalar output.
+* OPTICAL_FLOW_RAD (#106)        — angular-rate flow (PX4FLOW class).
+* DISTANCE_SENSOR (#132)         — downward rangefinder injection.
+* VISION_POSITION_ESTIMATE (#102) — VIO pose feed (component 197).
 
 Wire format and CRC_EXTRA fingerprints match the agent framework's
 canonical encoders at ``ados.services.mavlink.encoders.{vision,rangefinder}``;
@@ -44,10 +45,15 @@ log = logging.getLogger(__name__)
 MSG_ID_OPTICAL_FLOW: Final[int] = 100
 MSG_ID_OPTICAL_FLOW_RAD: Final[int] = 106
 MSG_ID_DISTANCE_SENSOR: Final[int] = 132
+MSG_ID_VISION_POSITION_ESTIMATE: Final[int] = 102
 
 CRC_OPTICAL_FLOW: Final[int] = 175
 CRC_OPTICAL_FLOW_RAD: Final[int] = 138
 CRC_DISTANCE_SENSOR: Final[int] = 85
+# CRC_EXTRA for VISION_POSITION_ESTIMATE is computed without the
+# extension fields (covariance, reset_counter). Matches the
+# dialect-generated digest from MAVLink common.xml.
+CRC_VISION_POSITION_ESTIMATE: Final[int] = 158
 
 
 # ---------------------------------------------------------------------------
@@ -57,6 +63,13 @@ CRC_DISTANCE_SENSOR: Final[int] = 85
 _PACK_OPTICAL_FLOW: Final[struct.Struct] = struct.Struct("<QfffhhBBff")
 _PACK_OPTICAL_FLOW_RAD: Final[struct.Struct] = struct.Struct("<QIfffffIfhBB")
 _PACK_DISTANCE_SENSOR: Final[struct.Struct] = struct.Struct("<IHHHBBBBff4fB")
+# VISION_POSITION_ESTIMATE: usec(Q) + x,y,z,roll,pitch,yaw (6f) +
+# covariance[21] (21f, extension) + reset_counter (B, extension).
+# Wire order matches MAVLink v2: non-extension fields first sorted
+# descending by size, then extensions in declared order.
+_PACK_VISION_POSITION_ESTIMATE: Final[struct.Struct] = struct.Struct(
+    "<Qffffff21fB"
+)
 
 
 # Default sys_id used by the plugin when it sends as comp 198 (peripheral
@@ -222,6 +235,58 @@ def build_distance_sensor(
     )
 
 
+def build_vision_position_estimate(
+    *,
+    sys_id: int,
+    comp_id: int,
+    seq: int,
+    time_usec: int,
+    x: float,
+    y: float,
+    z: float,
+    roll: float,
+    pitch: float,
+    yaw: float,
+    covariance: Sequence[float] = (),
+    reset_counter: int = 0,
+) -> bytes:
+    """Pack a VISION_POSITION_ESTIMATE (#102) v2 frame.
+
+    ``covariance`` is an upper-triangular row-major over (x, y, z,
+    roll, pitch, yaw) — 21 floats. Pass an empty sequence to fill
+    with zeros (the FC treats zero as "unknown" and falls back to
+    EK3_SRC1_POSXY_M_NSE parameter defaults).
+    """
+
+    if covariance:
+        if len(covariance) != 21:
+            raise ValueError(
+                f"covariance must have 21 entries, got {len(covariance)}"
+            )
+        cov = tuple(float(c) for c in covariance)
+    else:
+        cov = (0.0,) * 21
+    payload = _PACK_VISION_POSITION_ESTIMATE.pack(
+        int(time_usec),
+        float(x),
+        float(y),
+        float(z),
+        float(roll),
+        float(pitch),
+        float(yaw),
+        *cov,
+        int(reset_counter) & 0xFF,
+    )
+    return pack_v2(
+        msg_id=MSG_ID_VISION_POSITION_ESTIMATE,
+        crc_extra=CRC_VISION_POSITION_ESTIMATE,
+        payload=payload,
+        sys_id=sys_id,
+        comp_id=comp_id,
+        seq=seq,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Emit helpers (the plugin-public surface)
 # ---------------------------------------------------------------------------
@@ -352,6 +417,46 @@ async def emit_distance_sensor(
         vertical_fov=vertical_fov,
         quaternion=quaternion,
         signal_quality=signal_quality,
+    )
+    await _send(ctx, frame, component_id)
+
+
+async def emit_vision_position_estimate(
+    ctx: "object",
+    *,
+    component_id: int,
+    x: float,
+    y: float,
+    z: float,
+    roll: float,
+    pitch: float,
+    yaw: float,
+    covariance: Sequence[float] = (),
+    reset_counter: int = 0,
+    clock_align: "ClockAlign | None" = None,
+    sys_id: int = DEFAULT_SYS_ID,
+) -> None:
+    """Send one VISION_POSITION_ESTIMATE on the plugin's VIO component.
+
+    Plugin code normally calls this on component 197
+    (``MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY``). ArduPilot EKF3 fuses
+    the position when ``EK3_SRC1_POSXY`` is set to ``ExternalNav``
+    and the message arrives at 10 Hz or faster.
+    """
+
+    frame = build_vision_position_estimate(
+        sys_id=sys_id,
+        comp_id=component_id,
+        seq=_seq.next(),
+        time_usec=_fc_time_usec(clock_align),
+        x=x,
+        y=y,
+        z=z,
+        roll=roll,
+        pitch=pitch,
+        yaw=yaw,
+        covariance=covariance,
+        reset_counter=reset_counter,
     )
     await _send(ctx, frame, component_id)
 

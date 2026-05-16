@@ -56,6 +56,7 @@ export function useVisionNavTelemetry(
           imuRateHz: next.imuRateHz,
           cameraIntrinsicsLoaded: next.cameraIntrinsicsLoaded,
           cameraImuSyncOffsetMs: next.cameraImuSyncOffsetMs,
+          preArmReport: next.preArmReport,
         }));
       })
       .then((unsubscribe) => {

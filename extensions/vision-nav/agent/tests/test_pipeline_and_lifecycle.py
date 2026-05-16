@@ -582,6 +582,7 @@ class TestHealthPublisher:
             "imuRateHz",
             "cameraImuSyncOffsetMs",
             "cameraIntrinsicsLoaded",
+            "preArmReport",
         }
         assert set(snapshot.keys()) == expected_keys
         # Snake case must not leak into the payload.

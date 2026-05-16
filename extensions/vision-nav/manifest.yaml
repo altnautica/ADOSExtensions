@@ -2,12 +2,26 @@ schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
 version: "0.1.0"
-description: "GPS-denied navigation via downward optical flow. Supports ArduPilot (FLOW_TYPE=5) and PX4 (EKF2_OF_CTRL) on USB UVC or CSI cameras."
+description: "GPS-denied navigation. Optical flow (with or without a rangefinder) and visual-inertial odometry. Supports ArduPilot and PX4 on USB UVC or CSI cameras."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/vision-nav"
 license: "GPL-3.0-or-later"
 risk: high
-contains_vendor_binary: false
+# The VIO modes spawn a vendor binary; the optical-flow modes do not.
+# ``contains_vendor_binary`` is true so the installer surfaces the
+# vendor-attribution block at install time. When VIO modes are not
+# selected the binary stays on disk but never executes.
+contains_vendor_binary: true
+vendor_attribution:
+  - name: "OpenVINS"
+    license: "GPL-3.0-only"
+    source_url: "https://github.com/rpng/open_vins"
+    upstream_version: "v2.7.1"
+    notice: "VIO mode ``vio_openvins`` uses the OpenVINS estimator from the Robot Perception and Navigation Group at the University of Delaware."
+  - name: "VINS-Fusion"
+    license: "GPL-3.0-only"
+    source_url: "https://github.com/HKUST-Aerial-Robotics/VINS-Fusion"
+    notice: "VIO mode ``vio_vins_fusion`` uses the VINS-Fusion estimator from the HKUST Aerial Robotics Group."
 
 compatibility:
   ados_version: ">=0.13.0"
@@ -30,15 +44,30 @@ agent:
     - id: event.subscribe
     - id: mavlink.read
     - id: mavlink.write
+    - id: mavlink.component.peripheral
     - id: mavlink.component.vio
     - id: estimator.pose.inject
+    - id: process.spawn
+  # Vendor-binary allowlist. The plugin host's subprocess sandbox
+  # rejects any spawn whose basename is not in this list. Both
+  # binaries live under ``<install_dir>/vendor/`` and are signed
+  # together with the rest of the .adosplug archive.
+  subprocess_spawn:
+    - ados_openvins_shim
+    - ados_vins_fusion_shim
   resources:
-    max_ram_mb: 256
-    max_cpu_percent: 60
-    max_pids: 16
+    max_ram_mb: 512
+    max_cpu_percent: 80
+    max_pids: 24
   mavlink_components:
     - component_id: 198
       component_kind: peripheral
+      sub_id: 1
+    # MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY for VIO emissions. The
+    # router claims this component only when a vio_* mode is active;
+    # heartbeat and component-info remain quiet in OF-only modes.
+    - component_id: 197
+      component_kind: vio
       sub_id: 1
 
 gcs:

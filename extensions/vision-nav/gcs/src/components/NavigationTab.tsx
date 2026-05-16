@@ -8,6 +8,8 @@ import type { FirmwareType, VisionNavTelemetry } from "../types";
 import { ArduPilotVisionParams } from "./ArduPilotVisionParams";
 import { CompanionStatusPill } from "./CompanionStatusPill";
 import { EkfSourceSwitcher } from "./EkfSourceSwitcher";
+import { EstimatorCard } from "./EstimatorCard";
+import { FallbackBanner } from "./FallbackBanner";
 import { FlowHealthCard } from "./FlowHealthCard";
 import { ModeCard } from "./ModeCard";
 import { PreArmStatus } from "./PreArmStatus";
@@ -68,8 +70,10 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
         <h2 style={title}>{renderedTitle}</h2>
         <CompanionStatusPill state={telemetry.companionState} />
       </header>
+      <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
       <ModeCard ctx={props.ctx} telemetry={telemetry} />
       <SensorsCard ctx={props.ctx} telemetry={telemetry} />
+      <EstimatorCard ctx={props.ctx} telemetry={telemetry} />
       <FlowHealthCard telemetry={telemetry} />
       <PreArmStatus telemetry={telemetry} />
       <EkfSourceSwitcher

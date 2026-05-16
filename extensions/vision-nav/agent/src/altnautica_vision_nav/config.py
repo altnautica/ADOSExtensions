@@ -108,6 +108,9 @@ class VisionNavConfig(BaseModel):
         "off",
         "optical_flow",
         "optical_flow_degraded",
+        "vio_openvins",
+        "vio_vins_fusion",
+        "hybrid_of_plus_vio",
     ] = "optical_flow"
     camera: CameraConfig = Field(default_factory=CameraConfig)
     rangefinder: RangefinderConfig = Field(default_factory=RangefinderConfig)
