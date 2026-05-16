@@ -51,11 +51,69 @@ jobs:
       - name: Run GCS tests
         run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" test
 
+      - name: Install vision-nav agent for testing
+        run: |
+          cd extensions/${{ steps.route.outputs.ext }}/agent
+          pip install -e .[dev]
+
+      - name: Run vision-nav agent tests
+        run: |
+          cd extensions/${{ steps.route.outputs.ext }}/agent
+          pytest tests -ra
+
       - name: Build agent wheel
         run: |
           cd extensions/${{ steps.route.outputs.ext }}/agent
           pip install build
           python -m build --wheel --outdir ../dist
+
+      # TODO(founder): vision-nav-vendor-binaries.yml triggers on the same
+      # vision-nav-v* tag and runs in parallel with this workflow, so the
+      # vendor-binary tarballs are not guaranteed to exist on the runner
+      # when pack.sh runs. Options to resolve:
+      #   (a) switch this workflow to `on: workflow_run` of vendor-binaries,
+      #   (b) add a polling/download step that fetches the matching
+      #       vendor-binaries run artifacts via the GitHub API, or
+      #   (c) merge both workflows into a single multi-job pipeline.
+      # Until then, the presence check below will fail the release when the
+      # vendor binaries are absent, which is the safer default (refuse to
+      # ship an .adosplug missing its allowlisted shim binaries).
+      - name: Stage vendor binaries from sibling workflow
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          path: extensions/${{ steps.route.outputs.ext }}/vendor/_staged
+          pattern: "*-*-unknown-linux-gnu"
+          merge-multiple: true
+
+      - name: Extract staged vendor tarballs
+        if: hashFiles(format('extensions/{0}/vendor/_staged/**/*.tar.gz', steps.route.outputs.ext)) != ''
+        run: |
+          set -e
+          staged_dir="extensions/${{ steps.route.outputs.ext }}/vendor/_staged"
+          for tarball in $(find "${staged_dir}" -name '*.tar.gz' 2>/dev/null); do
+            target_dir="extensions/${{ steps.route.outputs.ext }}/vendor/$(basename "${tarball}" .tar.gz)"
+            mkdir -p "${target_dir}"
+            tar -xzf "${tarball}" -C "${target_dir}"
+            echo "extracted ${tarball} -> ${target_dir}"
+          done
+
+      - name: Verify vendor binaries present
+        run: |
+          set -e
+          missing=0
+          for binary in ados_openvins_shim ados_vins_fusion_shim; do
+            if ! find extensions/${{ steps.route.outputs.ext }} -name "${binary}" -type f 2>/dev/null | grep -q .; then
+              echo "::error::Missing vendor binary: ${binary}"
+              missing=$((missing + 1))
+            else
+              echo "Found: $(find extensions/${{ steps.route.outputs.ext }} -name "${binary}" -type f | head -1)"
+            fi
+          done
+          if [ ${missing} -gt 0 ]; then
+            echo "::error::${missing} vendor binary(ies) missing. Run vision-nav-vendor-binaries.yml workflow first to produce them."
+            exit 1
+          fi
 
       - name: Pack archive
         run: ./scripts/pack.sh "${{ steps.route.outputs.ext }}"
