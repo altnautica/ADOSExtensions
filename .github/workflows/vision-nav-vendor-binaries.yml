@@ -49,37 +49,14 @@ jobs:
             crossbuild-essential-arm64
 
       - name: Install sysroot dependencies
-        # See vision-nav-release.yml for the rationale. Sources are
-        # rewritten from scratch with explicit per-architecture
-        # mirrors.
+        # The current scaffold shims only need a C++ compiler + libpthread,
+        # which crossbuild-essential-arm64 already supplies for the cross
+        # case. We keep this step as a no-op stub so the matrix layout
+        # stays stable for future revisions of the shim that adopt the
+        # real OpenVINS / Ceres / VINS-Fusion estimators — at which point
+        # the per-arch sysroot package list reappears here.
         run: |
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
-            sudo tee /etc/apt/sources.list >/dev/null <<'SOURCES'
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu/ jammy-security main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-backports main restricted universe multiverse
-          SOURCES
-            sudo dpkg --add-architecture arm64
-            sudo apt-get update
-            sudo apt-get install -y \
-              libeigen3-dev:arm64 libopencv-dev:arm64 \
-              libboost-all-dev:arm64 libmsgpack-dev:arm64 \
-              libceres-dev:arm64 libgoogle-glog-dev:arm64 libgflags-dev:arm64 \
-              libunwind-dev:arm64
-          else
-            sudo apt-get update
-            sudo apt-get install -y \
-              libeigen3-dev libopencv-dev libboost-all-dev \
-              libmsgpack-dev libceres-dev \
-              libgoogle-glog-dev libgflags-dev \
-              libunwind-dev
-          fi
+          echo "scaffold build: no extra sysroot packages required"
 
       - name: Configure
         working-directory: ${{ env.BINARY_DIR }}

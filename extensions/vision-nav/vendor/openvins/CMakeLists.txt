@@ -13,12 +13,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # the "not yet implemented" sentinel that the conformance gate accepts.
 set(OPENVINS_VERSION "v2.7" CACHE STRING "OpenVINS upstream tag (informational)")
 
-# Toolchain deps for the scaffold (OpenCV / Eigen / Boost / msgpack
-# are present so future revisions of the shim can adopt the real
-# estimator without another CI sweep).
-find_package(Eigen3 REQUIRED)
-find_package(OpenCV 4 REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system thread filesystem)
+# Toolchain deps minimal for the scaffold. The current sources use
+# only POSIX + std and exit with the "not yet implemented" sentinel.
+# Eigen / OpenCV / Boost / Ceres become required when the upstream
+# estimator integration lands; until then keeping them out of the
+# build matches what the code actually consumes and keeps the arm64
+# sysroot install lean.
 find_package(Threads REQUIRED)
 
 add_executable(ados_openvins_shim
@@ -27,18 +27,7 @@ add_executable(ados_openvins_shim
   src/shm_ring.cpp
 )
 
-target_include_directories(ados_openvins_shim PRIVATE
-  ${OpenCV_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS}
-  ${Boost_INCLUDE_DIRS}
-)
-
 target_link_libraries(ados_openvins_shim PRIVATE
-  ${OpenCV_LIBS}
-  Eigen3::Eigen
-  Boost::system
-  Boost::thread
-  Boost::filesystem
   Threads::Threads
 )
 

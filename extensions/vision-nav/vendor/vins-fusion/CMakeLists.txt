@@ -12,10 +12,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # sentinel that the conformance gate accepts.
 set(VINS_FUSION_REF "be55a937a57436548ddfb1bd324bc1e9a9e828e0" CACHE STRING "VINS-Fusion upstream ref (informational)")
 
-find_package(Eigen3 REQUIRED)
-find_package(OpenCV 4 REQUIRED)
-find_package(Boost REQUIRED COMPONENTS system thread filesystem)
-find_package(Ceres REQUIRED)
+# Toolchain deps minimal for the scaffold. The current sources use
+# only POSIX + std and exit with the "not yet implemented" sentinel.
+# Eigen / OpenCV / Boost / Ceres become required when the upstream
+# estimator integration lands; until then keeping them out of the
+# build matches what the code actually consumes and avoids dragging
+# Ceres + libopenmpi-dev into the arm64 sysroot where gfortran-11
+# resolution breaks on Ubuntu jammy.
 find_package(Threads REQUIRED)
 
 add_executable(ados_vins_fusion_shim
@@ -24,20 +27,7 @@ add_executable(ados_vins_fusion_shim
   src/shm_ring.cpp
 )
 
-target_include_directories(ados_vins_fusion_shim PRIVATE
-  ${OpenCV_INCLUDE_DIRS}
-  ${EIGEN3_INCLUDE_DIRS}
-  ${Boost_INCLUDE_DIRS}
-  ${CERES_INCLUDE_DIRS}
-)
-
 target_link_libraries(ados_vins_fusion_shim PRIVATE
-  ${OpenCV_LIBS}
-  Eigen3::Eigen
-  Boost::system
-  Boost::thread
-  Boost::filesystem
-  ${CERES_LIBRARIES}
   Threads::Threads
 )
 
