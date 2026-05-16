@@ -76,7 +76,10 @@ jobs:
             for f in /etc/apt/sources.list.d/*.sources; do
               [ -f "$f" ] || continue
               if ! grep -q '^Architectures:' "$f"; then
-                printf '\nArchitectures: amd64\n' | sudo tee -a "$f" >/dev/null
+                # Insert in-stanza after the Types: header; appending
+                # at the file tail would create a malformed empty
+                # stanza.
+                sudo sed -i '/^Types:/a Architectures: amd64' "$f"
               fi
             done
             sudo tee /etc/apt/sources.list.d/ports.list >/dev/null <<'PORTS'
@@ -95,7 +98,7 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
               libeigen3-dev libopencv-dev libboost-all-dev \
-              libmsgpack-cxx-dev libceres-dev \
+              libmsgpack-dev libceres-dev \
               libgoogle-glog-dev libgflags-dev
           fi
 
