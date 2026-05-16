@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "altnautica-vision-nav"
-version = "0.1.0"
+version = "0.2.0"
 description = "ADOS plugin: optical-flow GPS-denied navigation (agent half)."
 readme = "../README.md"
 license = { text = "GPL-3.0-or-later" }

@@ -2,9 +2,42 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.2.0] — 2026-05-16
+
+This release flips Vision Navigation from "scaffolded but runtime-dormant"
+to runtime-complete on the OF modes and runtime-ready on the VIO modes
+pending the vendor-binary upstream integration. The plugin auto-detects
+its hardware on start, ships a guided in-app calibration wizard, and
+publishes an enriched heartbeat the cloud relay now accepts.
+
 ## [Unreleased]
 
 ### Added
+
+- **Public documentation refresh across five Mintlify pages.** The
+  calibration page (`Documentation/drone-agent/vision-nav-calibration.mdx`)
+  was rewritten to make the in-app wizard the primary path. The YAML
+  upload route stays documented as the "advanced" alternative for
+  operators with an existing Kalibr `camchain.yaml`. The walk-through
+  covers the seven-step flow, frame-quality troubleshooting, pose
+  coverage troubleshooting, IMU motion troubleshooting, and verify
+  diagnostics interpretation.
+- **New page `vision-nav-calibration-math.mdx`** for the technically
+  curious. Covers why intrinsics + extrinsics + timeshift are three
+  separate things, the math the wizard runs (`cv2.calibrateCamera`,
+  per-frame PnP, golden-section timeshift fit), why AprilGrid beats
+  a chessboard, and the role of pose diversity. Registered in
+  `Documentation/docs.json` in the right reading order.
+- **Overview + getting-started + architecture pages updated.** The
+  overview surfaces the hardware auto-detect behaviour (camera, IMU,
+  rangefinder probes + suggested mode + auto-flip), softens the
+  "VIO in development" framing to match reality (Python plumbing,
+  GCS surfaces, auto-detect, and build pipeline ship; the
+  upstream-integration step is the open work). Getting-started step 4
+  points at the wizard with a 1-paragraph summary. The architecture
+  page documents the new `calibration/runner.py`, the `autodetect/`
+  subpackage, and the `DirectI2cImu` source under the module map +
+  a dedicated calibration-runner section.
 
 - **Vendor build scaffold for the two VIO binaries.** New
   `extensions/vision-nav/vendor/openvins/` and
