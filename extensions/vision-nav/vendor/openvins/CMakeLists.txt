@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Pin the upstream commit. The CI workflow passes this in on the
 # command line so a release tag locks the exact source revision.
-set(OPENVINS_VERSION "v2.7.1" CACHE STRING "OpenVINS upstream tag or sha")
+set(OPENVINS_VERSION "v2.7" CACHE STRING "OpenVINS upstream tag or sha")
 
 include(FetchContent)
 FetchContent_Declare(
