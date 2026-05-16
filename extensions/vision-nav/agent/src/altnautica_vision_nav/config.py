@@ -15,7 +15,10 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+CameraOrientation = Literal["forward", "downward", "side", "auto"]
 
 
 class CameraConfig(BaseModel):
@@ -24,6 +27,13 @@ class CameraConfig(BaseModel):
     The plugin opens the first source it can: when ``bus_type`` is
     ``csi`` and a libcamera binding is available, the libcamera path
     runs; otherwise the V4L2 path runs against ``device_path``.
+
+    ``orientation`` records which way the lens points. Downward is the
+    default for over-ground flight where ground texture dominates;
+    forward is the default for indoor or corridor flight. ``auto``
+    defers to the bound HAL camera role and is only safe when the
+    board profile declares the orientation; the wizard refuses to
+    finalize an ``auto`` choice on boards without unambiguous metadata.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -35,6 +45,7 @@ class CameraConfig(BaseModel):
         "config cannot point the capture path at an arbitrary device.",
     )
     bus_type: Literal["uvc", "csi"] = "uvc"
+    orientation: CameraOrientation = "auto"
     width: int = Field(default=640, ge=64, le=4096)
     height: int = Field(default=480, ge=64, le=4096)
     fps: int = Field(default=30, ge=1, le=240)
@@ -71,11 +82,20 @@ class RangefinderConfig(BaseModel):
 
 
 class FirmwareConfig(BaseModel):
-    """Flight firmware identification."""
+    """Flight firmware identification.
+
+    Optical flow is supported on ArduPilot, PX4, and iNav (7.0+). VIO
+    modes are supported on ArduPilot and PX4; on iNav they are
+    experimental and the plugin disables them at install time with a
+    clear reason. Betaflight is intentionally absent: the firmware has
+    no position estimator, so optical-flow injection has no consumer.
+    Operators on Betaflight hardware who need GPS-denied flight should
+    cross-flash iNav or ArduPilot Copter on the same FC.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    type: Literal["ardupilot", "px4"] = "ardupilot"
+    type: Literal["ardupilot", "px4", "inav"] = "ardupilot"
     ekf_source_set_index: Optional[int] = Field(default=None, ge=1, le=3)
 
 
@@ -113,10 +133,73 @@ class VisionNavConfig(BaseModel):
         "hybrid_of_plus_vio",
     ] = "optical_flow"
     camera: CameraConfig = Field(default_factory=CameraConfig)
+    secondary_camera: Optional[CameraConfig] = Field(
+        default=None,
+        description="Only used by hybrid_of_plus_vio. The primary "
+        "camera carries the downward optical-flow stream; the "
+        "secondary carries the forward VIO stream. Both orientations "
+        "must be set explicitly when this field is populated.",
+    )
     rangefinder: RangefinderConfig = Field(default_factory=RangefinderConfig)
     firmware: FirmwareConfig = Field(default_factory=FirmwareConfig)
     pre_arm: PreArmConfig = Field(default_factory=PreArmConfig)
     flow_quality_min: int = Field(default=50, ge=0, le=255)
+
+    @model_validator(mode="after")
+    def _validate_mode_and_cameras(self) -> "VisionNavConfig":
+        # iNav rejection runs first because it is a fundamental
+        # firmware-capability mismatch; further mode-specific checks
+        # would produce confusing secondary errors on top.
+        if self.firmware.type == "inav" and self.mode in {
+            "vio_openvins",
+            "vio_vins_fusion",
+            "hybrid_of_plus_vio",
+        }:
+            raise ValueError(
+                "VIO modes are not supported on iNav in this release. "
+                "Use mode='optical_flow' with a downward camera + "
+                "rangefinder, or cross-flash ArduPilot Copter or PX4 "
+                "for VIO."
+            )
+
+        # Hybrid requires both cameras with explicit, opposed orientations.
+        if self.mode == "hybrid_of_plus_vio":
+            if self.secondary_camera is None:
+                raise ValueError(
+                    "hybrid_of_plus_vio requires both camera and "
+                    "secondary_camera; the primary holds the downward "
+                    "optical-flow stream and the secondary holds the "
+                    "forward VIO stream."
+                )
+            orientations = {
+                self.camera.orientation,
+                self.secondary_camera.orientation,
+            }
+            if orientations != {"forward", "downward"}:
+                raise ValueError(
+                    "hybrid_of_plus_vio requires one camera with "
+                    "orientation='downward' and one with "
+                    "orientation='forward'; got "
+                    f"{sorted(orientations)}."
+                )
+            if self.camera.device_path == self.secondary_camera.device_path:
+                raise ValueError(
+                    "camera and secondary_camera must point at distinct "
+                    "device_path values."
+                )
+
+        # Optical-flow modes require a downward-facing camera. ``auto``
+        # is allowed so the wizard can defer to HAL board metadata;
+        # explicit ``forward`` or ``side`` is rejected.
+        if self.mode in {"optical_flow", "optical_flow_degraded"}:
+            if self.camera.orientation in {"forward", "side"}:
+                raise ValueError(
+                    f"Mode {self.mode!r} needs a downward-facing "
+                    "camera; got orientation="
+                    f"{self.camera.orientation!r}."
+                )
+
+        return self
 
 
 def load_config(raw: dict) -> VisionNavConfig:

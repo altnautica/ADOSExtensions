@@ -270,12 +270,73 @@ def test_suggested_mode_degraded_without_rangefinder() -> None:
 
 
 def test_suggested_mode_vio_when_forward_cam_and_npu() -> None:
-    assert (
-        derive_suggested_mode(
-            has_camera=False,
-            has_rangefinder=False,
-            has_forward_camera=True,
-            has_npu_board=True,
-        ).mode
-        == "vio_openvins"
+    suggestion = derive_suggested_mode(
+        has_camera=False,
+        has_rangefinder=False,
+        has_forward_camera=True,
+        has_npu_board=True,
     )
+    assert suggestion.mode == "vio_openvins"
+    assert suggestion.recommended_orientation == "forward"
+
+
+def test_suggested_mode_hybrid_when_both_cameras_and_npu() -> None:
+    suggestion = derive_suggested_mode(
+        has_camera=False,
+        has_rangefinder=False,
+        has_forward_camera=True,
+        has_downward_camera=True,
+        has_npu_board=True,
+    )
+    assert suggestion.mode == "hybrid_of_plus_vio"
+    # Hybrid uses both cameras; orientation is "auto" because each
+    # camera carries its own role and the wizard does not pick one.
+    assert suggestion.recommended_orientation == "auto"
+
+
+def test_suggested_mode_downward_vio_for_over_ground_intent() -> None:
+    """Operator running an over-ground suite (agri/survey/SAR/pipeline)
+    on a board with a downward cam + NPU should land on downward VIO,
+    not forward VIO. The recommendation steers the wizard's orientation
+    picker."""
+    suggestion = derive_suggested_mode(
+        has_camera=False,
+        has_rangefinder=False,
+        has_downward_camera=True,
+        has_npu_board=True,
+        prefers_over_ground=True,
+    )
+    assert suggestion.mode == "vio_vins_fusion"
+    assert suggestion.recommended_orientation == "downward"
+
+
+def test_suggested_mode_forward_vio_falls_back_to_forward_when_no_downward() -> None:
+    """Over-ground intent but only a forward camera present: VIO still
+    runs but the operator gets a clear note in the suggestion reason
+    that downward would be the better fit."""
+    suggestion = derive_suggested_mode(
+        has_camera=False,
+        has_rangefinder=False,
+        has_forward_camera=True,
+        has_downward_camera=False,
+        has_npu_board=True,
+        prefers_over_ground=True,
+    )
+    assert suggestion.mode == "vio_vins_fusion"
+    assert suggestion.recommended_orientation == "forward"
+    assert "no downward camera" in suggestion.reason.lower()
+
+
+def test_suggested_mode_indoor_intent_picks_forward_openvins() -> None:
+    """Indoor / inspection (prefers_over_ground=False, default) on a
+    forward-camera NPU board should pick OpenVINS forward."""
+    suggestion = derive_suggested_mode(
+        has_camera=False,
+        has_rangefinder=False,
+        has_forward_camera=True,
+        has_downward_camera=False,
+        has_npu_board=True,
+        prefers_over_ground=False,
+    )
+    assert suggestion.mode == "vio_openvins"
+    assert suggestion.recommended_orientation == "forward"

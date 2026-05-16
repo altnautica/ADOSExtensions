@@ -66,17 +66,26 @@ const ALL_MODES: ModeOption[] = [
     id: "vio_openvins",
     label: "VIO (OpenVINS)",
     description:
-      "Forward camera plus the FC IMU, fused by OpenVINS. Reports a " +
-      "full 6-DOF pose. Best fit for low-cost NPU boards.",
-    needs: "Forward global-shutter camera and an NPU-capable SBC.",
+      "Camera plus the FC IMU, fused by OpenVINS. Reports a full " +
+      "6-DOF pose. Forward camera is the default for indoor and " +
+      "corridor flight; downward camera fits over-ground flight " +
+      "(agriculture, survey, SAR, pipeline patrol) where ground " +
+      "texture dominates. Best fit for low-cost NPU boards.",
+    needs:
+      "Forward or downward camera (calibrated for its orientation) " +
+      "and an NPU-capable SBC.",
   },
   {
     id: "vio_vins_fusion",
     label: "VIO (VINS-Fusion)",
     description:
-      "Forward camera plus the FC IMU, fused by VINS-Fusion. Higher " +
-      "CPU cost than OpenVINS, more accurate on fast motion.",
-    needs: "Forward camera and a higher-end SBC (Rock 5C / CM4 class).",
+      "Camera plus the FC IMU, fused by VINS-Fusion. Higher CPU " +
+      "cost than OpenVINS, more accurate on fast motion. Accepts " +
+      "either a forward camera (indoor / corridor) or a downward " +
+      "camera (over-ground).",
+    needs:
+      "Forward or downward camera (calibrated for its orientation) " +
+      "and a higher-end SBC (Rock 5C / CM4 class).",
   },
   {
     id: "hybrid_of_plus_vio",

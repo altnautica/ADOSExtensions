@@ -2,6 +2,59 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.2.1] — 2026-05-16
+
+Vision Navigation gains a first-class **camera-orientation** field on its
+config schema, **iNav 7.0+** firmware support for optical flow, and a
+clearer rejection path for **Betaflight**.
+
+### Added
+
+- `CameraConfig.orientation` literal on the plugin schema:
+  `forward`, `downward`, `side`, `auto`. VIO modes accept any
+  orientation; optical-flow modes require `downward` (or `auto`).
+- `secondary_camera` field on the plugin schema for `hybrid_of_plus_vio`,
+  with validation that the two cameras have opposed orientations and
+  distinct device paths.
+- `inav` added to the `FirmwareConfig.type` literal. Optical-flow modes
+  emit `OPTICAL_FLOW_RAD` over MAVLink rx, which iNav 7.0+ consumes
+  when `opflow_hardware = MAVLINK`.
+- New GCS component `InavVisionParams` listing the iNav-specific
+  parameters operators need to set (`opflow_hardware`,
+  `nav_use_optflow_for_poshold`, `rangefinder_hardware`,
+  `nav_rangefinder_for_terrain`, and a few neighbours).
+- New GCS component `BetaflightUnsupported` explaining why Betaflight
+  cannot run optical flow or VIO (no position estimator inside the FC).
+- New plugin tests: 11 cases for the iNav firmware branch and 20 cases
+  for camera orientation + hybrid dual-camera validation. Total agent
+  test count goes from 186 to 217. New GCS tests cover the iNav params
+  panel and the Betaflight unsupported banner.
+- `derive_suggested_mode()` now returns `recommended_orientation` and
+  takes `has_downward_camera` + `prefers_over_ground` inputs. The
+  over-ground intent flag steers VIO suggestions toward downward
+  cameras for agriculture, survey, SAR, and pipeline patrol suites.
+- HAL board profile schema accepts an additive `cameras:` block with
+  `orientation`. The Rock 5C Lite profile carries explicit
+  `front=forward` and `down=downward` entries for the dev rig.
+
+### Changed
+
+- Validator rejects `vio_*` and `hybrid_of_plus_vio` modes when
+  `firmware.type == "inav"` with a clear message. iNav's external
+  position-injection EKF integration is not VIO-grade in the 7.x
+  series; the plugin disables VIO modes at config time.
+- Validator rejects `optical_flow` and `optical_flow_degraded` when
+  the camera orientation is explicitly `forward` or `side`. `auto`
+  passes; the wizard resolves it.
+- Plugin pre-arm helper skips the synthetic-origin push on iNav
+  (iNav's position-hold runs from optical flow directly, no global
+  EKF origin required).
+- Plugin estimator factory returns `NullEstimator` when asked for a
+  VIO mode on iNav, as a belt-and-suspenders guard for the validator.
+- Mode descriptions in the GCS `ModeCard` rewritten to reflect that
+  VIO is orientation-flexible (forward for indoor / corridor,
+  downward for over-ground).
+
 ## [0.2.0] — 2026-05-16
 
 This release flips Vision Navigation from "scaffolded but runtime-dormant"

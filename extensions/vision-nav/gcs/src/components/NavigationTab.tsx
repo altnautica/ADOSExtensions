@@ -6,11 +6,13 @@ import { useVisionNavTelemetry } from "../store";
 import type { FirmwareType, VisionNavTelemetry } from "../types";
 
 import { ArduPilotVisionParams } from "./ArduPilotVisionParams";
+import { BetaflightUnsupported } from "./BetaflightUnsupported";
 import { CompanionStatusPill } from "./CompanionStatusPill";
 import { EkfSourceSwitcher } from "./EkfSourceSwitcher";
 import { EstimatorCard } from "./EstimatorCard";
 import { FallbackBanner } from "./FallbackBanner";
 import { FlowHealthCard } from "./FlowHealthCard";
+import { InavVisionParams } from "./InavVisionParams";
 import { ModeCard } from "./ModeCard";
 import { PreArmStatus } from "./PreArmStatus";
 import { Px4VisionParams } from "./Px4VisionParams";
@@ -120,6 +122,10 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
         <ArduPilotVisionParams />
       ) : props.firmware === "px4" ? (
         <Px4VisionParams />
+      ) : props.firmware === "inav" ? (
+        <InavVisionParams />
+      ) : props.firmware === "betaflight" ? (
+        <BetaflightUnsupported />
       ) : (
         <UnsupportedFirmware firmware={props.firmware} />
       )}

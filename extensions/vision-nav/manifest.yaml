@@ -1,8 +1,8 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.2.0"
-description: "GPS-denied navigation. Optical flow (with or without a rangefinder) and visual-inertial odometry. Supports ArduPilot and PX4 on USB UVC or CSI cameras."
+version: "0.2.1"
+description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/vision-nav"
 license: "GPL-3.0-or-later"

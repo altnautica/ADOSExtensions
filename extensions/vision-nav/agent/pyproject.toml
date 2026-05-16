@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "altnautica-vision-nav"
-version = "0.2.0"
-description = "ADOS plugin: optical-flow GPS-denied navigation (agent half)."
+version = "0.2.1"
+description = "ADOS plugin: GPS-denied navigation (optical flow + VIO) agent half. Supports ArduPilot, PX4, and iNav."
 readme = "../README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"

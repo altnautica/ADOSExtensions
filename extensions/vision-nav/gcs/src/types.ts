@@ -89,6 +89,11 @@ export interface VisionNavTelemetry {
   /** One-line explanation of why the suggestion was picked. Surfaced
    * on the ModeCard tooltip. */
   suggestedModeReason?: string;
+  /** Camera direction the agent recommends for the suggested mode.
+   * Only meaningful for VIO modes; optical-flow modes are always
+   * downward. ``"auto"`` means the wizard should let the operator
+   * pick (or defer to HAL board metadata). */
+  recommendedCameraOrientation?: "forward" | "downward" | "side" | "auto";
   /** Number of cameras the auto-detect pass found on the host. */
   detectedCameraCount?: number;
   /** Driver name of the rangefinder the auto-detect pass selected,

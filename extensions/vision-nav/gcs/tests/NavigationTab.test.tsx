@@ -141,4 +141,41 @@ describe("NavigationTab", () => {
     const of = screen.getByTestId("vn-ekf-button-of") as HTMLButtonElement;
     expect(of.disabled).toBe(true);
   });
+
+  it("renders the iNav params panel when firmware is inav", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="inav"
+        telemetryOverride={mkTelemetry({
+          vioSupported: false,
+          flowQuality: 180,
+        })}
+      />,
+    );
+    expect(screen.getByTestId("vn-inav-params")).toBeTruthy();
+    expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
+    expect(screen.queryByTestId("vn-px4-params")).toBeNull();
+    expect(screen.queryByTestId("vn-betaflight-unsupported")).toBeNull();
+  });
+
+  it("renders the Betaflight unsupported card when firmware is betaflight", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="betaflight"
+        telemetryOverride={mkTelemetry({})}
+      />,
+    );
+    const banner = screen.getByTestId("vn-betaflight-unsupported");
+    expect(banner).toBeTruthy();
+    // The banner names the firmware-upstream limitation explicitly so
+    // the operator does not blame the plugin.
+    expect(banner.textContent).toMatch(/no position estimator|EKF|cross-flash/i);
+    expect(screen.queryByTestId("vn-inav-params")).toBeNull();
+    expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
+    expect(screen.queryByTestId("vn-px4-params")).toBeNull();
+  });
 });

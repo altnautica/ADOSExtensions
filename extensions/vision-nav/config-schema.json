@@ -7,50 +7,25 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "Operating mode. Optical flow is the only mode in this release.",
+      "description": "Operating mode. Optical flow uses a downward camera + rangefinder. VIO modes accept a forward or downward camera (orientation chosen per the camera block). Hybrid runs both estimators in parallel from two cameras.",
       "default": "off",
-      "enum": ["off", "optical_flow"]
+      "enum": [
+        "off",
+        "optical_flow",
+        "optical_flow_degraded",
+        "vio_openvins",
+        "vio_vins_fusion",
+        "hybrid_of_plus_vio"
+      ]
     },
     "camera": {
-      "type": "object",
-      "title": "Camera",
-      "properties": {
-        "device_path": {
-          "type": "string",
-          "title": "Device path",
-          "description": "V4L2 or CSI device node (for example /dev/video0).",
-          "default": "/dev/video0",
-          "pattern": "^/dev/video[0-9]+$"
-        },
-        "bus_type": {
-          "type": "string",
-          "title": "Bus type",
-          "default": "uvc",
-          "enum": ["uvc", "csi"]
-        },
-        "width": {
-          "type": "integer",
-          "title": "Capture width",
-          "default": 640,
-          "minimum": 64,
-          "maximum": 4096
-        },
-        "height": {
-          "type": "integer",
-          "title": "Capture height",
-          "default": 480,
-          "minimum": 64,
-          "maximum": 4096
-        },
-        "fps": {
-          "type": "integer",
-          "title": "Frames per second",
-          "default": 30,
-          "minimum": 1,
-          "maximum": 240
-        }
-      },
-      "required": ["bus_type"]
+      "$ref": "#/definitions/camera",
+      "title": "Camera"
+    },
+    "secondary_camera": {
+      "$ref": "#/definitions/camera",
+      "title": "Secondary camera",
+      "description": "Only used by hybrid_of_plus_vio. The primary camera carries the downward optical-flow stream; the secondary carries the forward VIO stream. Both orientations must be set explicitly."
     },
     "rangefinder": {
       "type": "object",
@@ -94,8 +69,9 @@
         "type": {
           "type": "string",
           "title": "Firmware",
+          "description": "Flight controller firmware. Optical flow is supported on ArduPilot, PX4, and iNav (7.0+). VIO is supported on ArduPilot and PX4; on iNav it is experimental and disabled by the plugin at install time. Betaflight is not supported because the firmware has no position estimator.",
           "default": "ardupilot",
-          "enum": ["ardupilot", "px4"]
+          "enum": ["ardupilot", "px4", "inav"]
         },
         "ekf_source_set_index": {
           "type": "integer",
@@ -137,5 +113,54 @@
       }
     }
   },
-  "required": ["mode", "camera", "firmware"]
+  "required": ["mode", "camera", "firmware"],
+  "definitions": {
+    "camera": {
+      "type": "object",
+      "properties": {
+        "device_path": {
+          "type": "string",
+          "title": "Device path",
+          "description": "V4L2 or CSI device node (for example /dev/video0).",
+          "default": "/dev/video0",
+          "pattern": "^/dev/video[0-9]+$"
+        },
+        "bus_type": {
+          "type": "string",
+          "title": "Bus type",
+          "default": "uvc",
+          "enum": ["uvc", "csi"]
+        },
+        "orientation": {
+          "type": "string",
+          "title": "Mount orientation",
+          "description": "Direction the lens points. Downward suits over-ground flight (agriculture, survey, SAR, pipeline patrol) where ground texture is dense. Forward suits indoor or corridor flight. Side is reserved for future SLAM use cases. Auto infers from the bound HAL camera role; only safe when the board profile declares orientation unambiguously.",
+          "default": "auto",
+          "enum": ["forward", "downward", "side", "auto"]
+        },
+        "width": {
+          "type": "integer",
+          "title": "Capture width",
+          "default": 640,
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "height": {
+          "type": "integer",
+          "title": "Capture height",
+          "default": 480,
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "fps": {
+          "type": "integer",
+          "title": "Frames per second",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 240
+        }
+      },
+      "required": ["bus_type"]
+    }
+  }
 }

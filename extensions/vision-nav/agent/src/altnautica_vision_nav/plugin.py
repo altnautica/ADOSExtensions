@@ -339,14 +339,34 @@ class VisionNavPlugin:
         # Subscribe to operator events from the GCS.
         await self._subscribe_to_events(ctx)
 
-        # Pre-arm helper for the synthetic-origin push (ArduPilot path).
+        # Pre-arm helper for the synthetic-origin push. ArduPilot and
+        # PX4 expect SET_GPS_GLOBAL_ORIGIN + SET_HOME_POSITION when
+        # flying vision-only. iNav drives optical-flow position-hold
+        # without a global origin (position hold is purely flow-driven
+        # in nav-poshold), so the synthetic origin push is a no-op and
+        # we skip it to avoid noisy MAVLink chatter.
         self._pre_arm = PreArmHelper(component_id=COMPONENT_OF_PERIPHERAL)
-        if self._config.pre_arm.auto_set_origin:
+        if (
+            self._config.pre_arm.auto_set_origin
+            and self._config.firmware.type != "inav"
+        ):
             await self._pre_arm.auto_set_origin(
                 ctx,
                 self._config.pre_arm.origin_lat,
                 self._config.pre_arm.origin_lon,
                 self._config.pre_arm.origin_alt_m,
+            )
+        elif (
+            self._config.pre_arm.auto_set_origin
+            and self._config.firmware.type == "inav"
+        ):
+            self._log_info(
+                ctx,
+                "vision_nav_inav_origin_push_skipped",
+                reason=(
+                    "iNav position-hold does not require a global EKF "
+                    "origin; flow drives nav-poshold directly."
+                ),
             )
 
         self._log_info(ctx, "vision_nav_started", version=PLUGIN_VERSION)
@@ -459,6 +479,19 @@ class VisionNavPlugin:
         the right call. VIO modes that fail to construct fall back to
         :class:`NullEstimator` with a logged warning.
         """
+
+        # Belt-and-suspenders for the config-level iNav+VIO rejection.
+        # A hand-edited config or a programmatic set-mode that bypasses
+        # the validator would otherwise instantiate a VIO estimator the
+        # firmware cannot consume.
+        if self._config is not None and self._config.firmware.type == "inav":
+            if mode in {"vio_openvins", "vio_vins_fusion", "hybrid_of_plus_vio"}:
+                self._log_warning(
+                    ctx,
+                    "vision_nav_vio_not_supported_on_inav",
+                    mode=mode,
+                )
+                return NullEstimator()
 
         cls = ESTIMATOR_REGISTRY.get(mode)
         if cls is None or cls is NullEstimator:
