@@ -16,6 +16,7 @@ import { PreArmStatus } from "./PreArmStatus";
 import { Px4VisionParams } from "./Px4VisionParams";
 import { SensorsCard } from "./SensorsCard";
 import { TelemetryCharts } from "./TelemetryCharts";
+import { TourOrchestrator } from "./TourOrchestrator";
 
 export interface NavigationTabProps {
   ctx: PluginContext;
@@ -31,6 +32,7 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
   const live = useVisionNavTelemetry(props.ctx);
   const telemetry = props.telemetryOverride ?? live;
   const [themeVars, setThemeVars] = useState<Record<string, string>>({});
+  const [tourReplay, setTourReplay] = useState(false);
 
   useEffect(() => {
     const off = props.ctx.theme.onChange((vars) => {
@@ -38,6 +40,11 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
     });
     return off;
   }, [props.ctx]);
+
+  function tr(key: string, fallback: string): string {
+    const r = props.ctx.i18n.t(key);
+    return r === key ? fallback : r;
+  }
 
   const container: CSSProperties = {
     display: "flex",
@@ -69,8 +76,32 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
     <div style={container} data-testid="vn-navigation-tab">
       <header style={header}>
         <h2 style={title}>{renderedTitle}</h2>
-        <CompanionStatusPill state={telemetry.companionState} />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          <button
+            type="button"
+            onClick={() => setTourReplay(true)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "var(--vn-text-muted, #94a3b8)",
+              fontSize: "0.7rem",
+              cursor: "pointer",
+              padding: 0,
+              textDecoration: "underline",
+            }}
+            data-testid="vn-tour-replay"
+          >
+            {tr("navigation.tour.replay", "Replay tour")}
+          </button>
+          <CompanionStatusPill state={telemetry.companionState} />
+        </div>
       </header>
+      <TourOrchestrator
+        ctx={props.ctx}
+        telemetry={telemetry}
+        replay={tourReplay}
+        onClose={() => setTourReplay(false)}
+      />
       <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
       <ModeCard ctx={props.ctx} telemetry={telemetry} />
       <SensorsCard ctx={props.ctx} telemetry={telemetry} />

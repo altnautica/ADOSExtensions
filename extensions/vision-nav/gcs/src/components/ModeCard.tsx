@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
@@ -95,6 +95,42 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
   const estimatorState =
     (telemetry.estimatorState as EstimatorState | undefined) ?? "off";
 
+  // Optimistic UI: when the operator clicks a mode the card flips
+  // selected state immediately. The next heartbeat from the agent
+  // confirms or reverts based on the actual runtime swap.
+  const [pendingMode, setPendingMode] = useState<EstimatorMode | null>(null);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+
+  // Clear the optimistic state once the heartbeat catches up.
+  useEffect(() => {
+    if (pendingMode !== null && current === pendingMode) {
+      setPendingMode(null);
+      setPendingError(null);
+    }
+  }, [pendingMode, current]);
+
+  const selectedNow = pendingMode ?? current;
+
+  async function handleModeClick(mode: EstimatorMode): Promise<void> {
+    setPendingMode(mode);
+    setPendingError(null);
+    try {
+      // The SDK's generic RPC escape hatch. The plugin host routes
+      // plugin-namespaced methods to the matching agent-side plugin,
+      // which translates the call into an ``on_configure`` with the
+      // new mode. Capability ``vehicle.command`` is the closest
+      // permission already on the plugin's grants.
+      await ctx.client.request(
+        "vision-nav.set_mode",
+        "vehicle.command",
+        { mode },
+      );
+    } catch (err) {
+      setPendingError(err instanceof Error ? err.message : String(err));
+      setPendingMode(null);
+    }
+  }
+
   const options = ALL_MODES.filter((opt) => available.includes(opt.id));
   const renderable = options.length > 0 ? options : ALL_MODES.slice(0, 2);
 
@@ -112,7 +148,8 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
       </p>
       <div style={row}>
         {renderable.map((opt) => {
-          const selected = opt.id === current;
+          const selected = opt.id === selectedNow;
+          const isPending = pendingMode === opt.id && current !== opt.id;
           return (
             <button
               key={opt.id}
@@ -121,13 +158,30 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
               data-testid={`vn-mode-button-${opt.id}`}
               aria-pressed={selected}
               title={`${opt.description}\n\n${opt.needs}`}
+              onClick={() => {
+                void handleModeClick(opt.id);
+              }}
             >
-              <div style={btnLabel}>{opt.label}</div>
+              <div style={btnLabel}>
+                {opt.label}
+                {isPending ? " ..." : null}
+              </div>
               <div style={btnNeeds}>{opt.needs}</div>
             </button>
           );
         })}
       </div>
+      {pendingError !== null ? (
+        <p style={errorText} data-testid="vn-mode-error">
+          {tr(
+            t,
+            "navigation.modeCard.error",
+            "Mode change failed",
+          )}
+          {": "}
+          {pendingError}
+        </p>
+      ) : null}
       {options.length === 0 ? (
         <p style={hint} data-testid="vn-mode-empty-hint">
           {tr(t,
@@ -223,6 +277,11 @@ const hint: CSSProperties = {
   fontSize: "0.75rem",
   margin: 0,
   color: "var(--vn-text-muted, #94a3b8)",
+};
+const errorText: CSSProperties = {
+  fontSize: "0.75rem",
+  margin: 0,
+  color: "var(--vn-error, #ef4444)",
 };
 const pill = (color: string): CSSProperties => ({
   display: "inline-flex",
