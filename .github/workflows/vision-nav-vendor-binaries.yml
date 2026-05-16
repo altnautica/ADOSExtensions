@@ -52,15 +52,22 @@ jobs:
         # The aarch64 sysroot needs Eigen, OpenCV, Boost, msgpack,
         # plus Ceres for the VINS-Fusion build. The GitHub-hosted
         # runner's default Ubuntu mirror only carries amd64 + i386;
-        # arm64 packages live on ports.ubuntu.com. Restrict existing
-        # sources to amd64 so apt stops 404ing on arm64 index fetches,
+        # arm64 packages live on ports.ubuntu.com. We pin every
+        # existing source to [arch=amd64] (both http:// and https://),
+        # also handle deb822 .sources files (Architectures: amd64),
         # then add the ports mirror for the arm64 architecture before
         # the post-add-architecture apt-get update.
         run: |
           if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            sudo sed -i 's|^deb http|deb [arch=amd64] http|g' /etc/apt/sources.list
-            sudo find /etc/apt/sources.list.d/ -name '*.list' \
-              -exec sudo sed -i 's|^deb http|deb [arch=amd64] http|g' {} +
+            sudo sed -i -E 's|^deb (https?://)|deb [arch=amd64] \1|g' /etc/apt/sources.list
+            sudo find /etc/apt/sources.list.d/ -name '*.list' -print0 \
+              | sudo xargs -0 -r -I{} sed -i -E 's|^deb (https?://)|deb [arch=amd64] \1|g' {}
+            for f in /etc/apt/sources.list.d/*.sources; do
+              [ -f "$f" ] || continue
+              if ! grep -q '^Architectures:' "$f"; then
+                printf '\nArchitectures: amd64\n' | sudo tee -a "$f" >/dev/null
+              fi
+            done
             sudo tee /etc/apt/sources.list.d/ports.list >/dev/null <<'PORTS'
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ jammy-updates main restricted universe multiverse
@@ -74,6 +81,7 @@ jobs:
               libboost-all-dev:arm64 libmsgpack-cxx-dev:arm64 \
               libceres-dev:arm64 libgoogle-glog-dev:arm64 libgflags-dev:arm64
           else
+            sudo apt-get update
             sudo apt-get install -y --no-install-recommends \
               libeigen3-dev libopencv-dev libboost-all-dev \
               libmsgpack-cxx-dev libceres-dev \
