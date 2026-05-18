@@ -1,8 +1,55 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.2.2"
+version: "0.2.3"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
+description_long: |
+  GPS-denied navigation combining optical flow and visual-inertial
+  odometry (VIO). Choose from six modes: rangefinder-free optical flow,
+  rangefinder-aided optical flow, OpenVINS-based VIO, VINS-Fusion VIO,
+  hybrid dual-camera mode, or off.
+
+  Supports ArduPilot Copter/Plane/Rover 4.5+, PX4 1.14+, iNav 7.0+.
+  Requires a USB UVC or CSI camera. VIO modes additionally need a
+  Kalibr-compatible calibration file.
+features:
+  - "Optical flow with or without rangefinder (Lucas-Kanade tracker)"
+  - "Monocular VIO via OpenVINS or VINS-Fusion"
+  - "Hybrid mode: optical flow and VIO running side by side"
+  - "Auto-detect ArduPilot, PX4, or iNav and emit appropriate MAVLink"
+  - "Per-mode pre-arm checks with degradation fallback ladder"
+  - "Live telemetry: feature count, drift, sync offset, mode state"
+hardware_requirements:
+  cameras: "USB UVC global-shutter or rolling-shutter, or CSI via V4L2"
+  fc_firmware: "ArduPilot 4.5+, PX4 1.14+, iNav 7.0+"
+  boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "pi-zero-2w"]
+  optional:
+    - "Rangefinder (TF-Luna, Garmin LIDAR-Lite, ST VL53L1X) for optical flow modes"
+resource_impact:
+  cpu_percent_peak: 80
+  ram_mb: 512
+  pids: 24
+  startup_time_seconds: 5
+required_fc_parameters:
+  ardupilot:
+    - param: "EKF_SOURCE_SET"
+      note: "Select vision pose source for the active EKF lane"
+  px4:
+    - param: "EKF2_AID_MASK"
+      note: "Set VISION_POS and VISION_HEADING bits"
+  inav:
+    - param: "opflow_hardware"
+      value: "MAVLINK"
+    - param: "nav_use_optflow_for_poshold"
+      value: "ON"
+telemetry_fields:
+  - "navigation.rangefinder_type"
+  - "navigation.estimator_state"
+  - "navigation.feature_count"
+  - "navigation.drift_m"
+  - "navigation.sync_offset_ms"
+  - "navigation.mode"
+documentation_url: "https://docs.altnautica.com/drone-agent/vision-nav-overview"
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/vision-nav"
 license: "GPL-3.0-or-later"
