@@ -65,6 +65,7 @@ jobs:
 
       - name: Verify ados CLI is on PATH
         run: |
+          set -o pipefail
           which ados
           ados plugin --help | head -5
 

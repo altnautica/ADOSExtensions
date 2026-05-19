@@ -54,22 +54,6 @@ author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/vision-nav"
 license: "GPL-3.0-or-later"
 risk: high
-# The VIO modes spawn a vendor binary; the optical-flow modes do not.
-# ``contains_vendor_binary`` is true so the installer surfaces the
-# vendor-attribution block at install time. When VIO modes are not
-# selected the binary stays on disk but never executes.
-contains_vendor_binary: true
-vendor_attribution:
-  - name: "OpenVINS"
-    license: "GPL-3.0-only"
-    source_url: "https://github.com/rpng/open_vins"
-    upstream_version: "v2.7"
-    notice: "VIO mode ``vio_openvins`` uses the OpenVINS estimator from the Robot Perception and Navigation Group at the University of Delaware."
-  - name: "VINS-Fusion"
-    license: "GPL-3.0-only"
-    source_url: "https://github.com/HKUST-Aerial-Robotics/VINS-Fusion"
-    upstream_version: "be55a937a57436548ddfb1bd324bc1e9a9e828e0"
-    notice: "VIO mode ``vio_vins_fusion`` uses the VINS-Fusion estimator from the HKUST Aerial Robotics Group."
 
 compatibility:
   ados_version: ">=0.13.0"
@@ -80,6 +64,22 @@ agent:
   entrypoint: "altnautica_vision_nav.plugin:VisionNavPlugin"
   isolation: subprocess
   per_drone_config: true
+  # The VIO modes spawn a vendor binary; the optical-flow modes do not.
+  # contains_vendor_binary is true so the installer surfaces the
+  # vendor-attribution block at install time. When VIO modes are not
+  # selected the binary stays on disk but never executes.
+  contains_vendor_binary: true
+  vendor_attribution:
+    - name: "OpenVINS"
+      license: "GPL-3.0-only"
+      source_url: "https://github.com/rpng/open_vins"
+      upstream_version: "v2.7"
+      notice: "VIO mode vio_openvins uses the OpenVINS estimator from the Robot Perception and Navigation Group at the University of Delaware."
+    - name: "VINS-Fusion"
+      license: "GPL-3.0-only"
+      source_url: "https://github.com/HKUST-Aerial-Robotics/VINS-Fusion"
+      upstream_version: "be55a937a57436548ddfb1bd324bc1e9a9e828e0"
+      notice: "VIO mode vio_vins_fusion uses the VINS-Fusion estimator from the HKUST Aerial Robotics Group."
   permissions:
     - id: hardware.usb.uvc
     - id: hardware.camera.csi
@@ -138,6 +138,5 @@ gcs:
       - id: vision-nav-degraded
         title: "Vision navigation degraded"
         severity: warning
-
-locales:
-  - en
+  locales:
+    - en
