@@ -1,17 +1,32 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.2.3"
+version: "0.2.4"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
-  GPS-denied navigation combining optical flow and visual-inertial
-  odometry (VIO). Choose from six modes: rangefinder-free optical flow,
-  rangefinder-aided optical flow, OpenVINS-based VIO, VINS-Fusion VIO,
-  hybrid dual-camera mode, or off.
+  ADOS Vision Navigation gives the flight controller a position estimate when GPS is unavailable or unreliable. The plugin runs on the drone's companion computer and emits MAVLink optical-flow or visual-inertial-odometry components to the FC, letting the operator hold position indoors, under tree cover, in urban canyons, or in any other GPS-degraded environment. The estimate is fused inside the FC's existing EKF lanes so the rest of the flight stack (altitude hold, position hold, loiter, return-to-launch) keeps working without code changes on the FC side.
 
-  Supports ArduPilot Copter/Plane/Rover 4.5+, PX4 1.14+, iNav 7.0+.
-  Requires a USB UVC or CSI camera. VIO modes additionally need a
-  Kalibr-compatible calibration file.
+  Six operating modes pick how the navigation estimate is produced and how it fails over.
+
+  Optical Flow + rangefinder. Fastest startup, lowest CPU. A downward-facing camera measures pixel motion and reads height from a connected rangefinder (TF-Luna, Garmin LIDAR-Lite, ST VL53L1X). Best for indoor hover and low-altitude flight up to roughly 8 m AGL.
+
+  Optical Flow rangefinder-free. Same Lucas-Kanade tracker, height estimated from the barometer. Tolerates rangefinder failure but drifts more aggressively above 5 m AGL because the barometer is noisier than a laser at low altitude.
+
+  OpenVINS VIO. MSCKF-based monocular visual-inertial odometry from the Robot Perception and Navigation Group at the University of Delaware. Tight IMU sync, fast feature tracker, no loop closure. Best for outdoor flight with a forward camera and good lighting; pairs well with a global-shutter USB UVC camera.
+
+  VINS-Fusion VIO. Optimization-based monocular VIO from the HKUST Aerial Robotics Group. Sliding-window bundle adjustment with loop closure. Slower to initialize than OpenVINS but more accurate over long trajectories and more robust to brief feature dropouts.
+
+  Hybrid (OF + VIO). Runs optical flow on the downward camera and one of the two VIO backends on the forward camera simultaneously. Cross-checks both estimates, demotes whichever drifts faster, and reports the fused result to the FC. The highest-cost mode but the most resilient against sensor disagreement.
+
+  Off. No vision navigation; the FC falls back to GPS-only EKF lanes. Use this when you want the plugin installed for future flights but disabled for the current mission.
+
+  Degradation ladder. If the active estimator falls below the configured feature-count threshold or its drift exceeds the configured ceiling, the plugin automatically steps down: VIO → optical flow → barometer-only hover-hold → land. The FC keeps flying through each transition; every step is announced over MAVLink as a STATUSTEXT so the GCS can warn the operator and the flight log captures the event.
+
+  Firmware support. ArduPilot Copter/Plane/Rover 4.5+, PX4 1.14+, and iNav 7.0+. The plugin auto-detects the FC firmware on boot, then emits OPTICAL_FLOW_RAD on MAVLink component 198 (peripheral) and VISION_POSITION_ESTIMATE on component 197 (VIO) only when a VIO mode is active. EKF source bits are tuned per firmware so the FC accepts the vision estimate as a primary position source.
+
+  Hardware. USB UVC global-shutter cameras are preferred for VIO. Rolling-shutter and CSI-V4L2 cameras work for optical-flow modes. VIO modes additionally need a Kalibr-compatible IMU-camera calibration file at /etc/ados/vision-nav/calib/. The bundled vendor binaries (OpenVINS and VINS-Fusion shims) ship signed alongside the rest of the archive and run as subprocesses under the agent's sandbox; the optical-flow paths are pure Python and need no vendor code.
+
+  Calibration. Calibrate once with the bundled wizard (Settings → Vision Nav → Calibrate) and the result is stored per drone. The wizard walks through camera intrinsics, IMU-camera time offset, and IMU-camera transform extraction and produces the Kalibr-compatible YAML the VIO backends consume. The whole flow takes about ten minutes on a calibration target the GCS displays on screen.
 features:
   - "Optical flow with or without rangefinder (Lucas-Kanade tracker)"
   - "Monocular VIO via OpenVINS or VINS-Fusion"
