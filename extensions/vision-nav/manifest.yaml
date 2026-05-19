@@ -25,6 +25,7 @@ hardware_requirements:
   optional:
     - "Rangefinder (TF-Luna, Garmin LIDAR-Lite, ST VL53L1X) for optical flow modes"
 resource_impact:
+  output_rate_hz: 30
   cpu_percent_peak: 80
   ram_mb: 512
   pids: 24
