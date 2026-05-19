@@ -4,20 +4,13 @@ name: "ADOS Vision Navigation"
 version: "0.2.6"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
-  **How it works**
-  Camera frames are timestamped against IMU samples; the active estimator emits a 6-DoF pose at 30 Hz over MAVLink (VISION_POSITION_ESTIMATE for VIO, OPTICAL_FLOW_RAD for OF). The FC's EKF fuses it in the same lanes as GPS, so position-hold, loiter, and missions keep working.
+  Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A camera and the IMU feed the flight controller a 30 Hz position estimate over MAVLink, so position-hold, loiter, and missions keep working unchanged.
 
-  **Six modes**
-  OF + rangefinder (fastest, <8 m AGL, textured ground). OF rangefinder-free (barometer height; drifts >5 m). OpenVINS VIO (MSCKF, short flights). VINS-Fusion VIO (bundle-adjustment + loop closure, long loops). Hybrid (OF + VIO parallel, ~1.5× CPU). Off.
+  Six modes: optical flow with a rangefinder (fastest, low altitude on textured ground), without one (barometer height, drifts above 5 m), OpenVINS VIO (short flights), VINS-Fusion VIO (long loops with revisits), Hybrid (both, ~1.5× CPU), or Off.
 
-  **Fallback ladder**
-  Every 250 ms the estimator publishes feature count and drift. Below floor (30 OF / 50 VIO) or above ceiling (0.5 / 1 m/s) it steps down: VIO → OF → barometer hover → land. Each step fires a MAVLink STATUSTEXT.
+  Every 250 ms it checks itself. If features drop or drift grows it steps down — VIO → optical flow → barometer hover → land — and warns the GCS at each step.
 
-  **Firmware and hardware**
-  ArduPilot 4.5+, PX4 1.14+, iNav 7.0+ — auto-detected. Claims MAVLink 198 (OPTICAL_FLOW_RAD) + 197 (VISION_POSITION_ESTIMATE). Global-shutter USB UVC preferred for VIO; rolling-shutter or CSI-V4L2 fine for OF. VIO needs Kalibr calibration at /etc/ados/vision-nav/calib/.
-
-  **Calibration and telemetry**
-  A ~10 min wizard at Settings → Vision Nav → Calibrate captures camera intrinsics, IMU-camera time offset, and rigid transform. In flight, watch navigation.feature_count (drops = lost scene) and navigation.drift_m (growth = re-init).
+  Auto-detects ArduPilot 4.5+, PX4 1.14+, and iNav 7.0+. Global-shutter USB camera preferred for VIO; rolling-shutter or CSI fine for optical flow. VIO needs a one-time ~10 min camera-IMU calibration. Watch feature count and drift on the Vision Nav panel — drops = lost scene, growth = re-init.
 features:
   - "Optical flow with or without rangefinder (Lucas-Kanade tracker)"
   - "Monocular VIO via OpenVINS or VINS-Fusion"
