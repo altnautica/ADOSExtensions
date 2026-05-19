@@ -4,15 +4,20 @@ name: "ADOS Vision Navigation"
 version: "0.2.6"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
-  GPS-denied position estimate for the flight controller. Camera frames are timestamp-aligned with IMU samples; the active estimator emits a 6-DoF pose at 30 Hz over MAVLink as VISION_POSITION_ESTIMATE (VIO) or OPTICAL_FLOW_RAD. The FC's EKF fuses it in the same lanes it uses for GPS, so position-hold, loiter, and missions keep working with no FC-side changes.
+  **How it works**
+  Camera frames are timestamped against IMU samples; the active estimator emits a 6-DoF pose at 30 Hz over MAVLink (VISION_POSITION_ESTIMATE for VIO, OPTICAL_FLOW_RAD for OF). The FC's EKF fuses it in the same lanes as GPS, so position-hold, loiter, and missions keep working.
 
-  Six modes. Optical Flow + rangefinder (fastest, lowest CPU, best below 8 m AGL on textured ground). Optical Flow rangefinder-free (height from barometer; drifts above 5 m). OpenVINS VIO (MSCKF, low-memory, no loop closure — short straight flights). VINS-Fusion VIO (bundle-adjustment with loop closure — long loops, repeated coverage). Hybrid (OF + VIO in parallel, cross-checked, ~1.5× CPU). Off (GPS-only EKF).
+  **Six modes**
+  OF + rangefinder (fastest, <8 m AGL, textured ground). OF rangefinder-free (barometer height; drifts >5 m). OpenVINS VIO (MSCKF, short flights). VINS-Fusion VIO (bundle-adjustment + loop closure, long loops). Hybrid (OF + VIO parallel, ~1.5× CPU). Off.
 
-  Fallback ladder. Every 250 ms the active estimator publishes feature count and drift. If features fall below the floor (30 OF / 50 VIO) or drift exceeds the ceiling (0.5 m/s OF / 1 m/s VIO), the plugin steps down: VIO → optical flow → barometer hover → land. Each step fires a MAVLink STATUSTEXT.
+  **Fallback ladder**
+  Every 250 ms the estimator publishes feature count and drift. Below floor (30 OF / 50 VIO) or above ceiling (0.5 / 1 m/s) it steps down: VIO → OF → barometer hover → land. Each step fires a MAVLink STATUSTEXT.
 
-  Firmware and hardware. ArduPilot 4.5+, PX4 1.14+, iNav 7.0+ — auto-detected. Claims MAVLink components 198 (OPTICAL_FLOW_RAD) and 197 (VISION_POSITION_ESTIMATE), emits only when the matching mode is active; tunes per-firmware EKF source bits. Global-shutter USB UVC preferred for VIO; rolling-shutter or CSI-V4L2 fine for optical flow. VIO needs a Kalibr calibration at /etc/ados/vision-nav/calib/.
+  **Firmware and hardware**
+  ArduPilot 4.5+, PX4 1.14+, iNav 7.0+ — auto-detected. Claims MAVLink 198 (OPTICAL_FLOW_RAD) + 197 (VISION_POSITION_ESTIMATE). Global-shutter USB UVC preferred for VIO; rolling-shutter or CSI-V4L2 fine for OF. VIO needs Kalibr calibration at /etc/ados/vision-nav/calib/.
 
-  Calibration and telemetry. ~10 min wizard at Settings → Vision Nav → Calibrate captures camera intrinsics from an AprilGrid pattern, the IMU-camera time offset, and the rigid IMU-camera transform. In flight, watch navigation.feature_count (drops = lost scene) and navigation.drift_m (growth = re-init needed) on the Vision Nav panel.
+  **Calibration and telemetry**
+  A ~10 min wizard at Settings → Vision Nav → Calibrate captures camera intrinsics, IMU-camera time offset, and rigid transform. In flight, watch navigation.feature_count (drops = lost scene) and navigation.drift_m (growth = re-init).
 features:
   - "Optical flow with or without rangefinder (Lucas-Kanade tracker)"
   - "Monocular VIO via OpenVINS or VINS-Fusion"
