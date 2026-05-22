@@ -66,9 +66,21 @@ jobs:
           archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | head -n1)"
           ./scripts/sign.sh "${archive}"
 
+      - name: Emit SHA-256 checksum
+        run: |
+          # The agent's first-party catalog requires an archive_sha256
+          # pin to gate install_from_url. Emit the digest alongside the
+          # signed archive in shasum-compatible format so the catalog
+          # client can verify ``shasum -a 256 -c`` on download.
+          signed="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.signed\.adosplug$' | head -n1)"
+          digest=$(shasum -a 256 "${signed}" | awk '{print $1}')
+          printf '%s  %s\n' "${digest}" "$(basename "${signed}")" > "${signed}.sha256"
+          cat "${signed}.sha256"
+
       - name: Upload to GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
+            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug.sha256
             extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md
