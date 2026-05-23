@@ -59,9 +59,13 @@ jobs:
 
       - name: Sign archive
         env:
-          ADOS_SIGNING_KEY: ${{ secrets.ADOS_SIGNING_KEY }}
+          # Use the same first-party private key as sign-release.yml
+          # (the newer pipeline used by extensions/vision-nav-v* tags).
+          # Single keypair means a single public half lives on the
+          # agent at /etc/ados/plugin-keys/altnautica-2026-A.pem.
+          ADOS_SIGNING_KEY: ${{ secrets.ALTNAUTICA_PLUGIN_KEY_A }}
           ADOS_SIGNING_KEY_INLINE: "1"
-          ADOS_SIGNING_KEY_ID: ${{ secrets.ADOS_SIGNING_KEY_ID }}
+          ADOS_SIGNING_KEY_ID: altnautica-2026-A
         run: |
           archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | head -n1)"
           ./scripts/sign.sh "${archive}"
