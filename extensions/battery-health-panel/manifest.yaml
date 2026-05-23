@@ -1,7 +1,7 @@
 schema_version: 1
 id: com.altnautica.battery-health-panel
 name: "ADOS Battery Health Panel"
-version: "1.0.1"
+version: "1.0.2"
 description: "Cell-level battery diagnostics, predictive time-to-min, and anomaly alerts."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/battery-health-panel"

@@ -2,9 +2,13 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.0.2
+
+Re-sign release with the unified first-party private key. No functional changes.
+
 ## 1.0.1
 
-Re-sign release with the first-party publisher id. No functional changes.
+Re-sign release with the first-party publisher id (label only — key bytes still mismatched). No functional changes.
 
 ## 1.0.0
 
