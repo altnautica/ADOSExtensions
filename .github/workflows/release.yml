@@ -66,6 +66,27 @@ jobs:
           archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | head -n1)"
           ./scripts/sign.sh "${archive}"
 
+      - name: Assert signer id is first-party
+        run: |
+          # Defensive guard against a misconfigured ADOS_SIGNING_KEY_ID
+          # secret producing a placeholder signer (the agent rejects
+          # the install with signature_unknown_signer at runtime, but
+          # we'd rather fail the workflow than ship a broken archive
+          # to the catalog). Allowlist mirrors FIRST_PARTY_SIGNERS in
+          # the agent at src/ados/plugins/signing.py.
+          signed="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.signed\.adosplug$' | head -n1)"
+          signer=$(unzip -p "${signed}" SIGNATURE | head -n1)
+          case "${signer}" in
+            altnautica-2026-A|altnautica-2026-B)
+              echo "OK: signer ${signer}"
+              ;;
+            *)
+              echo "ERROR: signer '${signer}' is not in the first-party allowlist" >&2
+              echo "ERROR: set ADOS_SIGNING_KEY_ID secret to altnautica-2026-A or -B" >&2
+              exit 1
+              ;;
+          esac
+
       - name: Emit SHA-256 checksum
         run: |
           # The agent's first-party catalog requires an archive_sha256

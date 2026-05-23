@@ -2,6 +2,10 @@
 
 All notable changes to the Battery Health Panel.
 
+## 1.0.1
+
+Re-sign release with the first-party publisher id. No functional changes.
+
 ## 1.0.0
 
 Initial release.

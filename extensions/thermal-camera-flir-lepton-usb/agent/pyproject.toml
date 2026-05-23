@@ -1,6 +1,6 @@
 [project]
 name = "altnautica-thermal-camera-flir-lepton"
-version = "1.0.0"
+version = "1.0.1"
 description = "ADOS plugin: FLIR Lepton 3.5 radiometric thermal camera over PureThermal 2 USB UVC"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.11"

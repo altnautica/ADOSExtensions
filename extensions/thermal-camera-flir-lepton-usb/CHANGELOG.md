@@ -2,6 +2,10 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.0.1
+
+Re-sign release with the first-party publisher id. No functional changes.
+
 ## 1.0.0
 
 Initial release.

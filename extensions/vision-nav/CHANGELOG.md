@@ -2,6 +2,10 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.2.8] — 2026-05-23
+
+Re-sign release with the first-party publisher id. Catches package.json + agent pyproject.toml up to the manifest version. No functional changes.
+
 ## [0.2.1] — 2026-05-16
 
 Vision Navigation gains a first-class **camera-orientation** field on its
