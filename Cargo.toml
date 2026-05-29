@@ -1,0 +1,55 @@
+# Cargo workspace for the Rust agent halves of ADOS extensions.
+#
+# This monorepo carries three workspaces side by side, each scoped to its own
+# language:
+#   - pnpm  (pnpm-workspace.yaml) for the TypeScript / React GCS halves
+#   - uv    (pyproject.toml)      for the Python agent halves
+#   - cargo (this file)           for the Rust agent halves
+#
+# A Rust extension's agent half is its own crate under
+# `extensions/<name>/agent/`, mirroring the `extensions/*/agent` layout the uv
+# workspace already uses for Python agent halves. Members are listed explicitly
+# rather than globbed because a glob over `extensions/*/agent` would also match
+# the Python agent directories (which are not Cargo crates) and break the
+# workspace resolve.
+#
+# To add a Rust extension: create `extensions/<name>/agent/Cargo.toml`, then add
+# `"extensions/<name>/agent"` to the members list below.
+[workspace]
+resolver = "2"
+members = [
+  "extensions/_hello-rust/agent",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/altnautica/ADOSExtensions"
+
+# Shared dependencies for extension agent halves.
+#
+# `ados-sdk` is the plugin author SDK. It is consumed as a path dependency for
+# local development because the ADOS Drone Agent repository is checked out as a
+# sibling directory:
+#
+#     <root>/ADOSDroneAgent/crates/ados-sdk
+#     <root>/ADOSExtensions/Cargo.toml          (this file)
+#
+# The path below is resolved relative to this workspace root, so member crates
+# that write `ados-sdk = { workspace = true }` inherit it without restating the
+# relative path themselves.
+#
+# The SDK pulls in `ados-protocol` (the frame + envelope + capability-token
+# wire, including the vision framebus contract) through its own workspace path
+# dependency, so an extension crate only names `ados-sdk` and gets the whole
+# wire transitively.
+#
+# CI builds against a pinned git revision of the same crate instead of the local
+# path. A per-crate `Cargo.toml` overrides this dependency with a git source and
+# `rev = "<commit>"` when building in CI; see docs/rust-plugins.md.
+[workspace.dependencies]
+ados-sdk = { path = "../ADOSDroneAgent/crates/ados-sdk" }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
+rmpv = "1.3"
+async-trait = "0.1"

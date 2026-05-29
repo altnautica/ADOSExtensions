@@ -1,0 +1,32 @@
+schema_version: 2
+id: com.altnautica.hello-rust
+name: "ADOS Hello Rust"
+version: "0.1.0"
+description: "Minimal Rust agent-half example. Links the plugin SDK, runs an empty lifecycle, requests no permissions. A starting point for a Rust extension."
+author: "Altnautica"
+homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/_hello-rust"
+license: "GPL-3.0-or-later"
+risk: low
+
+compatibility:
+  ados_version: ">=0.13.0"
+  supported_boards: ["*"]
+
+agent:
+  # A Rust agent half ships as its own compiled binary. The plugin host execs
+  # this binary directly under systemd (it is not run through the shared Python
+  # runner), passing the per-plugin socket on the command line and the
+  # capability token + agent id through the unit environment.
+  runtime: rust
+  # Path to the binary inside the installed plugin tree. The pack step places
+  # the cross-compiled aarch64 binary at this path in the .adosplug archive.
+  entrypoint: "bin/hello-rust"
+  isolation: subprocess
+  # No capabilities used: the empty plugin makes no IPC calls. A real plugin
+  # lists the capabilities it invokes (for a vision plugin, for example,
+  # vision.frame.read / vision.model.register / vision.detection.publish).
+  permissions: []
+  resources:
+    max_ram_mb: 32
+    max_cpu_percent: 5
+    max_pids: 4

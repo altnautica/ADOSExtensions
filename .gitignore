@@ -7,3 +7,6 @@ __pycache__/
 *.tsbuildinfo
 .DS_Store
 extensions/*/gcs/plugin.bundle.js
+
+# Rust build output (the cargo workspace at the repo root)
+/target
