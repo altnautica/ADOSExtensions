@@ -1,0 +1,58 @@
+# Vision Navigation agent half, in Rust.
+#
+# The hot path (frame consumption, optical-flow tracking, the six-mode
+# degradation FSM, the scale ladder, the pre-arm gate, the MAVLink
+# component router, TIMESYNC clock alignment, IMU sourcing, rangefinder
+# drivers, the VIO vendor-binary bridge, and the heartbeat snapshot) is
+# Rust. The one-time offline camera-IMU calibration wizard stays Python
+# (calibration-helper/), out of the hot path; this crate only reads the
+# camchain.yaml it produces.
+[package]
+name = "vision-nav"
+version = "0.3.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GPS-denied navigation: optical flow (downward camera) and monocular visual-inertial odometry (forward or downward camera), feeding pose into the autopilot EKF over MAVLink. Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
+
+# The compiled binary is the manifest entrypoint. The plugin host execs
+# it directly under systemd and hands it the per-plugin socket; the
+# binary name is referenced from manifest.yaml as
+# agent.entrypoint: bin/vision-nav.
+[[bin]]
+name = "vision-nav"
+path = "src/main.rs"
+
+[lib]
+name = "vision_nav"
+path = "src/lib.rs"
+
+[dependencies]
+# The SDK brings the IPC client, the plugin-facing context facade, the
+# lifecycle runner, the vision client (ctx.vision frames + pose
+# helpers), and the testing harness.
+ados-sdk = { workspace = true }
+# The vision framebus value types (Frame ergonomics come from the SDK;
+# FrameFormat / FrameDescriptor come from here) plus the ardupilotmega
+# MAVLink codec (OPTICAL_FLOW_RAD, DISTANCE_SENSOR, RAW_IMU, TIMESYNC,
+# HEARTBEAT, VISION_POSITION_ESTIMATE) behind the `mavlink` feature.
+ados-protocol = { workspace = true, features = ["mavlink"] }
+tokio = { workspace = true }
+rmpv = { workspace = true }
+async-trait = { workspace = true }
+anyhow = "1"
+# msgpack codec for the VIO vendor-binary control channel (the same
+# length-prefixed msgpack-over-UDS contract the C++ shim speaks).
+rmp-serde = "1.3"
+serde = { version = "1", features = ["derive"] }
+# camchain.yaml parsing for the VIO engine config (Kalibr cam0 block:
+# intrinsics, distortion, T_cam_imu, timeshift_cam_imu).
+serde_yaml = "0.9"
+# Map the VIO frame ring in /dev/shm so the vendored C++ estimator reads
+# the bridged shared-bus frames zero-copy. Same crate + version the SDK
+# uses to map the vision frame bus read-only.
+memmap2 = "0.9"
+
+[dev-dependencies]
+ados-sdk = { workspace = true }
+tempfile = "3"

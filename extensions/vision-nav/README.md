@@ -5,13 +5,27 @@ estimator framework with six selectable modes covering optical flow
 (with or without a rangefinder), monocular visual-inertial odometry
 through two engines, and a hybrid mode that runs both side-by-side.
 
-The agent half captures frames from a USB UVC or CSI camera, pairs
-each frame with the closest IMU sample, runs the selected estimator,
-and emits the matching MAVLink messages that ArduPilot and PX4 fuse
-into their EKFs. The GCS half mounts a drone-detail tab with the
-mode picker, sensors card, estimator card, telemetry charts, pre-arm
-status, EKF source-set switcher, and a fallback banner that fires
-when the estimator goes degraded or fails.
+The agent half is a compiled **Rust** binary. It no longer opens a
+camera: it subscribes to the shared vision frame bus, pairs each frame
+with the closest IMU sample, runs the selected estimator, and emits the
+matching MAVLink messages that ArduPilot and PX4 fuse into their EKFs.
+For VIO modes the shared frames are bridged into the vendored C++
+estimator's shared-memory ring. The GCS half mounts a drone-detail tab
+with the mode picker, sensors card, estimator card, telemetry charts,
+pre-arm status, EKF source-set switcher, and a fallback banner that
+fires when the estimator goes degraded or fails.
+
+The one-time, offline camera-IMU **calibration wizard stays Python**
+(`agent/calibration-helper/`): it is an infrequent OpenCV-bound flow
+(AprilTag detection, intrinsics solve, timeshift fit) that runs far off
+the 30 Hz pose-emit path. It produces a Kalibr-style `camchain.yaml`;
+the Rust agent only reads that file at start-up.
+
+> **TODO: Rust-native VIO.** The two VIO modes still spawn the vendored
+> C++ estimators (OpenVINS, VINS-Fusion) as subprocesses. A future
+> Rust-native VIO core would remove the C++ shims entirely; until then
+> the binaries ship in the signed archive and the Rust agent supervises
+> them over the SHM ring + the msgpack control channel.
 
 ## Modes
 
@@ -93,19 +107,26 @@ pnpm --filter ./extensions/vision-nav/gcs build
 pnpm --filter ./extensions/vision-nav/gcs test
 ```
 
-Agent tests:
+Agent (Rust) build + tests, from the repo root:
 
 ```sh
-cd extensions/vision-nav/agent
-uv run pytest -q
-# or, without uv:
+cargo build -p vision-nav
+cargo test -p vision-nav
+```
+
+Calibration helper (Python) tests:
+
+```sh
+cd extensions/vision-nav/agent/calibration-helper
+python -m pip install -e .
 python -m pytest -q
 ```
 
-To produce a `.adosplug`:
+To produce a `.adosplug` (cross-compiles the Rust binary to the
+aarch64 musl target and stages it at the manifest entrypoint):
 
 ```sh
-scripts/pack.sh vision-nav
+scripts/pack-rust.sh vision-nav
 ```
 
 The vendor binaries (`ados_openvins_shim`, `ados_vins_fusion_shim`)
@@ -144,9 +165,10 @@ The drone-detail tab hosts:
 
 Agent:
 
-- `hardware.usb.uvc`, `hardware.camera.csi`, `hardware.uart`,
-  `hardware.i2c`
-- `sensor.camera.register`, `sensor.depth.register`
+- `vision.frame.read` (reads normalized frames from the shared vision
+  frame bus; the plugin no longer opens a camera, so the camera /
+  UVC / CSI / depth permissions are gone)
+- `hardware.uart`, `hardware.i2c` (companion-wired rangefinders)
 - `telemetry.extend`, `event.publish`, `event.subscribe`
 - `mavlink.read`, `mavlink.write`
 - `mavlink.component.peripheral`, `mavlink.component.vio`

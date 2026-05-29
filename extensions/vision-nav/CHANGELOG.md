@@ -2,6 +2,66 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.3.0]
+
+The agent half is rewritten from Python to a compiled **Rust** binary.
+The estimator output, the MAVLink wire surface, the six-mode
+degradation ladder, the scale ladder, the pre-arm gate, the TIMESYNC
+clock alignment, and the heartbeat block are all preserved; the GCS
+half, the config schema, and the locales are unchanged.
+
+### Changed
+
+- **Agent runtime is now `rust`.** `manifest.yaml` declares
+  `agent.runtime: rust` and `agent.entrypoint: bin/vision-nav`; the
+  plugin host execs the compiled binary directly.
+- **The plugin no longer opens a camera.** It subscribes to the shared
+  vision frame bus (`ctx.vision.subscribe_frames`) instead of capturing
+  from a V4L2 / libcamera device. The `sensor.camera.register`,
+  `hardware.usb.uvc`, `hardware.camera.csi`, and `sensor.depth.register`
+  permissions are dropped; `vision.frame.read` is added. The agent's own
+  SHM-ring frame write is removed.
+- **VIO frame input is bridged, not captured.** For the VIO modes the
+  shared-bus frames are copied into the vendored C++ estimator's
+  shared-memory ring (the C++ shim still reads frames from its ring).
+- **Optical flow is a clean-room Rust Lucas-Kanade tracker** (sparse
+  pyramidal LK with Shi-Tomasi corner selection). The output contract
+  (8x DPI scaling, gyro derotation, metric velocity, quality) matches
+  the prior implementation so the wire values the FC consumes are
+  unchanged.
+
+### Added
+
+- Rust crate at `agent/` with modular files: `config`, `framing`,
+  `flow`, `estimator`, `estimators`, `scale`, `rangefinder`, `imu`,
+  `clock_align`, `mavlink_emit`, `pre_arm`, `health`, `vio`, `pipeline`.
+- 72 Rust unit tests covering the optical-flow math, the scale-ladder
+  rung selection + staleness gates, the pre-arm gate per mode, the
+  6-mode estimator behaviour, the VIO control-channel codec + the SHM
+  frame-ring header layout, the TIMESYNC offset state machine, the IMU
+  time aligner + drift bands, and the camchain.yaml parser.
+
+### Kept
+
+- The vendored **OpenVINS** and **VINS-Fusion** C++ shims and their
+  `vendor_attribution` block (required for GPL). The Rust plugin spawns
+  them through `process.spawn` and speaks the same SHM-ring +
+  length-prefixed-msgpack-over-UDS contract.
+- The one-time offline calibration wizard as a **Python helper** at
+  `agent/calibration-helper/` (AprilTag detection, intrinsics solve,
+  golden-section timeshift fit). Out of the hot path; the Rust agent
+  reads the `camchain.yaml` it produces.
+
+### Known limitations
+
+- **TODO: Rust-native VIO** to remove the C++ shims. The two VIO modes
+  still spawn the vendored C++ estimators as subprocesses.
+- The I2C rangefinder drivers (`garmin_lidarlite_i2c`, `vl53l1x_i2c`)
+  are documented stubs that fail safe (return no reading) until the
+  plugin SDK exposes an I2C facade; wire an I2C rangefinder to the FC
+  and use the `fc_relay` topology instead. The UART TF-Luna driver and
+  the FC relay are fully implemented.
+
 ## [0.2.8] — 2026-05-23
 
 Re-sign release with the first-party publisher id. Catches package.json + agent pyproject.toml up to the manifest version. No functional changes.

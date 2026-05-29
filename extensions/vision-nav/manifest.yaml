@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.2.8"
+version: "0.3.0"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A camera and the IMU feed the flight controller a 30 Hz position estimate over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -61,7 +61,13 @@ compatibility:
   supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "pi-zero-2w"]
 
 agent:
-  entrypoint: "altnautica_vision_nav.plugin:VisionNavPlugin"
+  # The agent half is a compiled Rust binary. The plugin host execs it
+  # directly under systemd (not through the Python runner), passing the
+  # per-plugin socket on the command line and the capability token +
+  # agent id through the unit environment. The pack step places the
+  # cross-compiled aarch64 binary at the entrypoint path in the archive.
+  runtime: rust
+  entrypoint: "bin/vision-nav"
   isolation: subprocess
   per_drone_config: true
   # The VIO modes spawn a vendor binary; the optical-flow modes do not.
@@ -81,12 +87,13 @@ agent:
       upstream_version: "be55a937a57436548ddfb1bd324bc1e9a9e828e0"
       notice: "VIO mode vio_vins_fusion uses the VINS-Fusion estimator from the HKUST Aerial Robotics Group."
   permissions:
-    - id: hardware.usb.uvc
-    - id: hardware.camera.csi
+    # The plugin no longer opens a camera: it reads normalized frames
+    # from the shared vision frame bus. sensor.camera.register /
+    # hardware.usb.uvc / hardware.camera.csi / sensor.depth.register are
+    # dropped; vision.frame.read replaces them.
+    - id: vision.frame.read
     - id: hardware.uart
     - id: hardware.i2c
-    - id: sensor.camera.register
-    - id: sensor.depth.register
     - id: telemetry.extend
     - id: event.publish
     - id: event.subscribe
