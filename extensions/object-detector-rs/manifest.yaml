@@ -1,0 +1,34 @@
+schema_version: 2
+id: com.altnautica.object-detector-rs
+name: "ADOS Object Detector (Rust)"
+version: "0.1.0"
+description: "A trivial Rust object detector that proves the shared vision frame bus end to end. It subscribes to engine frames, finds the brightest 64x64 luma cell with a cheap heuristic (no ML model, no native dependency), and publishes one bounding box per frame. Use it to verify the frame and detection path on any board."
+author: "Altnautica"
+homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/object-detector-rs"
+license: "GPL-3.0-or-later"
+risk: low
+
+compatibility:
+  ados_version: ">=0.13.0"
+  supported_boards: ["*"]
+
+agent:
+  # A Rust agent half ships as its own compiled binary. The plugin host execs
+  # this binary directly under systemd (it is not run through the shared Python
+  # runner), passing the per-plugin socket on the command line and the
+  # capability token + agent id through the unit environment.
+  runtime: rust
+  # Path to the binary inside the installed plugin tree. The pack step places
+  # the cross-compiled aarch64 binary at this path in the .adosplug archive.
+  entrypoint: "bin/object-detector-rs"
+  isolation: subprocess
+  # Reads normalized camera frames from the vision engine and publishes the
+  # bounding boxes it derives. No model is registered: the heuristic runs in the
+  # plugin, so vision.model.register is not requested.
+  permissions:
+    - vision.frame.read
+    - vision.detection.publish
+  resources:
+    max_ram_mb: 32
+    max_cpu_percent: 10
+    max_pids: 4

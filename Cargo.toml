@@ -19,6 +19,7 @@
 resolver = "2"
 members = [
   "extensions/_hello-rust/agent",
+  "extensions/object-detector-rs/agent",
 ]
 
 [workspace.package]
@@ -50,6 +51,13 @@ repository = "https://github.com/altnautica/ADOSExtensions"
 # `rev = "<commit>"` when building in CI; see docs/rust-plugins.md.
 [workspace.dependencies]
 ados-sdk = { path = "../ADOSDroneAgent/crates/ados-sdk" }
+# The vision framebus value types (FrameDescriptor, Detection, BoundingBox,
+# FrameFormat, ModelMetadata, ...) live in ados-protocol. The SDK re-exports
+# the vision client and the Frame ergonomics but not these contract types, so a
+# vision extension names ados-protocol directly for them. It is the same crate
+# the SDK pulls in transitively, resolved here to one path so a CI build can
+# override it with a pinned git rev the same way it overrides ados-sdk.
+ados-protocol = { path = "../ADOSDroneAgent/crates/ados-protocol" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
 rmpv = "1.3"
 async-trait = "0.1"

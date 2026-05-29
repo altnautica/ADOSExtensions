@@ -1,0 +1,28 @@
+schema_version: 2
+id: com.altnautica.object-detector-demo
+name: "ADOS Object Detector Demo"
+version: "0.1.0"
+description: "Minimal Python detector that subscribes to the shared vision frame bus, scans each frame's luma plane for the brightest region with a cheap heuristic, and publishes one bounding-box detection. No ML model or accelerator required; it proves the frame-read and detection-publish path end to end on any host."
+author: "Altnautica"
+homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/object-detector-demo"
+license: "GPL-3.0-or-later"
+risk: low
+
+compatibility:
+  ados_version: ">=0.13.0"
+  gcs_version: ">=0.12.0"
+  supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rk3566", "rpi5", "x86"]
+
+agent:
+  runtime: python
+  entrypoint: "altnautica_object_detector_demo.plugin:ObjectDetectorDemoPlugin"
+  isolation: subprocess
+  permissions:
+    - id: vision.frame.read
+    - id: vision.detection.publish
+    - id: event.subscribe
+    - id: event.publish
+  resources:
+    max_ram_mb: 96
+    max_cpu_percent: 20
+    max_pids: 8

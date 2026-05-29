@@ -1,0 +1,30 @@
+[package]
+name = "object-detector-rs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Trivial Rust object detector: subscribes to vision-engine frames, finds the brightest luma cell with a cheap heuristic, and publishes one bounding box per frame. Proves the shared frame bus and detection path end to end without an ML model."
+
+# The compiled binary is the manifest entrypoint. The plugin host execs it
+# directly under systemd and hands it the per-plugin socket; the binary name is
+# referenced from manifest.yaml as `agent.entrypoint: bin/object-detector-rs`.
+[[bin]]
+name = "object-detector-rs"
+path = "src/main.rs"
+
+[dependencies]
+# The SDK brings the IPC client, the plugin-facing context facade, the
+# lifecycle runner, the vision client (ctx.vision), and (transitively, through
+# ados-protocol) the wire and the vision framebus contract types.
+ados-sdk = { workspace = true }
+# The vision framebus value types the heuristic builds (Detection, BoundingBox,
+# FrameFormat, FrameDescriptor). The SDK re-exports the Frame ergonomics and the
+# vision client; the contract value types come from ados-protocol directly.
+ados-protocol = { workspace = true }
+tokio = { workspace = true }
+rmpv = { workspace = true }
+# The SDK's `Plugin` lifecycle trait uses async methods, so implementing it
+# needs the same `#[async_trait]` attribute the trait was declared with.
+async-trait = { workspace = true }
+anyhow = "1"
