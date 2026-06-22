@@ -81,8 +81,15 @@ rsync -a \
   --exclude '.pnpm-store' \
   --exclude 'tests' \
   --exclude '__pycache__' \
+  --exclude '.pytest_cache' \
+  --exclude '.mypy_cache' \
+  --exclude '.ruff_cache' \
   --exclude '.tsbuildinfo' \
+  --exclude '*.tsbuildinfo' \
   --exclude 'tsconfig.json' \
+  --exclude 'vitest.config.ts' \
+  --exclude 'esbuild.config.*' \
+  --exclude '*.egg-info' \
   --exclude 'src' \
   --exclude 'package.json' \
   "${ext_dir}/" "${stage}/"

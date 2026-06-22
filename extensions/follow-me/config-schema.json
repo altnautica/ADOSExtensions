@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Follow-Me",
+  "description": "Per-drone configuration for the ADOS Follow-Me plugin.",
+  "properties": {
+    "active": {
+      "type": "boolean",
+      "title": "Active",
+      "description": "Whether the follow behavior is armed. Toggled by the Follow-Me Skill in the cockpit Skill Bar; the agent reads it live each loop.",
+      "default": false
+    },
+    "follow_distance_m": {
+      "type": "number",
+      "title": "Follow distance (m)",
+      "description": "Standoff distance the drone trails the subject at, along the ground line of sight.",
+      "default": 8,
+      "minimum": 3,
+      "maximum": 30
+    },
+    "follow_height_m": {
+      "type": "number",
+      "title": "Follow height (m)",
+      "description": "Height above the arming altitude the drone holds while following.",
+      "default": 4,
+      "minimum": 0,
+      "maximum": 20
+    },
+    "gimbal_point": {
+      "type": "boolean",
+      "title": "Point gimbal at subject",
+      "description": "When a gimbal is present, point it at the subject. Ignored gracefully when no gimbal component is found.",
+      "default": true
+    },
+    "designate_camera": {
+      "type": "string",
+      "title": "Designate camera",
+      "description": "The camera id whose detection stream the follow loop consumes and whose video the operator designates from.",
+      "default": "uvc-0"
+    },
+    "camera_hfov_deg": {
+      "type": "number",
+      "title": "Camera horizontal field of view (deg)",
+      "description": "Horizontal field of view of the designate camera, used by the image-to-ground projection.",
+      "default": 70,
+      "minimum": 30,
+      "maximum": 160
+    }
+  },
+  "required": ["active"]
+}

@@ -58,6 +58,19 @@ export interface PluginContext {
   config: {
     onChange<T = unknown>(handler: (next: T) => void): () => void;
   };
+  events: {
+    /**
+     * Subscribe to a one-way host-pushed event topic. The host streams
+     * these on the same channel as theme/host-prop pushes (no request /
+     * response round-trip): video-overlay host props, an agent plugin's
+     * state read-back, and any other topic the host forwards to the
+     * iframe. Returns an unsubscribe function.
+     */
+    subscribe<T = unknown>(
+      topic: string,
+      handler: (args: T) => void,
+    ): () => void;
+  };
   theme: {
     onChange(
       handler: (vars: Record<string, string>) => void,
@@ -109,6 +122,9 @@ export function createPluginContext(
     },
     config: {
       onChange: (handler) => client.on("config.changed", handler),
+    },
+    events: {
+      subscribe: (topic, handler) => client.on(topic, handler),
     },
     theme: {
       onChange: (handler) =>

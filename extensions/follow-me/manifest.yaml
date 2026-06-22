@@ -1,0 +1,103 @@
+schema_version: 2
+id: com.altnautica.follow-me
+name: "ADOS Follow-Me"
+version: "0.1.0"
+description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, an interactive click-to-follow video overlay, and a per-drone settings tab."
+description_long: |
+  Click a subject in the live video and the drone follows it at a fixed
+  distance and height. A generic person/object detector on the companion
+  produces detections; the operator designates one; the companion locks
+  onto that track, projects its image position onto the ground, and feeds
+  the flight controller guided position setpoints at a steady rate.
+
+  A lock-state safety gate stops commanding the instant the tracker reports
+  the subject uncertain or lost, and never silently re-locks onto a
+  different subject. The Follow-Me Skill in the cockpit Skill Bar arms and
+  disarms the behavior; the video overlay turns into a designate surface
+  while armed; the drone-detail tab carries the settings and a live
+  read-back.
+
+  Requires a flight controller in a guided position-hold mode (ArduPilot
+  Guided, PX4 Offboard/position). Works with a forward or downward camera;
+  point a gimbal at the subject when one is present.
+features:
+  - "Click-to-follow designation from the live video overlay"
+  - "Fixed-distance, fixed-height standoff follow via guided setpoints"
+  - "Lock-state safety gate: stops commanding on uncertain or lost"
+  - "Optional gimbal point-at-subject when a gimbal is present"
+  - "Live read-back: lock state, commanding flag, range, setpoints"
+hardware_requirements:
+  cameras: "USB UVC or CSI camera bound to the vision pipeline"
+  fc_firmware: "ArduPilot or PX4 in a guided position-hold mode"
+  boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5"]
+resource_impact:
+  output_rate_hz: 6
+  cpu_percent_peak: 25
+  ram_mb: 128
+  pids: 4
+  startup_time_seconds: 3
+telemetry_fields:
+  - "follow.state"
+documentation_url: "https://docs.altnautica.com/drone-agent/follow-me-overview"
+author: "Altnautica"
+homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/follow-me"
+license: "GPL-3.0-or-later"
+risk: high
+
+compatibility:
+  ados_version: ">=0.95.0"
+  gcs_version: ">=0.34.0"
+  supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5"]
+
+agent:
+  runtime: python
+  entrypoint: "follow_me:FollowMePlugin"
+  isolation: subprocess
+  per_drone_config: true
+  permissions:
+    - id: vision.detection.subscribe
+    - id: vision.track.designate
+    - id: mavlink.read
+    - id: mavlink.write
+    - id: event.publish
+    - id: event.subscribe
+  resources:
+    max_ram_mb: 128
+    max_cpu_percent: 25
+    max_pids: 4
+
+gcs:
+  entrypoint: "gcs/plugin.bundle.js"
+  isolation: iframe
+  permissions:
+    - id: ui.slot.flight-skill
+    - id: ui.slot.video-overlay
+    - id: ui.slot.drone-detail-tab
+    - id: command.send
+  contributes:
+    skills:
+      - id: follow-me
+        label: "Follow-Me"
+        icon: "crosshair"
+        category: behavior
+        toggle: true
+        confirm: false
+        arm_requirement: armed
+        default_binding:
+          key: "f"
+        activation:
+          via: config
+          config_key: active
+        state:
+          via: event
+          topic: "follow.state"
+    panels:
+      - id: follow-me-overlay
+        slot: video.overlay
+      - id: follow-me-tab
+        slot: drone.detail.tab
+        title: "Follow-Me"
+        icon: "crosshair"
+        order: 70
+  locales:
+    - en

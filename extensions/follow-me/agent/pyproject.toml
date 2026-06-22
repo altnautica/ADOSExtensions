@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "altnautica-follow-me"
+version = "0.1.0"
+description = "Follow-Me agent plugin: lock onto a designated subject and fly a fixed-distance standoff follow."
+authors = [{ name = "Altnautica" }]
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+dependencies = [
+    # Provided by the host agent venv at runtime; declared so a standalone
+    # checkout can run the unit tests.
+    "pymavlink>=2.4.41",
+]
+
+[project.entry-points."ados.plugins"]
+"com.altnautica.follow-me" = "follow_me:FollowMePlugin"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["follow_me"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
