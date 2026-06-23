@@ -1,7 +1,7 @@
 schema_version: 1
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.0.2"
+version: "1.0.3"
 description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, follow-me."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/mavlink-gimbal-v2"
@@ -39,7 +39,7 @@ gcs:
   permissions:
     - id: ui.slot.fc-tab
     - id: ui.slot.video-overlay
-    - id: ui.slot.notification
+    - id: ui.slot.notification-channel
     - id: ui.slot.settings-section
     - id: telemetry.subscribe.gimbal
     - id: telemetry.subscribe.mavlink

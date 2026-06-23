@@ -108,7 +108,7 @@ export function createPluginContext(
     },
     notifications: {
       publish: (payload) =>
-        client.request("notification.publish", "ui.slot.notification", payload),
+        client.request("notification.publish", "ui.slot.notification-channel", payload),
     },
     recording: {
       mark: (payload) =>

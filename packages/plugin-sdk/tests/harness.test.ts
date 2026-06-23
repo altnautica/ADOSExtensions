@@ -52,7 +52,7 @@ describe("createPluginHarness", () => {
   it("captures notifications and recording marks separately for assertions", async () => {
     const harness = createPluginHarness({
       grantedCapabilities: [
-        "ui.slot.notification",
+        "ui.slot.notification-channel",
         "recording.write",
       ],
       mount: async (ctx) => {

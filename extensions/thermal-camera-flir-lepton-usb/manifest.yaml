@@ -1,7 +1,7 @@
 schema_version: 1
 id: com.altnautica.thermal-flir-lepton-usb
 name: "ADOS Thermal Camera FLIR Lepton USB UVC"
-version: "1.0.2"
+version: "1.0.3"
 description: "FLIR Lepton 3.5 radiometric thermal imaging via PureThermal 2 USB UVC dongle. Adds video overlay, FC config tab, and a MAVLink camera component."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/thermal-camera-flir-lepton-usb"
@@ -39,7 +39,7 @@ gcs:
   permissions:
     - id: ui.slot.fc-tab
     - id: ui.slot.video-overlay
-    - id: ui.slot.notification
+    - id: ui.slot.notification-channel
     - id: ui.slot.settings-section
     - id: telemetry.subscribe.thermal
     - id: telemetry.subscribe.mavlink
