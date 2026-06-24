@@ -33,10 +33,6 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 | **thermal-camera-flir-lepton-usb** | Agent + GCS | FLIR Lepton 3.5 thermal capture over USB UVC, with a live GCS overlay and a flight-controller tab |
 | **mavlink-gimbal-v2** | Agent + GCS | MAVLink Gimbal v2 mount control with SimpleBGC, Storm32 NT, and Gremsy drivers, plus region-of-interest lock |
 | **vision-nav** | Agent + GCS | GPS-denied navigation from optical flow and monocular visual-inertial odometry (OpenVINS, VINS-Fusion) |
-| **object-detector-demo** | Agent (Python) | A worked example of a vision plugin on the agent frame bus |
-| **object-detector-rs** | Agent (Rust) | The same example in Rust, validating the frame-to-detection path |
-
-A `_hello-rust` template is included as the starting point for a Rust agent plugin.
 
 ---
 
@@ -60,9 +56,6 @@ extensions/                        first-party extensions, versioned independent
   thermal-camera-flir-lepton-usb/
   mavlink-gimbal-v2/
   vision-nav/
-  object-detector-demo/
-  object-detector-rs/
-  _hello-rust/                     Rust agent-plugin template
 packages/
   create-ados-plugin/              scaffolder + templates
   plugin-sdk/                      TypeScript GCS SDK

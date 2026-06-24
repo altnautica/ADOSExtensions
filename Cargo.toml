@@ -18,8 +18,6 @@
 [workspace]
 resolver = "2"
 members = [
-  "extensions/_hello-rust/agent",
-  "extensions/object-detector-rs/agent",
   "extensions/vision-nav/agent",
 ]
 
