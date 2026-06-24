@@ -18,9 +18,11 @@ export const VIDEO_OVERLAY_PROPS_EVENT = "video.overlay.props";
  * manifest skill state.topic). */
 export const FOLLOW_STATE_TOPIC = "follow.state";
 
-/** The topic the overlay publishes the operator's designate click on; the
- * agent half subscribes to it and owns the resulting track lock. */
-export const DESIGNATE_TOPIC = "follow-me/designate";
+/** The reserved command the overlay sends the operator's designate click on.
+ * The host routes it to the vision engine's designate (it locks the tracker
+ * onto the clicked box and returns a track id); the agent half then follows
+ * whatever the engine has locked. Not an event topic — a host bridge command. */
+export const DESIGNATE_COMMAND = "vision.designate";
 
 /** A pixel-space bounding box in the source frame's own resolution. */
 export interface BBox {

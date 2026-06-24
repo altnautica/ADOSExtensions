@@ -117,7 +117,7 @@ describe("VideoOverlay", () => {
     const designate = h.calls.find(
       (c) =>
         c.method === "command.send" &&
-        (c.args as { command?: string }).command === "follow-me/designate",
+        (c.args as { command?: string }).command === "vision.designate",
     );
     expect(designate).toBeTruthy();
     const args = (
@@ -139,7 +139,7 @@ describe("VideoOverlay", () => {
     const designate = h.calls.find(
       (c) =>
         c.method === "command.send" &&
-        (c.args as { command?: string }).command === "follow-me/designate",
+        (c.args as { command?: string }).command === "vision.designate",
     );
     expect(designate).toBeUndefined();
   });

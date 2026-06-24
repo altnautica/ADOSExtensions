@@ -1,20 +1,19 @@
 /**
  * Designation dispatch from the GCS overlay.
  *
- * The operator's click is forwarded to the agent half so the agent owns
- * the resulting track lock: the overlay sends the chosen camera + box on
- * the `follow-me/designate` command, which the host bridges onto the
- * agent's event bus, where the Follow-Me agent plugin designates the box
- * with the vision engine and follows the returned track id. Routing the
- * lock through the agent keeps a single owner of the locked track, so the
- * GCS never holds a lock the agent does not know about.
+ * The operator's click is forwarded to the vision engine, the single owner of
+ * the locked track: the overlay sends the chosen camera + box on the
+ * `vision.designate` host command, the host locks the engine's tracker onto the
+ * box (returning a track id), and the Follow-Me agent half follows whatever the
+ * engine has locked. Routing the lock through the engine keeps one owner of the
+ * locked track, so the GCS never holds a lock the agent does not know about.
  *
  * @license GPL-3.0-or-later
  */
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import { DESIGNATE_TOPIC, type OverlayDetectionItem } from "./types";
+import { DESIGNATE_COMMAND, type OverlayDetectionItem } from "./types";
 
 export interface DesignatePayload {
   camera_id: string;
@@ -59,7 +58,7 @@ export async function sendDesignate(
   payload: DesignatePayload,
 ): Promise<boolean> {
   try {
-    await ctx.command.send(DESIGNATE_TOPIC, payload);
+    await ctx.command.send(DESIGNATE_COMMAND, payload);
     return true;
   } catch {
     return false;

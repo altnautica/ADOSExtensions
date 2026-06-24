@@ -25,7 +25,6 @@ from ados.sdk.vision import BoundingBox, Detection, DetectionBatch
 
 import follow_me
 from follow_me.state import (
-    DESIGNATE_TOPIC,
     FOLLOW_STATE_TOPIC,
     LOCK_LOCKED,
     LOCK_LOST,
@@ -448,8 +447,9 @@ def test_batch_with_no_tracked_detection_adopts_nothing() -> None:
     assert plugin._last_bbox is None
 
 
-def test_designate_topic_constant_matches_state_module() -> None:
-    # The overlay publishes on DESIGNATE_TOPIC and the read-back lands on
-    # FOLLOW_STATE_TOPIC; both must be the literals the manifest declares.
-    assert DESIGNATE_TOPIC == "follow-me/designate"
+def test_follow_state_topic_constant_matches_manifest() -> None:
+    # The agent publishes its read-back on FOLLOW_STATE_TOPIC; it must be the
+    # literal the manifest skill state.topic declares. Designation is engine-
+    # owned now (the GCS overlay locks the engine via the host vision.designate
+    # command), so the agent half carries no designate topic.
     assert FOLLOW_STATE_TOPIC == "follow.state"

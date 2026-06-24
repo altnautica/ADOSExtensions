@@ -14,9 +14,6 @@ from dataclasses import asdict, dataclass
 # + tab subscribe to. Must equal the manifest skill ``state.topic``.
 FOLLOW_STATE_TOPIC = "follow.state"
 
-# The topic the GCS overlay publishes the operator's designate click on.
-DESIGNATE_TOPIC = "follow-me/designate"
-
 # Lock-state words on the wire (lowercase, matching the vision contract).
 LOCK_LOCKED = "locked"
 LOCK_UNCERTAIN = "uncertain"
@@ -104,7 +101,6 @@ class FollowState:
 
 __all__ = [
     "FOLLOW_STATE_TOPIC",
-    "DESIGNATE_TOPIC",
     "LOCK_LOCKED",
     "LOCK_UNCERTAIN",
     "LOCK_LOST",
