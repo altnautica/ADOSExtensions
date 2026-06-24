@@ -6,6 +6,7 @@ on:
       - "battery-health-panel-v*"
       - "thermal-camera-flir-lepton-usb-v*"
       - "mavlink-gimbal-v2-v*"
+      - "follow-me-v*"
 
 jobs:
   build-and-release:

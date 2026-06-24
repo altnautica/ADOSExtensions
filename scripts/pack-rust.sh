@@ -35,6 +35,9 @@ arg="$1"
 target="${2:-aarch64-unknown-linux-musl}"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Shared exclude list + the entrypoint-existence guard (see _pack-exclude.sh).
+source "$(dirname "$0")/_pack-exclude.sh"
+
 # Resolve the extension directory the same way pack.sh does.
 if [[ -d "${arg}" && -f "${arg}/manifest.yaml" ]]; then
   ext_dir="$(cd "${arg}" && pwd)"
@@ -84,6 +87,15 @@ if [[ ! -f "${bin_path}" ]]; then
   exit 1
 fi
 
+# Build the GCS bundle if this extension has a GCS half (esbuild ->
+# plugin.bundle.js). This packer used to rely on a stale, un-tracked local
+# bundle; it now builds the same way pack.sh does, so a clean CI checkout
+# ships a real bundle instead of a manifest pointing at a missing entrypoint.
+if [[ -d "${ext_dir}/gcs" ]]; then
+  echo "building gcs bundle..."
+  (cd "${ext_dir}/gcs" && pnpm build)
+fi
+
 archive_name="${plugin_id}-${plugin_version}.adosplug"
 dist_dir="${ext_dir}/dist"
 mkdir -p "${dist_dir}"
@@ -93,27 +105,23 @@ rm -f "${archive_path}"
 stage="$(mktemp -d)"
 trap 'rm -rf "${stage}"' EXIT
 
-# Stage the manifest and assets. Exclude the Rust source tree (agent/), the
-# build output (dist, target), and editor/test scaffolding; those never ship.
-rsync -a \
-  --exclude 'dist' \
+# Stage the manifest and assets. The shared exclude list plus 'agent' (the Rust
+# source tree; the compiled binary is staged separately) and 'target' (the
+# build output).
+rsync -a "${PACK_RSYNC_EXCLUDES[@]}" \
   --exclude 'target' \
   --exclude 'agent' \
-  --exclude 'node_modules' \
-  --exclude '.venv' \
-  --exclude '.pnpm-store' \
-  --exclude 'tests' \
-  --exclude '__pycache__' \
-  --exclude '.tsbuildinfo' \
-  --exclude 'tsconfig.json' \
-  --exclude 'src' \
-  --exclude 'package.json' \
   "${ext_dir}/" "${stage}/"
 
 # Place the compiled binary at the manifest entrypoint path inside the archive.
 mkdir -p "${stage}/$(dirname "${entrypoint}")"
 cp "${bin_path}" "${stage}/${entrypoint}"
 chmod 0755 "${stage}/${entrypoint}"
+
+# Never publish a half-archive: the agent binary and, when declared, the built
+# GCS bundle must both be present in the stage.
+assert_entrypoint_in_stage "${stage}" "${entrypoint}" "agent.entrypoint"
+assert_entrypoint_in_stage "${stage}" "$(manifest_gcs_entrypoint "${manifest_src}")" "gcs.entrypoint"
 
 (cd "${stage}" && zip -qr "${archive_path}" .)
 

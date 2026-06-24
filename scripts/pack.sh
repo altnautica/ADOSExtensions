@@ -28,6 +28,9 @@ fi
 arg="$1"
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Shared exclude list + the entrypoint-existence guard (see _pack-exclude.sh).
+source "$(dirname "$0")/_pack-exclude.sh"
+
 # Resolve the extension directory. If the argument is a path to an existing
 # directory containing a manifest.yaml, use it directly. Otherwise treat it
 # as a folder name under the monorepo's extensions/ tree.
@@ -74,25 +77,11 @@ trap 'rm -rf "${stage}"' EXIT
 
 # Copy the extension contents into the staging area, excluding build
 # artifacts and the dist folder we just created.
-rsync -a \
-  --exclude 'dist' \
-  --exclude 'node_modules' \
-  --exclude '.venv' \
-  --exclude '.pnpm-store' \
-  --exclude 'tests' \
-  --exclude '__pycache__' \
-  --exclude '.pytest_cache' \
-  --exclude '.mypy_cache' \
-  --exclude '.ruff_cache' \
-  --exclude '.tsbuildinfo' \
-  --exclude '*.tsbuildinfo' \
-  --exclude 'tsconfig.json' \
-  --exclude 'vitest.config.ts' \
-  --exclude 'esbuild.config.*' \
-  --exclude '*.egg-info' \
-  --exclude 'src' \
-  --exclude 'package.json' \
-  "${ext_dir}/" "${stage}/"
+rsync -a "${PACK_RSYNC_EXCLUDES[@]}" "${ext_dir}/" "${stage}/"
+
+# Never publish a half-archive: if the manifest declares a GCS entrypoint, the
+# built bundle must be in the stage (the pnpm build above must have produced it).
+assert_entrypoint_in_stage "${stage}" "$(manifest_gcs_entrypoint "${manifest_src}")" "gcs.entrypoint"
 
 (cd "${stage}" && zip -qr "${archive_path}" .)
 
