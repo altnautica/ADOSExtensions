@@ -56,7 +56,6 @@ agent:
   per_drone_config: true
   permissions:
     - id: vision.detection.subscribe
-    - id: vision.track.designate
     - id: mavlink.read
     - id: mavlink.write
     - id: event.publish

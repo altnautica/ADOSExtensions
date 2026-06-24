@@ -354,97 +354,57 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Designation
+# Detection routing: the plugin follows the engine's designated track.
+# The operator designates through the vision engine (the GCS overlay calls the
+# engine's designate route); the engine's single-object tracker stamps the one
+# designated detection with a track id + lock state, and the plugin adopts that
+# track. The plugin never picks a target itself, so there is no plugin-side
+# designate path.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_designate_stores_engine_track_id() -> None:
-    ctx = _Ctx(
-        config={"designate_camera": "uvc-0"},
-        designate_result={
-            "designated": True,
-            "track_id": 42,
-            "camera_id": "uvc-0",
-        },
-    )
-    plugin = _make_plugin(ctx)
-
-    bbox = _bbox_center_frame()
-    await plugin._on_designate(
-        {
-            "camera_id": "uvc-0",
-            "bbox": bbox.to_dict(),
-            "class_label": "person",
-            "confidence": 0.9,
-        }
-    )
-
-    assert ctx.vision.designate_calls, "designate must reach the engine"
-    call = ctx.vision.designate_calls[0]
-    assert call["camera_id"] == "uvc-0"
-    assert call["class_label"] == "person"
-    assert plugin._locked_id == 42
-    assert plugin._last_lock_state == LOCK_LOCKED
-
-
-@pytest.mark.asyncio
-async def test_designate_rejected_leaves_no_lock() -> None:
-    ctx = _Ctx(
-        config={"designate_camera": "uvc-0"},
-        designate_result={
-            "designated": False,
-            "track_id": None,
-            "camera_id": "uvc-0",
-        },
-    )
-    plugin = _make_plugin(ctx)
-
-    await plugin._on_designate(
-        {
-            "camera_id": "uvc-0",
-            "bbox": _bbox_center_frame().to_dict(),
-        }
-    )
-
-    assert plugin._locked_id is None
-
-
-@pytest.mark.asyncio
-async def test_designate_ignores_malformed_payload() -> None:
+def test_batch_adopts_the_engine_tracked_detection() -> None:
     ctx = _Ctx(config={"designate_camera": "uvc-0"})
     plugin = _make_plugin(ctx)
-
-    # Missing bbox / camera_id: nothing should reach the engine.
-    await plugin._on_designate({"camera_id": "uvc-0"})
-    await plugin._on_designate({"bbox": {"x": 0, "y": 0}})
-
-    assert not ctx.vision.designate_calls
     assert plugin._locked_id is None
 
-
-# ---------------------------------------------------------------------------
-# Detection routing: only the locked id is tracked.
-# ---------------------------------------------------------------------------
-
-
-def test_batch_tracks_only_the_locked_id() -> None:
-    ctx = _Ctx(config={"designate_camera": "uvc-0"})
-    plugin = _make_plugin(ctx)
-    plugin._locked_id = 7
-
-    other = Detection(
-        bbox=BoundingBox(0, 0, 5, 5),
-        class_label="person",
-        confidence=0.8,
-        track_id=99,
-        lock_state=LOCK_LOCKED,
-    )
-    locked = Detection(
+    tracked = Detection(
         bbox=BoundingBox(100, 100, 20, 20),
         class_label="person",
         confidence=0.9,
         track_id=7,
+        lock_state=LOCK_LOCKED,
+    )
+    batch = DetectionBatch(
+        model_id="coco-person",
+        camera_id="uvc-0",
+        frame_id=1,
+        ts_ms=0,
+        detections=[tracked],
+    )
+    plugin._on_batch(batch)
+
+    assert plugin._locked_id == 7
+    assert plugin._last_bbox == tracked.bbox
+    assert plugin._last_lock_state == LOCK_LOCKED
+
+
+def test_batch_picks_the_tracked_detection_among_untracked() -> None:
+    ctx = _Ctx(config={"designate_camera": "uvc-0"})
+    plugin = _make_plugin(ctx)
+
+    untracked = Detection(
+        bbox=BoundingBox(0, 0, 5, 5),
+        class_label="person",
+        confidence=0.8,
+        track_id=None,
+        lock_state=None,
+    )
+    tracked = Detection(
+        bbox=BoundingBox(100, 100, 20, 20),
+        class_label="person",
+        confidence=0.9,
+        track_id=4,
         lock_state=LOCK_UNCERTAIN,
     )
     batch = DetectionBatch(
@@ -452,20 +412,21 @@ def test_batch_tracks_only_the_locked_id() -> None:
         camera_id="uvc-0",
         frame_id=1,
         ts_ms=0,
-        detections=[other, locked],
+        detections=[untracked, tracked],
     )
-
     plugin._on_batch(batch)
 
-    assert plugin._last_bbox == locked.bbox
+    assert plugin._locked_id == 4
+    assert plugin._last_bbox == tracked.bbox
     assert plugin._last_lock_state == LOCK_UNCERTAIN
 
 
-def test_batch_without_lock_is_ignored() -> None:
+def test_batch_with_no_tracked_detection_adopts_nothing() -> None:
     ctx = _Ctx(config={"designate_camera": "uvc-0"})
     plugin = _make_plugin(ctx)
-    plugin._locked_id = None
 
+    # Untracked detections (the engine has nothing designated) never start a
+    # follow: the operator must designate through the engine first.
     batch = DetectionBatch(
         model_id="coco-person",
         camera_id="uvc-0",
@@ -476,14 +437,14 @@ def test_batch_without_lock_is_ignored() -> None:
                 bbox=BoundingBox(0, 0, 5, 5),
                 class_label="person",
                 confidence=0.8,
-                track_id=3,
-                lock_state=LOCK_LOCKED,
+                track_id=None,
+                lock_state=None,
             )
         ],
     )
     plugin._on_batch(batch)
 
-    # No lock means nothing is cached from the stream.
+    assert plugin._locked_id is None
     assert plugin._last_bbox is None
 
 

@@ -6,12 +6,14 @@ onto an operator-designated subject, and flies a fixed-distance standoff
 follow by projecting the subject's image position onto the ground and
 emitting guided position setpoints to the autopilot at a steady rate.
 
-Designation is operator-driven: the GCS overlay publishes the clicked
-bounding box on the designate topic; this plugin designates that box with
-the vision engine, stores the returned track id, and follows only that
-track. A lock-state safety gate stops commanding the instant the tracker
-reports the subject uncertain or lost, and never silently re-locks onto a
-different subject — the operator must designate again.
+Designation is operator-driven and owned by the vision engine: the operator
+designates a subject through the engine (the GCS overlay calls the engine's
+designate route), the engine's single-object tracker locks that subject and
+stamps it with a track id + lock state on the detection stream, and this
+plugin follows that one tracked subject. A lock-state safety gate stops
+commanding the instant the tracker reports the subject uncertain or lost,
+and the engine never silently re-locks onto a different subject — the
+operator must designate again.
 
 The behavior is gated by a per-drone ``active`` config flag the GCS skill
 toggles; the loop reads it live each cycle so arming/disarming the skill
@@ -38,7 +40,6 @@ from ados.sdk.vision import BoundingBox, DetectionBatch
 
 from follow_me import mavlink_frames, projection
 from follow_me.state import (
-    DESIGNATE_TOPIC,
     FOLLOW_STATE_TOPIC,
     LOCK_LOCKED,
     LOCK_LOST,
@@ -84,7 +85,6 @@ def get_manifest() -> PluginManifest:
             isolation="subprocess",
             permissions=[
                 "vision.detection.subscribe",
-                "vision.track.designate",
                 "mavlink.read",
                 "mavlink.write",
                 "event.publish",
@@ -139,7 +139,6 @@ class FollowMePlugin:
         self._loop_task: asyncio.Task | None = None
         self._published = FollowState()
         self._last_heartbeat: float = 0.0
-        self._designating = False
 
     # -- lifecycle ----------------------------------------------------
 
@@ -154,10 +153,9 @@ class FollowMePlugin:
             "GLOBAL_POSITION_INT", self._on_global_position
         )
 
-        # The operator's designate click arrives on the designate topic.
-        await ctx.events.subscribe(DESIGNATE_TOPIC, self._on_designate)
-
-        # Detection stream from the configured camera.
+        # Detection stream from the configured camera. The operator designates
+        # through the vision engine; we follow whatever track it locks (see
+        # _on_batch), so there is no plugin-side designate path.
         await ctx.vision.subscribe_detections(
             self._on_batch, camera_id=cfg.designate_camera
         )
@@ -227,59 +225,24 @@ class FollowMePlugin:
             self._pose.rel_alt_m = float(rel) / 1000.0
         self._pose.have_position = True
 
-    # -- detections + designation ------------------------------------
+    # -- detections --------------------------------------------------
 
     def _on_batch(self, batch: DetectionBatch) -> None:
-        if self._locked_id is None:
-            return
+        # Follow the vision engine's designated subject. The engine's
+        # single-object tracker stamps exactly one detection per camera with a
+        # track id + lock state; the operator designates through the engine, so
+        # the engine owns the lock and its "never silently re-lock" guarantee
+        # carries through to the follow. We adopt whichever detection is tracked
+        # and never choose a target ourselves.
         for det in batch.detections:
-            if det.track_id == self._locked_id:
+            if det.track_id is not None and det.lock_state is not None:
+                self._locked_id = int(det.track_id)
                 self._last_bbox = det.bbox
-                self._last_lock_state = det.lock_state or LOCK_LOCKED
+                self._last_lock_state = det.lock_state
                 self._last_seen_monotonic = time.monotonic()
                 return
-        # The locked track is absent from this batch. Leave the timestamp
-        # so the coast window in the loop decides lost vs uncertain.
-
-    async def _on_designate(self, payload: dict[str, Any]) -> None:
-        """Designate the operator-clicked box and own the returned id."""
-        if self._designating:
-            return
-        bbox_raw = payload.get("bbox")
-        camera_id = payload.get("camera_id")
-        if not isinstance(bbox_raw, dict) or not camera_id:
-            return
-        try:
-            bbox = BoundingBox.from_dict(bbox_raw)
-        except (KeyError, TypeError, ValueError):
-            return
-
-        self._designating = True
-        try:
-            result = await self._ctx.vision.designate_track(
-                str(camera_id),
-                bbox,
-                class_label=str(payload.get("class_label", "")),
-                confidence=float(payload.get("confidence", 1.0)),
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._ctx.log.warning("follow_me_designate_failed", error=str(exc))
-            self._designating = False
-            return
-        self._designating = False
-
-        if not result.get("designated"):
-            self._ctx.log.info("follow_me_designate_rejected")
-            return
-        track_id = result.get("track_id")
-        if track_id is None:
-            return
-        self._locked_id = int(track_id)
-        self._last_bbox = bbox
-        self._last_lock_state = LOCK_LOCKED
-        self._last_seen_monotonic = time.monotonic()
-        self._ctx.log.info("follow_me_locked", track_id=self._locked_id)
-        await self._publish_state(force=True)
+        # No tracked detection in this batch. Leave the timestamp so the coast
+        # window in the loop decides uncertain vs lost.
 
     # -- the follow loop ---------------------------------------------
 
