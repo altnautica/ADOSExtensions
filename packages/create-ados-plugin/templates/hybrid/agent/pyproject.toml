@@ -1,13 +1,28 @@
-[project]
-name = "hello-agent-plugin"
-version = "0.1.0"
-description = "Skeleton agent-only ADOS plugin."
-license = { text = "GPL-3.0-or-later" }
-requires-python = ">=3.11"
-dependencies = [
-  "msgpack>=1.0",
-]
-
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[project]
+name = "hello-agent-plugin"
+version = "0.1.0"
+description = "Skeleton hybrid ADOS plugin (agent half)."
+authors = [{ name = "__PLUGIN_AUTHOR__" }]
+license = "GPL-3.0-or-later"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.entry-points."ados.plugins"]
+"__PLUGIN_ID__" = "plugin:HelloPlugin"
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+]
+
+[tool.hatch.build.targets.wheel]
+include = ["plugin.py"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

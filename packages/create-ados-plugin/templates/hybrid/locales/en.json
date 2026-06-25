@@ -1,3 +1,16 @@
 {
-  "hello.title": "Hello from a plugin"
+  "skill.label": "Hello",
+  "tab.title": "Hello",
+  "tab.hint": "The settings for this plugin render natively from the manifest. This tab shows the live read-back from the agent half.",
+  "tab.waiting": "Waiting for the agent...",
+  "settings.group": "Behavior",
+  "settings.rate": "Update rate (Hz)",
+  "settings.rateHelp": "How often the agent publishes its read-back.",
+  "settings.greeting": "Greeting",
+  "settings.detector": "Detector model",
+  "live.active": "Active",
+  "live.greeting": "Greeting",
+  "live.ticks": "Ticks",
+  "live.yes": "yes",
+  "live.no": "no"
 }

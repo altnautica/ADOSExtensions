@@ -1,21 +1,15 @@
 /**
- * Per-drone config read/write for the settings tab.
+ * Per-drone config read for the detail tab.
  *
- * The settings tab writes follow parameters through the host's plugin
- * config surface; the agent reads the same per-drone keys live each loop.
- * The SDK's `ctx.config.onChange` delivers the current config to the
- * iframe; writes go through `ctx.command.send` on a config-write command
- * the host bridges to the per-drone plugin config store.
+ * The follow settings are edited through the host's native parameter
+ * controls (declared as `contributes.parameters` in the manifest), not from
+ * this iframe. The tab only READS the current config to show the live camera
+ * in its Specs section; the SDK's `ctx.config.onChange` delivers it.
  *
  * @license GPL-3.0-or-later
  */
 
-import type { PluginContext } from "@altnautica/plugin-sdk";
-
 import { DEFAULT_CONFIG, type FollowConfig } from "./types";
-
-/** The command the host maps to a per-drone plugin config write. */
-export const CONFIG_WRITE_COMMAND = "plugin.config.write";
 
 /** Coerce a raw config payload into the typed FollowConfig with defaults. */
 export function normalizeConfig(raw: unknown): FollowConfig {
@@ -33,20 +27,6 @@ export function normalizeConfig(raw: unknown): FollowConfig {
         : DEFAULT_CONFIG.designate_camera,
     camera_hfov_deg: numberOr(r.camera_hfov_deg, DEFAULT_CONFIG.camera_hfov_deg),
   };
-}
-
-/** Write a single config key for this drone's plugin instance. */
-export async function writeConfigKey<K extends keyof FollowConfig>(
-  ctx: PluginContext,
-  key: K,
-  value: FollowConfig[K],
-): Promise<boolean> {
-  try {
-    await ctx.command.send(CONFIG_WRITE_COMMAND, { key, value });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function numberOr(v: unknown, fallback: number): number {

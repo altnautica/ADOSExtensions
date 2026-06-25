@@ -4,7 +4,7 @@
  * A `video.overlay` iframe receives a VideoOverlayHostProps payload pushed
  * by the cockpit on the non-gated `video.overlay.props` event: the
  * rendered (letterbox-corrected) rect, the stream resolution, the latest
- * attitude, and the latest detection batch. A `drone.detail.tab` mount of
+ * attitude, and the latest detection batch. A `node.detail.tab` mount of
  * the same bundle never receives this event, which is how the plugin tells
  * the two slots apart at runtime.
  *

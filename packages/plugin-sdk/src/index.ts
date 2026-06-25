@@ -39,3 +39,38 @@ export {
   type PluginInstance,
   type PluginLifecycle,
 } from "./definePlugin";
+
+export {
+  contributesModel,
+  type PluginContributes,
+  type PluginParameterContribution,
+  type ParameterSchema,
+  type ParameterSchemaType,
+  type ParameterWidget,
+  type ParameterBinding,
+  type ParameterUi,
+  type PluginTabContribution,
+  type NodeProfile,
+  type PluginSettingsContribution,
+  type PluginModelContribution,
+  type PluginModelBoardVariant,
+  type PluginEntrypointContribution,
+  type PluginMissionTemplateContribution,
+  type PluginMapOverlayContribution,
+  type PluginSkillContribution,
+  type SkillCategory,
+  type SkillArmRequirement,
+  type PluginSlotContribution,
+  type PluginSlotName,
+} from "./manifest";
+
+export {
+  validateValue,
+  clampValue,
+  inferWidget,
+  resolveBinding,
+  defaultFor,
+  PARAMETER_WIDGETS,
+  PARAMETER_BINDINGS,
+  type ValidationResult,
+} from "./parameters";

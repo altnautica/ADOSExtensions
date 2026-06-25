@@ -35,8 +35,11 @@ subject. The operator re-designates to resume.
   the video, coloured by lock state (green locked, amber uncertain, red
   lost). Dormant until the skill is armed; then it shows a designation
   reticle and the boxes become clickable.
-- **Drone-detail tab** (`drone.detail.tab`): Specs, Settings (follow
-  distance, follow height, gimbal point, designate camera), and a live
+- **Native settings** (`contributes.parameters`): the follow settings
+  (distance, height, gimbal point, camera, field of view, and the detector
+  model) render as native GCS controls from the manifest. The agent reads
+  the same per-drone keys live; the iframe does not re-implement them.
+- **Node-detail tab** (`node.detail.tab`, drone profile): Specs and a live
   read-back (lock state, the honest `commanding` flag, range, setpoints).
 
 ## Configuration

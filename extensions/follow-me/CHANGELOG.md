@@ -8,10 +8,11 @@ uses independent semantic versioning per extension.
 
 ### Added
 
-- First release. Hybrid plugin contributing three surfaces from one
-  manifest: a `follow-me` flight Skill, an interactive `video.overlay`
-  click-to-follow surface, and a `drone.detail.tab` settings + live-metrics
-  tab.
+- First release. Hybrid plugin contributing from one manifest: a
+  `follow-me` flight Skill, an interactive `video.overlay` click-to-follow
+  surface, native settings (`contributes.parameters`, including a model
+  picker bound to the shared vision detector), and a `node.detail.tab`
+  live-metrics tab on the drone profile.
 - Agent half (Python): subscribes to the vision detection stream and the
   flight controller pose, designates the operator-clicked subject, projects
   its image position onto the ground with a pinhole model, and emits guided

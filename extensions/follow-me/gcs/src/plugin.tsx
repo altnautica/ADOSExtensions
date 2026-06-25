@@ -2,12 +2,13 @@
  * Follow-Me plugin entry point. Built into ``plugin.bundle.js`` and loaded
  * by the GCS plugin host inside a sandboxed iframe, once per slot context.
  *
- * The same bundle backs three slot contributions. The skill is declarative
- * (the host builds it from the manifest) so this entry only renders the two
- * iframe surfaces: the interactive video overlay and the drone-detail tab.
- * The two are told apart at runtime by the host-prop stream: a
- * ``video.overlay`` mount receives the ``video.overlay.props`` event; a
- * ``drone.detail.tab`` mount never does. The root renders the tab until an
+ * The same bundle backs both iframe slot contributions. The skill is
+ * declarative (the host builds it from the manifest) and the plain settings
+ * render as native parameters, so this entry only renders the two iframe
+ * surfaces: the interactive video overlay and the node-detail tab. The two
+ * are told apart at runtime by the host-prop stream: a ``video.overlay``
+ * mount receives the ``video.overlay.props`` event; a ``node.detail.tab``
+ * mount never does. The root renders the tab until an
  * overlay-props payload arrives, at which point it switches to the overlay
  * (the overlay iframe receives that payload on load, so the swap is
  * immediate and invisible behind the video pane it is sized over).

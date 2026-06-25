@@ -14,8 +14,8 @@ description_long: |
   the subject uncertain or lost, and never silently re-locks onto a
   different subject. The Follow-Me Skill in the cockpit Skill Bar arms and
   disarms the behavior; the video overlay turns into a designate surface
-  while armed; the drone-detail tab carries the settings and a live
-  read-back.
+  while armed; the follow settings render as native controls; the node-detail
+  tab carries a live read-back.
 
   Requires a flight controller in a guided position-hold mode (ArduPilot
   Guided, PX4 Offboard/position). Works with a forward or downward camera;
@@ -71,7 +71,7 @@ gcs:
   permissions:
     - id: ui.slot.flight-skill
     - id: ui.slot.video-overlay
-    - id: ui.slot.drone-detail-tab
+    - id: ui.slot.node-detail-tab
     - id: command.send
   contributes:
     skills:
@@ -90,13 +90,108 @@ gcs:
         state:
           via: event
           topic: "follow.state"
+    # The interactive video overlay (live lock-state + click-to-designate)
+    # stays a sandboxed iframe panel; the plain settings move to native
+    # parameters below.
     panels:
       - id: follow-me-overlay
         slot: video.overlay
+    # The settings + live read-back tab on the drone's detail panel.
+    tabs:
       - id: follow-me-tab
-        slot: drone.detail.tab
+        slot: node.detail.tab
+        profile: ["drone"]
         title: "Follow-Me"
         icon: "crosshair"
         order: 70
+    # Native, declarative follow settings. The GCS renders these controls;
+    # the agent reads the same per-drone keys live each loop. `active` is not
+    # here — it is the skill toggle, not an operator setting.
+    parameters:
+      - key: follow_distance_m
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 3
+          maximum: 30
+          step: 0.5
+          default: 8
+        ui:
+          widget: range
+          label: "settings.followDistance"
+          group: "settings.title"
+          order: 10
+      - key: follow_height_m
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0
+          maximum: 20
+          step: 0.5
+          default: 4
+        ui:
+          widget: range
+          label: "settings.followHeight"
+          group: "settings.title"
+          order: 20
+      - key: gimbal_point
+        binding: plugin.config
+        schema:
+          type: boolean
+          default: true
+        ui:
+          widget: boolean
+          label: "settings.gimbalPoint"
+          group: "settings.title"
+          order: 30
+      - key: camera_hfov_deg
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 30
+          maximum: 160
+          step: 1
+          default: 70
+        ui:
+          widget: number
+          label: "settings.cameraHfov"
+          group: "settings.title"
+          order: 40
+      - key: designate_camera
+        binding: plugin.config
+        schema:
+          type: string
+          default: "uvc-0"
+        ui:
+          widget: string
+          label: "settings.designateCamera"
+          group: "settings.title"
+          order: 45
+      # The detection model the follow loop consumes. A model picker bound to
+      # the shared vision detector; it lists every registered detection model,
+      # including the generic person model this plugin contributes.
+      - key: detector
+        binding: engine.detector
+        schema:
+          type: string
+          default: "coco-person"
+        ui:
+          widget: model
+          task: detection
+          label: "settings.detector"
+          group: "settings.title"
+          order: 50
+    # The generic person/COCO detection model the picker offers.
+    models:
+      - id: coco-person
+        task: detection
+        board_variants:
+          - board_match: rk3588
+            runtime: rknn
+            input: "640x640"
+            min_tops: 6
+          - board_match: cpu
+            runtime: onnx
+            input: "640x640"
   locales:
     - en

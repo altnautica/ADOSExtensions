@@ -10,7 +10,7 @@ camera: it subscribes to the shared vision frame bus, pairs each frame
 with the closest IMU sample, runs the selected estimator, and emits the
 matching MAVLink messages that ArduPilot and PX4 fuse into their EKFs.
 For VIO modes the shared frames are bridged into the vendored C++
-estimator's shared-memory ring. The GCS half mounts a drone-detail tab
+estimator's shared-memory ring. The GCS half mounts a node-detail tab
 with the mode picker, sensors card, estimator card, telemetry charts,
 pre-arm status, EKF source-set switcher, and a fallback banner that
 fires when the estimator goes degraded or fails.
@@ -140,11 +140,11 @@ install dialog.
 
 | Slot | Purpose |
 |------|---------|
-| `drone.detail.tab` | "Vision Nav" configuration tab on the drone detail panel |
+| `node.detail.tab` | "Vision Nav" configuration tab on the node detail panel |
 | `video.overlay` | Reserved for flow-vector and quality overlays |
 | `notification.channel` | Channel for degraded-navigation alerts |
 
-The drone-detail tab hosts:
+The node-detail tab hosts:
 
 - Mode picker (six options filtered by the agent's available
   estimators)
@@ -177,7 +177,7 @@ Agent:
 
 GCS:
 
-- `ui.slot.drone-detail-tab`, `ui.slot.video-overlay`,
+- `ui.slot.node-detail-tab`, `ui.slot.video-overlay`,
   `ui.slot.notification-channel`
 - `telemetry.subscribe`, `command.send`
 

@@ -129,18 +129,18 @@ gcs:
   entrypoint: "gcs/plugin.bundle.js"
   isolation: iframe
   permissions:
-    - id: ui.slot.drone-detail-tab
+    - id: ui.slot.node-detail-tab
     - id: ui.slot.video-overlay
     - id: ui.slot.notification-channel
     - id: telemetry.subscribe
     - id: command.send
   contributes:
-    panels:
+    tabs:
       - id: vision-nav-tab
-        slot: drone.detail.tab
         title: "Vision Nav"
         icon: "compass"
         order: 60
+        profile: ["drone"]
     notifications:
       - id: vision-nav-degraded
         title: "Vision navigation degraded"
