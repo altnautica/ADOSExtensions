@@ -1,9 +1,13 @@
-"""Test setup: stub the agent SDK gimbal ABC if the real package is
-not on the import path.
+"""Test setup: stub the agent SDK surfaces if the real package is not on
+the import path.
 
-The plugin imports ``ados.sdk.drivers.gimbal``. When the extension is
-tested in isolation (no ADOSDroneAgent on PYTHONPATH), we provide a
-minimal compatible namespace so unit tests can run anywhere.
+The plugin imports ``ados.sdk.drivers.gimbal`` (the driver ABC) and the
+tests construct ``ados.sdk.vision`` wire shapes (``BoundingBox`` /
+``Detection`` / ``DetectionBatch``). When the extension is tested in
+isolation (no ADOSDroneAgent on PYTHONPATH), we provide minimal
+compatible namespaces so unit tests can run anywhere. When the real host
+package is importable, both stubs step aside and the tests exercise the
+real contract.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ from __future__ import annotations
 import importlib
 import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any, AsyncIterator
 
@@ -116,4 +120,60 @@ def _ensure_sdk_stub() -> None:
     sys.modules["ados.sdk.drivers.gimbal"] = gimbal
 
 
+def _ensure_vision_stub() -> None:
+    try:
+        importlib.import_module("ados.sdk.vision")
+        return
+    except ModuleNotFoundError:
+        pass
+
+    # Reuse the ``ados`` / ``ados.sdk`` parents (created by
+    # ``_ensure_sdk_stub`` above, or the real ones if the host is on the
+    # path); only create a parent if it is genuinely absent.
+    ados = sys.modules.get("ados")
+    if ados is None:
+        ados = ModuleType("ados")
+        ados.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["ados"] = ados
+    sdk = sys.modules.get("ados.sdk")
+    if sdk is None:
+        sdk = ModuleType("ados.sdk")
+        sdk.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["ados.sdk"] = sdk
+
+    vision = ModuleType("ados.sdk.vision")
+
+    @dataclass(frozen=True)
+    class BoundingBox:
+        x: float
+        y: float
+        width: float
+        height: float
+
+    @dataclass(frozen=True)
+    class Detection:
+        bbox: BoundingBox
+        class_label: str
+        confidence: float
+        track_id: int | None = None
+        assoc_confidence: float | None = None
+        lock_state: str | None = None
+
+    @dataclass(frozen=True)
+    class DetectionBatch:
+        model_id: str
+        camera_id: str
+        frame_id: int
+        ts_ms: int
+        detections: list[Detection] = field(default_factory=list)
+
+    vision.BoundingBox = BoundingBox
+    vision.Detection = Detection
+    vision.DetectionBatch = DetectionBatch
+
+    sdk.vision = vision  # type: ignore[attr-defined]
+    sys.modules["ados.sdk.vision"] = vision
+
+
 _ensure_sdk_stub()
+_ensure_vision_stub()

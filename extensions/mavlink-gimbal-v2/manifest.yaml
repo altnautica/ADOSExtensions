@@ -1,16 +1,16 @@
 schema_version: 1
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.0.3"
-description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, follow-me."
+version: "1.1.0"
+description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/mavlink-gimbal-v2"
 license: "GPL-3.0-or-later"
 risk: medium
 
 compatibility:
-  ados_version: ">=0.10.0"
-  gcs_version: ">=0.5.0"
+  ados_version: ">=0.99.123"
+  gcs_version: ">=0.56.0"
   supported_boards: ["*"]
 
 agent:
@@ -21,6 +21,7 @@ agent:
     - id: mavlink.read
     - id: mavlink.write
     - id: mavlink.component.gimbal
+    - id: vision.detection.subscribe
     - id: event.publish
     - id: event.subscribe
     - id: telemetry.extend
@@ -61,5 +62,19 @@ gcs:
       - id: gimbal-health
         title: "Gimbal health"
         severity: warning
+    # A cockpit target action: click a detected object in the host overlay,
+    # pick "Aim at this target", and the gimbal keeps it centred. The host
+    # owns the overlay, the box drawing, the selection, and the designate +
+    # config write -- this plugin only declares the action. No
+    # applies_to_class: a gimbal can aim at any detected object.
+    target_actions:
+      - id: aim
+        label: "Aim at this target"
+        icon: crosshair
+        order: 30
+        designate: true
+        config_key: aim
+        config_value: true
+        default_key: "g"
   locales:
     - en

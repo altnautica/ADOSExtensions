@@ -115,6 +115,76 @@
           "maximum": 2592000
         }
       }
+    },
+    "camera_frame_width": {
+      "type": "integer",
+      "title": "Camera frame width (px)",
+      "description": "Pixel width the detection bounding boxes are expressed in. Used to convert a target's image position into an angular aim error. Set to the vision pipeline's capture resolution.",
+      "default": 1280,
+      "minimum": 1
+    },
+    "camera_frame_height": {
+      "type": "integer",
+      "title": "Camera frame height (px)",
+      "description": "Pixel height the detection bounding boxes are expressed in. Set to the vision pipeline's capture resolution.",
+      "default": 720,
+      "minimum": 1
+    },
+    "camera_hfov_deg": {
+      "type": "number",
+      "title": "Camera horizontal FOV (deg)",
+      "description": "Horizontal field of view of the aiming camera, in degrees. Maps a horizontal pixel offset to a yaw error for the aim loop.",
+      "default": 66,
+      "minimum": 1,
+      "maximum": 180
+    },
+    "camera_vfov_deg": {
+      "type": "number",
+      "title": "Camera vertical FOV (deg)",
+      "description": "Vertical field of view of the aiming camera, in degrees. Maps a vertical pixel offset to a pitch error for the aim loop.",
+      "default": 41,
+      "minimum": 1,
+      "maximum": 180
+    },
+    "aim_gain": {
+      "type": "number",
+      "title": "Aim gain",
+      "description": "Fraction of the angular error the gimbal moves each detection update. Lower is slower and more stable; higher is faster but risks overshoot. The default is deliberately conservative.",
+      "default": 0.3,
+      "minimum": 0.05,
+      "maximum": 1.0
+    },
+    "aim_deadband_frac": {
+      "type": "number",
+      "title": "Aim dead-band (fraction of half-frame)",
+      "description": "A centred target within this normalized offset produces no command, so a well-centred target does not jitter the gimbal. Expressed as a fraction of the half-frame (0 = no dead-band).",
+      "default": 0.04,
+      "minimum": 0,
+      "maximum": 0.3
+    },
+    "aim_invert_pitch": {
+      "type": "boolean",
+      "title": "Invert aim pitch",
+      "description": "Flip if the gimbal slews the wrong way on the bench in pitch. The pitch sign convention is unvalidated against hardware; this corrects a reversed pitch axis with no code change.",
+      "default": false
+    },
+    "aim_invert_yaw": {
+      "type": "boolean",
+      "title": "Invert aim yaw",
+      "description": "Flip if the gimbal slews the wrong way on the bench in yaw. The yaw sign convention is unvalidated against hardware; this corrects a reversed yaw axis with no code change.",
+      "default": false
+    },
+    "designate_camera": {
+      "type": "string",
+      "title": "Aim camera id",
+      "description": "Camera id whose detection stream drives the aim loop. Leave empty to consume every camera's detections.",
+      "default": ""
+    },
+    "aim": {
+      "type": "boolean",
+      "title": "Aim at target active",
+      "description": "Arms the aim-at-target loop. Flipped on when the operator picks 'Aim at this target' on a designated detection, and off to stop. While active, the gimbal tracks the vision engine's locked target and holds its angle whenever the lock is uncertain or lost.",
+      "default": false
     }
   }
 }

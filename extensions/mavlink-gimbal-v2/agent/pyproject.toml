@@ -11,6 +11,13 @@ license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.11"
 authors = [{ name = "Altnautica" }]
 keywords = ["ados", "plugin", "gimbal", "mavlink"]
+dependencies = [
+    # Provided by the host agent venv at runtime; declared here so a
+    # standalone checkout can run the unit tests and pack/parse MAVLink
+    # frames. Used by the ctx-router adapter that packs the driver's
+    # gimbal-manager commands into wire frames for ``ctx.mavlink.send``.
+    "pymavlink>=2.4.41",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23"]
