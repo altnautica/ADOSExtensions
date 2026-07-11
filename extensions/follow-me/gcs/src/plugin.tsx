@@ -23,7 +23,7 @@ import { FollowMeTab } from "./FollowMeTab";
 import enLocale from "../../locales/en.json";
 
 const PLUGIN_ID = "com.altnautica.follow-me";
-const PLUGIN_VERSION = "0.2.0";
+const PLUGIN_VERSION = "0.2.1";
 
 let rootEl: HTMLElement | null = null;
 let reactRoot: Root | null = null;

@@ -36,6 +36,7 @@ from ados.plugins.manifest import (
     Compatibility,
     PluginManifest,
 )
+from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 from ados.sdk.vision import BoundingBox, DetectionBatch
 
 from follow_me import mavlink_frames, projection
@@ -43,7 +44,6 @@ from follow_me.state import (
     FOLLOW_STATE_TOPIC,
     LOCK_LOCKED,
     LOCK_LOST,
-    LOCK_UNCERTAIN,
     FollowConfig,
     FollowState,
 )
@@ -70,7 +70,7 @@ def get_manifest() -> PluginManifest:
     return PluginManifest(
         schema_version=2,
         id=PLUGIN_ID,
-        version="0.1.0",
+        version="0.2.1",
         name="ADOS Follow-Me",
         description=(
             "Locks onto an operator-designated subject and flies a "
@@ -79,7 +79,7 @@ def get_manifest() -> PluginManifest:
         author="Altnautica",
         license="GPL-3.0-or-later",
         risk="high",
-        compatibility=Compatibility(ados_version=">=0.95.0"),
+        compatibility=Compatibility(ados_version=">=0.99.125"),
         agent=AgentBlock(
             entrypoint="follow_me:FollowMePlugin",
             isolation="subprocess",
@@ -132,10 +132,10 @@ class FollowMePlugin:
     def __init__(self) -> None:
         self._ctx: Any = None
         self._pose = _Pose()
-        self._locked_id: int | None = None
-        self._last_lock_state: str | None = None
-        self._last_seen_monotonic: float = 0.0
-        self._last_bbox: BoundingBox | None = None
+        # The shared locked-target safety gate: adopt only the engine's
+        # designated target, coast briefly, stop on uncertain/lost, never
+        # silently re-lock. One audited implementation for every behaviour.
+        self._tracker = LockedTargetTracker(coast_window_s=_COAST_WINDOW_S)
         self._loop_task: asyncio.Task | None = None
         self._published = FollowState()
         self._last_heartbeat: float = 0.0
@@ -179,9 +179,7 @@ class FollowMePlugin:
             except asyncio.CancelledError:
                 pass
             self._loop_task = None
-        self._locked_id = None
-        self._last_bbox = None
-        self._last_lock_state = None
+        self._tracker.drop()
         if self._ctx is not None:
             await self._publish_state(force=True, active=False)
 
@@ -228,21 +226,11 @@ class FollowMePlugin:
     # -- detections --------------------------------------------------
 
     def _on_batch(self, batch: DetectionBatch) -> None:
-        # Follow the vision engine's designated subject. The engine's
-        # single-object tracker stamps exactly one detection per camera with a
-        # track id + lock state; the operator designates through the engine, so
-        # the engine owns the lock and its "never silently re-lock" guarantee
-        # carries through to the follow. We adopt whichever detection is tracked
-        # and never choose a target ourselves.
-        for det in batch.detections:
-            if det.track_id is not None and det.lock_state is not None:
-                self._locked_id = int(det.track_id)
-                self._last_bbox = det.bbox
-                self._last_lock_state = det.lock_state
-                self._last_seen_monotonic = time.monotonic()
-                return
-        # No tracked detection in this batch. Leave the timestamp so the coast
-        # window in the loop decides uncertain vs lost.
+        # Hand the batch to the shared gate. It adopts the engine's designated
+        # target (the one detection stamped with a track id + lock state) and
+        # never chooses a target itself; the follow loop reads the effective
+        # lock (with the coast window) each tick.
+        self._tracker.record(batch, time.monotonic())
 
     # -- the follow loop ---------------------------------------------
 
@@ -259,26 +247,26 @@ class FollowMePlugin:
     async def _tick(self) -> None:
         cfg = await self._read_config()
 
-        if not cfg.active or self._locked_id is None:
+        if not cfg.active or not self._tracker.has_lock:
             await self._publish_state(active=cfg.active, commanding=False)
             return
 
-        lock = self._effective_lock_state()
+        now = time.monotonic()
+        lock = self._tracker.effective_lock(now)
 
-        if lock == LOCK_LOST:
+        if lock is EffectiveLock.LOST:
             # Drop the lock entirely; require a fresh operator designate.
-            self._locked_id = None
-            self._last_bbox = None
-            self._last_lock_state = None
+            self._tracker.drop()
             await self._publish_state(
                 active=True, lock_state=LOCK_LOST, commanding=False, force=True
             )
             return
 
-        if lock != LOCK_LOCKED or self._last_bbox is None:
+        target = self._tracker.locked_target(now)
+        if target is None:
             # uncertain (or coasting): hold, stop commanding.
             await self._publish_state(
-                active=True, lock_state=lock, commanding=False
+                active=True, lock_state=lock.value, commanding=False
             )
             return
 
@@ -288,27 +276,9 @@ class FollowMePlugin:
             )
             return
 
-        await self._command_follow(cfg)
+        await self._command_follow(cfg, target.bbox)
 
-    def _effective_lock_state(self) -> str:
-        """Lock state for this tick, applying the coast window.
-
-        A tracker-reported ``lost`` is authoritative. Otherwise, if the
-        locked detection has not been seen within the coast window the
-        loop treats it as lost; a recent ``uncertain`` stays uncertain.
-        """
-        if self._last_lock_state == LOCK_LOST:
-            return LOCK_LOST
-        age = time.monotonic() - self._last_seen_monotonic
-        if age > _COAST_WINDOW_S:
-            return LOCK_LOST
-        if self._last_lock_state == LOCK_UNCERTAIN:
-            return LOCK_UNCERTAIN
-        return LOCK_LOCKED
-
-    async def _command_follow(self, cfg: FollowConfig) -> None:
-        bbox = self._last_bbox
-        assert bbox is not None
+    async def _command_follow(self, cfg: FollowConfig, bbox: BoundingBox) -> None:
         frame_w, frame_h = self._frame_size_for(bbox)
 
         gimbal_pitch = 0.0
@@ -406,7 +376,7 @@ class FollowMePlugin:
         new = FollowState(
             active=bool(active) if active is not None else False,
             lock_state=lock_state,
-            target_id=self._locked_id,
+            target_id=self._tracker.track_id,
             range_m=range_m,
             distance_setpoint_m=distance_setpoint_m,
             height_setpoint_m=height_setpoint_m,

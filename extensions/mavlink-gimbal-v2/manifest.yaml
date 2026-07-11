@@ -1,7 +1,7 @@
 schema_version: 1
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.1.0"
+version: "1.1.1"
 description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/mavlink-gimbal-v2"
@@ -9,7 +9,7 @@ license: "GPL-3.0-or-later"
 risk: medium
 
 compatibility:
-  ados_version: ">=0.99.123"
+  ados_version: ">=0.99.125"
   gcs_version: ">=0.56.0"
   supported_boards: ["*"]
 

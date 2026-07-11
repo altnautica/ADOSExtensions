@@ -25,7 +25,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable
+
+from ados.sdk.tracking import LOCK_LOCKED, EffectiveLock, LockedTargetTracker
 
 from altnautica_gimbal_v2.aim import AimConfig, GimbalAimController
 from altnautica_gimbal_v2.ctx_router import ONBOARD_COMPUTER_COMP_ID, _CtxRouter
@@ -38,11 +41,6 @@ log = logging.getLogger(__name__)
 
 # Only the MAVLink transport is wired for the vision-locked aim loop.
 _MAVLINK_TRANSPORT = "mavlink"
-
-# Lock state the vision engine stamps on a detection the operator has
-# designated and the tracker still holds. The aim loop commands only on
-# this exact state (never "uncertain"/"lost"/None).
-_LOCK_LOCKED = "locked"
 
 
 _DRIVER_FACTORIES: dict[str, Callable[[Any], Any]] = {
@@ -65,6 +63,10 @@ class GimbalV2Plugin:
         self._controller: GimbalAimController | None = None
         self._transport: str | None = None
         self._last_aim_state: tuple[Any, ...] | None = None
+        # The shared locked-target safety gate: adopt only the engine's
+        # designated target, coast briefly, stop on uncertain/lost, never
+        # silently re-lock. Identical gate to Follow-Me, one implementation.
+        self._tracker = LockedTargetTracker()
 
     # -- lifecycle ----------------------------------------------------
 
@@ -181,6 +183,7 @@ class GimbalV2Plugin:
         self._router = None
         self._loop = None
         self._last_aim_state = None
+        self._tracker.drop()
         self._ctx = None
 
     # -- config -------------------------------------------------------
@@ -203,6 +206,11 @@ class GimbalV2Plugin:
         ):
             return
 
+        # Hand the batch to the shared safety gate. It adopts the engine's
+        # designated target (never our own) and applies the coast window.
+        now = time.monotonic()
+        self._tracker.record(batch, now)
+
         # The target action flips the ``aim`` key live; read it each batch
         # so arming/disarming takes effect without a restart.
         try:
@@ -211,36 +219,41 @@ class GimbalV2Plugin:
             aim_active = False
 
         if not aim_active:
-            # Not armed: do nothing (no command, no reset).
+            # Not armed: do nothing (no command, no drop).
             return
 
-        # Command only the vision engine's designated + locked target.
-        # Never pick a target ourselves; never follow an unlocked box.
-        locked = None
-        for det in batch.detections:
-            if det.track_id is not None and det.lock_state == _LOCK_LOCKED:
-                locked = det
-                break
-
-        if locked is None:
-            # No locked target (uncertain / lost / none): STOP commanding and
-            # send nothing -- the gimbal holds its last physical angle. The
-            # controller model is intentionally NOT reset: it stays equal to
-            # the held angle, so a re-lock resumes smoothly from there instead
-            # of jumping the gimbal back toward centre.
+        lock = self._tracker.effective_lock(now)
+        if lock is EffectiveLock.LOST:
+            # Lost (tracker-reported, or the coast window elapsed): drop the
+            # lock so a fresh operator designate is required, and send nothing
+            # -- the gimbal holds its last physical angle. The controller model
+            # is intentionally NOT reset: it stays equal to the held angle, so
+            # a re-lock resumes smoothly instead of jumping toward centre.
+            self._tracker.drop()
             await self._publish_aim_state(
                 aim_active=True, commanding=False, lock_state="lost", target_id=None
             )
             return
 
-        result = self._controller.update(locked.bbox)
+        target = self._tracker.locked_target(now)
+        if target is None:
+            # Uncertain / coasting / nothing adopted: hold, emit no command.
+            await self._publish_aim_state(
+                aim_active=True,
+                commanding=False,
+                lock_state=lock.value,
+                target_id=self._tracker.track_id,
+            )
+            return
+
+        result = self._controller.update(target.bbox)
         if result is None:
             # Inside the dead-band: on target, hold, emit no command.
             await self._publish_aim_state(
                 aim_active=True,
                 commanding=False,
-                lock_state=_LOCK_LOCKED,
-                target_id=locked.track_id,
+                lock_state=LOCK_LOCKED,
+                target_id=target.track_id,
             )
             return
 
@@ -253,8 +266,8 @@ class GimbalV2Plugin:
         await self._publish_aim_state(
             aim_active=True,
             commanding=True,
-            lock_state=_LOCK_LOCKED,
-            target_id=locked.track_id,
+            lock_state=LOCK_LOCKED,
+            target_id=target.track_id,
         )
 
     async def _publish_aim_state(

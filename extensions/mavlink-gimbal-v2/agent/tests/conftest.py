@@ -175,5 +175,106 @@ def _ensure_vision_stub() -> None:
     sys.modules["ados.sdk.vision"] = vision
 
 
+def _ensure_tracking_stub() -> None:
+    """Provide ``ados.sdk.tracking`` (the shared locked-target safety gate the
+    plugin imports) when the real host package is not on the path. A faithful
+    minimal shim mirroring ``ados/sdk/tracking.py``; the authoritative
+    implementation and its unit tests live in the agent repo, and when that
+    checkout is importable this stub steps aside."""
+    try:
+        importlib.import_module("ados.sdk.tracking")
+        return
+    except ModuleNotFoundError:
+        pass
+
+    sdk = sys.modules.get("ados.sdk")
+    tracking = ModuleType("ados.sdk.tracking")
+
+    import enum as _enum
+
+    lock_locked, lock_uncertain, lock_lost = "locked", "uncertain", "lost"
+    default_coast = 1.5
+
+    class EffectiveLock(str, _enum.Enum):
+        NONE = "none"
+        LOCKED = "locked"
+        UNCERTAIN = "uncertain"
+        LOST = "lost"
+
+        @property
+        def should_command(self) -> bool:
+            return self is EffectiveLock.LOCKED
+
+    @dataclass
+    class LockedTarget:
+        track_id: int
+        bbox: Any
+        lock_state: str
+
+    class LockedTargetTracker:
+        def __init__(self, coast_window_s: float = default_coast) -> None:
+            self._coast_s = max(0.0, float(coast_window_s))
+            self._track_id: int | None = None
+            self._bbox: Any = None
+            self._raw_state: str | None = None
+            self._last_seen_s = 0.0
+
+        @property
+        def has_lock(self) -> bool:
+            return self._track_id is not None
+
+        @property
+        def track_id(self) -> int | None:
+            return self._track_id
+
+        def record(self, batch: Any, now_monotonic_s: float) -> None:
+            for det in getattr(batch, "detections", None) or ():
+                tid = getattr(det, "track_id", None)
+                raw = getattr(det, "lock_state", None)
+                if tid is not None and raw is not None:
+                    self._track_id = int(tid)
+                    self._bbox = getattr(det, "bbox", None)
+                    self._raw_state = str(raw)
+                    self._last_seen_s = now_monotonic_s
+                    return
+
+        def effective_lock(self, now_monotonic_s: float) -> EffectiveLock:
+            if self._track_id is None:
+                return EffectiveLock.NONE
+            if self._raw_state == lock_lost:
+                return EffectiveLock.LOST
+            if (now_monotonic_s - self._last_seen_s) > self._coast_s:
+                return EffectiveLock.LOST
+            if self._raw_state == lock_uncertain:
+                return EffectiveLock.UNCERTAIN
+            return EffectiveLock.LOCKED
+
+        def locked_target(self, now_monotonic_s: float) -> LockedTarget | None:
+            if (
+                self.effective_lock(now_monotonic_s) is EffectiveLock.LOCKED
+                and self._bbox is not None
+                and self._track_id is not None
+            ):
+                return LockedTarget(self._track_id, self._bbox, self._raw_state or lock_locked)
+            return None
+
+        def drop(self) -> None:
+            self._track_id = None
+            self._bbox = None
+            self._raw_state = None
+
+    tracking.LOCK_LOCKED = lock_locked
+    tracking.LOCK_UNCERTAIN = lock_uncertain
+    tracking.LOCK_LOST = lock_lost
+    tracking.DEFAULT_COAST_WINDOW_S = default_coast
+    tracking.EffectiveLock = EffectiveLock
+    tracking.LockedTarget = LockedTarget
+    tracking.LockedTargetTracker = LockedTargetTracker
+    if sdk is not None:
+        sdk.tracking = tracking  # type: ignore[attr-defined]
+    sys.modules["ados.sdk.tracking"] = tracking
+
+
 _ensure_sdk_stub()
 _ensure_vision_stub()
+_ensure_tracking_stub()

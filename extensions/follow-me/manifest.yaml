@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.2.0"
+version: "0.2.1"
 description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a fixed
@@ -45,7 +45,7 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.99.123"
+  ados_version: ">=0.99.125"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5"]
 

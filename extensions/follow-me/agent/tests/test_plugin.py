@@ -16,11 +16,12 @@ focus is the control logic the operator's safety depends on:
 
 from __future__ import annotations
 
-import math
+import time
 from typing import Any
 
 import pytest
 
+from ados.sdk.tracking import EffectiveLock
 from ados.sdk.vision import BoundingBox, Detection, DetectionBatch
 
 import follow_me
@@ -155,6 +156,37 @@ def _make_plugin(ctx: _Ctx) -> follow_me.FollowMePlugin:
     return plugin
 
 
+def _seed_lock(
+    plugin: follow_me.FollowMePlugin,
+    *,
+    track_id: int = 7,
+    lock_state: str = LOCK_LOCKED,
+    bbox: BoundingBox | None = None,
+    aged: bool = False,
+) -> None:
+    """Seed the plugin's locked-target tracker as if a detection batch had
+    just arrived carrying the engine's designated target. ``aged=True``
+    records the sighting far in the past so the coast window treats it as
+    lost on the next tick."""
+    seen_at = time.monotonic() - 1e6 if aged else time.monotonic()
+    batch = DetectionBatch(
+        model_id="coco-person",
+        camera_id="uvc-0",
+        frame_id=1,
+        ts_ms=0,
+        detections=[
+            Detection(
+                bbox=bbox if bbox is not None else _bbox_center_frame(),
+                class_label="person",
+                confidence=0.9,
+                track_id=track_id,
+                lock_state=lock_state,
+            )
+        ],
+    )
+    plugin._tracker.record(batch, seen_at)
+
+
 def _state_events(ctx: _Ctx) -> list[dict[str, Any]]:
     return [p for (t, p) in ctx.events.published if t == FOLLOW_STATE_TOPIC]
 
@@ -180,10 +212,7 @@ async def test_locked_and_active_sends_a_setpoint() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_LOCKED
-    plugin._last_seen_monotonic = math.inf  # never aged out for this tick
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
     await plugin._tick()
 
@@ -206,10 +235,7 @@ async def test_uncertain_lock_sends_no_setpoint() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_UNCERTAIN
-    plugin._last_seen_monotonic = math.inf
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_UNCERTAIN)
 
     await plugin._tick()
 
@@ -218,7 +244,7 @@ async def test_uncertain_lock_sends_no_setpoint() -> None:
     assert states and states[-1]["commanding"] is False
     assert states[-1]["lock_state"] == LOCK_UNCERTAIN
     # The lock id is retained on uncertain (a recoverable state).
-    assert plugin._locked_id == 7
+    assert plugin._tracker.track_id == 7
 
 
 @pytest.mark.asyncio
@@ -234,10 +260,7 @@ async def test_lost_lock_sends_no_setpoint_and_drops_lock() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_LOST
-    plugin._last_seen_monotonic = math.inf
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOST)
 
     await plugin._tick()
 
@@ -247,7 +270,7 @@ async def test_lost_lock_sends_no_setpoint_and_drops_lock() -> None:
     assert states[-1]["lock_state"] == LOCK_LOST
     # A lost track drops the lock: no silent re-acquisition onto another
     # subject; the operator must designate again.
-    assert plugin._locked_id is None
+    assert plugin._tracker.has_lock is False
 
 
 @pytest.mark.asyncio
@@ -263,16 +286,13 @@ async def test_coast_window_expiry_is_treated_as_lost() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_LOCKED
     # Seen far enough in the past that the coast window has elapsed.
-    plugin._last_seen_monotonic = -1e9
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, aged=True)
 
     await plugin._tick()
 
     assert not ctx.mavlink.sent, "a stale lock past the coast window is lost"
-    assert plugin._locked_id is None
+    assert plugin._tracker.has_lock is False
 
 
 @pytest.mark.asyncio
@@ -288,10 +308,7 @@ async def test_inactive_sends_no_setpoint() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_LOCKED
-    plugin._last_seen_monotonic = math.inf
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
     await plugin._tick()
 
@@ -313,10 +330,7 @@ async def test_no_pose_yet_holds_without_commanding() -> None:
     plugin = _make_plugin(ctx)
     # No pose set: have_attitude / have_position are both False.
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_LOCKED
-    plugin._last_seen_monotonic = math.inf
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
     await plugin._tick()
 
@@ -341,10 +355,7 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
 
-    plugin._locked_id = 7
-    plugin._last_bbox = _bbox_center_frame()
-    plugin._last_lock_state = LOCK_LOCKED
-    plugin._last_seen_monotonic = math.inf
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
     await plugin._tick()
 
@@ -365,7 +376,7 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
 def test_batch_adopts_the_engine_tracked_detection() -> None:
     ctx = _Ctx(config={"designate_camera": "uvc-0"})
     plugin = _make_plugin(ctx)
-    assert plugin._locked_id is None
+    assert plugin._tracker.has_lock is False
 
     tracked = Detection(
         bbox=BoundingBox(100, 100, 20, 20),
@@ -383,9 +394,11 @@ def test_batch_adopts_the_engine_tracked_detection() -> None:
     )
     plugin._on_batch(batch)
 
-    assert plugin._locked_id == 7
-    assert plugin._last_bbox == tracked.bbox
-    assert plugin._last_lock_state == LOCK_LOCKED
+    now = time.monotonic()
+    assert plugin._tracker.track_id == 7
+    assert plugin._tracker.effective_lock(now) is EffectiveLock.LOCKED
+    target = plugin._tracker.locked_target(now)
+    assert target is not None and target.bbox == tracked.bbox
 
 
 def test_batch_picks_the_tracked_detection_among_untracked() -> None:
@@ -415,9 +428,9 @@ def test_batch_picks_the_tracked_detection_among_untracked() -> None:
     )
     plugin._on_batch(batch)
 
-    assert plugin._locked_id == 4
-    assert plugin._last_bbox == tracked.bbox
-    assert plugin._last_lock_state == LOCK_UNCERTAIN
+    now = time.monotonic()
+    assert plugin._tracker.track_id == 4
+    assert plugin._tracker.effective_lock(now) is EffectiveLock.UNCERTAIN
 
 
 def test_batch_with_no_tracked_detection_adopts_nothing() -> None:
@@ -443,8 +456,7 @@ def test_batch_with_no_tracked_detection_adopts_nothing() -> None:
     )
     plugin._on_batch(batch)
 
-    assert plugin._locked_id is None
-    assert plugin._last_bbox is None
+    assert plugin._tracker.has_lock is False
 
 
 def test_follow_state_topic_constant_matches_manifest() -> None:
