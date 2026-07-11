@@ -2,8 +2,8 @@
  * Shared types for the Follow-Me GCS half.
  *
  * The iframe runs sandboxed with no access to the host's source, so the
- * host-prop and event shapes the host streams in are mirrored here as
- * plain serializable interfaces.
+ * event shapes the host streams in are mirrored here as plain serializable
+ * interfaces.
  *
  * @license GPL-3.0-or-later
  */
@@ -11,65 +11,9 @@
 /** Lock state words shared with the agent + vision contract. */
 export type LockState = "locked" | "uncertain" | "lost";
 
-/** The non-gated bridge event the host pushes overlay props on. */
-export const VIDEO_OVERLAY_PROPS_EVENT = "video.overlay.props";
-
 /** The topic the agent publishes its follow read-back on (must equal the
  * manifest skill state.topic). */
 export const FOLLOW_STATE_TOPIC = "follow.state";
-
-/** The reserved command the overlay sends the operator's designate click on.
- * The host routes it to the vision engine's designate (it locks the tracker
- * onto the clicked box and returns a track id); the agent half then follows
- * whatever the engine has locked. Not an event topic — a host bridge command. */
-export const DESIGNATE_COMMAND = "vision.designate";
-
-/** A pixel-space bounding box in the source frame's own resolution. */
-export interface BBox {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-/** One detection in the host-prop shape. */
-export interface OverlayDetectionItem {
-  bbox: BBox;
-  classLabel: string;
-  confidence: number;
-  trackId: number | null;
-  lockState: LockState | null;
-}
-
-/** The detection batch carried on the host props, or null when stale. */
-export interface OverlayDetections {
-  frameWidth: number;
-  frameHeight: number;
-  frameId: number;
-  receivedAt: number;
-  items: OverlayDetectionItem[];
-}
-
-/** The letterbox-corrected rendered video rect, CSS px relative to the
- * overlay wrapper's top-left. */
-export interface RenderedRect {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-}
-
-/** Host props pushed to a `video.overlay` iframe. */
-export interface VideoOverlayHostProps {
-  droneId: string;
-  cameraId: string;
-  streamWidth: number;
-  streamHeight: number;
-  renderedRect: RenderedRect;
-  frameTimestampMs: number;
-  attitude: { rollDeg: number; pitchDeg: number; yawDeg: number };
-  detections: OverlayDetections | null;
-}
 
 /** The follow read-back the agent publishes on FOLLOW_STATE_TOPIC. */
 export interface FollowState {

@@ -1,8 +1,8 @@
 schema_version: 2
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.1.0"
-description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, an interactive click-to-follow video overlay, and a per-drone settings tab."
+version: "0.2.0"
+description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a fixed
   distance and height. A generic person/object detector on the companion
@@ -13,15 +13,15 @@ description_long: |
   A lock-state safety gate stops commanding the instant the tracker reports
   the subject uncertain or lost, and never silently re-locks onto a
   different subject. The Follow-Me Skill in the cockpit Skill Bar arms and
-  disarms the behavior; the video overlay turns into a designate surface
-  while armed; the follow settings render as native controls; the node-detail
-  tab carries a live read-back.
+  disarms the behavior; click a detected subject in the cockpit and pick
+  Follow to designate it; the follow settings render as native controls; the
+  node-detail tab carries a live read-back.
 
   Requires a flight controller in a guided position-hold mode (ArduPilot
   Guided, PX4 Offboard/position). Works with a forward or downward camera;
   point a gimbal at the subject when one is present.
 features:
-  - "Click-to-follow designation from the live video overlay"
+  - "Click a detected subject in the cockpit and pick Follow to designate it"
   - "Fixed-distance, fixed-height standoff follow via guided setpoints"
   - "Lock-state safety gate: stops commanding on uncertain or lost"
   - "Optional gimbal point-at-subject when a gimbal is present"
@@ -45,8 +45,8 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.95.0"
-  gcs_version: ">=0.34.0"
+  ados_version: ">=0.99.123"
+  gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5"]
 
 agent:
@@ -70,9 +70,7 @@ gcs:
   isolation: iframe
   permissions:
     - id: ui.slot.flight-skill
-    - id: ui.slot.video-overlay
     - id: ui.slot.node-detail-tab
-    - id: command.send
   contributes:
     skills:
       - id: follow-me
@@ -90,12 +88,21 @@ gcs:
         state:
           via: event
           topic: "follow.state"
-    # The interactive video overlay (live lock-state + click-to-designate)
-    # stays a sandboxed iframe panel; the plain settings move to native
-    # parameters below.
-    panels:
-      - id: follow-me-overlay
-        slot: video.overlay
+    # A cockpit target action: click a detected subject in the host overlay,
+    # pick Follow, and the drone designates + follows it. The host owns the
+    # overlay, the box drawing, the selection, and the designate + config
+    # write — this plugin only declares the action. Bound to `f` on the
+    # selected target.
+    target_actions:
+      - id: follow
+        label: "Follow this target"
+        icon: crosshair
+        order: 20
+        applies_to_class: person
+        designate: true
+        config_key: active
+        config_value: true
+        default_key: "f"
     # The settings + live read-back tab on the drone's detail panel.
     tabs:
       - id: follow-me-tab
