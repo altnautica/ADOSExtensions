@@ -100,7 +100,6 @@ export function CalibrationWizard({
   const [capturedFrames, setCapturedFrames] = useState<CapturedFrame[]>([]);
   const [poseSamples, setPoseSamples] = useState<PoseSample[]>([]);
   const [windowStartNs, setWindowStartNs] = useState<number | null>(null);
-  const [imuTrace, setImuTrace] = useState<ImuTracePoint[]>([]);
   const [progress, setProgress] = useState<CalibrationProgressPayload | null>(
     null,
   );
@@ -246,32 +245,23 @@ export function CalibrationWizard({
     setPoseSamples((prev) => prev.slice(0, prev.length - 1));
   }, []);
 
-  // IMU motion sampling: while we are on step 4, periodically push
-  // the current gyro / accel magnitudes into a rolling buffer so the
-  // operator sees a live sparkline.
+  // Mark the calibration window start when the motion step opens (the real
+  // window bundled into the submit payload).
   useEffect(() => {
     if (wizard.step !== 3) return;
     if (windowStartNs === null) {
       setWindowStartNs(Date.now() * 1_000_000);
     }
-    const interval = window.setInterval(() => {
-      const gyroMag = Math.random() * 2; // placeholder; real IMU data
-      const accelMag = Math.random() * 5; // would come from the heartbeat
-      setImuTrace((prev) =>
-        [...prev, { ts: Date.now(), gyroMag, accelMag }].slice(-60),
-      );
-    }, 100);
-    return () => window.clearInterval(interval);
   }, [wizard.step, windowStartNs]);
 
-  const imuMotionSufficient = useMemo(() => {
-    if (imuTrace.length < 30) return false;
-    const gyroMax = Math.max(...imuTrace.map((p) => p.gyroMag));
-    const accelRange =
-      Math.max(...imuTrace.map((p) => p.accelMag)) -
-      Math.min(...imuTrace.map((p) => p.accelMag));
-    return gyroMax >= 1.5 && accelRange >= 3;
-  }, [imuTrace]);
+  // Live IMU telemetry is not wired to this build, so we never fabricate a gyro
+  // /accel trace. Sufficient motion is confirmed from the REAL captured-frame
+  // coverage instead — a diverse pose set means the drone was moved through
+  // enough range.
+  const imuMotionSufficient = useMemo(
+    () => isPoseSetDiverse(poseSamples),
+    [poseSamples],
+  );
 
   // Submit step: bundle the captured frames + window into the event
   // payload and call ctx.client.request.
@@ -325,7 +315,6 @@ export function CalibrationWizard({
   const retry = useCallback(() => {
     setCapturedFrames([]);
     setPoseSamples([]);
-    setImuTrace([]);
     setWindowStartNs(null);
     setResult(null);
     setProgress(null);
@@ -373,7 +362,6 @@ export function CalibrationWizard({
     <Step4ImuMotion
       key="step4"
       ctx={ctx}
-      imuTrace={imuTrace}
       sufficient={imuMotionSufficient}
       onNext={wizard.next}
       onBack={wizard.back}
@@ -421,12 +409,6 @@ export function CalibrationWizard({
 // ---------------------------------------------------------------------------
 // Step components
 // ---------------------------------------------------------------------------
-
-interface ImuTracePoint {
-  ts: number;
-  gyroMag: number;
-  accelMag: number;
-}
 
 function Step1TargetCheck({
   ctx,
@@ -669,13 +651,11 @@ function Step3FrameCapture({
 
 function Step4ImuMotion({
   ctx,
-  imuTrace,
   sufficient,
   onNext,
   onBack,
 }: {
   ctx: PluginContext;
-  imuTrace: ImuTracePoint[];
   sufficient: boolean;
   onNext: () => void;
   onBack: () => void;
@@ -708,19 +688,17 @@ function Step4ImuMotion({
         </>
       }
     >
-      <ImuSparkline points={imuTrace} field="gyroMag" label="Gyro |ω| rad/s" />
-      <ImuSparkline
-        points={imuTrace}
-        field="accelMag"
-        label="Accel |a| m/s²"
-      />
       <span style={hint}>
         {sufficient
-          ? tr(t, "navigation.calibrationWizard.imuOk", "IMU motion sufficient")
+          ? tr(
+              t,
+              "navigation.calibrationWizard.imuOk",
+              "Enough motion captured across the frame coverage.",
+            )
           : tr(
               t,
               "navigation.calibrationWizard.imuMore",
-              "Keep moving; need more dynamic range",
+              "Keep moving the drone until the captured coverage spans enough tilt and rotation.",
             )}
       </span>
     </WizardStep>
@@ -958,60 +936,6 @@ function CameraPreviewWrapper({
   );
 }
 
-function ImuSparkline({
-  points,
-  field,
-  label,
-}: {
-  points: ImuTracePoint[];
-  field: "gyroMag" | "accelMag";
-  label: string;
-}): JSX.Element {
-  const w = 320;
-  const h = 48;
-  if (points.length < 2) {
-    return (
-      <div style={sparkBlock}>
-        <span style={sparkLabel}>{label}</span>
-        <svg width={w} height={h}>
-          <line
-            x1={0}
-            x2={w}
-            y1={h / 2}
-            y2={h / 2}
-            stroke="var(--vn-border, rgba(255,255,255,0.08))"
-            strokeDasharray="2 2"
-          />
-        </svg>
-      </div>
-    );
-  }
-  const values = points.map((p) => p[field]);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = Math.max(max - min, 1e-6);
-  const poly = points
-    .map((p, i) => {
-      const x = (i / Math.max(points.length - 1, 1)) * w;
-      const y = h - ((p[field] - min) / span) * h;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  return (
-    <div style={sparkBlock}>
-      <span style={sparkLabel}>{label}</span>
-      <svg width={w} height={h}>
-        <polyline
-          points={poly}
-          fill="none"
-          stroke="var(--vn-accent, #2563eb)"
-          strokeWidth={1.5}
-        />
-      </svg>
-    </div>
-  );
-}
-
 function tagAreaSpanOf(detections: DetectionShape[]): number {
   if (detections.length === 0) return 0;
   let minX = Infinity;
@@ -1120,13 +1044,4 @@ const captureRow: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: "0.75rem",
-};
-const sparkBlock: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "0.25rem",
-};
-const sparkLabel: CSSProperties = {
-  fontSize: "0.7rem",
-  color: "var(--vn-text-muted, #94a3b8)",
 };
