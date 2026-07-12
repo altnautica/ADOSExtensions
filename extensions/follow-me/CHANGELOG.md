@@ -4,7 +4,17 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
-## [0.1.0]
+## [0.2.1]
+
+### Changed
+
+- The click-to-follow interaction now rides the host's shared target overlay
+  and a `target.action` ("Follow this target") instead of a private
+  `video.overlay`, so designation is consistent with every other target
+  behaviour and the box drawing is host-owned.
+- Adopted the shared locked-target safety gate: the follow behaviour stops
+  and holds on an uncertain or lost lock and never auto-re-acquires, matching
+  the platform's one canonical safety contract.
 
 ### Added
 

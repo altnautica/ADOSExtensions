@@ -2,6 +2,14 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.1.1
+
+Adds an "Aim at this target" `target.action`: a visual-servo controller
+points the gimbal at the operator-designated subject, riding the shared
+locked-target safety gate (stop + hold on an uncertain/lost lock). The aim
+sign/gain (`invert_pitch`/`invert_yaw`/`gain`) are conservative defaults to be
+confirmed against real gimbal hardware before wider use.
+
 ## 1.0.2
 
 Re-sign release with the unified first-party private key. No functional changes.
