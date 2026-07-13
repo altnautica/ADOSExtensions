@@ -30,6 +30,13 @@ export {
   type NotificationPayload,
   type RecordingMark,
   type MissionUpdate,
+  type PerceptionTier,
+  type PerceptionTierInfo,
+  type PerceptionLockState,
+  type PerceptionBoundingBox,
+  type PerceptionDetection,
+  type PerceptionDetectionBatch,
+  type PerceptionSessionHealth,
 } from "./api";
 
 export {

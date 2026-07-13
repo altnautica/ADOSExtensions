@@ -116,6 +116,33 @@ export class PluginClient {
     return off;
   }
 
+  /**
+   * Subscribe to the host's perception detection stream. Mirrors
+   * {@link subscribeTelemetry}: it registers a local handler for the
+   * pushed `perception.detections` event, then sends one
+   * `perception.subscribe` request to open the stream. The returned
+   * function tears the subscription down locally AND sends a
+   * `perception.unsubscribe` request so the host can stop streaming.
+   *
+   * The unsubscribe request is best-effort — it is fire-and-forget and
+   * swallows host errors (e.g. a disposed client) so unmount paths never
+   * throw.
+   */
+  async subscribePerception<TBatch = unknown>(
+    handler: EventHandler<TBatch>,
+  ): Promise<() => void> {
+    const off = this.on("perception.detections", handler);
+    await this.request("perception.subscribe", "perception.subscribe", {});
+    return () => {
+      off();
+      void this.request(
+        "perception.unsubscribe",
+        "perception.subscribe",
+        {},
+      ).catch(() => {});
+    };
+  }
+
   private route(env: RpcEnvelope): void {
     if (env.type === "response") {
       const slot = this.pending.get(env.id);

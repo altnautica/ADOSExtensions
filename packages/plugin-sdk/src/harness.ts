@@ -1,4 +1,10 @@
-import { createPluginContext, type PluginContext } from "./api";
+import {
+  createPluginContext,
+  type PerceptionDetectionBatch,
+  type PerceptionSessionHealth,
+  type PerceptionTierInfo,
+  type PluginContext,
+} from "./api";
 import { PluginClient } from "./client";
 import { PROTOCOL_VERSION, type RpcEnvelope } from "./protocol";
 import { MemoryTransport } from "./transport";
@@ -59,6 +65,15 @@ export interface PluginHarness {
   readonly recordingMarks: ReadonlyArray<unknown>;
   start(): Promise<void>;
   pushTelemetry(topic: string, payload: unknown): void;
+  /** Push one detection batch on the host's `perception.detections`
+   * event, driving a `ctx.perception.subscribeDetections` handler. */
+  pushPerceptionDetection(batch: PerceptionDetectionBatch): void;
+  /** Stub the `perception.read` response so `ctx.perception.readTier`
+   * resolves this value. */
+  stubPerceptionTier(info: PerceptionTierInfo): void;
+  /** Stub the `perception.health` response so
+   * `ctx.perception.readSessionHealth` resolves this value. */
+  stubPerceptionHealth(health: PerceptionSessionHealth): void;
   pushEvent(method: string, args: unknown, capability?: string): void;
   pushConfig(next: unknown): void;
   pushTheme(vars: Record<string, string>): void;
@@ -79,8 +94,26 @@ export function createPluginHarness(
   const notifications: unknown[] = [];
   const recordingMarks: unknown[] = [];
   const failQueue = new Map<string, { code: string; message: string }>();
+  const perceptionStubs: {
+    tier?: PerceptionTierInfo;
+    health?: PerceptionSessionHealth;
+  } = {};
 
-  const respond = opts.respondTo ?? (() => ({ ok: true }));
+  // Perception read/health stubs take precedence, then any caller-supplied
+  // responder, then the default `{ ok: true }` echo.
+  const respond = (call: PluginHarnessCall): Promise<unknown> | unknown => {
+    if (call.method === "perception.read" && perceptionStubs.tier !== undefined) {
+      return perceptionStubs.tier;
+    }
+    if (
+      call.method === "perception.health" &&
+      perceptionStubs.health !== undefined
+    ) {
+      return perceptionStubs.health;
+    }
+    if (opts.respondTo) return opts.respondTo(call);
+    return { ok: true };
+  };
 
   transport.onPluginSend = (env) => {
     if (env.type !== "request") return;
@@ -164,6 +197,22 @@ export function createPluginHarness(
         args: payload,
         version: PROTOCOL_VERSION,
       });
+    },
+    pushPerceptionDetection(batch) {
+      transport.pushFromHost({
+        id: `perception-${Date.now()}`,
+        type: "event",
+        method: "perception.detections",
+        capability: "perception.subscribe",
+        args: batch,
+        version: PROTOCOL_VERSION,
+      });
+    },
+    stubPerceptionTier(info) {
+      perceptionStubs.tier = info;
+    },
+    stubPerceptionHealth(health) {
+      perceptionStubs.health = health;
     },
     pushEvent(method, args, capability = "") {
       transport.pushFromHost({
