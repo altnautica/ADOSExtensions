@@ -30,7 +30,7 @@ class SiyiTrackerBridge:
         self,
         ctx,
         *,
-        camera_id: str = "siyi-pod",
+        camera_id: str = "main",
         model_id: str = "siyi-pod-tracker",
         class_label: str = "subject",
     ) -> None:
@@ -39,6 +39,11 @@ class SiyiTrackerBridge:
         self._model_id = model_id
         self._class_label = class_label
         self._frame_id = 0
+
+    @property
+    def camera_id(self) -> str:
+        """The advertised leg id the republished boxes are stamped with."""
+        return self._camera_id
 
     async def publish_box(
         self,

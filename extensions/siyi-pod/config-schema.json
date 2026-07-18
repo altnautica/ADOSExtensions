@@ -37,12 +37,6 @@
       "default": 1,
       "title": "MAVLink system id",
       "description": "The aircraft system id the pod's mirrored MAVLink frames use."
-    },
-    "camera_id": {
-      "type": "string",
-      "default": "siyi-pod",
-      "title": "Camera id",
-      "description": "The camera id stamped on the pod's republished tracker detections."
     }
   },
   "additionalProperties": true

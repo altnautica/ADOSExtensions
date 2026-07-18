@@ -178,6 +178,9 @@ async def test_start_negotiates_and_registers_components():
     assert (100, "camera") in ctx.mavlink.components
     assert "ATTITUDE" in ctx.mavlink.subscriptions
     assert any(ch == "siyi" for ch, _ in ctx.telemetry.extended)
+    # The tracker stamps its box with the primary advertised leg id (not the
+    # old "siyi-pod" placeholder), so the overlay renders it on the shown leg.
+    assert plugin._tracker.camera_id == "main"
     await plugin.on_stop(ctx)
 
 

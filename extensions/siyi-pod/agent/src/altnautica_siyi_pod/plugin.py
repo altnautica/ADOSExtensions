@@ -123,7 +123,6 @@ class SiyiPodPlugin:
     # -- lifecycle --------------------------------------------------------
     async def on_start(self, ctx: Any) -> None:
         self._ctx = ctx
-        camera_id = str(await self._cfg("camera_id", "siyi-pod"))
         system_id = int(await self._cfg("system_id", 1))
         self._host = str(await self._cfg("host", DEFAULT_HOST))
 
@@ -142,7 +141,10 @@ class SiyiPodPlugin:
         profile = await self._pod.negotiate()
 
         self._bridge = SiyiMavlinkBridge(ctx, system_id=system_id)
-        self._tracker = SiyiTrackerBridge(ctx, camera_id=camera_id)
+        # The pod tracks on its primary leg; stamp its republished box with that
+        # advertised leg id so the cockpit overlay (which keys detection boxes by
+        # cameraId to the shown leg) actually renders it.
+        self._tracker = SiyiTrackerBridge(ctx, camera_id=self._primary_leg())
 
         # Register the pod's MAVLink components so the standard gimbal/camera
         # surfaces light up (interop bonus; the plugin's own GCS half is the
@@ -229,6 +231,10 @@ class SiyiPodPlugin:
         if profile is not None and len(profile.sensors) >= 2:
             return ["main", "sub"]
         return ["main"]
+
+    def _primary_leg(self) -> str:
+        """The leg the pod tracks on — its primary EO stream (always ``main``)."""
+        return self._stream_layout()[0]
 
     def _default_assignment(self) -> dict[str, str]:
         """Which sensor each physical leg carries by default.
