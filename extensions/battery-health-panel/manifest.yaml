@@ -1,8 +1,26 @@
 schema_version: 2
 id: com.altnautica.battery-health-panel
 name: "ADOS Battery Health Panel"
-version: "1.1.0"
+version: "1.2.0"
 description: "Cell-level battery diagnostics, predictive time-to-min, and anomaly alerts."
+description_long: |
+  A per-drone diagnostics tab that reads the battery telemetry already on
+  the link and turns it into a health picture: per-cell voltages with the
+  weakest cell called out, pack voltage, current draw, consumed capacity,
+  and temperature. A predictive estimate projects time remaining until the
+  configured minimum from the recent discharge trend, and anomaly rules
+  flag cell divergence, a sudden voltage sag, and over-temperature so a
+  failing pack is caught before it is a problem in the air. Alerts raise a
+  notification and drop a marker so the event is easy to find later. The
+  panel is read-only and adds no load to the flight controller.
+features:
+  - "Per-cell voltages with the weakest cell highlighted"
+  - "Pack voltage, current, consumed capacity, and temperature at a glance"
+  - "Predictive time-to-minimum from the recent discharge trend"
+  - "Anomaly rules: cell divergence, voltage sag, and over-temperature"
+  - "Notification and a recording marker on each anomaly"
+telemetry_fields:
+  - "battery"
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/battery-health-panel"
 license: "GPL-3.0-or-later"
@@ -19,7 +37,6 @@ gcs:
   permissions:
     - id: ui.slot.node-detail-tab
     - id: ui.slot.notification-channel
-    - id: ui.slot.settings-section
     - id: telemetry.subscribe.battery
     - id: telemetry.subscribe.mavlink
     - id: recording.write

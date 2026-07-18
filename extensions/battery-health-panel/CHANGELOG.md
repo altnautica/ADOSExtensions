@@ -2,6 +2,15 @@
 
 All notable changes to the Battery Health Panel.
 
+## 1.2.0
+
+- Enriched manifest: a long description, a feature list, and the `battery`
+  telemetry field, so the extension detail page and the registry surface the
+  panel's real capabilities instead of a one-line summary.
+- Dropped the unused `ui.slot.settings-section` capability. The panel
+  contributes a node-detail tab and notifications only; it never rendered a
+  settings section.
+
 ## 1.1.0
 
 - Manifest on the current contribution platform (schema_version 2): the panel
