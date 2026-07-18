@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.1
+
+- The console now has a per-leg source selector (main / sub) so the operator
+  can reassign a leg to EO-wide or the on-pod split/PiP composite through the
+  plugin; previously those sources were unreachable (the reassignment command
+  had no UI). The live assignment is published in the pod state so each
+  selector shows the current source.
+- The pod's on-pod AI-track box is now read each telemetry tick and
+  republished onto the shared `vision.detection` bus (stamped with the primary
+  leg id), so cockpit click-to-track, the locked-target gate, and track
+  geolocation work; a track drop publishes one "lost" batch. The exact
+  AI-track output wire format is a placeholder resolved on the bench.
+
 ## 0.3.0
 
 - Two-stream model corrected: the pod serves exactly two concurrent RTSP

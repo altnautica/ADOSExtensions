@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "altnautica-siyi-pod"
-version = "0.3.0"
+version = "0.3.1"
 description = "ADOS plugin: SIYI optical-pod driver (agent half)."
 readme = "../README.md"
 license = { text = "GPL-3.0-or-later" }
