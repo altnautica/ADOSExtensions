@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ados.plugins.manifest import (
@@ -84,6 +84,25 @@ _ARDUCOPTER_GUIDED_NOGPS = 20
 # PX4 packs the main mode into bits 16-23 of custom_mode; OFFBOARD is 6.
 _PX4_MAIN_MODE_OFFBOARD = 6
 
+# Fallback frame size when a detection batch carries no source-frame
+# dimensions (a pre-frame-size agent). The common UVC capture size.
+_DEFAULT_FRAME_W = 640
+_DEFAULT_FRAME_H = 480
+
+
+@dataclass
+class _LastCommand:
+    """The last follow command emitted, retained so the loop can HOLD it while
+    coasting on a frozen bounding box instead of re-projecting stale image data
+    through fresh vehicle attitude."""
+
+    bbox: Any
+    position_frame: bytes
+    gimbal_frame: bytes | None
+    range_m: float
+    distance_setpoint_m: float
+    height_setpoint_m: float
+
 
 def _is_guided_mode(autopilot: int, custom_mode: int) -> bool:
     """Whether ``custom_mode`` is a guided/offboard mode for ``autopilot``.
@@ -105,7 +124,7 @@ def get_manifest() -> PluginManifest:
     return PluginManifest(
         schema_version=2,
         id=PLUGIN_ID,
-        version="0.2.2",
+        version="0.2.3",
         name="ADOS Follow-Me",
         description=(
             "Locks onto an operator-designated subject and flies a "
@@ -177,6 +196,22 @@ class _FcState:
         self.guided = False
 
 
+class _GimbalState:
+    """Gimbal boresight attitude reported by the FC, in the PROJECTION's
+    convention (pitch degrees positive = down, yaw degrees positive = right of
+    the nose). MOUNT_ORIENTATION reports pitch negative = down, so the handler
+    negates it on the way in. ``have_reported`` stays False until a real
+    attitude arrives, so the follow loop knows to fall back to the last
+    commanded angle (then to the fixed mount)."""
+
+    __slots__ = ("pitch_deg", "yaw_deg", "have_reported")
+
+    def __init__(self) -> None:
+        self.pitch_deg = 0.0
+        self.yaw_deg = 0.0
+        self.have_reported = False
+
+
 class FollowMePlugin:
     """Lifecycle-hook plugin class the runner instantiates with no args."""
 
@@ -184,6 +219,14 @@ class FollowMePlugin:
         self._ctx: Any = None
         self._pose = _Pose()
         self._fc = _FcState()
+        self._gimbal = _GimbalState()
+        # The last gimbal angle the plugin itself commanded (projection
+        # convention), used as the boresight estimate until the FC reports a
+        # real gimbal attitude.
+        self._commanded_gimbal: tuple[float, float] | None = None
+        # The real source-frame size from the most recent detection batch that
+        # carried one; None until the first sized batch arrives.
+        self._last_frame_wh: tuple[int, int] | None = None
         # The shared locked-target safety gate: adopt only the engine's
         # designated target, coast briefly, stop on uncertain/lost, never
         # silently re-lock. One audited implementation for every behaviour.
@@ -199,6 +242,9 @@ class FollowMePlugin:
         # config read yet) accepts any camera; once set, _on_batch filters to
         # it, so a runtime designate_camera change takes effect immediately.
         self._active_camera: str | None = None
+        # The last commanded follow setpoint, held (re-sent) while coasting on
+        # a frozen bbox so the setpoint does not drift on stale image data.
+        self._last_command: _LastCommand | None = None
 
     # -- lifecycle ----------------------------------------------------
 
@@ -217,6 +263,11 @@ class FollowMePlugin:
             "GLOBAL_POSITION_INT", self._on_global_position
         )
         await ctx.mavlink.subscribe("HEARTBEAT", self._on_heartbeat)
+        # The gimbal's reported boresight attitude, so the image-to-ground
+        # projection uses where the gimbal actually points, not a fixed guess.
+        await ctx.mavlink.subscribe(
+            "MOUNT_ORIENTATION", self._on_mount_orientation
+        )
 
         # Detection stream. The operator designates through the vision engine;
         # we follow whatever track it locks (see _on_batch), so there is no
@@ -246,6 +297,7 @@ class FollowMePlugin:
                 pass
             self._loop_task = None
         self._tracker.drop()
+        self._last_command = None
         if self._ctx is not None:
             await self._publish_state(force=True, active=False)
 
@@ -297,6 +349,19 @@ class FollowMePlugin:
         self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
         self._fc.guided = _is_guided_mode(autopilot, custom_mode)
 
+    def _on_mount_orientation(self, msg: dict[str, Any]) -> None:
+        # MOUNT_ORIENTATION carries degrees: pitch negative = down, yaw
+        # relative to the vehicle heading (positive to the right). The
+        # projection wants pitch positive = down, so negate it; the yaw
+        # convention already matches.
+        pitch = msg.get("pitch")
+        yaw = msg.get("yaw")
+        if pitch is None or yaw is None:
+            return
+        self._gimbal.pitch_deg = -float(pitch)
+        self._gimbal.yaw_deg = float(yaw)
+        self._gimbal.have_reported = True
+
     def _on_attitude(self, msg: dict[str, Any]) -> None:
         self._pose.roll = float(msg.get("roll", 0.0))
         self._pose.pitch = float(msg.get("pitch", 0.0))
@@ -327,6 +392,12 @@ class FollowMePlugin:
             and batch.camera_id != self._active_camera
         ):
             return
+        # Cache the real source-frame size the bbox pixels live in, so the
+        # projection uses the true resolution instead of a guess.
+        fw = getattr(batch, "frame_width", None)
+        fh = getattr(batch, "frame_height", None)
+        if fw and fh:
+            self._last_frame_wh = (int(fw), int(fh))
         # Hand the batch to the shared gate. It adopts the engine's designated
         # target (the one detection stamped with a track id + lock state) and
         # never chooses a target itself; the follow loop reads the effective
@@ -356,8 +427,10 @@ class FollowMePlugin:
         lock = self._tracker.effective_lock(now)
 
         if lock is EffectiveLock.LOST:
-            # Drop the lock entirely; require a fresh operator designate.
+            # Drop the lock entirely; require a fresh operator designate. The
+            # held setpoint goes with it, so a re-lock recomputes from scratch.
             self._tracker.drop()
+            self._last_command = None
             await self._publish_state(
                 active=True, lock_state=LOCK_LOST, commanding=False, force=True
             )
@@ -390,10 +463,29 @@ class FollowMePlugin:
         await self._command_follow(cfg, target.bbox)
 
     async def _command_follow(self, cfg: FollowConfig, bbox: BoundingBox) -> None:
-        frame_w, frame_h = self._frame_size_for(bbox)
+        # Coast hold: while the tracker holds LOCKED through the coast window it
+        # returns the SAME frozen bbox object from the last sighting. Re-
+        # projecting that stale bbox through fresh vehicle attitude each tick
+        # would drift the world setpoint on stale image data, so hold (re-send)
+        # the last commanded setpoint until a fresh detection replaces the bbox.
+        if self._last_command is not None and bbox is self._last_command.bbox:
+            await self._resend_last_command()
+            return
 
-        gimbal_pitch = 0.0
-        gimbal_yaw = 0.0
+        frame_w, frame_h = self._frame_size()
+
+        # Which pitch/yaw the camera boresight is actually at. A reported or
+        # commanded gimbal angle is the TOTAL orientation relative to the
+        # vehicle, so it replaces the fixed mount tilt rather than adding to it.
+        gimbal = self._gimbal_angles_deg(cfg)
+        if gimbal is None:
+            mount_pitch_deg = cfg.mount_pitch_deg
+            gimbal_pitch_deg = 0.0
+            gimbal_yaw_deg = 0.0
+        else:
+            mount_pitch_deg = 0.0
+            gimbal_pitch_deg, gimbal_yaw_deg = gimbal
+
         setpoint = projection.project_follow_setpoint(
             bbox_x=bbox.x,
             bbox_y=bbox.y,
@@ -410,9 +502,9 @@ class FollowMePlugin:
             agl_m=self._pose.rel_alt_m,
             follow_distance_m=cfg.follow_distance_m,
             follow_height_m=cfg.follow_height_m,
-            mount_pitch_deg=cfg.mount_pitch_deg,
-            gimbal_pitch_deg=gimbal_pitch,
-            gimbal_yaw_deg=gimbal_yaw,
+            mount_pitch_deg=mount_pitch_deg,
+            gimbal_pitch_deg=gimbal_pitch_deg,
+            gimbal_yaw_deg=gimbal_yaw_deg,
         )
         if setpoint is None:
             # No ground intersection (subject above the horizon / no AGL).
@@ -421,14 +513,15 @@ class FollowMePlugin:
             )
             return
 
-        frame = mavlink_frames.build_position_target(
+        position_frame = mavlink_frames.build_position_target(
             lat_deg=setpoint.lat_deg,
             lon_deg=setpoint.lon_deg,
             alt_rel_m=setpoint.alt_rel_m,
             yaw_rad=setpoint.yaw_rad,
         )
-        await self._ctx.mavlink.send(frame)
+        await self._ctx.mavlink.send(position_frame)
 
+        gimbal_frame: bytes | None = None
         if cfg.gimbal_point:
             target = setpoint.target
             pitch_deg, yaw_deg = mavlink_frames.gimbal_angles_for_target(
@@ -437,6 +530,10 @@ class FollowMePlugin:
                 bearing_rad=target.bearing_rad,
                 vehicle_yaw_rad=self._pose.yaw,
             )
+            # Cache the commanded angle (projection convention: pitch positive =
+            # down, so negate the negative-down gimbal command) as the boresight
+            # estimate until the FC reports a real attitude.
+            self._commanded_gimbal = (-pitch_deg, yaw_deg)
             gimbal_frame = mavlink_frames.build_gimbal_pitchyaw(
                 pitch_deg=pitch_deg, yaw_deg=yaw_deg
             )
@@ -448,7 +545,16 @@ class FollowMePlugin:
                 self._ctx.log.info(
                     "follow_me_gimbal_skipped", error=str(exc)
                 )
+                gimbal_frame = None
 
+        self._last_command = _LastCommand(
+            bbox=bbox,
+            position_frame=position_frame,
+            gimbal_frame=gimbal_frame,
+            range_m=setpoint.target.ground_range_m,
+            distance_setpoint_m=cfg.follow_distance_m,
+            height_setpoint_m=cfg.follow_height_m,
+        )
         await self._publish_state(
             active=True,
             lock_state=LOCK_LOCKED,
@@ -458,18 +564,54 @@ class FollowMePlugin:
             height_setpoint_m=cfg.follow_height_m,
         )
 
-    def _frame_size_for(self, bbox: BoundingBox) -> tuple[int, int]:
-        """Frame dimensions the bbox lives in.
+    async def _resend_last_command(self) -> None:
+        """Re-send the last commanded setpoint (and gimbal frame) unchanged,
+        holding position while coasting on a frozen bbox."""
+        cmd = self._last_command
+        if cmd is None:
+            return
+        await self._ctx.mavlink.send(cmd.position_frame)
+        if cmd.gimbal_frame is not None:
+            try:
+                await self._ctx.mavlink.send(cmd.gimbal_frame)
+            except Exception as exc:  # noqa: BLE001
+                self._ctx.log.info("follow_me_gimbal_skipped", error=str(exc))
+        await self._publish_state(
+            active=True,
+            lock_state=LOCK_LOCKED,
+            commanding=True,
+            range_m=cmd.range_m,
+            distance_setpoint_m=cmd.distance_setpoint_m,
+            height_setpoint_m=cmd.height_setpoint_m,
+        )
 
-        The detection batch does not carry the frame size through the
-        SDK callback, so the projection uses the configured capture
-        resolution. The bbox is in source-frame pixels, so we infer a
-        frame at least as large as the box and default to the common UVC
-        640x480 frame otherwise.
+    def _frame_size(self) -> tuple[int, int]:
+        """The source-frame size the bbox pixels live in.
+
+        Uses the real dimensions the detection batch carried (cached in
+        _on_batch); falls back to the common UVC 640x480 frame only when a
+        batch arrived without them (a pre-frame-size agent).
         """
-        w = max(640, int(bbox.x + bbox.width))
-        h = max(480, int(bbox.y + bbox.height))
-        return (w, h)
+        if self._last_frame_wh is not None:
+            return self._last_frame_wh
+        return (_DEFAULT_FRAME_W, _DEFAULT_FRAME_H)
+
+    def _gimbal_angles_deg(
+        self, cfg: FollowConfig
+    ) -> tuple[float, float] | None:
+        """The camera boresight pitch/yaw (projection convention: pitch
+        positive = down, yaw positive = right of the nose), or ``None`` for a
+        fixed camera whose tilt is the configured mount pitch.
+
+        Preference: the FC's reported gimbal attitude, then the last angle the
+        plugin commanded the gimbal to (only when gimbal pointing is enabled),
+        then ``None`` (no gimbal in play).
+        """
+        if self._gimbal.have_reported:
+            return (self._gimbal.pitch_deg, self._gimbal.yaw_deg)
+        if cfg.gimbal_point and self._commanded_gimbal is not None:
+            return self._commanded_gimbal
+        return None
 
     # -- state read-back ---------------------------------------------
 

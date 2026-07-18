@@ -491,6 +491,192 @@ def test_mount_pitch_live_value_overrides_the_default() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Projection inputs: real frame size, real gimbal attitude, and the coast hold.
+# ---------------------------------------------------------------------------
+
+
+def _spy_projection(monkeypatch: Any) -> dict[str, Any]:
+    """Record the kwargs the follow loop passes to project_follow_setpoint,
+    while still calling through to the real geometry."""
+    captured: dict[str, Any] = {}
+    real = follow_me.projection.project_follow_setpoint
+
+    def spy(**kwargs: Any) -> Any:
+        captured.clear()
+        captured.update(kwargs)
+        return real(**kwargs)
+
+    monkeypatch.setattr(follow_me.projection, "project_follow_setpoint", spy)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_real_frame_size_from_the_batch_feeds_the_projection(
+    monkeypatch: Any,
+) -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": False,
+            "designate_camera": "uvc-0",
+            "camera_hfov_deg": 70.0,
+            "mount_pitch_deg": 45.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    plugin._active_camera = "uvc-0"
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    # A v2 batch carrying its real source-frame size, delivered through the
+    # real _on_batch path so the plugin caches the dimensions.
+    batch = DetectionBatch(
+        model_id="coco-person",
+        camera_id="uvc-0",
+        frame_id=1,
+        ts_ms=0,
+        frame_width=1920,
+        frame_height=1080,
+        detections=[
+            Detection(
+                bbox=BoundingBox(955.0, 535.0, 10.0, 10.0),
+                class_label="person",
+                confidence=0.9,
+                track_id=7,
+                lock_state=LOCK_LOCKED,
+            )
+        ],
+    )
+    plugin._on_batch(batch)
+
+    captured = _spy_projection(monkeypatch)
+    await plugin._tick()
+
+    # The projection is fed the batch's real dimensions, not a bbox guess.
+    assert captured["frame_width"] == 1920
+    assert captured["frame_height"] == 1080
+
+
+@pytest.mark.asyncio
+async def test_reported_gimbal_attitude_feeds_the_projection(
+    monkeypatch: Any,
+) -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": True,
+            "designate_camera": "uvc-0",
+            "camera_hfov_deg": 70.0,
+            "mount_pitch_deg": 30.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    # MOUNT_ORIENTATION reports the gimbal pitched 40 deg down (negative = down)
+    # and yawed 15 deg to the right of the nose.
+    plugin._on_mount_orientation({"pitch": -40.0, "yaw": 15.0})
+
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
+
+    captured = _spy_projection(monkeypatch)
+    await plugin._tick()
+
+    # The reported attitude (converted to projection convention: +40 down) is
+    # the boresight; the fixed mount pitch does not stack on top of it.
+    assert captured["gimbal_pitch_deg"] == 40.0
+    assert captured["gimbal_yaw_deg"] == 15.0
+    assert captured["mount_pitch_deg"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_the_last_commanded_gimbal_angle(
+    monkeypatch: Any,
+) -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": True,
+            "designate_camera": "uvc-0",
+            "camera_hfov_deg": 70.0,
+            "mount_pitch_deg": 30.0,
+            "follow_distance_m": 6.0,
+            "follow_height_m": 4.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    # Tick 1: no gimbal report yet, so the loop bootstraps on the fixed mount
+    # pitch, then commands the gimbal and caches that angle.
+    _seed_lock(
+        plugin,
+        track_id=7,
+        lock_state=LOCK_LOCKED,
+        bbox=BoundingBox(315.0, 235.0, 10.0, 10.0),
+    )
+    await plugin._tick()
+    assert plugin._commanded_gimbal is not None
+    last_commanded = plugin._commanded_gimbal
+
+    # Tick 2 on a FRESH sighting (a new bbox, so not coasting): still no report,
+    # so the projection uses the last commanded gimbal angle, not the mount.
+    captured = _spy_projection(monkeypatch)
+    _seed_lock(
+        plugin,
+        track_id=7,
+        lock_state=LOCK_LOCKED,
+        bbox=BoundingBox(320.0, 240.0, 12.0, 12.0),
+    )
+    await plugin._tick()
+
+    assert (captured["gimbal_pitch_deg"], captured["gimbal_yaw_deg"]) == (
+        last_commanded
+    )
+    assert captured["mount_pitch_deg"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_coasting_holds_the_last_setpoint_without_recomputing(
+    monkeypatch: Any,
+) -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": False,
+            "designate_camera": "uvc-0",
+            "camera_hfov_deg": 70.0,
+            "mount_pitch_deg": 45.0,
+            "follow_distance_m": 6.0,
+            "follow_height_m": 4.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    # One sighting, one fresh command.
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
+    await plugin._tick()
+    assert len(ctx.mavlink.sent) == 1
+    first_frame = ctx.mavlink.sent[-1]
+
+    # Tick again with NO new detection (the tracker holds the same frozen bbox
+    # within the coast window) and a CHANGED vehicle attitude. The loop must
+    # hold: re-send the same frame, never re-project the stale bbox.
+    plugin._on_attitude({"roll": 0.0, "pitch": 0.0, "yaw": 1.0})
+    captured = _spy_projection(monkeypatch)
+    await plugin._tick()
+
+    assert captured == {}, "coasting must not re-project the stale bbox"
+    assert len(ctx.mavlink.sent) == 2
+    assert ctx.mavlink.sent[-1] == first_frame, "the held setpoint is re-sent"
+    states = _state_events(ctx)
+    assert states[-1]["commanding"] is True
+
+
+# ---------------------------------------------------------------------------
 # Detection routing: the plugin follows the engine's designated track.
 # The operator designates through the vision engine (the GCS overlay calls the
 # engine's designate route); the engine's single-object tracker stamps the one

@@ -161,6 +161,8 @@ def _install_sdk_stub() -> None:
         frame_id: int
         ts_ms: int
         detections: list[Detection] = field(default_factory=list)
+        frame_width: int | None = None
+        frame_height: int | None = None
 
     vision.BoundingBox = BoundingBox
     vision.Detection = Detection

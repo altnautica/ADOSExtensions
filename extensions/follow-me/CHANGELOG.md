@@ -4,6 +4,24 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.3]
+
+### Fixed
+
+- The image-to-ground projection now uses the detection batch's real source
+  frame size instead of guessing it from the bounding box, so the camera
+  center and angular scale are correct and the ground setpoint lands where
+  the subject is.
+- When the gimbal points at the subject, the projection now uses the gimbal's
+  actual reported attitude (MOUNT_ORIENTATION), falling back to the last angle
+  the plugin commanded, then the fixed mount tilt. It previously assumed a
+  fixed forward boresight while commanding the gimbal elsewhere, which threw
+  the ground setpoint off.
+- While coasting on the last sighting through the brief lock-hold window, the
+  loop now holds the last commanded setpoint instead of re-projecting the
+  frozen bounding box through fresh vehicle attitude, so the setpoint no
+  longer drifts on stale image data.
+
 ## [0.2.2]
 
 ### Added
