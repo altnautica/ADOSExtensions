@@ -2,6 +2,15 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.2.0
+
+- Manifest on the current contribution platform (schema_version 2): the control
+  tab moves from the fleet-wide FC-config slot to a per-node detail tab
+  (`node.detail.tab`), and the agent half is marked per-drone so each drone
+  keeps its own gimbal settings. Resolves the earlier schema_version 1 manifest
+  that already declared a schema-2 `target_actions` block. The reticle overlay
+  and the aim-at-target action are unchanged.
+
 ## 1.1.1
 
 Adds an "Aim at this target" `target.action`: a visual-servo controller

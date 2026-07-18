@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.1.1"
+version: "1.2.0"
 description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/mavlink-gimbal-v2"
@@ -14,8 +14,10 @@ compatibility:
   supported_boards: ["*"]
 
 agent:
+  runtime: python
   entrypoint: "altnautica_gimbal_v2.plugin:GimbalV2Plugin"
   isolation: subprocess
+  per_drone_config: true
   permissions:
     - id: hardware.uart
     - id: mavlink.read
@@ -38,7 +40,7 @@ gcs:
   entrypoint: "gcs/plugin.bundle.js"
   isolation: iframe
   permissions:
-    - id: ui.slot.fc-tab
+    - id: ui.slot.node-detail-tab
     - id: ui.slot.video-overlay
     - id: ui.slot.notification-channel
     - id: ui.slot.settings-section
@@ -48,12 +50,14 @@ gcs:
     - id: mission.write
     - id: command.send
   contributes:
-    panels:
+    tabs:
       - id: gimbal-control
-        slot: fc.tab
+        slot: node.detail.tab
+        profile: ["drone"]
         title: "Gimbal"
         icon: "gimbal"
         order: 60
+    panels:
       - id: gimbal-reticle
         slot: video.overlay
         title: "Gimbal reticle"
