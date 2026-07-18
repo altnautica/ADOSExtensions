@@ -31,6 +31,8 @@ export interface PodState {
   connected: boolean;
   firmware: string | null;
   capabilities: Partial<PodCapabilities>;
+  /** Which sensor source each physical leg (main/sub) currently carries. */
+  assignment: Record<string, string>;
   yaw_deg: number | null;
   pitch_deg: number | null;
   roll_deg: number | null;

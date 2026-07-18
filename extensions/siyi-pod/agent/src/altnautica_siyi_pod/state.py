@@ -22,6 +22,9 @@ class PodState:
     firmware: str | None = None
     # Which controls to show, mirrored from the negotiated capability profile.
     capabilities: dict[str, object] = field(default_factory=dict)
+    # Which sensor source each physical leg (main/sub) currently carries, so the
+    # console's per-leg source selector reflects the live assignment.
+    assignment: dict[str, str] = field(default_factory=dict)
     # Live readings (None until first read / for unsupported sensors).
     yaw_deg: float | None = None
     pitch_deg: float | None = None

@@ -206,6 +206,7 @@ class SiyiPodPlugin:
         self._state.connected = pod.negotiated
         self._state.firmware = pod.firmware
         self._state.capabilities = self._capabilities_dict()
+        self._state.assignment = dict(self._assignment)
         self._state.link_ok = pod.negotiated
 
     async def _try_renegotiate(self) -> None:
@@ -360,6 +361,8 @@ class SiyiPodPlugin:
             return
         await self._apply_stream_assignment(merged)
         await self._configure_video(self._host)
+        self._refresh_state()
+        await self._publish_state()
 
     # -- config -----------------------------------------------------------
     async def _cfg(self, key: str, default: Any) -> Any:

@@ -36,6 +36,15 @@ function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
+function strMap(v: unknown): Record<string, string> {
+  if (!isRecord(v)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (typeof val === "string") out[k] = val;
+  }
+  return out;
+}
+
 function normalise(raw: Record<string, unknown>): PodState {
   return {
     model: typeof raw.model === "string" ? raw.model : "Unknown SIYI pod",
@@ -43,6 +52,7 @@ function normalise(raw: Record<string, unknown>): PodState {
     connected: raw.connected === true,
     firmware: typeof raw.firmware === "string" ? raw.firmware : null,
     capabilities: isRecord(raw.capabilities) ? (raw.capabilities as never) : {},
+    assignment: strMap(raw.assignment),
     yaw_deg: num(raw.yaw_deg),
     pitch_deg: num(raw.pitch_deg),
     roll_deg: num(raw.roll_deg),

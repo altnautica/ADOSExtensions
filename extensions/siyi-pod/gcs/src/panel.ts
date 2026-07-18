@@ -12,7 +12,7 @@ import type { PluginContext } from "@altnautica/plugin-sdk";
 import * as cmd from "./commands";
 import { maxZoom, showControl } from "./capability";
 import type { PodStateStore } from "./pod-state";
-import { GIMBAL_MODES, type PodState } from "./types";
+import { GIMBAL_MODES, type PodCapabilities, type PodState } from "./types";
 
 export interface PanelHandle {
   destroy(): void;
@@ -84,9 +84,39 @@ export function mountPanel(
       );
     }
 
-    // Camera. Each pod sensor is now its own video stream (the cockpit stream
-    // switcher selects between them), so the panel keeps only the per-sensor
-    // controls (zoom, etc.), not a sensor-mux selector.
+    // Stream sources. The pod serves two concurrent legs (main + sub); this
+    // reassigns which sensor each leg carries, so the operator reaches EO-wide
+    // or the on-pod split composite (which are not third concurrent streams).
+    // Shown only when the pod has both legs and more than one assignable source.
+    const caps: Partial<PodCapabilities> = state?.capabilities ?? {};
+    const sources = Array.isArray(caps.streams) ? caps.streams : [];
+    const legs =
+      Array.isArray(caps.sensors) && caps.sensors.length >= 2
+        ? ["main", "sub"]
+        : [];
+    if (legs.length >= 2 && sources.length >= 2) {
+      const assignment = state?.assignment ?? {};
+      const streamRow: (Node | string)[] = [];
+      for (const leg of legs) {
+        const sel = el("select", { class: "siyi-sel" }) as HTMLSelectElement;
+        for (const src of sources) {
+          sel.appendChild(el("option", { value: src }, [sourceLabel(src)]));
+        }
+        const current = assignment[leg];
+        if (current && sources.includes(current)) sel.value = current;
+        sel.addEventListener("change", () =>
+          void cmd.setStreamSource(ctx, leg, sel.value),
+        );
+        streamRow.push(el("span", { class: "siyi-dim" }, [`${legLabel(leg)} `]));
+        streamRow.push(sel);
+      }
+      container.appendChild(section("Streams", streamRow));
+    }
+
+    // Camera. The pod serves two concurrent streams (main + sub); the cockpit
+    // switches the view between them, and the Streams selector above reassigns
+    // which sensor each leg carries. The panel keeps the per-sensor controls
+    // (zoom, photo, record) here.
     const cameraRow: (Node | string)[] = [];
     if (showControl(state, "zoom")) {
       const zoom = el("input", {
@@ -173,4 +203,23 @@ function section(title: string, children: (Node | string)[]): HTMLElement {
     el("div", { class: "siyi-section-title" }, [title]),
     el("div", { class: "siyi-row" }, children),
   ]);
+}
+
+function legLabel(leg: string): string {
+  return leg === "sub" ? "Sub" : "Main";
+}
+
+function sourceLabel(source: string): string {
+  switch (source) {
+    case "eo_zoom":
+      return "EO Zoom";
+    case "eo_wide":
+      return "EO Wide";
+    case "ir":
+      return "Thermal";
+    case "split":
+      return "Split";
+    default:
+      return source;
+  }
 }

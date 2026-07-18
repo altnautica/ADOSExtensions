@@ -10,6 +10,7 @@ function state(caps: Partial<PodCapabilities>): PodState {
     connected: true,
     firmware: null,
     capabilities: caps,
+    assignment: {},
     yaw_deg: null,
     pitch_deg: null,
     roll_deg: null,

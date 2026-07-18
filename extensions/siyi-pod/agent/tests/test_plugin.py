@@ -115,6 +115,9 @@ async def test_start_assigns_main_eo_sub_ir_zt30():
         C.STREAM_MAIN: C.IMG_SOURCE_EO_ZOOM,
         C.STREAM_SUB: C.IMG_SOURCE_IR,
     }
+    # The live assignment is published so the console's per-leg selector reflects
+    # it (main = EO-zoom, sub = IR).
+    assert plugin.state.assignment == {"main": "eo_zoom", "sub": "ir"}
     await plugin.on_stop(ctx)
 
 
@@ -134,6 +137,7 @@ async def test_reassign_stream_source_to_wide():
     legs = ctx.video.sources[-1]
     sub = next(leg for leg in legs if leg["id"] == "sub")
     assert sub["role"] == "eo_wide"
+    assert plugin.state.assignment["sub"] == "eo_wide"
     await plugin.on_stop(ctx)
 
 
