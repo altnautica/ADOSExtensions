@@ -86,6 +86,27 @@ importers:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@20.19.43)(happy-dom@15.11.7)
 
+  extensions/siyi-pod: {}
+
+  extensions/siyi-pod/gcs:
+    dependencies:
+      '@altnautica/plugin-sdk':
+        specifier: workspace:^
+        version: link:../../../packages/plugin-sdk
+    devDependencies:
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      happy-dom:
+        specifier: ^15.7.4
+        version: 15.11.7
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@20.19.43)(happy-dom@15.11.7)
+
   extensions/thermal-camera-flir-lepton-usb: {}
 
   extensions/thermal-camera-flir-lepton-usb/gcs:
