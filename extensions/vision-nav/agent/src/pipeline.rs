@@ -114,7 +114,7 @@ impl Plugin for VisionNavPlugin {
         // Seed the static health fields.
         {
             let mut h = self.health.lock().expect("health lock");
-            h.mode = Some(cfg.mode.as_str().to_string());
+            h.mode = Some(cfg.effective_mode().as_str().to_string());
             h.available_estimators = available_estimators().iter().map(|s| s.to_string()).collect();
             h.companion_state = Some(CompanionState::Inactive);
             h.recommended_camera_id = Some(cfg.camera.device_path.clone());
@@ -138,7 +138,10 @@ impl Plugin for VisionNavPlugin {
         self.spawn_heartbeat_tick(ctx, companion.clone());
 
         // ---- health publish tick -------------------------------------
-        self.spawn_health_tick(ctx);
+        // The engage Skill's read-back: engaged when the estimator is active
+        // and a mode other than Off is configured.
+        let engaged = cfg.active && cfg.mode != Mode::Off;
+        self.spawn_health_tick(ctx, engaged);
 
         // ---- the per-frame worker + frame subscription ---------------
         let (tx, rx) = mpsc::channel::<GrayFramePair>(8);
@@ -154,7 +157,7 @@ impl Plugin for VisionNavPlugin {
         );
         self.subscribe_frames(ctx, tx).await?;
 
-        eprintln!("vision-nav: started (mode={})", cfg.mode.as_str());
+        eprintln!("vision-nav: started (mode={})", cfg.effective_mode().as_str());
         Ok(())
     }
 
@@ -454,15 +457,28 @@ impl VisionNavPlugin {
         self.tasks.push(task);
     }
 
-    fn spawn_health_tick(&mut self, ctx: &PluginContext) {
+    fn spawn_health_tick(&mut self, ctx: &PluginContext, engaged: bool) {
         let ctx = ctx.clone();
         let health = self.health.clone();
         let task = tokio::spawn(async move {
+            let engage_state = if engaged { "active" } else { "idle" };
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             loop {
                 interval.tick().await;
                 let snapshot = health.lock().expect("health lock").to_value();
                 let _ = ctx.telemetry.extend("navigation", snapshot).await;
+                // The engage Skill reads this state event to reflect whether
+                // vision navigation is engaged (not a false-idle bar, Rule 44).
+                let _ = ctx
+                    .events
+                    .publish(
+                        "navigation.engage",
+                        Value::Map(vec![(
+                            Value::from("state"),
+                            Value::from(engage_state),
+                        )]),
+                    )
+                    .await;
             }
         });
         self.tasks.push(task);
@@ -482,16 +498,20 @@ pub fn build_estimator(
     ladder: Arc<ScaleLadder>,
     install_dir: &str,
 ) -> Box<dyn Estimator> {
+    // The engage Skill can disengage the estimator (active=false); the
+    // effective mode is then Off, so the null estimator runs and no pose is
+    // emitted.
+    let mode = cfg.effective_mode();
     if cfg.firmware.firmware == Firmware::Inav
         && matches!(
-            cfg.mode,
+            mode,
             Mode::VioOpenvins | Mode::VioVinsFusion | Mode::HybridOfPlusVio
         )
     {
         eprintln!("vision-nav: VIO not supported on iNav; falling back to off");
         return Box::new(NullEstimator);
     }
-    match cfg.mode {
+    match mode {
         Mode::Off => Box::new(NullEstimator),
         Mode::OpticalFlow => Box::new(OpticalFlowEstimator::new(cfg.flow_quality_min)),
         Mode::OpticalFlowDegraded => Box::new(OpticalFlowDegradedEstimator::new(
@@ -762,7 +782,7 @@ fn publish_health(
     let flow_scale_source = output.and_then(|o| o.flow_scale_source).map(|s| s.as_str().to_string());
 
     let inputs = PreArmInputs {
-        mode: cfg.mode,
+        mode: cfg.effective_mode(),
         companion_state,
         estimator_state,
         flow_quality: output.and_then(|o| o.flow_quality),

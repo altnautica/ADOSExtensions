@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.3.1"
+version: "0.3.2"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A camera and the IMU feed the flight controller a 30 Hz position estimate over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -130,7 +130,7 @@ gcs:
   isolation: iframe
   permissions:
     - id: ui.slot.node-detail-tab
-    - id: ui.slot.video-overlay
+    - id: ui.slot.flight-skill
     - id: ui.slot.notification-channel
     - id: telemetry.subscribe.navigation
     - id: command.send
@@ -146,5 +146,21 @@ gcs:
       - id: vision-nav-degraded
         title: "Vision navigation degraded"
         severity: warning
+    # A cockpit Skill that engages / disengages the estimator. Arming it feeds
+    # the flight controller a position estimate over MAVLink, so the toggle
+    # confirms before it engages rather than firing on a single keypress. The
+    # agent reads the `active` per-drone key live and idles vision navigation
+    # (effective mode off, no pose emitted) when disengaged.
+    skills:
+      - id: engage
+        label: "Engage"
+        icon: navigation
+        category: navigation
+        toggle: true
+        confirm: true
+        arm_requirement: any
+        default_binding: { key: "shift+n" }
+        activation: { via: config, config_key: active }
+        state: { via: event, topic: "navigation.engage" }
   locales:
     - en

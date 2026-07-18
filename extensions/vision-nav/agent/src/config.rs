@@ -208,6 +208,13 @@ impl Default for PreArmConfig {
 #[derive(Debug, Clone)]
 pub struct VisionNavConfig {
     pub mode: Mode,
+    /// Whether the estimator is engaged. When false the effective mode is
+    /// `Off`: the pipeline runs the null estimator and emits no pose, so the
+    /// flight controller falls back to its own estimator sources. The engage
+    /// Skill toggles this per-drone key so the operator arms and disarms
+    /// vision navigation without changing the configured `mode`. Defaults to
+    /// true so an existing config with no `active` key runs its mode as before.
+    pub active: bool,
     pub camera: CameraConfig,
     pub secondary_camera: Option<CameraConfig>,
     pub rangefinder: RangefinderConfig,
@@ -217,10 +224,24 @@ pub struct VisionNavConfig {
     pub flow_quality_min: i32,
 }
 
+impl VisionNavConfig {
+    /// The mode the pipeline actually runs. The configured `mode` when the
+    /// estimator is engaged; `Off` when disengaged so the null estimator runs
+    /// and no pose reaches the flight controller.
+    pub fn effective_mode(&self) -> Mode {
+        if self.active {
+            self.mode
+        } else {
+            Mode::Off
+        }
+    }
+}
+
 impl Default for VisionNavConfig {
     fn default() -> Self {
         Self {
             mode: Mode::OpticalFlow,
+            active: true,
             camera: CameraConfig::default(),
             secondary_camera: None,
             rangefinder: RangefinderConfig::default(),
@@ -252,6 +273,11 @@ impl VisionNavConfig {
         if let Some(v) = map.get("mode").and_then(Value::as_str) {
             cfg.mode = Mode::parse(v)
                 .ok_or_else(|| ConfigError(format!("unknown mode {v:?}")))?;
+        }
+        // The engage Skill writes this per-drone flag. Absent = engaged, so an
+        // existing config keeps running its configured mode.
+        if let Some(b) = map.get("active").and_then(Value::as_bool) {
+            cfg.active = b;
         }
         if let Some(v) = map.get("camera") {
             cfg.camera = parse_camera(v)?;
@@ -517,5 +543,27 @@ mod tests {
         let v = map(&[("mode", Value::from("off")), ("bogus", Value::from(1i64))]);
         let cfg = VisionNavConfig::from_value(&v).unwrap();
         assert_eq!(cfg.mode, Mode::Off);
+    }
+
+    #[test]
+    fn active_defaults_true_and_effective_mode_follows_configured() {
+        // No active key: engaged, effective mode == configured mode.
+        let cfg = VisionNavConfig::from_value(&Value::Map(vec![])).unwrap();
+        assert!(cfg.active);
+        assert_eq!(cfg.effective_mode(), Mode::OpticalFlow);
+    }
+
+    #[test]
+    fn disengaged_effective_mode_is_off() {
+        // active=false disengages: the effective mode is Off regardless of the
+        // configured mode, so the null estimator runs and no pose is emitted.
+        let v = map(&[
+            ("mode", Value::from("optical_flow")),
+            ("active", Value::from(false)),
+        ]);
+        let cfg = VisionNavConfig::from_value(&v).unwrap();
+        assert!(!cfg.active);
+        assert_eq!(cfg.mode, Mode::OpticalFlow);
+        assert_eq!(cfg.effective_mode(), Mode::Off);
     }
 }

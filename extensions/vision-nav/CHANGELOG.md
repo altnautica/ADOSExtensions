@@ -2,7 +2,17 @@
 
 All notable changes to the Vision Navigation extension.
 
-## [0.3.1]
+## [0.3.2]
+
+- Added an Engage cockpit Skill that arms and disarms vision navigation. The
+  Skill toggles a per-drone `active` flag the agent reads live; when
+  disengaged the effective mode is off, so the null estimator runs and no pose
+  is emitted and the flight controller falls back to its own sources. The
+  toggle confirms before it engages, and the agent publishes an engage
+  read-back so the Skill Bar reflects the true engaged state.
+- Dropped the unused `ui.slot.video-overlay` capability. The extension
+  contributes a node-detail tab, a notification, and now the Engage Skill; it
+  never rendered a video overlay.
 
 - Fixed the live telemetry subscription: the panel requested the
   `navigation` telemetry topic but the manifest granted only the bare
