@@ -180,6 +180,12 @@ class SiyiPod:
         self._require("ai_track")
         await self._session.command(C.ai_track_stop())
 
+    async def read_track_box(self) -> C.TrackBox | None:
+        """Read the pod's live AI-track box (None when it reports no track)."""
+        self._require("ai_track")
+        reply = await self._session.request(C.request_track_box())
+        return C.decode_track_box(reply.data)
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, float(value)))

@@ -123,6 +123,9 @@ class SiyiPodPlugin:
         self._nonces: dict[str, int] = {}
         # Which sensor each physical leg (main/sub) currently carries.
         self._assignment: dict[str, str] = {}
+        # Whether the pod is currently reporting an AI-track box (so a drop
+        # publishes one "lost" batch rather than an empty batch every tick).
+        self._track_present = False
         self._host = DEFAULT_HOST
         self._control_task: asyncio.Task | None = None
         self._telemetry_task: asyncio.Task | None = None
@@ -556,9 +559,49 @@ class SiyiPodPlugin:
                 )
         except Exception:  # noqa: BLE001
             pass
+        await self.poll_track_once()
         self._state.frames_received = session.frames_received
         self._state.link_ok = True
         await self._publish_state()
+
+    async def poll_track_once(self) -> None:
+        """Read the pod's AI-track box and republish it onto the shared bus.
+
+        The pod owns the track loop (it detects and self-slews with no companion
+        NPU); this mirrors its current box onto ``vision.detection`` so the
+        cockpit click-to-track overlay, the locked-target safety gate, and track
+        geolocation all work. Publishes an empty batch once when a track drops,
+        so consumers see the loss (never a silent stall).
+        """
+        pod = self._pod
+        tracker = self._tracker
+        if pod is None or tracker is None:
+            return
+        if not pod.negotiated or not pod.profile.supports("ai_track"):
+            return
+        try:
+            box = await pod.read_track_box()
+        except PodUnsupported:
+            return
+        except Exception:  # noqa: BLE001
+            return
+        if box is not None:
+            self._track_present = True
+            self._state.track_active = True
+            self._state.track_id = box.track_id
+            await tracker.publish_box(
+                x=box.x,
+                y=box.y,
+                width=box.width,
+                height=box.height,
+                track_id=box.track_id,
+                locked=box.locked,
+            )
+        elif self._track_present:
+            self._track_present = False
+            self._state.track_active = False
+            self._state.track_id = None
+            await tracker.publish_lost()
 
     async def _publish_state(self) -> None:
         payload = self._state.to_dict()

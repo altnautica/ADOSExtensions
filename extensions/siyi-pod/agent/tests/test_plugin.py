@@ -275,6 +275,38 @@ async def test_start_survives_unreachable_pod_and_recovers():
     await plugin.on_stop(ctx)
 
 
+async def test_pod_track_box_is_republished_to_vision():
+    # The pod owns the track loop; the plugin mirrors its box onto the shared
+    # detection bus, stamped with the primary advertised leg id so the cockpit
+    # overlay renders it. A drop publishes one "lost" batch, not a silent stall.
+    ctx = _Ctx()
+    transport = MockTransport(model=HW_ZT30, track_box=(7, 100, 120, 40, 60, True))
+    plugin = SiyiPodPlugin(transport_factory=lambda _cfg: transport)
+    await plugin.on_start(ctx)
+
+    await plugin.poll_track_once()
+    assert len(ctx.vision.published) >= 1
+    batch = ctx.vision.published[-1]
+    assert batch.camera_id == "main"
+    assert len(batch.detections) == 1
+    det = batch.detections[0]
+    assert det.track_id == 7
+    assert det.lock_state == "locked"
+    assert (det.bbox.x, det.bbox.y, det.bbox.width, det.bbox.height) == (100, 120, 40, 60)
+    assert plugin.state.track_active is True
+    assert plugin.state.track_id == 7
+
+    # The track drops: exactly one empty batch, then nothing further.
+    transport.track_box = None
+    await plugin.poll_track_once()
+    assert ctx.vision.published[-1].detections == []
+    assert plugin.state.track_active is False
+    published_after_lost = len(ctx.vision.published)
+    await plugin.poll_track_once()
+    assert len(ctx.vision.published) == published_after_lost  # no repeat empty batch
+    await plugin.on_stop(ctx)
+
+
 async def test_a2_mini_unsupported_controls_are_ignored_not_raised():
     ctx = _Ctx()
     plugin = SiyiPodPlugin(

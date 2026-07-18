@@ -38,10 +38,29 @@ def _round_trip(command: C.Command) -> None:
         C.set_image_source("main", "eo_zoom"),
         C.set_image_source("sub", "ir"),
         C.set_split_mode(True),
+        C.request_track_box(),
     ],
 )
 def test_command_frames_round_trip(command):
     _round_trip(command)
+
+
+def test_decode_track_box():
+    # PLACEHOLDER wire layout (status, track_id, x, y, w, h) — exercised so the
+    # republish path is covered; the real layout is bench-resolved (Rule 44).
+    payload = struct.pack("<BBHHHH", 0x01, 7, 100, 120, 40, 60)
+    box = C.decode_track_box(payload)
+    assert box is not None
+    assert box.track_id == 7
+    assert box.locked is True
+    assert (box.x, box.y, box.width, box.height) == (100.0, 120.0, 40.0, 60.0)
+    # A non-zero status with bit 0 clear = tracking but not locked.
+    unlocked = struct.pack("<BBHHHH", 0x02, 1, 0, 0, 0, 0)
+    assert C.decode_track_box(unlocked).locked is False
+    # Status 0 and truncated payloads mean no active track.
+    assert C.decode_track_box(bytes([0x00])) is None
+    assert C.decode_track_box(b"\x01\x02") is None
+    assert C.decode_track_box(b"") is None
 
 
 def test_set_image_source_payload():

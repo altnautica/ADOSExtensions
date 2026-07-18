@@ -110,6 +110,27 @@ async def test_zt30_assigns_image_source_and_split():
     await session.stop()
 
 
+async def test_read_track_box():
+    pod, session, transport = await make_pod(model=CP.HW_ZT30)
+    # No active track by default.
+    assert await pod.read_track_box() is None
+    transport.track_box = (3, 10, 20, 30, 40, True)
+    box = await pod.read_track_box()
+    assert box is not None
+    assert box.track_id == 3
+    assert box.locked is True
+    assert (box.x, box.y, box.width, box.height) == (10.0, 20.0, 30.0, 40.0)
+    await session.stop()
+
+
+async def test_read_track_box_gated_on_ai_track():
+    # The ZR10 has no on-pod tracker.
+    pod, session, _t = await make_pod(model=CP.HW_ZR10)
+    with pytest.raises(PodUnsupported):
+        await pod.read_track_box()
+    await session.stop()
+
+
 async def test_negotiate_survives_unreachable_pod():
     # A pod that never answers the identity query must not raise out of
     # negotiate; it stays on the conservative fallback until it appears.

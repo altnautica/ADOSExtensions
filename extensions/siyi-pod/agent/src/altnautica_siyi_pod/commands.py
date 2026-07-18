@@ -238,6 +238,23 @@ def ai_track_stop() -> Command:
     return Command(CMD_AI_TRACK, bytes([AI_TRACK_STOP_FLAG]))
 
 
+AI_TRACK_QUERY_FLAG = 0x02
+
+
+def request_track_box() -> Command:
+    """Read the pod's live AI-track box + lock state.
+
+    The pod owns the track loop (it detects and self-slews); this reads its
+    current box so the driver can republish it onto the shared detection bus.
+
+    PLACEHOLDER: the query sub-function and the output DATA layout (see
+    :func:`decode_track_box`) are SIYI SDK-PDF values we do NOT have — resolved
+    on the ZT30 bench. Exercised via MockTransport so the republish path is
+    CI-covered (Rule 44 — no invented wire value shipped as truth).
+    """
+    return Command(CMD_AI_TRACK, bytes([AI_TRACK_QUERY_FLAG]))
+
+
 # --- decoders ---------------------------------------------------------------
 class GimbalAttitude(NamedTuple):
     yaw_deg: float
@@ -276,3 +293,38 @@ def decode_current_zoom(data: bytes) -> float:
     if len(data) < 2:
         raise ValueError(f"zoom reply too short: {len(data)} bytes")
     return data[0] + (data[1] % 10) / 10.0
+
+
+class TrackBox(NamedTuple):
+    """The pod's current AI-track output: a box (pod-frame pixels) + lock."""
+
+    track_id: int
+    x: float
+    y: float
+    width: float
+    height: float
+    locked: bool
+
+
+def decode_track_box(data: bytes) -> TrackBox | None:
+    """Decode an AI-track output reply, or None when no track is active.
+
+    PLACEHOLDER DATA layout — status(1), track_id(1), then x / y / width /
+    height as uint16 each — all SDK-PDF, resolved on the ZT30 bench. A status of
+    0 (or a truncated payload) means no active track; a non-zero status means
+    the pod is tracking, with bit 0 = locked.
+    """
+    if len(data) < 1:
+        return None
+    status = data[0]
+    if status == 0 or len(data) < 10:
+        return None
+    track_id, x, y, width, height = struct.unpack_from("<BHHHH", data, 1)
+    return TrackBox(
+        track_id=track_id,
+        x=float(x),
+        y=float(y),
+        width=float(width),
+        height=float(height),
+        locked=bool(status & 0x01),
+    )

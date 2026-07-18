@@ -60,10 +60,14 @@ class MockTransport:
         laser_range_m: float = 42.0,
         firmware: str = "v1.2.3",
         answer_identity: bool = True,
+        track_box: tuple | None = None,
     ) -> None:
         self.model = model
         self.laser_range_m = laser_range_m
         self.firmware = firmware
+        # The AI-track box the mock reports (track_id, x, y, w, h, locked), or
+        # None for no active track; tests mutate it to drive the republish path.
+        self.track_box = track_box
         # When False the mock stays silent on the firmware / hardware-id queries,
         # simulating a pod that is not yet reachable (drives the retry path).
         self.answer_identity = answer_identity
@@ -163,6 +167,10 @@ class MockTransport:
         if cmd == C.CMD_SET_SPLIT_MODE and f.data:
             self.split_mode = bool(f.data[0])
             return self._ack(cmd, seq)
+        if cmd == C.CMD_AI_TRACK:
+            if f.data and f.data[0] == C.AI_TRACK_QUERY_FLAG:
+                return build_frame(C.CMD_AI_TRACK, self._track_payload(), seq=seq)
+            return self._ack(cmd, seq)
         # Every other need-ack command gets a generic ack so the session's
         # request future resolves.
         if f.ctrl & CTRL_NEED_ACK:
@@ -179,6 +187,13 @@ class MockTransport:
             0,
             0,
         )
+
+    def _track_payload(self) -> bytes:
+        if self.track_box is None:
+            return bytes([0x00])  # status 0 = no active track
+        tid, x, y, w, h, locked = self.track_box
+        status = 0x01 if locked else 0x02  # non-zero = tracking; bit 0 = locked
+        return struct.pack("<BBHHHH", status, tid, x, y, w, h)
 
     def push_attitude(self) -> None:
         """Deliver an unsolicited attitude frame (simulates a data stream)."""
