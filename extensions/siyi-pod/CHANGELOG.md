@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+
+- Two-stream model corrected: the pod serves exactly two concurrent RTSP
+  streams (`main` + `sub`), each assignable to a sensor, so a multi-sensor
+  pod (ZT6/ZT30) now advertises exactly those two legs (dropping the phantom
+  `/ir` leg) with distinct sources on start — `main` = EO-zoom, `sub` = IR.
+  The console reaches EO-wide or the on-pod split/PiP composite by reassigning
+  a leg's source (a new image-source command + `stream_assignment` config key;
+  the exact SIYI opcodes are placeholders resolved on the bench).
+- The republished AI-track box is stamped with the primary advertised leg id
+  (`main`) so the cockpit overlay renders it; the stale camera-id config key
+  is removed.
+- The plugin no longer fails to start when the pod is unreachable at boot: it
+  keeps the conservative fallback profile and re-negotiates until the pod
+  answers, then brings the gimbal, telemetry, and video online.
+- Capability profile reconciled: `sensors` are `eo_zoom` / `eo_wide` / `ir`,
+  with a distinct assignable-`streams` set (+ `split`) and `supports_pip`.
+
 ## 0.2.0
 
 - Multi-stream video: on start the plugin advertises one video leg per sensor

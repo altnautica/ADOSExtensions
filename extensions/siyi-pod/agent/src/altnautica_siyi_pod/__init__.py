@@ -10,7 +10,7 @@ laser range up to the flight controller over MAVLink.
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 
 PLUGIN_ID = "com.altnautica.siyi-pod"
 

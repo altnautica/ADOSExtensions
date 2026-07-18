@@ -19,7 +19,7 @@ import type { PodState } from "./types";
 import enLocale from "../../locales/en.json";
 
 const PLUGIN_ID = "com.altnautica.siyi-pod";
-const PLUGIN_VERSION = "0.1.0";
+const PLUGIN_VERSION = "0.3.0";
 
 let handles: { destroy(): void }[] = [];
 let rootEl: HTMLElement | null = null;
