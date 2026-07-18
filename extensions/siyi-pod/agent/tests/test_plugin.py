@@ -157,6 +157,29 @@ async def test_reassign_stream_source_to_split_enables_composite():
     await plugin.on_stop(ctx)
 
 
+async def test_video_source_apply_failure_is_surfaced(caplog):
+    # The host reports ok=False when the pipeline restart failed (config saved,
+    # streams not live). The plugin must warn, not swallow it (Rule 44).
+    import logging
+
+    class _FailVideo:
+        async def set_source(self, cameras):
+            return {
+                "ok": False,
+                "count": len(list(cameras)),
+                "persisted": True,
+                "restarted": False,
+            }
+
+    ctx = _Ctx()
+    ctx.video = _FailVideo()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    with caplog.at_level(logging.WARNING):
+        await plugin.on_start(ctx)
+    assert "video source apply did not go live" in caplog.text
+    await plugin.on_stop(ctx)
+
+
 async def test_configure_video_single_leg_for_a_single_sensor_pod():
     ctx = _Ctx(with_video=True)
     plugin = SiyiPodPlugin(

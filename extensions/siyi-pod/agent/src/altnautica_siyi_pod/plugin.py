@@ -311,9 +311,15 @@ class SiyiPodPlugin:
             return
         cameras = self._video_legs(host)
         try:
-            await video.set_source(cameras)
-        except Exception:  # noqa: BLE001
-            log.info("video source auto-config unavailable; using operator config")
+            reply = await video.set_source(cameras)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("video source auto-config failed: %s", exc)
+            return
+        # The host reports ok=False when the config saved but the pipeline
+        # restart failed (streams not live). Surface it — a failed apply must be
+        # visible, not silently swallowed.
+        if isinstance(reply, dict) and reply.get("ok") is not True:
+            log.warning("video source apply did not go live: %s", reply)
 
     async def _apply_stream_assignment(self, assignment: dict[str, str]) -> None:
         """Route each physical leg to its assigned sensor on the pod.

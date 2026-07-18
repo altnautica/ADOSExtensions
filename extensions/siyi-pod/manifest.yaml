@@ -40,7 +40,7 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.99.177"
+  ados_version: ">=0.99.179"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "x86"]
 
