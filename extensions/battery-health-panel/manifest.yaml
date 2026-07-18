@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 id: com.altnautica.battery-health-panel
 name: "ADOS Battery Health Panel"
-version: "1.0.3"
+version: "1.1.0"
 description: "Cell-level battery diagnostics, predictive time-to-min, and anomaly alerts."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/battery-health-panel"
@@ -9,24 +9,25 @@ license: "GPL-3.0-or-later"
 risk: low
 
 compatibility:
-  ados_version: ">=0.10.0"
-  gcs_version: ">=0.5.0"
+  ados_version: ">=0.99.125"
+  gcs_version: ">=0.56.0"
   supported_boards: ["*"]
 
 gcs:
   entrypoint: "gcs/plugin.bundle.js"
   isolation: iframe
   permissions:
-    - id: ui.slot.fc-tab
+    - id: ui.slot.node-detail-tab
     - id: ui.slot.notification-channel
     - id: ui.slot.settings-section
     - id: telemetry.subscribe.battery
     - id: telemetry.subscribe.mavlink
     - id: recording.write
   contributes:
-    panels:
+    tabs:
       - id: battery-health-tab
-        slot: fc.tab
+        slot: node.detail.tab
+        profile: ["drone"]
         title: "Battery Health"
         icon: "battery"
         order: 30

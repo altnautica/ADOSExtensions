@@ -2,6 +2,14 @@
 
 All notable changes to the Battery Health Panel.
 
+## 1.1.0
+
+- Manifest on the current contribution platform (schema_version 2): the panel
+  moves from the fleet-wide FC-config slot to a per-node detail tab
+  (`node.detail.tab`) so it appears on each drone's detail panel, and the
+  compatibility floors are raised to the current platform. No functional change
+  to the diagnostics.
+
 ## 1.0.2
 
 Re-sign release with the unified first-party private key. No functional changes.
