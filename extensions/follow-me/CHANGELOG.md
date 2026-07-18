@@ -4,6 +4,21 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.5]
+
+### Changed
+
+- Replaced the hand-typed `designate_camera` string (defaulted to a device
+  name) with a camera picker: the operator pins the camera whose detections
+  the follow loop consumes, or leaves it on auto to follow the designated
+  subject on whatever camera the engine feeds.
+
+### Added
+
+- Two conservative tools for an assistant: `follow_status` (read the follow
+  read-back) and `stop_follow` (disarm). There is deliberately no start tool —
+  a follow begins only when an operator designates a subject in the cockpit.
+
 ## [0.2.4]
 
 ### Changed

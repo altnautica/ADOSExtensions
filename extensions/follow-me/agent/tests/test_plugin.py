@@ -822,3 +822,60 @@ def test_follow_state_topic_constant_matches_manifest() -> None:
     # owned now (the GCS overlay locks the engine via the host vision.designate
     # command), so the agent half carries no designate topic.
     assert FOLLOW_STATE_TOPIC == "follow.state"
+
+
+class _Tools:
+    def __init__(self) -> None:
+        self.handlers: dict[str, Any] = {}
+
+    def register(self, name: str, handler: Any) -> None:
+        self.handlers[name] = handler
+
+
+def test_camera_selector_resolution() -> None:
+    plugin = _make_plugin(_Ctx())
+    # By-requirement (auto / empty / None) accepts any camera (None filter).
+    assert plugin._resolve_designate_camera("auto") is None
+    assert plugin._resolve_designate_camera("") is None
+    assert plugin._resolve_designate_camera(None) is None
+    # A pinned id filters to that camera.
+    assert plugin._resolve_designate_camera("uvc-1") == "uvc-1"
+    assert plugin._resolve_designate_camera(" uvc-2 ") == "uvc-2"
+
+
+def test_default_designate_camera_accepts_any_camera() -> None:
+    # The manifest default is "auto", so a fresh install follows the designated
+    # subject on whatever camera the engine feeds (no hard-coded uvc-0 filter).
+    assert FollowConfig().designate_camera == "auto"
+    plugin = _make_plugin(_Ctx())
+    assert plugin._resolve_designate_camera(FollowConfig().designate_camera) is None
+
+
+@pytest.mark.asyncio
+async def test_stop_follow_tool_disarms_only() -> None:
+    ctx = _Ctx(config={"active": True})
+    plugin = _make_plugin(ctx)
+    plugin._register_tools(ctx)  # ctx has no tools surface -> no-op
+    # Call the handler directly (the host would route tool.invoke to it).
+    result = await plugin._tool_stop_follow({})
+    assert result == {"ok": True, "active": False}
+    assert await ctx.config_kv.get("active", None) is False
+
+
+@pytest.mark.asyncio
+async def test_follow_status_tool_reports_state() -> None:
+    ctx = _Ctx()
+    plugin = _make_plugin(ctx)
+    status = await plugin._tool_follow_status({})
+    # The read-back shape the GCS + an assistant consume.
+    assert "active" in status
+    assert "commanding" in status
+    assert "lock_state" in status
+
+
+def test_tools_registered_when_ctx_exposes_them() -> None:
+    ctx = _Ctx()
+    ctx.tools = _Tools()
+    plugin = _make_plugin(ctx)
+    plugin._register_tools(ctx)
+    assert set(ctx.tools.handlers) == {"follow_status", "stop_follow"}

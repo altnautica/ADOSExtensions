@@ -37,6 +37,7 @@ from ados.plugins.manifest import (
     Compatibility,
     PluginManifest,
 )
+from ados.sdk.cameras import CAMERA_SELECTOR_AUTO
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 from ados.sdk.vision import BoundingBox, DetectionBatch
 
@@ -122,9 +123,9 @@ def _is_guided_mode(autopilot: int, custom_mode: int) -> bool:
 def get_manifest() -> PluginManifest:
     """In-code manifest mirror (the packed archive ships manifest.yaml)."""
     return PluginManifest(
-        schema_version=2,
+        schema_version=3,
         id=PLUGIN_ID,
-        version="0.2.4",
+        version="0.2.5",
         name="ADOS Follow-Me",
         description=(
             "Locks onto an operator-designated subject and flies a "
@@ -144,6 +145,7 @@ def get_manifest() -> PluginManifest:
                 "flight.guided_setpoint",
                 "event.publish",
                 "event.subscribe",
+                "mcp.expose",
             ],
         ),
     )
@@ -254,7 +256,7 @@ class FollowMePlugin:
         cfg = await self._read_config()
         self._cfg = cfg
         self._cfg_read_at = time.monotonic()
-        self._active_camera = cfg.designate_camera
+        self._active_camera = self._resolve_designate_camera(cfg.designate_camera)
 
         # FC state. ATTITUDE gives roll/pitch/yaw; GLOBAL_POSITION_INT gives
         # lat/lon and relative altitude (height AGL above home); HEARTBEAT
@@ -278,9 +280,53 @@ class FollowMePlugin:
         # effect immediately without re-subscribing.
         await ctx.vision.subscribe_detections(self._on_batch, camera_id=None)
 
+        # MCP tools (guarded: the host injects ctx.tools only when the
+        # mcp.expose capability is granted; tests pass a ctx without it). The
+        # tools are read-only + stop; there is no AI-initiated follow-start.
+        self._register_tools(ctx)
+
         self._loop_task = asyncio.create_task(self._follow_loop())
         ctx.log.info("follow_me_started", camera=cfg.designate_camera)
         await self._publish_state(force=True)
+
+    # -- camera binding + MCP tools -----------------------------------
+
+    def _resolve_designate_camera(self, selection: Any) -> str | None:
+        """Resolve the camera-selector value to the detection-subscription
+        filter. By-requirement (auto / empty) accepts detections from any
+        camera (``None``) and follows the operator's designated track wherever
+        the engine feeds it; a pinned id filters to that camera. The full
+        roster-based resolution runs host-side; the follow loop only needs the
+        pinned-vs-any distinction."""
+        if selection is None:
+            return None
+        s = str(selection).strip()
+        if s == "" or s == CAMERA_SELECTOR_AUTO:
+            return None
+        return s
+
+    def _register_tools(self, ctx: Any) -> None:
+        tools = getattr(ctx, "tools", None)
+        if tools is None or not hasattr(tools, "register"):
+            return
+        tools.register("follow_status", self._tool_follow_status)
+        tools.register("stop_follow", self._tool_stop_follow)
+
+    async def _tool_follow_status(self, _args: dict) -> dict:
+        """Report the current follow read-back (read-only)."""
+        return self._published.to_dict()
+
+    async def _tool_stop_follow(self, _args: dict) -> dict:
+        """Disarm the follow behaviour. Only ever stops — an assistant cannot
+        start a follow (that requires an operator to designate a subject)."""
+        ctx = self._ctx
+        if ctx is None:
+            return {"ok": False, "reason": "not running"}
+        setter = getattr(ctx.config_kv, "set", None)
+        if setter is None:
+            return {"ok": False, "reason": "no config seam"}
+        await setter("active", False)
+        return {"ok": True, "active": False}
 
     async def on_stop(self, ctx: Any) -> None:
         await self._teardown()
@@ -338,7 +384,9 @@ class FollowMePlugin:
             active = await self._ctx.config_kv.get("active", None)
             if active is not None:
                 self._cfg = replace(self._cfg, active=bool(active))
-        self._active_camera = self._cfg.designate_camera
+        self._active_camera = self._resolve_designate_camera(
+            self._cfg.designate_camera
+        )
         return self._cfg
 
     # -- MAVLink pose handlers ---------------------------------------

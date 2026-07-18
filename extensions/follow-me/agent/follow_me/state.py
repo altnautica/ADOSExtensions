@@ -28,7 +28,10 @@ class FollowConfig:
     follow_distance_m: float = 8.0
     follow_height_m: float = 4.0
     gimbal_point: bool = True
-    designate_camera: str = "uvc-0"
+    # A camera-selector value: "auto" / "" resolves by requirement (the first
+    # detect camera → any camera for the detection filter), or a pinned camera
+    # id. Resolved by the plugin; not a device string.
+    designate_camera: str = "auto"
     camera_hfov_deg: float = 70.0
     # Fixed downward tilt of the designate camera below the horizon. A
     # forward camera needs a positive tilt for its ground projection to
