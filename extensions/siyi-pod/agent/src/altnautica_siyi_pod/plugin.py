@@ -25,7 +25,6 @@ import asyncio
 import logging
 from typing import Any, Callable
 
-from altnautica_siyi_pod import commands as C
 from altnautica_siyi_pod.geolocation import geolocate
 from altnautica_siyi_pod.mavlink_bridge import (
     COMP_CAMERA,
