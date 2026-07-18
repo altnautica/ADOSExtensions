@@ -46,6 +46,20 @@ export const setGain = (ctx: PluginContext, high: boolean) =>
 export const setTrackActive = (ctx: PluginContext, active: boolean) =>
   writeConfig(ctx, "track_active", active);
 
+/**
+ * Reassign which sensor a physical stream carries.
+ *
+ * `leg` is "main" | "sub"; `source` is one of eo_zoom / eo_wide / ir / split.
+ * The agent re-routes the pod and re-advertises the leg with the new role, so
+ * the cockpit reaches EO-wide (or the on-pod split composite) by reassigning a
+ * leg rather than by opening a third stream the pod cannot serve.
+ */
+export const setStreamSource = (
+  ctx: PluginContext,
+  leg: string,
+  source: string,
+) => writeConfig(ctx, "stream_assignment", { [leg]: source });
+
 // -- one-shot actions (nonce) ----------------------------------------------
 export const takePhoto = (ctx: PluginContext) =>
   writeConfig(ctx, "photo_nonce", nextNonce());

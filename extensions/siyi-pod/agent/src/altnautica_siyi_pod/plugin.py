@@ -56,19 +56,24 @@ _STATE_KEYS = (
     "palette",
     "thermal_gain",
     "track_active",
+    "stream_assignment",
 )
 
-# SIYI RTSP stream layout: the pod serves each active sensor on its own 8554
-# path. Each entry is (leg id, role, rtsp path) keyed by the negotiated sensor
-# name; a pod advertises exactly the legs for the sensors it has, so a single-EO
-# pod publishes one leg and a three-sensor pod (zoom + wide + thermal) publishes
-# three. The cockpit stream switcher then flips between them client-side, which
-# is why the pod-side sensor mux is gone.
-_SENSOR_STREAMS: dict[str, tuple[str, str, str]] = {
-    "eo": ("main", "eo", "main"),
-    "zoom": ("main", "eo", "main"),
-    "wide": ("eo_wide", "eo_wide", "sub"),
-    "thermal": ("ir", "ir", "ir"),
+# SIYI RTSP stream layout: the pod serves exactly two concurrent streams,
+# `main` and `sub`, each on its own :8554 path and each assignable to a sensor
+# (EO-zoom / EO-wide / thermal-IR) or the on-pod split/PiP composite. A
+# multi-sensor pod (ZT6 / ZT30) advertises both legs with distinct sources
+# (main = EO-zoom, sub = IR by default); a single-sensor pod advertises only
+# `main`. The GCS reaches EO-wide / split by reassigning a leg's source.
+#
+# The advertised leg `role` uses the GCS label-map vocabulary (eo / eo_wide /
+# ir / split); the assignable source vocabulary the pod facade + capability
+# profile speak is eo_zoom / eo_wide / ir / split.
+_ROLE_FOR_SOURCE = {
+    "eo_zoom": "eo",
+    "eo_wide": "eo_wide",
+    "ir": "ir",
+    "split": "split",
 }
 # One-shot keys: an action fires once each time its integer nonce increases.
 _NONCE_KEYS = (
@@ -109,6 +114,9 @@ class SiyiPodPlugin:
         self._state = PodState()
         self._applied: dict[str, Any] = {}
         self._nonces: dict[str, int] = {}
+        # Which sensor each physical leg (main/sub) currently carries.
+        self._assignment: dict[str, str] = {}
+        self._host = DEFAULT_HOST
         self._control_task: asyncio.Task | None = None
         self._telemetry_task: asyncio.Task | None = None
 
@@ -117,11 +125,12 @@ class SiyiPodPlugin:
         self._ctx = ctx
         camera_id = str(await self._cfg("camera_id", "siyi-pod"))
         system_id = int(await self._cfg("system_id", 1))
+        self._host = str(await self._cfg("host", DEFAULT_HOST))
 
         transport = self._build_transport(
             {
                 "transport": str(await self._cfg("transport", "udp")),
-                "host": str(await self._cfg("host", DEFAULT_HOST)),
+                "host": self._host,
                 "port": int(await self._cfg("port", DEFAULT_PORT)),
                 "serial_port": str(await self._cfg("serial_port", "/dev/ttyUSB0")),
             }
@@ -147,24 +156,37 @@ class SiyiPodPlugin:
             ctx.mavlink.subscribe("GLOBAL_POSITION_INT", self._on_global_position)
         )
 
-        # Auto-configure the pod's video source when the host exposes the video
-        # facade; otherwise the operator points the pipeline at the pod (the
-        # plugin still works, it just does not self-configure the stream).
-        await self._configure_video(await self._cfg("host", DEFAULT_HOST))
-
-        self._state = PodState(
-            model=profile.model,
-            known=profile.known,
-            connected=True,
-            firmware=self._pod.firmware,
-            capabilities=self._capabilities_dict(),
-            link_ok=True,
-        )
-        await self._publish_state()
+        # Route the default sensor assignment to the pod's streams, advertise the
+        # legs to the video pipeline, and publish the read-back.
+        await self._post_negotiation_setup()
 
         self._control_task = asyncio.create_task(self._control_loop())
         self._telemetry_task = asyncio.create_task(self._telemetry_loop())
         log.info("siyi pod started: model=%s", profile.model)
+
+    async def _post_negotiation_setup(self) -> None:
+        """Apply the default source assignment, advertise the pod's stream legs,
+        and refresh the published state.
+
+        Idempotent and re-runnable so the video legs + source routing re-resolve
+        once a (re)negotiation lands the model.
+        """
+        await self._apply_stream_assignment(self._default_assignment())
+        await self._configure_video(self._host)
+        self._refresh_state()
+        await self._publish_state()
+
+    def _refresh_state(self) -> None:
+        pod = self._pod
+        if pod is None:
+            return
+        p = pod.profile
+        self._state.model = p.model
+        self._state.known = p.known
+        self._state.connected = pod.negotiated
+        self._state.firmware = pod.firmware
+        self._state.capabilities = self._capabilities_dict()
+        self._state.link_ok = pod.negotiated
 
     async def on_stop(self, ctx: Any) -> None:
         for task in (self._control_task, self._telemetry_task):
@@ -197,39 +219,46 @@ class SiyiPodPlugin:
             return UartTransport(cfg["serial_port"])
         return UdpTransport(cfg["host"], cfg["port"])
 
-    def _video_legs(self, host: str) -> list[dict]:
-        """Build the pipeline's stream-source list from the negotiated sensors.
+    def _stream_layout(self) -> list[str]:
+        """The pod's concurrent physical RTSP legs.
 
-        One leg per sensor the pod actually has, each pointing at its own RTSP
-        path on the pod (Rule 44 — advertise only the streams the pod serves).
-        Falls back to a single ``main`` leg when the profile is unknown.
+        A multi-sensor pod (ZT6 / ZT30) serves two concurrent streams —
+        ``main`` and ``sub``; every other pod serves a single ``main`` leg.
         """
         profile = self._pod.profile if self._pod is not None else None
-        sensors = tuple(profile.sensors) if profile is not None else ("eo",)
+        if profile is not None and len(profile.sensors) >= 2:
+            return ["main", "sub"]
+        return ["main"]
+
+    def _default_assignment(self) -> dict[str, str]:
+        """Which sensor each physical leg carries by default.
+
+        A multi-sensor pod shows two distinct sensors at once — the primary EO
+        on ``main`` and thermal on ``sub`` (the observation default); a
+        single-sensor pod shows its one EO stream on ``main``.
+        """
+        profile = self._pod.profile if self._pod is not None else None
+        if profile is not None and len(profile.sensors) >= 2:
+            secondary = "ir" if "ir" in profile.sensors else "eo_wide"
+            return {"main": "eo_zoom", "sub": secondary}
+        return {"main": "eo_zoom"}
+
+    def _video_legs(self, host: str) -> list[dict]:
+        """Build the pipeline's stream-source list from the current assignment.
+
+        Exactly the pod's concurrent physical legs (``main`` [+ ``sub``]), each
+        pointing at its own RTSP path on the pod, with the leg ``role`` set to
+        whatever sensor that leg currently carries (Rule 44 — advertise only the
+        streams the pod actually serves; no phantom ``/ir`` path).
+        """
         legs: list[dict] = []
-        seen: set[str] = set()
-        for sensor in sensors:
-            entry = _SENSOR_STREAMS.get(sensor)
-            if entry is None:
-                continue
-            leg_id, role, path = entry
-            if leg_id in seen:
-                continue
-            seen.add(leg_id)
+        for leg_id in self._stream_layout():
+            source = self._assignment.get(leg_id, "eo_zoom")
             legs.append(
                 {
                     "id": leg_id,
-                    "source": f"rtsp://{host}:8554/{path}",
-                    "role": role,
-                    "codec": "h264",
-                }
-            )
-        if not legs:
-            legs.append(
-                {
-                    "id": "main",
-                    "source": f"rtsp://{host}:8554/main",
-                    "role": "eo",
+                    "source": f"rtsp://{host}:8554/{leg_id}",
+                    "role": _ROLE_FOR_SOURCE.get(source, "eo"),
                     "codec": "h264",
                 }
             )
@@ -244,6 +273,44 @@ class SiyiPodPlugin:
             await video.set_source(cameras)
         except Exception:  # noqa: BLE001
             log.info("video source auto-config unavailable; using operator config")
+
+    async def _apply_stream_assignment(self, assignment: dict[str, str]) -> None:
+        """Route each physical leg to its assigned sensor on the pod.
+
+        Only a multi-stream pod routes distinct sensors; a single-EO pod has one
+        sensor and issues no assignment command. The pod's split/PiP composite is
+        left enabled only while a leg is assigned the ``split`` source.
+        """
+        pod = self._pod
+        self._assignment = dict(assignment)
+        if pod is None or len(self._stream_layout()) < 2:
+            return
+        want_split = "split" in self._assignment.values()
+        for leg_id, source in self._assignment.items():
+            try:
+                await pod.set_image_source(leg_id, source)
+            except PodUnsupported as exc:
+                log.info("ignoring unsupported source %s=%s: %s", leg_id, source, exc)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("source assign %s=%s failed: %s", leg_id, source, exc)
+        if not want_split and pod.profile.supports_pip:
+            await self._safe(pod.set_split_mode(False))
+
+    async def _reassign_streams(self, value: Any) -> None:
+        """Apply a GCS-driven leg-source change (a ``{leg: source}`` delta)."""
+        if not isinstance(value, dict):
+            return
+        layout = self._stream_layout()
+        merged = dict(self._assignment)
+        changed = False
+        for leg, source in value.items():
+            if leg in layout and isinstance(source, str) and source in _ROLE_FOR_SOURCE:
+                merged[leg] = source
+                changed = True
+        if not changed:
+            return
+        await self._apply_stream_assignment(merged)
+        await self._configure_video(self._host)
 
     # -- config -----------------------------------------------------------
     async def _cfg(self, key: str, default: Any) -> Any:
@@ -263,7 +330,8 @@ class SiyiPodPlugin:
             "laser": p.supports("laser"),
             "ai_track": p.supports("ai_track"),
             "sensors": list(p.sensors),
-            "split_pip": p.supports_split_pip,
+            "streams": list(p.streams),
+            "supports_pip": p.supports_pip,
             "yaw_min": p.yaw_min_deg,
             "yaw_max": p.yaw_max_deg,
             "pitch_min": p.pitch_min_deg,
@@ -341,6 +409,8 @@ class SiyiPodPlugin:
             elif key == "track_active":
                 if not value:
                     await pod.ai_track_stop()
+            elif key == "stream_assignment":
+                await self._reassign_streams(value)
         except PodUnsupported as exc:
             log.info("ignoring unsupported control %s: %s", key, exc)
         except Exception as exc:  # noqa: BLE001

@@ -89,3 +89,32 @@ async def test_zt30_clamps_gimbal_angles():
     assert transport.yaw_deg == 360.0  # clamped to limitless-yaw bound
     assert transport.pitch_deg == 25.0  # clamped to pitch max
     await session.stop()
+
+
+async def test_zt30_assigns_image_source_and_split():
+    from altnautica_siyi_pod import commands as C
+
+    pod, session, transport = await make_pod(model=CP.HW_ZT30)
+    await pod.set_image_source("main", "eo_zoom")
+    await pod.set_image_source("sub", "ir")
+    assert transport.image_sources == {
+        C.STREAM_MAIN: C.IMG_SOURCE_EO_ZOOM,
+        C.STREAM_SUB: C.IMG_SOURCE_IR,
+    }
+    # Assigning a leg to the split source enables the on-pod composite.
+    await pod.set_image_source("sub", "split")
+    assert transport.split_mode is True
+    assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_SPLIT
+    await session.stop()
+
+
+async def test_single_eo_pod_rejects_multi_sensor_sources():
+    pod, session, _t = await make_pod(model=CP.HW_A8_MINI)
+    # A single-EO pod has no wide / thermal / split source to assign.
+    with pytest.raises(PodUnsupported):
+        await pod.set_image_source("sub", "ir")
+    with pytest.raises(PodUnsupported):
+        await pod.set_image_source("main", "split")
+    with pytest.raises(PodUnsupported):
+        await pod.set_split_mode(True)
+    await session.stop()

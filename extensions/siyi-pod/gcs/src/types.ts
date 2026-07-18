@@ -17,7 +17,8 @@ export interface PodCapabilities {
   laser: boolean;
   ai_track: boolean;
   sensors: string[];
-  split_pip: boolean;
+  streams: string[];
+  supports_pip: boolean;
   yaw_min: number;
   yaw_max: number;
   pitch_min: number;

@@ -30,6 +30,18 @@ CMD_CURRENT_ZOOM = 0x18
 CMD_ENCODING_INFO = 0x20
 CMD_SET_ENCODING = 0x21
 CMD_DATA_STREAM = 0x25
+
+# Image-source assignment (which sensor feeds the main/sub RTSP stream) and the
+# on-pod split / picture-in-picture composite toggle.
+#
+# PLACEHOLDER opcodes + DATA layouts: the exact SIYI opcodes that assign a sensor
+# to a stream and that toggle the on-pod split/PiP composite are SIYI SDK-PDF
+# values we do NOT have. These placeholders make the command STRUCTURE and the
+# control path exist and CI-covered via MockTransport; the real opcodes and DATA
+# layout are resolved on the ZT30 bench against the SIYI SDK document before the
+# on-rig gate (Rule 44 — never an invented wire value shipped as truth).
+CMD_SET_IMAGE_SOURCE = 0xE1  # PLACEHOLDER — SDK PDF, resolve on the ZT30 bench
+CMD_SET_SPLIT_MODE = 0xE2  # PLACEHOLDER — SDK PDF, resolve on the ZT30 bench
 CMD_THERMAL_PALETTE = 0x1B  # palette select (thermal models); confirm on-rig
 CMD_THERMAL_GAIN = 0x1A  # gain high/low (thermal models); confirm on-rig
 CMD_THERMAL_TEMP_POINT = 0x14  # point temperature (thermal models)
@@ -48,6 +60,24 @@ FUNC_MOTION_FPV = 0x05
 ZOOM_OUT = -1
 ZOOM_STOP = 0
 ZOOM_IN = 1
+
+# Physical stream ids and image-source codes for CMD_SET_IMAGE_SOURCE. PLACEHOLDER
+# values (see the CMD_SET_IMAGE_SOURCE note) — the real DATA layout is SDK-PDF,
+# resolved on the ZT30 bench.
+STREAM_MAIN = 0x00
+STREAM_SUB = 0x01
+IMG_SOURCE_EO_ZOOM = 0x00
+IMG_SOURCE_EO_WIDE = 0x01
+IMG_SOURCE_IR = 0x02
+IMG_SOURCE_SPLIT = 0x03
+
+_STREAM_CODES = {"main": STREAM_MAIN, "sub": STREAM_SUB}
+_IMG_SOURCE_CODES = {
+    "eo_zoom": IMG_SOURCE_EO_ZOOM,
+    "eo_wide": IMG_SOURCE_EO_WIDE,
+    "ir": IMG_SOURCE_IR,
+    "split": IMG_SOURCE_SPLIT,
+}
 
 _GIMBAL_MODE_FUNC = {
     "lock": FUNC_MOTION_LOCK,
@@ -141,6 +171,26 @@ def take_photo() -> Command:
 
 def record_toggle() -> Command:
     return Command(CMD_FUNCTION_FEEDBACK, bytes([FUNC_RECORD_TOGGLE]))
+
+
+# --- image source / split composite (multi-sensor pods) ---------------------
+def set_image_source(stream: str, source: str) -> Command:
+    """Assign which sensor feeds a physical RTSP stream.
+
+    ``stream`` is 'main' | 'sub'; ``source`` is eo_zoom | eo_wide | ir | split.
+    PLACEHOLDER opcode + DATA layout (see the CMD_SET_IMAGE_SOURCE note) —
+    resolve on the ZT30 bench.
+    """
+    stream_id = _STREAM_CODES[stream]
+    source_id = _IMG_SOURCE_CODES[source]
+    return Command(CMD_SET_IMAGE_SOURCE, bytes([stream_id, source_id]))
+
+
+def set_split_mode(enabled: bool) -> Command:
+    """Enable/disable the pod's on-pod split / PiP composite (two sensors in one
+    stream). PLACEHOLDER opcode (see the CMD_SET_SPLIT_MODE note) — resolve on
+    the ZT30 bench."""
+    return Command(CMD_SET_SPLIT_MODE, bytes([0x01 if enabled else 0x00]))
 
 
 # --- thermal (thermal models only; gated by the capability profile) ---------

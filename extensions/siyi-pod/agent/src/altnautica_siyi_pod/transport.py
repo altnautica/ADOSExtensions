@@ -75,6 +75,10 @@ class MockTransport:
         self.gimbal_mode = "follow"
         self.palette = 0
         self.photos_taken = 0
+        # Image-source assignment the mock records (stream_id -> source_id) plus
+        # the on-pod split/PiP toggle, so tests assert the source routing.
+        self.image_sources: dict[int, int] = {}
+        self.split_mode = False
 
     def set_on_bytes(self, callback: OnBytes) -> None:
         self._on_bytes = callback
@@ -144,6 +148,12 @@ class MockTransport:
             return self._ack(cmd, seq)
         if cmd == C.CMD_THERMAL_PALETTE and f.data:
             self.palette = f.data[0]
+            return self._ack(cmd, seq)
+        if cmd == C.CMD_SET_IMAGE_SOURCE and len(f.data) >= 2:
+            self.image_sources[f.data[0]] = f.data[1]
+            return self._ack(cmd, seq)
+        if cmd == C.CMD_SET_SPLIT_MODE and f.data:
+            self.split_mode = bool(f.data[0])
             return self._ack(cmd, seq)
         # Every other need-ack command gets a generic ack so the session's
         # request future resolves.

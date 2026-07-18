@@ -31,10 +31,23 @@ def test_profiles(hw_id, model, zoom, thermal, laser, ai, gimbal):
 
 def test_zt30_is_the_full_pod():
     p = CP.profile_for(CP.HW_ZT30)
-    assert set(p.sensors) == {"zoom", "wide", "thermal"}
-    assert p.supports_split_pip is True
+    assert set(p.sensors) == {"eo_zoom", "eo_wide", "ir"}
+    assert set(p.streams) == {"eo_zoom", "eo_wide", "ir", "split"}
+    assert p.supports_pip is True
     assert p.max_zoom == 180.0
     assert p.yaw_max_deg == 360.0  # limitless
+
+
+def test_streams_are_the_assignable_source_roles():
+    # Single-EO pods advertise only eo_zoom; the ZT6 adds ir + the on-pod split
+    # composite; the ZT30 adds the wide EO too.
+    assert CP.profile_for(CP.HW_A2_MINI).streams == ("eo_zoom",)
+    assert CP.profile_for(CP.HW_A8_MINI).streams == ("eo_zoom",)
+    assert set(CP.profile_for(CP.HW_ZT6).streams) == {"eo_zoom", "ir", "split"}
+    # can_stream gates a source against the model's assignable set.
+    assert CP.profile_for(CP.HW_ZT30).can_stream("split") is True
+    assert CP.profile_for(CP.HW_A8_MINI).can_stream("split") is False
+    assert CP.profile_for(CP.HW_A8_MINI).can_stream("ir") is False
 
 
 def test_resolve_leading_code():

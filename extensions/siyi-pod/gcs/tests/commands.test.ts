@@ -7,6 +7,7 @@ import {
   fireLaser,
   setGimbalMode,
   setPalette,
+  setStreamSource,
   setTrackActive,
   setZoom,
   takePhoto,
@@ -52,6 +53,15 @@ describe("config-write commands", () => {
     expect(nth(calls, 1).args).toEqual({ key: "palette", value: 3 });
     await setTrackActive(ctx, true);
     expect(nth(calls, 1).args).toEqual({ key: "track_active", value: true });
+    await teardown();
+  });
+
+  it("setStreamSource writes a leg-source delta under stream_assignment", async () => {
+    const { ctx, calls, teardown } = await withHarness();
+    await setStreamSource(ctx, "sub", "eo_wide");
+    const o = nth(calls, 1);
+    expect(o.args.key).toBe("stream_assignment");
+    expect(o.args.value).toEqual({ sub: "eo_wide" });
     await teardown();
   });
 

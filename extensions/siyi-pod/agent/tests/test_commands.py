@@ -35,10 +35,32 @@ def _round_trip(command: C.Command) -> None:
         C.record_toggle(),
         C.set_thermal_palette(3),
         C.set_thermal_gain(True),
+        C.set_image_source("main", "eo_zoom"),
+        C.set_image_source("sub", "ir"),
+        C.set_split_mode(True),
     ],
 )
 def test_command_frames_round_trip(command):
     _round_trip(command)
+
+
+def test_set_image_source_payload():
+    # PLACEHOLDER wire layout (stream id, source id) — exercised so the control
+    # path is covered; the real opcode/layout is bench-resolved (Rule 44).
+    assert C.set_image_source("main", "eo_zoom").data == bytes(
+        [C.STREAM_MAIN, C.IMG_SOURCE_EO_ZOOM]
+    )
+    assert C.set_image_source("sub", "ir").data == bytes(
+        [C.STREAM_SUB, C.IMG_SOURCE_IR]
+    )
+    assert C.set_image_source("sub", "split").data == bytes(
+        [C.STREAM_SUB, C.IMG_SOURCE_SPLIT]
+    )
+
+
+def test_set_split_mode_payload():
+    assert C.set_split_mode(True).data == bytes([0x01])
+    assert C.set_split_mode(False).data == bytes([0x00])
 
 
 def test_set_gimbal_attitude_payload():

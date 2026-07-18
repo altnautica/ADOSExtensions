@@ -43,9 +43,14 @@ class CapabilityProfile:
     has_thermal: bool
     has_laser: bool
     has_ai_track: bool
-    # Stream roles the pod can output (drive the video-source configuration).
+    # Physical sensors the pod carries: a subset of eo_zoom / eo_wide / ir.
     sensors: tuple[str, ...] = field(default_factory=tuple)
-    supports_split_pip: bool = False
+    # Assignable source roles a physical stream (main/sub) can be set to. A
+    # multi-sensor pod adds "split" when it can composite two sensors on-pod.
+    streams: tuple[str, ...] = field(default_factory=tuple)
+    # The pod can composite a split / picture-in-picture view on-pod into one
+    # stream (the "combined" source role).
+    supports_pip: bool = False
     known: bool = True
 
     def supports(self, feature: str) -> bool:
@@ -62,6 +67,13 @@ class CapabilityProfile:
             "laser": self.has_laser,
             "ai_track": self.has_ai_track,
         }.get(feature, False)
+
+    def can_stream(self, source: str) -> bool:
+        """True when a physical stream can be assigned this source role.
+
+        ``source`` is one of eo_zoom / eo_wide / ir / split.
+        """
+        return source in self.streams
 
 
 # The lineup. Ranges and sensor sets follow the SIYI product specifications;
@@ -80,7 +92,8 @@ PROFILES: dict[int, CapabilityProfile] = {
         has_thermal=False,
         has_laser=False,
         has_ai_track=False,
-        sensors=("eo",),
+        sensors=("eo_zoom",),
+        streams=("eo_zoom",),
     ),
     HW_A8_MINI: CapabilityProfile(
         model="A8 mini",
@@ -95,7 +108,8 @@ PROFILES: dict[int, CapabilityProfile] = {
         has_thermal=False,
         has_laser=False,
         has_ai_track=True,
-        sensors=("eo",),
+        sensors=("eo_zoom",),
+        streams=("eo_zoom",),
     ),
     HW_ZR10: CapabilityProfile(
         model="ZR10",
@@ -110,7 +124,8 @@ PROFILES: dict[int, CapabilityProfile] = {
         has_thermal=False,
         has_laser=True,
         has_ai_track=False,
-        sensors=("zoom",),
+        sensors=("eo_zoom",),
+        streams=("eo_zoom",),
     ),
     HW_ZR30: CapabilityProfile(
         model="ZR30",
@@ -125,7 +140,8 @@ PROFILES: dict[int, CapabilityProfile] = {
         has_thermal=False,
         has_laser=True,
         has_ai_track=False,
-        sensors=("zoom",),
+        sensors=("eo_zoom",),
+        streams=("eo_zoom",),
     ),
     HW_ZT6: CapabilityProfile(
         model="ZT6",
@@ -140,8 +156,9 @@ PROFILES: dict[int, CapabilityProfile] = {
         has_thermal=True,
         has_laser=False,
         has_ai_track=True,
-        sensors=("eo", "thermal"),
-        supports_split_pip=True,
+        sensors=("eo_zoom", "ir"),
+        streams=("eo_zoom", "ir", "split"),
+        supports_pip=True,
     ),
     HW_ZT30: CapabilityProfile(
         model="ZT30",
@@ -156,8 +173,9 @@ PROFILES: dict[int, CapabilityProfile] = {
         has_thermal=True,
         has_laser=True,
         has_ai_track=True,
-        sensors=("zoom", "wide", "thermal"),
-        supports_split_pip=True,
+        sensors=("eo_zoom", "eo_wide", "ir"),
+        streams=("eo_zoom", "eo_wide", "ir", "split"),
+        supports_pip=True,
     ),
 }
 
@@ -177,7 +195,8 @@ FALLBACK_PROFILE = CapabilityProfile(
     has_thermal=False,
     has_laser=False,
     has_ai_track=False,
-    sensors=("eo",),
+    sensors=("eo_zoom",),
+    streams=("eo_zoom",),
     known=False,
 )
 

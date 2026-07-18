@@ -113,6 +113,30 @@ class SiyiPod:
     async def toggle_record(self) -> None:
         await self._session.request(C.record_toggle())
 
+    # -- image-source assignment (multi-sensor pods) ----------------------
+    async def set_image_source(self, stream: str, source: str) -> None:
+        """Assign which sensor a physical stream (main/sub) carries.
+
+        ``source`` is one of eo_zoom / eo_wide / ir / split; ``split`` also
+        enables the on-pod composite. Gated on the model's assignable streams so
+        a source the pod cannot output raises :class:`PodUnsupported`.
+        """
+        if not self.profile.can_stream(source):
+            raise PodUnsupported(
+                f"{source} is not an assignable source on {self.profile.model}"
+            )
+        if source == "split":
+            await self.set_split_mode(True)
+        await self._session.request(C.set_image_source(stream, source))
+
+    async def set_split_mode(self, enabled: bool) -> None:
+        """Toggle the pod's on-pod split / PiP composite (gated on supports_pip)."""
+        if not self.profile.supports_pip:
+            raise PodUnsupported(
+                f"split/PiP is not supported by {self.profile.model}"
+            )
+        await self._session.request(C.set_split_mode(enabled))
+
     # -- thermal ----------------------------------------------------------
     async def set_palette(self, palette_code: int) -> None:
         self._require("thermal")

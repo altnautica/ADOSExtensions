@@ -86,19 +86,74 @@ def _zt30_factory(_cfg):
     return MockTransport(model=HW_ZT30, laser_range_m=42.0)
 
 
-async def test_configure_video_advertises_one_leg_per_sensor_zt30():
-    # A three-sensor pod advertises three legs: zoom-EO on main, wide-EO on sub,
-    # thermal on ir. The cockpit stream switcher flips between them client-side.
+async def test_configure_video_advertises_two_legs_zt30():
+    # A multi-sensor pod advertises exactly two concurrent legs (main + sub) on
+    # real RTSP paths; there is no phantom /ir path. Main carries EO-zoom, sub
+    # carries thermal by default. The cockpit switches / reassigns them.
     ctx = _Ctx(with_video=True)
     plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
     await plugin.on_start(ctx)
-    assert len(ctx.video.sources) == 1
-    legs = ctx.video.sources[0]
+    legs = ctx.video.sources[-1]
     ids = [leg["id"] for leg in legs]
-    assert ids == ["main", "eo_wide", "ir"]
+    assert ids == ["main", "sub"]
     assert legs[0]["source"] == "rtsp://192.168.144.25:8554/main"
-    assert legs[1]["role"] == "eo_wide"
-    assert legs[2]["source"] == "rtsp://192.168.144.25:8554/ir"
+    assert legs[0]["role"] == "eo"
+    assert legs[1]["source"] == "rtsp://192.168.144.25:8554/sub"
+    assert legs[1]["role"] == "ir"
+    await plugin.on_stop(ctx)
+
+
+async def test_start_assigns_main_eo_sub_ir_zt30():
+    # On start the plugin routes distinct sensors: main = EO-zoom, sub = IR.
+    from altnautica_siyi_pod import commands as C
+
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+    assert transport.image_sources == {
+        C.STREAM_MAIN: C.IMG_SOURCE_EO_ZOOM,
+        C.STREAM_SUB: C.IMG_SOURCE_IR,
+    }
+    await plugin.on_stop(ctx)
+
+
+async def test_reassign_stream_source_to_wide():
+    # The GCS reaches EO-wide by reassigning a leg's source; the plugin re-routes
+    # the pod and re-advertises the leg with the new role.
+    from altnautica_siyi_pod import commands as C
+
+    ctx = _Ctx(with_video=True)
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+
+    ctx.config_kv.set("stream_assignment", {"sub": "eo_wide"})
+    await plugin.apply_config_once()
+    assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_EO_WIDE
+    legs = ctx.video.sources[-1]
+    sub = next(leg for leg in legs if leg["id"] == "sub")
+    assert sub["role"] == "eo_wide"
+    await plugin.on_stop(ctx)
+
+
+async def test_reassign_stream_source_to_split_enables_composite():
+    # Selecting the split source enables the pod's on-pod split/PiP composite and
+    # advertises the leg with the split role.
+    from altnautica_siyi_pod import commands as C
+
+    ctx = _Ctx(with_video=True)
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+
+    ctx.config_kv.set("stream_assignment", {"sub": "split"})
+    await plugin.apply_config_once()
+    assert transport.split_mode is True
+    assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_SPLIT
+    legs = ctx.video.sources[-1]
+    sub = next(leg for leg in legs if leg["id"] == "sub")
+    assert sub["role"] == "split"
     await plugin.on_stop(ctx)
 
 
