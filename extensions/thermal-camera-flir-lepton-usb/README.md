@@ -91,3 +91,17 @@ colorize step. A fourth `arctic` palette is reserved for v1.1.
 PureThermal 2 (GroupGets) plus FLIR Lepton 3.5 plus a USB-C cable.
 Detail in the spec. The native libuvc binding is deferred until the
 hardware kit lands on the bench.
+
+## Roadmap: thermal as a cockpit video stream
+
+The agent's video pipeline can serve any number of named streams, and the
+cockpit stream switcher flips between them. This plugin could publish its
+colorized thermal feed as its own leg (`ctx.video.set_source([...])`) so it
+appears as a selectable stream beside the primary EO feed, rather than only as
+an overlay.
+
+That step is hardware-gated. Unlike an IP pod that already streams RTSP, the
+Lepton feed is per-pixel Y16 that this plugin colorizes in-process; exposing it
+as a stream leg needs a plugin-side colorized-stream source (an RTSP/MJPEG
+endpoint the pipeline can pull) plus a real Lepton to validate the pixel path.
+It is deferred with the native libuvc binding, not shipped inert.

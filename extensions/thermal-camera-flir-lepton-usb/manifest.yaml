@@ -1,7 +1,7 @@
-schema_version: 1
+schema_version: 2
 id: com.altnautica.thermal-flir-lepton-usb
 name: "ADOS Thermal Camera FLIR Lepton USB UVC"
-version: "1.0.3"
+version: "1.1.0"
 description: "FLIR Lepton 3.5 radiometric thermal imaging via PureThermal 2 USB UVC dongle. Adds video overlay, FC config tab, and a MAVLink camera component."
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/thermal-camera-flir-lepton-usb"
@@ -9,13 +9,15 @@ license: "GPL-3.0-or-later"
 risk: medium
 
 compatibility:
-  ados_version: ">=0.10.0"
-  gcs_version: ">=0.5.0"
+  ados_version: ">=0.99.125"
+  gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rk3582", "rk3576", "rk3566", "x86"]
 
 agent:
+  runtime: python
   entrypoint: "altnautica_thermal_camera.plugin:ThermalUsbPlugin"
   isolation: subprocess
+  per_drone_config: true
   permissions:
     - id: hardware.usb.uvc
     - id: sensor.camera.register
@@ -37,7 +39,7 @@ gcs:
   entrypoint: "gcs/plugin.bundle.js"
   isolation: iframe
   permissions:
-    - id: ui.slot.fc-tab
+    - id: ui.slot.node-detail-tab
     - id: ui.slot.video-overlay
     - id: ui.slot.notification-channel
     - id: ui.slot.settings-section
@@ -47,16 +49,18 @@ gcs:
     - id: mission.write
     - id: recording.write
   contributes:
+    tabs:
+      - id: thermal-config
+        slot: node.detail.tab
+        profile: ["drone"]
+        title: "Thermal Camera"
+        icon: "camera"
+        order: 50
     panels:
       - id: thermal-overlay
         slot: video.overlay
         title: "Thermal"
         icon: "thermometer"
-      - id: thermal-config
-        slot: fc.tab
-        title: "Thermal Camera"
-        icon: "camera"
-        order: 50
     notifications:
       - id: thermal-alarm
         title: "Thermal alarm"

@@ -2,6 +2,15 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.1.0
+
+- Manifest on the current contribution platform (schema_version 2): the config
+  tab moves from the fleet-wide FC-config slot to a per-node detail tab
+  (`node.detail.tab`), and the agent half is marked per-drone so each drone
+  keeps its own thermal settings. The thermal video overlay is unchanged.
+- Documented the future path to publishing the colorized thermal feed as its
+  own cockpit video stream (hardware-gated; see the README roadmap).
+
 ## 1.0.2
 
 Re-sign release with the unified first-party private key. No functional changes.
