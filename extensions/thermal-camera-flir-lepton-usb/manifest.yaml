@@ -43,8 +43,7 @@ gcs:
     - id: ui.slot.video-overlay
     - id: ui.slot.notification-channel
     - id: ui.slot.settings-section
-    - id: telemetry.subscribe.thermal
-    - id: telemetry.subscribe.mavlink
+    - id: telemetry.subscribe.camera.thermal.frame
     - id: mission.read
     - id: mission.write
     - id: recording.write

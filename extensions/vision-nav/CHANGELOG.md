@@ -2,6 +2,17 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.3.1]
+
+- Fixed the live telemetry subscription: the panel requested the
+  `navigation` telemetry topic but the manifest granted only the bare
+  `telemetry.subscribe` permission, so the host denied the per-topic
+  subscription and the Vision Nav panel never received a snapshot. The
+  permission is now the correct `telemetry.subscribe.navigation`.
+- Declared the node-detail tab slot explicitly and raised the compatibility
+  floors to the current platform (the plugin uses the shared vision frame bus
+  and per-node tabs, which the old floors predated).
+
 ## [0.3.0]
 
 The agent half is rewritten from Python to a compiled **Rust** binary.

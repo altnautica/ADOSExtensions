@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.3.0"
+version: "0.3.1"
 description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A camera and the IMU feed the flight controller a 30 Hz position estimate over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -56,8 +56,8 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.13.0"
-  gcs_version: ">=0.12.0"
+  ados_version: ">=0.99.125"
+  gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "pi-zero-2w"]
 
 agent:
@@ -132,11 +132,12 @@ gcs:
     - id: ui.slot.node-detail-tab
     - id: ui.slot.video-overlay
     - id: ui.slot.notification-channel
-    - id: telemetry.subscribe
+    - id: telemetry.subscribe.navigation
     - id: command.send
   contributes:
     tabs:
       - id: vision-nav-tab
+        slot: node.detail.tab
         title: "Vision Nav"
         icon: "compass"
         order: 60

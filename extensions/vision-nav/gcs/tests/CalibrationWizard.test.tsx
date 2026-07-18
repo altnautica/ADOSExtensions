@@ -68,6 +68,20 @@ function fakeCtx(): {
         read: async () => ({}),
         write: async () => ({ ok: true }),
       },
+      perception: {
+        readTier: async () => ({ tier: null, offloadTarget: null }),
+        subscribeDetections: async () => () => undefined,
+        readSessionHealth: async () => ({
+          session: "closed" as const,
+          feed: "idle" as const,
+          ageMs: null,
+          batchesPerSecond: null,
+          boundNode: null,
+        }),
+      },
+      events: {
+        subscribe: () => () => undefined,
+      },
       config: { onChange: () => () => undefined },
       theme: { onChange: () => () => undefined },
       i18n: { t: (key: string) => key },
