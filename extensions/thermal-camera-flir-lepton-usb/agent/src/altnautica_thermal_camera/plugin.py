@@ -1,72 +1,43 @@
 """Plugin entry point for the ADOS Thermal Camera FLIR Lepton USB UVC.
 
-The agent half ships a single class, :class:`ThermalUsbPlugin`, that
-the host instantiates from a subprocess hosting environment. The host
-calls :meth:`on_start` after capability tokens are issued and
-:meth:`on_stop` when the plugin is torn down.
+The agent half ships a single class, :class:`ThermalUsbPlugin`, that the host
+instantiates in a subprocess hosting environment. The host calls
+:meth:`on_start` after capability tokens are issued and :meth:`on_stop` when
+the plugin is torn down.
 
-The plugin's job at start is small:
+The plugin owns its device: on start it constructs a UVC backend, builds a
+:class:`LeptonUvcDriver`, opens the device, and runs a control loop that reads
+the per-drone config keys the GCS half writes and applies them to the Lepton
+(palette, high/low gain via the radiometric linear resolution, one-shot flat
+field correction). It also auto-configures the agent's video pipeline with the
+thermal stream leg via ``ctx.video.set_source`` when a colorized stream
+endpoint is configured (hardware-gated: the Lepton feed is per-pixel Y16 that
+is colorized before it can be a stream leg, so the leg is advertised only when
+an endpoint exists, never as a phantom stream — see the extension README).
 
-1. Construct a UVC backend. In v1.0 the production binding is not in
-   tree so the default is the in-tree :class:`MockUvcBackend`. The
-   agent passes a real backend factory via ``ctx.hardware.uvc.backend``
-   when the libuvc binding lands.
-
-2. Build a :class:`LeptonUvcDriver` against the backend.
-
-3. Register the driver with the peripheral manager via
-   ``ctx.peripheral_manager.register_camera_driver(driver)``.
-
-The peripheral manager handles discovery, arbitration, opening
-sessions, and pumping frames onto the event bus. The plugin does not
-need to subscribe to telemetry or attitude in v1.0 (the host's
-recording subsystem and the GCS overlay handle those concerns through
-the existing telemetry path).
-
-Spec references that justify this surface:
-
-* ``02-architecture.md`` section 2: agent-half component map and
-  driver registration.
-* ``03-dependencies.md`` section 2: ``sensor.camera.register``
-  permission and the peripheral manager registry contract.
-* ``05-design.md`` sections 3 and 4: palette and spot-meter wiring at
-  the driver layer.
+In v1.0 the production libuvc binding is not in tree, so the default backend is
+the in-tree :class:`MockUvcBackend`. The host swaps the factory when the real
+binding lands; the rest of the plugin does not change.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Protocol
+import asyncio
+import logging
+from typing import Any, Callable
 
 from altnautica_thermal_camera.driver import LeptonUvcDriver
+from altnautica_thermal_camera.palettes import list_palettes
 from altnautica_thermal_camera.uvc_backend import LibUvcBackend, MockUvcBackend
 
+log = logging.getLogger(__name__)
 
-class _PeripheralManager(Protocol):
-    """The slice of the peripheral manager the plugin depends on.
+# How often the control loop reads the config keys and applies changes.
+_CONTROL_HZ = 5.0
 
-    The host injects an object that conforms to this Protocol via
-    ``ctx.peripheral_manager``. v1.0 only needs camera registration;
-    a future revision may add hooks for power-management and hot-plug
-    events.
-    """
-
-    def register_camera_driver(self, driver: Any) -> None: ...
-
-    def unregister_camera_driver(self, driver: Any) -> None: ...
-
-
-class _PluginContext(Protocol):
-    """The plugin host context shape the entry point reads.
-
-    The host provides this object at ``on_start``. The plugin only
-    touches ``peripheral_manager`` and ``log`` in v1.0; richer
-    subscriptions (events, telemetry, recording) are wired by the
-    GCS half and the host's video pipeline.
-    """
-
-    peripheral_manager: _PeripheralManager
-    log: Any
-
+# The radiometric linear resolution (kelvin per count) each gain setting maps
+# to: high gain trades range for temperature sensitivity, low gain the reverse.
+_GAIN_TLINEAR = {True: 0.01, False: 0.1}
 
 BackendFactory = Callable[[], LibUvcBackend]
 
@@ -74,54 +45,239 @@ BackendFactory = Callable[[], LibUvcBackend]
 class ThermalUsbPlugin:
     """Entry point for the thermal camera plugin.
 
-    The plugin is constructed by the host. Optional ``backend_factory``
-    is the seam by which a production agent injects a real libuvc
-    binding. When unset, a :class:`MockUvcBackend` is used so the
-    plugin starts cleanly on a bench rig with no PureThermal hardware
-    plugged in (frames stream synthetic data; the GCS overlay paints
-    them as if they were real). When the libuvc binding lands the
-    host swaps the factory; the rest of the plugin does not change.
+    Optional ``backend_factory`` is the seam by which a production agent injects
+    a real libuvc binding. When unset, a :class:`MockUvcBackend` is used so the
+    plugin starts cleanly on a bench with no PureThermal hardware plugged in.
     """
 
     plugin_id = "com.altnautica.thermal-flir-lepton-usb"
-    version = "1.0.0"
+    version = "1.2.0"
 
     def __init__(self, backend_factory: BackendFactory | None = None) -> None:
         self._backend_factory: BackendFactory = (
             backend_factory if backend_factory is not None else MockUvcBackend
         )
+        self._ctx: Any = None
         self._driver: LeptonUvcDriver | None = None
-        self._registered = False
+        self._session: Any = None
+        self._control_task: asyncio.Task | None = None
+        # Declarative-key cache so a control tick only re-applies a changed key.
+        self._applied: dict[str, Any] = {}
+        # Last published thermal state, so the read-back is emitted on change.
+        self._last_state: dict[str, Any] | None = None
 
-    async def on_start(self, ctx: _PluginContext) -> None:
-        """Build the driver and register it with the peripheral manager."""
+    async def on_start(self, ctx: Any) -> None:
+        """Open the device and start the control loop.
 
+        The deprecated ``ctx.peripheral_manager.register_camera_driver`` path is
+        gone (it was never awaited against the async host and so never
+        registered); the plugin now opens and drives the device itself.
+        """
+        self._ctx = ctx
         backend = self._backend_factory()
         self._driver = LeptonUvcDriver(backend)
-        ctx.peripheral_manager.register_camera_driver(self._driver)
-        self._registered = True
+
+        candidates = await self._driver.discover()
+        if not candidates:
+            self._log("thermal-flir-lepton-usb found no device")
+            return
+
+        initial_palette = str(await self._cfg("palette", "ironbow"))
         try:
-            ctx.log.info(
-                "thermal-flir-lepton-usb registered camera driver",
-                extra={"driver_id": self._driver.driver_id},
+            self._session = await self._driver.open(
+                candidates[0], {"palette": initial_palette}
             )
-        except Exception:
-            # Logging is best-effort. Production contexts always provide a
-            # structured logger; tests pass a stub.
-            pass
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"thermal-flir-lepton-usb open failed: {exc}")
+            return
+        self._applied["palette"] = initial_palette
 
-    async def on_stop(self, ctx: _PluginContext) -> None:
-        """Unregister the driver and release the backend."""
+        # Advertise the thermal stream leg to the video pipeline when a
+        # colorized stream endpoint is configured (hardware-gated: no endpoint
+        # means no leg, never a phantom stream).
+        await self._maybe_declare_source()
 
-        if self._driver is not None and self._registered:
+        self._control_task = asyncio.create_task(self._control_loop())
+        await self._publish_state()
+        self._log(
+            "thermal-flir-lepton-usb started",
+            driver_id=self._driver.driver_id,
+        )
+
+    async def on_stop(self, ctx: Any) -> None:
+        """Stop the control loop and release the device."""
+        if self._control_task is not None:
+            self._control_task.cancel()
             try:
-                ctx.peripheral_manager.unregister_camera_driver(self._driver)
-            finally:
-                self._registered = False
+                await self._control_task
+            except asyncio.CancelledError:
+                pass
+            self._control_task = None
+        if self._driver is not None and self._session is not None:
+            try:
+                await self._driver.close(self._session)
+            except Exception:  # noqa: BLE001
+                self._log("thermal-flir-lepton-usb close failed")
+        self._session = None
         self._driver = None
+        self._ctx = None
+
+    async def on_disable(self, ctx: Any) -> None:
+        await self.on_stop(ctx)
+
+    # -- config -----------------------------------------------------------
+
+    async def _cfg(self, key: str, default: Any) -> Any:
+        kv = self._ctx.config_kv
+        static = kv.static(key, default) if hasattr(kv, "static") else default
+        return await kv.get(key, static)
+
+    # -- video source (hardware-gated) -----------------------------------
+
+    async def _maybe_declare_source(self) -> None:
+        """Declare the thermal stream leg to the video pipeline when a stream
+        endpoint is configured. The Lepton output is per-pixel Y16 that the
+        colorize step turns into a viewable image, so the pipeline can only
+        serve it once a colorized RTSP/MJPEG endpoint exists; until then no leg
+        is advertised (Rule 44: never a phantom stream)."""
+        video = getattr(self._ctx, "video", None)
+        if video is None or not hasattr(video, "set_source"):
+            return
+        source = str(await self._cfg("stream_source", "")).strip()
+        if not source:
+            return
+        cameras = [
+            {"id": "thermal", "source": source, "role": "ir", "codec": "h264"}
+        ]
+        try:
+            reply = await video.set_source(cameras)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"thermal video source config failed: {exc}")
+            return
+        if isinstance(reply, dict) and reply.get("ok") is not True:
+            self._log(f"thermal video source apply did not go live: {reply}")
+
+    # -- control loop -----------------------------------------------------
+
+    async def _control_loop(self) -> None:
+        period = 1.0 / _CONTROL_HZ
+        while True:
+            await asyncio.sleep(period)
+            try:
+                await self.apply_config_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"thermal control tick failed: {exc}")
+
+    async def apply_config_once(self) -> None:
+        """Read the config keys and apply any change / fire any one-shot.
+
+        Deterministic and idempotent so tests can drive it directly.
+        """
+        driver = self._driver
+        session = self._session
+        if driver is None or session is None:
+            return
+
+        # Declarative: palette.
+        palette = await self._cfg("palette", None)
+        if palette is not None and self._applied.get("palette") != palette:
+            self._applied["palette"] = palette
+            await self._safe_set_param("palette", palette)
+
+        # Declarative: high/low gain -> radiometric linear resolution.
+        gain = await self._cfg("gain", None)
+        if gain is not None and self._applied.get("gain") != gain:
+            self._applied["gain"] = gain
+            await self._safe_set_param(
+                "tlinear_resolution", _GAIN_TLINEAR[bool(gain)]
+            )
+
+        # One-shot: cycle to the next palette (the cycle-palette Skill).
+        if bool(await self._cfg("palette_cycle", False)):
+            await self._cycle_palette()
+            await self._reset_key("palette_cycle")
+
+        # One-shot: flat field correction (the FFC Skill).
+        if bool(await self._cfg("ffc", False)):
+            await self._safe_set_param("ffc", None)
+            await self._reset_key("ffc")
+
+        await self._publish_state()
+
+    async def _publish_state(self) -> None:
+        """Publish the thermal read-back (connected, palette, gain) on change,
+        so the GCS shows the true state without spamming the heartbeat."""
+        payload = {
+            "connected": self._session is not None,
+            "palette": self._applied.get("palette"),
+            "gain": bool(self._applied.get("gain", True)),
+        }
+        if payload == self._last_state:
+            return
+        self._last_state = payload
+        tel = getattr(self._ctx, "telemetry", None)
+        if tel is None or not hasattr(tel, "extend"):
+            return
+        try:
+            await tel.extend("thermal", payload)
+        except Exception:  # noqa: BLE001
+            log.debug("thermal telemetry extend failed", exc_info=True)
+
+    async def _cycle_palette(self) -> None:
+        palettes = list_palettes()
+        current = getattr(self._session, "palette", palettes[0])
+        try:
+            idx = palettes.index(current)
+        except ValueError:
+            idx = -1
+        nxt = palettes[(idx + 1) % len(palettes)]
+        await self._safe_set_param("palette", nxt)
+        self._applied["palette"] = nxt
+        # Write the cycled palette back so the settings picker reflects it.
+        setter = getattr(self._ctx.config_kv, "set", None)
+        if setter is not None:
+            try:
+                await setter("palette", nxt)
+            except Exception:  # noqa: BLE001
+                log.debug("thermal palette write-back failed", exc_info=True)
+
+    async def _safe_set_param(self, param: str, value: Any) -> None:
+        try:
+            await self._driver.set_param(self._session, param, value)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"thermal set_param {param} failed: {exc}")
+
+    async def _reset_key(self, key: str) -> None:
+        """Clear a one-shot key so a re-press fires again (the Skill Bar writes
+        the flag true each press with no nonce)."""
+        setter = getattr(self._ctx.config_kv, "set", None)
+        if setter is None:
+            return
+        try:
+            await setter(key, False)
+        except Exception:  # noqa: BLE001
+            log.debug("thermal action key reset failed: %s", key, exc_info=True)
+
+    # -- helpers ----------------------------------------------------------
+
+    def _log(self, message: str, **fields: Any) -> None:
+        logger = getattr(self._ctx, "log", None) if self._ctx is not None else None
+        if logger is not None:
+            try:
+                logger.info(message, extra=fields or None)
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        log.info(message)
+
+    # -- accessors (tests) ------------------------------------------------
 
     @property
     def driver(self) -> LeptonUvcDriver | None:
-        """Test helper: expose the driver instance after start."""
-
         return self._driver
+
+    @property
+    def session(self) -> Any:
+        return self._session

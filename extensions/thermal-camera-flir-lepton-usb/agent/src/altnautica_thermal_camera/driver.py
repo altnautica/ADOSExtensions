@@ -6,10 +6,11 @@ runs against the in-tree :class:`MockUvcBackend` in tests and against
 a real libuvc binding once that drops in.
 
 The driver does NOT own the colorize step or the H.264 encode. Those
-live in the agent's video pipeline and consume the radiometric frames
-the driver pushes onto the event bus. Keeping the driver narrow makes
-the abstraction stable for forks (Workswell, Boson, Vue Pro) that
-share UVC plumbing but ship different colorize and encode stacks.
+live in the agent's video pipeline, which serves the thermal stream
+leg the plugin declares via ``ctx.video.set_source``. Keeping the
+driver narrow makes the abstraction stable for forks (Workswell,
+Boson, Vue Pro) that share UVC plumbing but ship different colorize
+and encode stacks.
 """
 
 from __future__ import annotations
@@ -129,7 +130,7 @@ class LeptonUvcSession(CameraSession):
 
     The session carries the device record, a numpy view onto the
     in-flight frame, the active palette name, and a hot copy of the
-    config block. The peripheral manager treats this opaquely.
+    config block. The plugin opens the driver and treats this opaquely.
     """
 
     device: UvcDeviceInfo

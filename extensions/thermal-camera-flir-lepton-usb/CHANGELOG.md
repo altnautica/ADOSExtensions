@@ -2,6 +2,24 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.2.0
+
+- The plugin now opens and drives the Lepton directly. It replaces the old
+  camera-driver registration (which was never awaited against the async host
+  and so never registered) with its own device open plus a control loop that
+  applies the palette, high/low gain, and flat field correction from config,
+  and it advertises the thermal stream leg to the video pipeline through
+  `ctx.video.set_source` when a colorized stream endpoint is configured. The
+  `sensor.camera.register` capability is replaced by `video.source.set`.
+- Added two cockpit Skills: Cycle palette and Flat field correction.
+- Added palette and gain (high/low) settings, read live each control tick.
+- Publishes a `thermal` read-back (connected, palette, gain) on change.
+- Enriched the manifest with a long description, feature list, hardware
+  requirements, resource estimate, telemetry field, and a documentation link.
+- Note: exposing the thermal feed as a live video stream leg still needs a
+  colorized RTSP/MJPEG endpoint and real hardware; until an endpoint is
+  configured no stream leg is advertised (no phantom stream).
+
 ## 1.1.0
 
 - Manifest on the current contribution platform (schema_version 2): the config

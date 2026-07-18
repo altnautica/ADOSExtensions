@@ -192,20 +192,51 @@ def test_frame_iterator_stamps_resolution_into_metadata(
     assert len(bytes(frame.data)) == frame.width * frame.height * 2
 
 
-class _FakePeripheralManager:
+class _FakeConfigKv:
+    def __init__(self, values: dict[str, Any] | None = None) -> None:
+        self._values = dict(values or {})
+
+    def static(self, key: str, default: Any = None) -> Any:
+        return default
+
+    async def get(self, key: str, default: Any = None) -> Any:
+        return self._values.get(key, default)
+
+    async def set(self, key: str, value: Any, scope: str = "drone") -> dict:
+        self._values[key] = value
+        return {"ok": True}
+
+
+class _FakeVideo:
     def __init__(self) -> None:
-        self.registered: list[Any] = []
+        self.sources: list[list[dict]] = []
 
-    def register_camera_driver(self, driver: Any) -> None:
-        self.registered.append(driver)
+    async def set_source(self, cameras: Any) -> dict:
+        legs = list(cameras)
+        self.sources.append(legs)
+        return {"ok": True, "count": len(legs)}
 
-    def unregister_camera_driver(self, driver: Any) -> None:
-        self.registered.remove(driver)
+
+class _FakeTelemetry:
+    def __init__(self) -> None:
+        self.extended: list[tuple[str, dict]] = []
+
+    async def extend(self, channel: str, payload: dict) -> None:
+        self.extended.append((channel, payload))
 
 
 class _FakeContext:
-    def __init__(self) -> None:
-        self.peripheral_manager = _FakePeripheralManager()
+    def __init__(
+        self,
+        config: dict[str, Any] | None = None,
+        with_video: bool = False,
+        with_telemetry: bool = False,
+    ) -> None:
+        self.config_kv = _FakeConfigKv(config)
+        if with_video:
+            self.video = _FakeVideo()
+        if with_telemetry:
+            self.telemetry = _FakeTelemetry()
 
         class _Log:
             def info(self, *args: Any, **kwargs: Any) -> None:
@@ -214,29 +245,157 @@ class _FakeContext:
         self.log = _Log()
 
 
-def test_plugin_registers_and_unregisters_driver() -> None:
-    plugin = ThermalUsbPlugin()
-    ctx = _FakeContext()
-    asyncio.run(plugin.on_start(ctx))
-    assert plugin.driver is not None
-    assert ctx.peripheral_manager.registered == [plugin.driver]
-    asyncio.run(plugin.on_stop(ctx))
-    assert ctx.peripheral_manager.registered == []
-    assert plugin.driver is None
+def test_plugin_opens_and_closes_the_device() -> None:
+    async def scenario() -> None:
+        plugin = ThermalUsbPlugin()
+        ctx = _FakeContext()
+        await plugin.on_start(ctx)
+        assert plugin.driver is not None
+        assert plugin.session is not None
+        await plugin.on_stop(ctx)
+        assert plugin.session is None
+        assert plugin.driver is None
+
+    asyncio.run(scenario())
 
 
 def test_plugin_uses_injected_backend_factory() -> None:
-    constructed: list[MockUvcBackend] = []
+    async def scenario() -> None:
+        constructed: list[MockUvcBackend] = []
 
-    def factory() -> MockUvcBackend:
-        backend = MockUvcBackend(device_count=2)
-        constructed.append(backend)
-        return backend
+        def factory() -> MockUvcBackend:
+            backend = MockUvcBackend(device_count=2)
+            constructed.append(backend)
+            return backend
 
-    plugin = ThermalUsbPlugin(backend_factory=factory)
-    ctx = _FakeContext()
-    asyncio.run(plugin.on_start(ctx))
-    assert len(constructed) == 1
-    assert plugin.driver is not None
-    candidates = asyncio.run(plugin.driver.discover())
-    assert len(candidates) == 2
+        plugin = ThermalUsbPlugin(backend_factory=factory)
+        ctx = _FakeContext()
+        await plugin.on_start(ctx)
+        try:
+            assert len(constructed) == 1
+            assert plugin.driver is not None
+            candidates = await plugin.driver.discover()
+            assert len(candidates) == 2
+        finally:
+            await plugin.on_stop(ctx)
+
+    asyncio.run(scenario())
+
+
+def test_palette_config_applies_to_the_driver() -> None:
+    async def scenario() -> None:
+        plugin = ThermalUsbPlugin()
+        ctx = _FakeContext(config={"palette": "ironbow"})
+        await plugin.on_start(ctx)
+        try:
+            ctx.config_kv._values["palette"] = "rainbow"
+            await plugin.apply_config_once()
+            assert plugin.session.palette == "rainbow"
+        finally:
+            await plugin.on_stop(ctx)
+
+    asyncio.run(scenario())
+
+
+def test_gain_config_sets_the_radiometric_resolution() -> None:
+    async def scenario() -> None:
+        plugin = ThermalUsbPlugin()
+        ctx = _FakeContext()
+        await plugin.on_start(ctx)
+        try:
+            ctx.config_kv._values["gain"] = False  # low gain -> wider range
+            await plugin.apply_config_once()
+            assert plugin.session.tlinear_resolution_k_per_count == 0.1
+            ctx.config_kv._values["gain"] = True  # high gain -> sensitivity
+            await plugin.apply_config_once()
+            assert plugin.session.tlinear_resolution_k_per_count == 0.01
+        finally:
+            await plugin.on_stop(ctx)
+
+    asyncio.run(scenario())
+
+
+def test_cycle_palette_advances_and_writes_back() -> None:
+    from altnautica_thermal_camera.palettes import list_palettes
+
+    async def scenario() -> None:
+        plugin = ThermalUsbPlugin()
+        ctx = _FakeContext(config={"palette": "ironbow"})
+        await plugin.on_start(ctx)
+        try:
+            palettes = list_palettes()
+            expected = palettes[(palettes.index("ironbow") + 1) % len(palettes)]
+            ctx.config_kv._values["palette_cycle"] = True
+            await plugin.apply_config_once()
+            assert plugin.session.palette == expected
+            # The cycled palette is written back so the picker reflects it.
+            assert await ctx.config_kv.get("palette") == expected
+            # The one-shot key is cleared so a re-press cycles again.
+            assert await ctx.config_kv.get("palette_cycle") is False
+        finally:
+            await plugin.on_stop(ctx)
+
+    asyncio.run(scenario())
+
+
+def test_ffc_action_triggers_and_resets() -> None:
+    async def scenario() -> None:
+        backend = MockUvcBackend()
+        plugin = ThermalUsbPlugin(backend_factory=lambda: backend)
+        ctx = _FakeContext()
+        await plugin.on_start(ctx)
+        try:
+            serial = plugin.session.device.serial
+            ctx.config_kv._values["ffc"] = True
+            await plugin.apply_config_once()
+            assert backend.ffc_calls.get(serial) == 1
+            assert await ctx.config_kv.get("ffc") is False
+        finally:
+            await plugin.on_stop(ctx)
+
+    asyncio.run(scenario())
+
+
+def test_thermal_state_is_published_on_telemetry() -> None:
+    async def scenario() -> None:
+        plugin = ThermalUsbPlugin()
+        ctx = _FakeContext(config={"palette": "ironbow"}, with_telemetry=True)
+        await plugin.on_start(ctx)
+        try:
+            channels = [c for c, _ in ctx.telemetry.extended]
+            assert "thermal" in channels
+            payload = dict(ctx.telemetry.extended[-1][1])
+            assert payload["connected"] is True
+            assert payload["palette"] == "ironbow"
+        finally:
+            await plugin.on_stop(ctx)
+
+    asyncio.run(scenario())
+
+
+def test_video_source_declared_only_when_an_endpoint_is_configured() -> None:
+    async def scenario() -> None:
+        # No stream endpoint -> no leg advertised (Rule 44: no phantom stream).
+        plugin = ThermalUsbPlugin()
+        ctx = _FakeContext(with_video=True)
+        await plugin.on_start(ctx)
+        assert ctx.video.sources == []
+        await plugin.on_stop(ctx)
+
+        # With an endpoint -> the thermal leg is advertised to the pipeline.
+        plugin2 = ThermalUsbPlugin()
+        ctx2 = _FakeContext(
+            config={"stream_source": "rtsp://127.0.0.1:8554/thermal"},
+            with_video=True,
+        )
+        await plugin2.on_start(ctx2)
+        try:
+            assert len(ctx2.video.sources) == 1
+            leg = ctx2.video.sources[0][0]
+            assert leg["id"] == "thermal"
+            assert leg["role"] == "ir"
+            assert leg["source"] == "rtsp://127.0.0.1:8554/thermal"
+        finally:
+            await plugin2.on_stop(ctx2)
+
+    asyncio.run(scenario())
