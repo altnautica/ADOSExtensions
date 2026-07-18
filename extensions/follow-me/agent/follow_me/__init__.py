@@ -97,7 +97,7 @@ class _LastCommand:
     through fresh vehicle attitude."""
 
     bbox: Any
-    position_frame: bytes
+    position_setpoint: dict[str, Any]
     gimbal_frame: bytes | None
     range_m: float
     distance_setpoint_m: float
@@ -124,7 +124,7 @@ def get_manifest() -> PluginManifest:
     return PluginManifest(
         schema_version=2,
         id=PLUGIN_ID,
-        version="0.2.3",
+        version="0.2.4",
         name="ADOS Follow-Me",
         description=(
             "Locks onto an operator-designated subject and flies a "
@@ -133,7 +133,7 @@ def get_manifest() -> PluginManifest:
         author="Altnautica",
         license="GPL-3.0-or-later",
         risk="high",
-        compatibility=Compatibility(ados_version=">=0.99.125"),
+        compatibility=Compatibility(ados_version=">=0.99.180"),
         agent=AgentBlock(
             entrypoint="follow_me:FollowMePlugin",
             isolation="subprocess",
@@ -141,6 +141,7 @@ def get_manifest() -> PluginManifest:
                 "vision.detection.subscribe",
                 "mavlink.read",
                 "mavlink.write",
+                "flight.guided_setpoint",
                 "event.publish",
                 "event.subscribe",
             ],
@@ -513,13 +514,13 @@ class FollowMePlugin:
             )
             return
 
-        position_frame = mavlink_frames.build_position_target(
+        position_setpoint = mavlink_frames.build_position_setpoint(
             lat_deg=setpoint.lat_deg,
             lon_deg=setpoint.lon_deg,
             alt_rel_m=setpoint.alt_rel_m,
             yaw_rad=setpoint.yaw_rad,
         )
-        await self._ctx.mavlink.send(position_frame)
+        await self._ctx.flight.guided_setpoint(**position_setpoint)
 
         gimbal_frame: bytes | None = None
         if cfg.gimbal_point:
@@ -549,7 +550,7 @@ class FollowMePlugin:
 
         self._last_command = _LastCommand(
             bbox=bbox,
-            position_frame=position_frame,
+            position_setpoint=position_setpoint,
             gimbal_frame=gimbal_frame,
             range_m=setpoint.target.ground_range_m,
             distance_setpoint_m=cfg.follow_distance_m,
@@ -570,7 +571,7 @@ class FollowMePlugin:
         cmd = self._last_command
         if cmd is None:
             return
-        await self._ctx.mavlink.send(cmd.position_frame)
+        await self._ctx.flight.guided_setpoint(**cmd.position_setpoint)
         if cmd.gimbal_frame is not None:
             try:
                 await self._ctx.mavlink.send(cmd.gimbal_frame)

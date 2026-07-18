@@ -67,46 +67,33 @@ def _mav(system_id: int, component_id: int) -> mavlink2.MAVLink:
     return mavlink2.MAVLink(None, srcSystem=system_id, srcComponent=component_id)
 
 
-def build_position_target(
+def build_position_setpoint(
     *,
     lat_deg: float,
     lon_deg: float,
     alt_rel_m: float,
     yaw_rad: float,
-    system_id: int = 1,
-    component_id: int = ONBOARD_COMPUTER_COMP_ID,
-    target_system: int = 1,
-    target_component: int = 1,
-) -> bytes:
-    """Pack a SET_POSITION_TARGET_GLOBAL_INT guided follow setpoint.
+) -> dict[str, float | int | str]:
+    """Build the ``ctx.flight.guided_setpoint`` kwargs for a global follow.
 
-    ``lat_deg`` / ``lon_deg`` are scaled to the 1e7 integer
-    representation the message carries. ``alt_rel_m`` is metres above the
-    arming/home altitude (the frame is GLOBAL_RELATIVE_ALT_INT). ``yaw``
-    faces the vehicle at the subject.
+    Describes a SET_POSITION_TARGET_GLOBAL_INT that keeps lat/lon/alt and
+    yaw and ignores velocity, acceleration, and yaw-rate, so the autopilot
+    flies to the position and faces the subject. ``lat_deg`` / ``lon_deg``
+    are scaled to the 1e7 integer representation the message carries;
+    ``alt_rel_m`` is metres above the arming/home altitude (the frame is
+    GLOBAL_RELATIVE_ALT_INT). The scoped flight sender in the agent encodes
+    and stamps the frame on the outbound link, so the plugin no longer packs
+    raw MAVLink for the position setpoint (the gimbal command still does).
     """
-    lat_int = int(round(lat_deg * 1e7))
-    lon_int = int(round(lon_deg * 1e7))
-    mav = _mav(system_id, component_id)
-    msg = mav.set_position_target_global_int_encode(
-        0,  # time_boot_ms (0 = unused, the FC timestamps on receipt)
-        target_system,
-        target_component,
-        mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
-        POSITION_YAW_TYPE_MASK,
-        lat_int,
-        lon_int,
-        float(alt_rel_m),
-        0.0,  # vx (ignored)
-        0.0,  # vy (ignored)
-        0.0,  # vz (ignored)
-        0.0,  # afx (ignored)
-        0.0,  # afy (ignored)
-        0.0,  # afz (ignored)
-        float(yaw_rad),
-        0.0,  # yaw_rate (ignored)
-    )
-    return msg.pack(mav)
+    return {
+        "kind": "global_int",
+        "coordinate_frame": int(mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT),
+        "type_mask": int(POSITION_YAW_TYPE_MASK),
+        "x": float(round(lat_deg * 1e7)),
+        "y": float(round(lon_deg * 1e7)),
+        "z": float(alt_rel_m),
+        "yaw": float(yaw_rad),
+    }
 
 
 def build_gimbal_pitchyaw(
@@ -175,7 +162,7 @@ def gimbal_angles_for_target(
 __all__ = [
     "ONBOARD_COMPUTER_COMP_ID",
     "POSITION_YAW_TYPE_MASK",
-    "build_position_target",
+    "build_position_setpoint",
     "build_gimbal_pitchyaw",
     "gimbal_angles_for_target",
 ]

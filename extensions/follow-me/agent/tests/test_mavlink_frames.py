@@ -20,30 +20,29 @@ def _decode(frame: bytes):
     return msgs[-1] if msgs else None
 
 
-def test_position_target_is_valid_v2_and_carries_setpoint() -> None:
-    frame = mavlink_frames.build_position_target(
+def test_position_setpoint_carries_the_scaled_global_position() -> None:
+    # The position setpoint is built as ctx.flight.guided_setpoint kwargs; the
+    # agent's scoped flight sender encodes and stamps the wire frame, so the
+    # builder only shapes the arguments (lat/lon scaled to 1e7, frame + mask).
+    sp = mavlink_frames.build_position_setpoint(
         lat_deg=12.3456789,
         lon_deg=77.1234567,
         alt_rel_m=15.0,
         yaw_rad=1.2,
     )
-    assert frame[0] == 0xFD  # MAVLink v2 magic
-    msg = _decode(frame)
-    assert msg is not None
-    assert msg.get_type() == "SET_POSITION_TARGET_GLOBAL_INT"
-    assert msg.lat_int == int(round(12.3456789 * 1e7))
-    assert msg.lon_int == int(round(77.1234567 * 1e7))
-    assert abs(msg.alt - 15.0) < 1e-4
-    assert abs(msg.yaw - 1.2) < 1e-4
-    assert msg.coordinate_frame == mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+    assert sp["kind"] == "global_int"
+    assert sp["coordinate_frame"] == mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
+    assert sp["x"] == float(round(12.3456789 * 1e7))
+    assert sp["y"] == float(round(77.1234567 * 1e7))
+    assert abs(sp["z"] - 15.0) < 1e-4
+    assert abs(sp["yaw"] - 1.2) < 1e-4
 
 
-def test_position_target_mask_ignores_velocity_and_accel_keeps_yaw() -> None:
-    frame = mavlink_frames.build_position_target(
+def test_position_setpoint_mask_ignores_velocity_and_accel_keeps_yaw() -> None:
+    sp = mavlink_frames.build_position_setpoint(
         lat_deg=0.0, lon_deg=0.0, alt_rel_m=10.0, yaw_rad=0.0
     )
-    msg = _decode(frame)
-    mask = msg.type_mask
+    mask = sp["type_mask"]
     # Velocity bits (3,4,5), accel bits (6,7,8), yaw-rate (11) set = ignored.
     for bit in (3, 4, 5, 6, 7, 8, 11):
         assert mask & (1 << bit), f"bit {bit} should be set (ignored)"

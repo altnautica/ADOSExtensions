@@ -83,6 +83,15 @@ class _MAVLink:
         self.subscriptions[msg_name] = cb
 
 
+class _Flight:
+    def __init__(self) -> None:
+        self.setpoints: list[dict[str, Any]] = []
+
+    async def guided_setpoint(self, **kwargs: Any) -> dict:
+        self.setpoints.append(dict(kwargs))
+        return {"ok": True}
+
+
 class _Vision:
     def __init__(self, designate_result: dict[str, Any] | None = None) -> None:
         self._designate_result = designate_result or {
@@ -129,6 +138,7 @@ class _Ctx:
         self.config_kv = _ConfigKv(dict(config or {}))
         self.events = _Events()
         self.mavlink = _MAVLink()
+        self.flight = _Flight()
         self.vision = _Vision(designate_result)
         self.log = _Log()
 
@@ -235,7 +245,7 @@ async def test_locked_and_active_sends_a_setpoint() -> None:
 
     await plugin._tick()
 
-    assert ctx.mavlink.sent, "a locked, active follow must emit a setpoint"
+    assert ctx.flight.setpoints, "a locked, active follow must emit a setpoint"
     states = _state_events(ctx)
     assert states, "the loop must publish a follow.state read-back"
     assert states[-1]["commanding"] is True
@@ -260,7 +270,7 @@ async def test_uncertain_lock_sends_no_setpoint() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "uncertain lock must not command the FC"
+    assert not ctx.flight.setpoints, "uncertain lock must not command the FC"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
     assert states[-1]["lock_state"] == LOCK_UNCERTAIN
@@ -285,7 +295,7 @@ async def test_lost_lock_sends_no_setpoint_and_drops_lock() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "lost lock must not command the FC"
+    assert not ctx.flight.setpoints, "lost lock must not command the FC"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
     assert states[-1]["lock_state"] == LOCK_LOST
@@ -312,7 +322,7 @@ async def test_coast_window_expiry_is_treated_as_lost() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "a stale lock past the coast window is lost"
+    assert not ctx.flight.setpoints, "a stale lock past the coast window is lost"
     assert plugin._tracker.has_lock is False
 
 
@@ -333,7 +343,7 @@ async def test_inactive_sends_no_setpoint() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "an inactive behaviour never commands"
+    assert not ctx.flight.setpoints, "an inactive behaviour never commands"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
 
@@ -355,7 +365,7 @@ async def test_no_pose_yet_holds_without_commanding() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "without a pose there is nothing to project"
+    assert not ctx.flight.setpoints, "without a pose there is nothing to project"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
 
@@ -381,8 +391,10 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
 
     await plugin._tick()
 
-    # One position-target frame plus one gimbal command frame.
-    assert len(ctx.mavlink.sent) == 2
+    # One position setpoint (via the scoped flight sender) plus one gimbal
+    # command frame (raw MAVLink).
+    assert len(ctx.flight.setpoints) == 1
+    assert len(ctx.mavlink.sent) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +423,7 @@ async def test_armed_but_not_guided_holds_without_commanding() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "a non-guided FC must not be commanded"
+    assert not ctx.flight.setpoints, "a non-guided FC must not be commanded"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
     assert states[-1]["fc_armed"] is True
@@ -441,7 +453,7 @@ async def test_guided_but_disarmed_holds_without_commanding() -> None:
 
     await plugin._tick()
 
-    assert not ctx.mavlink.sent, "a disarmed FC must not be commanded"
+    assert not ctx.flight.setpoints, "a disarmed FC must not be commanded"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
     assert states[-1]["fc_armed"] is False
@@ -467,7 +479,7 @@ async def test_px4_offboard_is_treated_as_guided() -> None:
 
     await plugin._tick()
 
-    assert ctx.mavlink.sent, "PX4 OFFBOARD must be commanded like AP GUIDED"
+    assert ctx.flight.setpoints, "PX4 OFFBOARD must be commanded like AP GUIDED"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is True
     assert states[-1]["fc_guided"] is True
@@ -659,19 +671,19 @@ async def test_coasting_holds_the_last_setpoint_without_recomputing(
     # One sighting, one fresh command.
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
     await plugin._tick()
-    assert len(ctx.mavlink.sent) == 1
-    first_frame = ctx.mavlink.sent[-1]
+    assert len(ctx.flight.setpoints) == 1
+    first_setpoint = ctx.flight.setpoints[-1]
 
     # Tick again with NO new detection (the tracker holds the same frozen bbox
     # within the coast window) and a CHANGED vehicle attitude. The loop must
-    # hold: re-send the same frame, never re-project the stale bbox.
+    # hold: re-send the same setpoint, never re-project the stale bbox.
     plugin._on_attitude({"roll": 0.0, "pitch": 0.0, "yaw": 1.0})
     captured = _spy_projection(monkeypatch)
     await plugin._tick()
 
     assert captured == {}, "coasting must not re-project the stale bbox"
-    assert len(ctx.mavlink.sent) == 2
-    assert ctx.mavlink.sent[-1] == first_frame, "the held setpoint is re-sent"
+    assert len(ctx.flight.setpoints) == 2
+    assert ctx.flight.setpoints[-1] == first_setpoint, "the held setpoint is re-sent"
     states = _state_events(ctx)
     assert states[-1]["commanding"] is True
 

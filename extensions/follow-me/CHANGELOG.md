@@ -4,6 +4,17 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.4]
+
+### Changed
+
+- The guided follow position setpoint is now emitted through the agent's
+  scoped flight sender (`flight.guided_setpoint`) instead of a raw MAVLink
+  write, so the flight-command surface is gated by a single high-risk
+  capability and the agent's MAVLink router owns encoding and link stamping.
+  The gimbal point-at-subject command still rides `mavlink.write`. Requires
+  agent 0.99.179+.
+
 ## [0.2.3]
 
 ### Fixed
