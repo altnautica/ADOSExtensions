@@ -47,7 +47,6 @@ function normalise(raw: Record<string, unknown>): PodState {
     pitch_deg: num(raw.pitch_deg),
     roll_deg: num(raw.roll_deg),
     zoom: num(raw.zoom),
-    sensor_mode: typeof raw.sensor_mode === "string" ? raw.sensor_mode : "eo",
     gimbal_mode: typeof raw.gimbal_mode === "string" ? raw.gimbal_mode : "follow",
     palette: num(raw.palette),
     recording: raw.recording === true,

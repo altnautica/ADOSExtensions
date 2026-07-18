@@ -52,12 +52,24 @@ _TELEMETRY_HZ = 5.0
 # Declarative state keys the control loop diffs each tick.
 _STATE_KEYS = (
     "zoom",
-    "sensor_mode",
     "gimbal_mode",
     "palette",
     "thermal_gain",
     "track_active",
 )
+
+# SIYI RTSP stream layout: the pod serves each active sensor on its own 8554
+# path. Each entry is (leg id, role, rtsp path) keyed by the negotiated sensor
+# name; a pod advertises exactly the legs for the sensors it has, so a single-EO
+# pod publishes one leg and a three-sensor pod (zoom + wide + thermal) publishes
+# three. The cockpit stream switcher then flips between them client-side, which
+# is why the pod-side sensor mux is gone.
+_SENSOR_STREAMS: dict[str, tuple[str, str, str]] = {
+    "eo": ("main", "eo", "main"),
+    "zoom": ("main", "eo", "main"),
+    "wide": ("eo_wide", "eo_wide", "sub"),
+    "thermal": ("ir", "ir", "ir"),
+}
 # One-shot keys: an action fires once each time its integer nonce increases.
 _NONCE_KEYS = (
     "photo_nonce",
@@ -185,13 +197,51 @@ class SiyiPodPlugin:
             return UartTransport(cfg["serial_port"])
         return UdpTransport(cfg["host"], cfg["port"])
 
+    def _video_legs(self, host: str) -> list[dict]:
+        """Build the pipeline's stream-source list from the negotiated sensors.
+
+        One leg per sensor the pod actually has, each pointing at its own RTSP
+        path on the pod (Rule 44 — advertise only the streams the pod serves).
+        Falls back to a single ``main`` leg when the profile is unknown.
+        """
+        profile = self._pod.profile if self._pod is not None else None
+        sensors = tuple(profile.sensors) if profile is not None else ("eo",)
+        legs: list[dict] = []
+        seen: set[str] = set()
+        for sensor in sensors:
+            entry = _SENSOR_STREAMS.get(sensor)
+            if entry is None:
+                continue
+            leg_id, role, path = entry
+            if leg_id in seen:
+                continue
+            seen.add(leg_id)
+            legs.append(
+                {
+                    "id": leg_id,
+                    "source": f"rtsp://{host}:8554/{path}",
+                    "role": role,
+                    "codec": "h264",
+                }
+            )
+        if not legs:
+            legs.append(
+                {
+                    "id": "main",
+                    "source": f"rtsp://{host}:8554/main",
+                    "role": "eo",
+                    "codec": "h264",
+                }
+            )
+        return legs
+
     async def _configure_video(self, host: str) -> None:
         video = getattr(self._ctx, "video", None)
         if video is None or not hasattr(video, "set_source"):
             return
-        url = f"rtsp://{host}:8554/main"
+        cameras = self._video_legs(host)
         try:
-            await video.set_source(url, "main")
+            await video.set_source(cameras)
         except Exception:  # noqa: BLE001
             log.info("video source auto-config unavailable; using operator config")
 
@@ -288,8 +338,6 @@ class SiyiPodPlugin:
                 await pod.set_palette(int(value))
             elif key == "thermal_gain":
                 await pod.set_gain(bool(value))
-            elif key == "sensor_mode":
-                self._state.sensor_mode = str(value)
             elif key == "track_active":
                 if not value:
                     await pod.ai_track_stop()

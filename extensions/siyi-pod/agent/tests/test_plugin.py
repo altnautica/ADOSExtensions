@@ -62,17 +62,55 @@ class _Events:
         self.published.append((topic, payload))
 
 
-class _Ctx:
+class _Video:
     def __init__(self) -> None:
+        self.sources: list = []
+
+    async def set_source(self, cameras):
+        self.sources.append(list(cameras))
+        return {"ok": True, "count": len(list(cameras))}
+
+
+class _Ctx:
+    def __init__(self, *, with_video: bool = False) -> None:
         self.config_kv = _ConfigKV()
         self.mavlink = _Mavlink()
         self.vision = _Vision()
         self.telemetry = _Telemetry()
         self.events = _Events()
+        if with_video:
+            self.video = _Video()
 
 
 def _zt30_factory(_cfg):
     return MockTransport(model=HW_ZT30, laser_range_m=42.0)
+
+
+async def test_configure_video_advertises_one_leg_per_sensor_zt30():
+    # A three-sensor pod advertises three legs: zoom-EO on main, wide-EO on sub,
+    # thermal on ir. The cockpit stream switcher flips between them client-side.
+    ctx = _Ctx(with_video=True)
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    assert len(ctx.video.sources) == 1
+    legs = ctx.video.sources[0]
+    ids = [leg["id"] for leg in legs]
+    assert ids == ["main", "eo_wide", "ir"]
+    assert legs[0]["source"] == "rtsp://192.168.144.25:8554/main"
+    assert legs[1]["role"] == "eo_wide"
+    assert legs[2]["source"] == "rtsp://192.168.144.25:8554/ir"
+    await plugin.on_stop(ctx)
+
+
+async def test_configure_video_single_leg_for_a_single_sensor_pod():
+    ctx = _Ctx(with_video=True)
+    plugin = SiyiPodPlugin(
+        transport_factory=lambda _cfg: MockTransport(model=HW_A2_MINI)
+    )
+    await plugin.on_start(ctx)
+    legs = ctx.video.sources[0]
+    assert [leg["id"] for leg in legs] == ["main"]
+    await plugin.on_stop(ctx)
 
 
 async def test_start_negotiates_and_registers_components():

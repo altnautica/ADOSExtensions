@@ -14,7 +14,6 @@ function state(caps: Partial<PodCapabilities>): PodState {
     pitch_deg: null,
     roll_deg: null,
     zoom: null,
-    sensor_mode: "eo",
     gimbal_mode: "follow",
     palette: null,
     recording: false,

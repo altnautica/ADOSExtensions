@@ -27,7 +27,6 @@ class PodState:
     pitch_deg: float | None = None
     roll_deg: float | None = None
     zoom: float | None = None
-    sensor_mode: str = "eo"
     gimbal_mode: str = "follow"
     palette: int | None = None
     recording: bool = False

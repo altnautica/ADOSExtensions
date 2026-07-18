@@ -12,7 +12,7 @@ import type { PluginContext } from "@altnautica/plugin-sdk";
 import * as cmd from "./commands";
 import { maxZoom, showControl } from "./capability";
 import type { PodStateStore } from "./pod-state";
-import { GIMBAL_MODES, SENSOR_MODES, type PodState } from "./types";
+import { GIMBAL_MODES, type PodState } from "./types";
 
 export interface PanelHandle {
   destroy(): void;
@@ -84,18 +84,10 @@ export function mountPanel(
       );
     }
 
-    // Camera.
+    // Camera. Each pod sensor is now its own video stream (the cockpit stream
+    // switcher selects between them), so the panel keeps only the per-sensor
+    // controls (zoom, etc.), not a sensor-mux selector.
     const cameraRow: (Node | string)[] = [];
-    const sensorSel = el("select", { class: "siyi-sel" }) as HTMLSelectElement;
-    for (const m of SENSOR_MODES) {
-      const opt = el("option", { value: m }, [m.toUpperCase()]) as HTMLOptionElement;
-      if (state?.sensor_mode === m) opt.selected = true;
-      sensorSel.appendChild(opt);
-    }
-    sensorSel.addEventListener("change", () =>
-      void cmd.setSensorMode(ctx, sensorSel.value),
-    );
-    cameraRow.push(sensorSel);
     if (showControl(state, "zoom")) {
       const zoom = el("input", {
         type: "range",

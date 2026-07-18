@@ -34,9 +34,6 @@ export async function writeConfig(
 export const setZoom = (ctx: PluginContext, zoom: number) =>
   writeConfig(ctx, "zoom", zoom);
 
-export const setSensorMode = (ctx: PluginContext, mode: string) =>
-  writeConfig(ctx, "sensor_mode", mode);
-
 export const setGimbalMode = (ctx: PluginContext, mode: string) =>
   writeConfig(ctx, "gimbal_mode", mode);
 

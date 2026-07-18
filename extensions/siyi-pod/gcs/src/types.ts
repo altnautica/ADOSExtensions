@@ -34,7 +34,6 @@ export interface PodState {
   pitch_deg: number | null;
   roll_deg: number | null;
   zoom: number | null;
-  sensor_mode: string;
   gimbal_mode: string;
   palette: number | null;
   recording: boolean;
@@ -73,7 +72,5 @@ export interface OverlayDetection {
   classLabel?: string;
 }
 
-export const SENSOR_MODES = ["eo", "ir", "wide", "pip"] as const;
 export const GIMBAL_MODES = ["lock", "follow", "fpv"] as const;
-export type SensorMode = (typeof SENSOR_MODES)[number];
 export type GimbalMode = (typeof GIMBAL_MODES)[number];

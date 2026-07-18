@@ -27,7 +27,6 @@ describe("PodStateStore", () => {
     const s = store.get();
     expect(s?.laser_range_m).toBeNull();
     expect(s?.zoom).toBe(5.5);
-    expect(s?.sensor_mode).toBe("eo");
     expect(s?.recording).toBe(false);
   });
 

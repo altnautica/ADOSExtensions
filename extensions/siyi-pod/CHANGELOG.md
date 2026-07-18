@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- Multi-stream video: on start the plugin advertises one video leg per sensor
+  the pod has (zoom/EO on `main`, wide EO on `sub`, thermal on `ir`), so a
+  multi-sensor pod like the ZT30 serves all its sensors at once and the cockpit
+  stream switcher flips between them. Auto-configured over the agent's video
+  facade (requires agent 0.99.177+); older agents fall back to operator config.
+- Removed the pod-side sensor-mode mux — each sensor is now its own stream, so
+  the panel keeps only the per-sensor controls.
+
 ## 0.1.0
 
 - Initial agent half: SIYI SDK frame codec (CRC16/XMODEM, verified against the
