@@ -158,3 +158,35 @@ def test_closed_loop_converges_with_shrinking_steps() -> None:
     # The loop settles inside the dead-band and then holds.
     assert held
     assert abs(target_yaw - ctrl.cmd_yaw) <= cfg.deadband_frac * half + 1e-9
+
+
+def test_rate_holds_inside_deadband() -> None:
+    ctrl = GimbalAimController(_cfg())
+    assert ctrl.rate(_bbox(640.0, 360.0)) is None
+
+
+def test_rate_right_target_yields_positive_yaw_rate() -> None:
+    ctrl = GimbalAimController(_cfg())
+    result = ctrl.rate(_bbox(640.0 + 0.5 * 640.0, 360.0))
+    assert result is not None
+    pitch_rate, yaw_rate = result
+    assert yaw_rate > 0.0  # right target slews yaw positive
+    assert pitch_rate == 0.0  # no vertical error
+
+
+def test_rate_invert_yaw_flips_the_sign() -> None:
+    box = _bbox(640.0 + 0.5 * 640.0, 360.0)
+    plain = GimbalAimController(_cfg()).rate(box)
+    inverted = GimbalAimController(_cfg(invert_yaw=True)).rate(box)
+    assert plain is not None and inverted is not None
+    assert plain[1] > 0.0
+    assert inverted[1] == -plain[1]
+
+
+def test_rate_does_not_integrate_the_model() -> None:
+    # Rate commands do not touch the controller's integrated-angle model, so a
+    # switch back to position mode resumes from the held angle.
+    ctrl = GimbalAimController(_cfg())
+    ctrl.rate(_bbox(640.0 + 0.5 * 640.0, 360.0))
+    assert ctrl.cmd_pitch == 0.0
+    assert ctrl.cmd_yaw == 0.0

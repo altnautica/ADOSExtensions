@@ -2,6 +2,24 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.3.0
+
+- Added four cockpit Skills: Aim (toggle the visual servo), Recenter, Nadir
+  (point straight down to the driver's lower pitch limit), and Rate mode
+  (toggle between angle and rate control). Recenter and Nadir are one-shot
+  commands the agent fires on the rising edge and then clears; Aim and Rate
+  mode publish a state read-back so the Skill Bar reflects the true state.
+- Added a rate-control mode: when on, the aim servo commands the gimbal by
+  angular rate instead of an absolute angle, sharing one error model with the
+  position servo.
+- Replaced the hand-typed `designate_camera` string with a camera picker: the
+  operator pins the camera the aim servo follows or leaves it on auto (the
+  first detect camera).
+- Exposed three tools (status, point-at, recenter) for an assistant, each
+  going through the same clamped driver paths the Skills use.
+- Enriched the manifest with a long description, feature list, hardware
+  requirements, resource estimate, telemetry field, and a documentation link.
+
 ## 1.2.0
 
 - Manifest on the current contribution platform (schema_version 2): the control

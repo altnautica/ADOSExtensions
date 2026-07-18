@@ -55,6 +55,18 @@ class FakeConfigKv:
     async def get(self, key, default=None):
         return self._live.get(key, default)
 
+    async def set(self, key, value, scope="drone"):
+        self._live[key] = value
+        return {"ok": True}
+
+
+class FakeTools:
+    def __init__(self) -> None:
+        self.handlers: dict = {}
+
+    def register(self, name, handler) -> None:
+        self.handlers[name] = handler
+
 
 class FakeEvents:
     def __init__(self) -> None:
@@ -66,11 +78,13 @@ class FakeEvents:
 
 
 class FakeCtx:
-    def __init__(self, live=None, static=None) -> None:
+    def __init__(self, live=None, static=None, with_tools=False) -> None:
         self.mavlink = FakeMavlink()
         self.vision = FakeVision()
         self.config_kv = FakeConfigKv(live=live, static=static)
         self.events = FakeEvents()
+        if with_tools:
+            self.tools = FakeTools()
 
 
 def _locked_batch(lock_state: str | None, track_id: int | None) -> DetectionBatch:
@@ -209,3 +223,129 @@ async def test_on_stop_closes_cleanly_and_is_idempotent() -> None:
 
     # A second on_stop must not raise.
     await plugin.on_stop(ctx)
+
+
+def _decode(frame: bytes):
+    return mavlink2.MAVLink(None).decode(bytearray(frame))
+
+
+@pytest.mark.asyncio
+async def test_recenter_action_centres_and_resets_the_key() -> None:
+    ctx = FakeCtx(live={"aim": False, "recenter": True})
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        await _settle()
+        ctx.mavlink.sent.clear()
+
+        await plugin.poll_control_once()
+        await _settle()
+
+        # One gimbal-manager command to (0, 0).
+        assert len(ctx.mavlink.sent) == 1
+        msg = _decode(ctx.mavlink.sent[0][0])
+        assert msg.command == MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+        assert msg.param1 == 0.0 and msg.param2 == 0.0
+        # The one-shot key is cleared so a re-press fires again.
+        assert await ctx.config_kv.get("recenter", False) is False
+    finally:
+        await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_nadir_action_points_straight_down() -> None:
+    ctx = FakeCtx(live={"aim": False, "nadir": True})
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        await _settle()
+        ctx.mavlink.sent.clear()
+
+        await plugin.poll_control_once()
+        await _settle()
+
+        assert len(ctx.mavlink.sent) == 1
+        msg = _decode(ctx.mavlink.sent[0][0])
+        # Nadir points to the driver's lower pitch limit (straight down).
+        assert msg.param1 == plugin._nadir_pitch
+        assert msg.param1 <= -90.0 or msg.param1 < 0.0
+        assert await ctx.config_kv.get("nadir", False) is False
+    finally:
+        await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_rate_mode_sends_a_rate_command() -> None:
+    # aim on + rate_mode on: a locked off-centre target drives a RATE command
+    # (non-zero pitch/yaw rate slots), not an absolute-angle command.
+    ctx = FakeCtx(live={"aim": True, "rate_mode": True})
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        await _settle()
+        # Pick up rate_mode from config (also set at start here).
+        await plugin.poll_control_once()
+        ctx.mavlink.sent.clear()
+
+        await ctx.vision.callback(_locked_batch("locked", track_id=7))
+        await _settle()
+
+        assert len(ctx.mavlink.sent) == 1
+        msg = _decode(ctx.mavlink.sent[0][0])
+        assert msg.command == MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+        # The target is right of centre, so the yaw rate slot (param4) is set.
+        assert msg.param4 != 0.0
+    finally:
+        await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_pinned_designate_camera_filters_the_subscription() -> None:
+    ctx = FakeCtx(live={"aim": False, "designate_camera": "uvc-1"})
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        # A pinned id filters the detection subscription to that camera; auto /
+        # empty subscribes to all (None), the default other tests cover.
+        assert ctx.vision.camera_id == "uvc-1"
+    finally:
+        await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_mcp_tools_registered_and_callable() -> None:
+    ctx = FakeCtx(live={"aim": False}, with_tools=True)
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        assert set(ctx.tools.handlers) == {"status", "point_at", "recenter"}
+
+        status = await ctx.tools.handlers["status"]({})
+        assert status["connected"] is True
+        assert status["rate_mode"] is False
+
+        await _settle()
+        ctx.mavlink.sent.clear()
+        result = await ctx.tools.handlers["point_at"](
+            {"pitch_deg": -20.0, "yaw_deg": 15.0}
+        )
+        assert result["ok"] is True
+        await _settle()
+        assert len(ctx.mavlink.sent) == 1
+        msg = _decode(ctx.mavlink.sent[0][0])
+        assert msg.param1 == -20.0 and msg.param2 == 15.0
+    finally:
+        await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_tools_absent_when_ctx_has_no_tools() -> None:
+    # No tools surface (mcp.expose not granted) -> registration is skipped, no
+    # crash.
+    ctx = FakeCtx(live={"aim": False})
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        assert not hasattr(ctx, "tools")
+    finally:
+        await plugin.on_stop(ctx)
