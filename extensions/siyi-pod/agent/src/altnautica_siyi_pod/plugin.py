@@ -101,10 +101,18 @@ class _Pose:
 class SiyiPodPlugin:
     """Lifecycle-hook plugin the runner instantiates with no args."""
 
-    def __init__(self, transport_factory: Callable[[dict], Any] | None = None) -> None:
+    def __init__(
+        self,
+        transport_factory: Callable[[dict], Any] | None = None,
+        *,
+        session_timeout_s: float | None = None,
+    ) -> None:
         # A test injects a factory returning a MockTransport; production uses the
         # config-selected real transport (the thermal-extension mock-seam pattern).
         self._transport_factory = transport_factory
+        # A test seam to shorten the session command timeout (production uses the
+        # session default); keeps the unreachable-pod retry test fast.
+        self._session_timeout_s = session_timeout_s
         self._ctx: Any = None
         self._session: SiyiSession | None = None
         self._pod: SiyiPod | None = None
@@ -134,10 +142,18 @@ class SiyiPodPlugin:
                 "serial_port": str(await self._cfg("serial_port", "/dev/ttyUSB0")),
             }
         )
-        self._session = SiyiSession(transport)
+        if self._session_timeout_s is not None:
+            self._session = SiyiSession(
+                transport, timeout_s=self._session_timeout_s, retries=0
+            )
+        else:
+            self._session = SiyiSession(transport)
         await self._session.start()
 
         self._pod = SiyiPod(self._session)
+        # Never hard-raise if the pod is unreachable at boot: negotiate resolves
+        # the fallback profile and the control loop re-negotiates until the pod
+        # answers (the gimbal, telemetry, and video come up once it appears).
         profile = await self._pod.negotiate()
 
         self._bridge = SiyiMavlinkBridge(ctx, system_id=system_id)
@@ -189,6 +205,25 @@ class SiyiPodPlugin:
         self._state.firmware = pod.firmware
         self._state.capabilities = self._capabilities_dict()
         self._state.link_ok = pod.negotiated
+
+    async def _try_renegotiate(self) -> None:
+        """Re-run negotiation while the pod is unresolved, and bring it online.
+
+        On the attempt that resolves the model, the video legs, source
+        assignment, and published state are set up — so a pod that was
+        unreachable at boot comes fully online once it answers, with no plugin
+        restart.
+        """
+        pod = self._pod
+        if pod is None:
+            return
+        try:
+            await pod.negotiate()
+        except Exception:  # noqa: BLE001
+            return
+        if pod.negotiated:
+            log.info("siyi pod negotiated on retry: model=%s", pod.profile.model)
+            await self._post_negotiation_setup()
 
     async def on_stop(self, ctx: Any) -> None:
         for task in (self._control_task, self._telemetry_task):
@@ -382,6 +417,9 @@ class SiyiPodPlugin:
         pod = self._pod
         if pod is None:
             return
+        # Bring an unreachable-at-boot pod online once it answers.
+        if not pod.negotiated:
+            await self._try_renegotiate()
         # Declarative state keys.
         for key in _STATE_KEYS:
             value = await self._cfg(key, None)

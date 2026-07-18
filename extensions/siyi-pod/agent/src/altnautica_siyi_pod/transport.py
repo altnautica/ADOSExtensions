@@ -59,10 +59,14 @@ class MockTransport:
         model: int = HW_ZT30,
         laser_range_m: float = 42.0,
         firmware: str = "v1.2.3",
+        answer_identity: bool = True,
     ) -> None:
         self.model = model
         self.laser_range_m = laser_range_m
         self.firmware = firmware
+        # When False the mock stays silent on the firmware / hardware-id queries,
+        # simulating a pod that is not yet reachable (drives the retry path).
+        self.answer_identity = answer_identity
         self._on_bytes: OnBytes | None = None
         self.opened = False
         self.sent: list[bytes] = []
@@ -100,8 +104,12 @@ class MockTransport:
         cmd = f.cmd_id
         seq = f.seq
         if cmd == C.CMD_HARDWARE_ID:
+            if not self.answer_identity:
+                return None
             return build_frame(C.CMD_HARDWARE_ID, bytes([self.model, 0x00]), seq=seq)
         if cmd == C.CMD_FIRMWARE_VERSION:
+            if not self.answer_identity:
+                return None
             # Synthetic firmware triple (camera / gimbal / zoom board).
             return build_frame(
                 C.CMD_FIRMWARE_VERSION, b"\x01\x02\x03\x00\x00\x00", seq=seq

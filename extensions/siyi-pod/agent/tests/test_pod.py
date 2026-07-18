@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from altnautica_siyi_pod import capability_profile as CP
-from altnautica_siyi_pod.pod import PodUnsupported
+from altnautica_siyi_pod.pod import PodUnsupported, SiyiPod
+from altnautica_siyi_pod.session import SiyiSession
+from altnautica_siyi_pod.transport import MockTransport
 from helpers import make_pod
 
 
@@ -105,6 +107,24 @@ async def test_zt30_assigns_image_source_and_split():
     await pod.set_image_source("sub", "split")
     assert transport.split_mode is True
     assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_SPLIT
+    await session.stop()
+
+
+async def test_negotiate_survives_unreachable_pod():
+    # A pod that never answers the identity query must not raise out of
+    # negotiate; it stays on the conservative fallback until it appears.
+    transport = MockTransport(model=CP.HW_ZT30, answer_identity=False)
+    session = SiyiSession(transport, timeout_s=0.02, retries=0)
+    await session.start()
+    pod = SiyiPod(session)
+    profile = await pod.negotiate()  # must not raise
+    assert pod.negotiated is False
+    assert profile is CP.FALLBACK_PROFILE  # not a guessed model (Rule 44)
+    # Once the pod answers, a re-run resolves the real model — idempotent.
+    transport.answer_identity = True
+    await pod.negotiate()
+    assert pod.negotiated is True
+    assert pod.profile.model == "ZT30"
     await session.stop()
 
 

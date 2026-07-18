@@ -229,6 +229,29 @@ async def test_laser_fire_publishes_a_geolocated_target():
     await plugin.on_stop(ctx)
 
 
+async def test_start_survives_unreachable_pod_and_recovers():
+    # The pod is unreachable at boot: on_start must not raise, and the model +
+    # video legs must come up once the pod answers.
+    ctx = _Ctx(with_video=True)
+    transport = MockTransport(model=HW_ZT30, answer_identity=False)
+    plugin = SiyiPodPlugin(
+        transport_factory=lambda _cfg: transport, session_timeout_s=0.02
+    )
+    await plugin.on_start(ctx)  # must not raise on an unreachable pod
+    assert plugin.pod.negotiated is False
+    assert plugin.state.connected is False
+
+    # The pod appears; the control loop re-negotiates and brings it online.
+    transport.answer_identity = True
+    await plugin.apply_config_once()
+    assert plugin.pod.negotiated is True
+    assert plugin.pod.profile.model == "ZT30"
+    assert plugin.state.connected is True
+    legs = ctx.video.sources[-1]
+    assert [leg["id"] for leg in legs] == ["main", "sub"]
+    await plugin.on_stop(ctx)
+
+
 async def test_a2_mini_unsupported_controls_are_ignored_not_raised():
     ctx = _Ctx()
     plugin = SiyiPodPlugin(

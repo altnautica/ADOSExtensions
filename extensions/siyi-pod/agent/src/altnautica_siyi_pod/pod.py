@@ -40,7 +40,15 @@ class SiyiPod:
 
     # -- negotiation ------------------------------------------------------
     async def negotiate(self) -> CapabilityProfile:
-        """Query firmware + hardware-id and resolve the capability profile."""
+        """Query firmware + hardware-id and resolve the capability profile.
+
+        Never raises on a slow / absent / unreachable pod: a firmware or
+        hardware-id timeout leaves the conservative fallback profile in place
+        with ``negotiated`` still False, so the caller retries rather than the
+        whole plugin failing to start. Negotiation is idempotent and
+        re-runnable — it re-queries on every call, so a pod that appears late
+        (or a hot-swapped model) resolves cleanly on a later attempt.
+        """
         try:
             fw = await self._session.request(C.request_firmware())
             self.firmware = "".join(f"{b}" for b in fw.data[:3]) or None
@@ -48,7 +56,14 @@ class SiyiPod:
             # Firmware is informational; a pod that answers the hardware-id but
             # not the firmware query still negotiates.
             log.info("siyi firmware query failed; continuing", exc_info=True)
-        hw = await self._session.request(C.request_hardware_id())
+        try:
+            hw = await self._session.request(C.request_hardware_id())
+        except Exception:  # noqa: BLE001
+            # The pod did not answer the identity query (late boot, unpowered,
+            # unreachable). Stay on the fallback profile; the caller re-runs
+            # negotiation until the pod appears.
+            log.info("siyi hardware-id query failed; will retry", exc_info=True)
+            return self.profile
         code = resolve_hardware_code(hw.data)
         self.profile = profile_for(code)
         self.negotiated = True
