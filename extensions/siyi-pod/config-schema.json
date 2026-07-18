@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "ADOS SIYI Optical Pod configuration",
+  "type": "object",
+  "properties": {
+    "transport": {
+      "type": "string",
+      "enum": ["udp", "tcp", "uart"],
+      "default": "udp",
+      "title": "Transport",
+      "description": "How the agent reaches the pod: UDP or TCP over Ethernet, or a TTL serial port."
+    },
+    "host": {
+      "type": "string",
+      "default": "192.168.144.25",
+      "title": "Pod IP address",
+      "description": "The pod's IP on the companion network (UDP/TCP transports)."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 37260,
+      "title": "Control port",
+      "description": "The SIYI SDK control port (UDP/TCP transports)."
+    },
+    "serial_port": {
+      "type": "string",
+      "default": "/dev/ttyUSB0",
+      "title": "Serial port",
+      "description": "The TTL serial device (UART transport), 115200 8N1."
+    },
+    "system_id": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 255,
+      "default": 1,
+      "title": "MAVLink system id",
+      "description": "The aircraft system id the pod's mirrored MAVLink frames use."
+    },
+    "camera_id": {
+      "type": "string",
+      "default": "siyi-pod",
+      "title": "Camera id",
+      "description": "The camera id stamped on the pod's republished tracker detections."
+    }
+  },
+  "additionalProperties": true
+}

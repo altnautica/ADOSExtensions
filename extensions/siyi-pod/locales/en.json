@@ -1,0 +1,19 @@
+{
+  "settings.optics": "Optics",
+  "settings.gimbal": "Gimbal",
+  "settings.thermal": "Thermal",
+  "settings.laser": "Laser rangefinder",
+  "settings.zoom": "Zoom",
+  "settings.sensorMode": "Sensor",
+  "settings.gimbalMode": "Gimbal mode",
+  "settings.palette": "Thermal palette",
+  "settings.gain": "High gain",
+  "settings.laserHelp": "Arm the laser rangefinder. Off by default; the operator arms it before ranging.",
+  "skill.track": "Track",
+  "skill.record": "Record",
+  "hud.range": "Range",
+  "hud.zoom": "Zoom",
+  "notify.overTemp": "Pod over-temperature",
+  "notify.linkLost": "Pod link lost",
+  "notify.trackLost": "Track lost"
+}
