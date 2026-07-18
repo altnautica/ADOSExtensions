@@ -158,6 +158,36 @@ def set_data_stream(stream_type: int, frequency_hz: int) -> Command:
     return Command(CMD_DATA_STREAM, bytes([stream_type & 0xFF, frequency_hz & 0xFF]))
 
 
+# --- AI tracking (ai-track models only) -------------------------------------
+AI_TRACK_STOP_FLAG = 0x00
+AI_TRACK_START_FLAG = 0x01
+
+
+def ai_track_designate(x: int, y: int, width: int, height: int) -> Command:
+    """Hand the pod a box (pod-frame pixels) to lock its on-pod tracker onto.
+
+    The pod then tracks the subject and self-slews the gimbal. The exact
+    coordinate convention (pixel box vs normalised centre) is confirmed on a
+    bench pod against the SDK document (Rule 25).
+    """
+    return Command(
+        CMD_AI_TRACK,
+        struct.pack(
+            "<BHHHH",
+            AI_TRACK_START_FLAG,
+            int(x) & 0xFFFF,
+            int(y) & 0xFFFF,
+            int(width) & 0xFFFF,
+            int(height) & 0xFFFF,
+        ),
+    )
+
+
+def ai_track_stop() -> Command:
+    """Release the pod's AI tracker."""
+    return Command(CMD_AI_TRACK, bytes([AI_TRACK_STOP_FLAG]))
+
+
 # --- decoders ---------------------------------------------------------------
 class GimbalAttitude(NamedTuple):
     yaw_deg: float

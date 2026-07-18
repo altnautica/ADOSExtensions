@@ -129,6 +129,18 @@ class SiyiPod:
         reply = await self._session.request(C.request_laser_range())
         return C.decode_laser_range(reply.data)
 
+    # -- AI tracking ------------------------------------------------------
+    async def ai_track_designate(
+        self, x: int, y: int, width: int, height: int
+    ) -> None:
+        """Lock the pod's on-pod tracker onto a box (pod-frame pixels)."""
+        self._require("ai_track")
+        await self._session.command(C.ai_track_designate(x, y, width, height))
+
+    async def ai_track_stop(self) -> None:
+        self._require("ai_track")
+        await self._session.command(C.ai_track_stop())
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, float(value)))
