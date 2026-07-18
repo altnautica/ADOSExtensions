@@ -16,10 +16,13 @@
   "settings.gimbalPoint": "Point gimbal at subject",
   "settings.designateCamera": "Designate camera",
   "settings.cameraHfov": "Camera field of view (deg)",
+  "settings.mountPitch": "Camera mount pitch (deg)",
   "settings.detector": "Detector model",
   "metrics.title": "Live",
   "metrics.lockState": "Lock state",
   "metrics.commanding": "Commanding",
+  "metrics.fcArmed": "FC armed",
+  "metrics.guidedMode": "Guided mode",
   "metrics.targetId": "Target",
   "metrics.range": "Range to subject",
   "metrics.distanceSetpoint": "Distance setpoint",
@@ -29,7 +32,5 @@
   "lock.locked": "Locked",
   "lock.uncertain": "Uncertain",
   "lock.lost": "Lost",
-  "lock.none": "No lock",
-  "overlay.clickToFollow": "Click to follow this subject",
-  "overlay.designateHint": "Click a subject to follow"
+  "lock.none": "No lock"
 }

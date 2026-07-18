@@ -25,6 +25,8 @@ const idleFollow: FollowState = {
   distanceSetpointM: null,
   heightSetpointM: null,
   commanding: false,
+  fcArmed: false,
+  fcGuided: false,
 };
 
 const commandingFollow: FollowState = {
@@ -35,6 +37,8 @@ const commandingFollow: FollowState = {
   distanceSetpointM: 8,
   heightSetpointM: 4,
   commanding: true,
+  fcArmed: true,
+  fcGuided: true,
 };
 
 describe("FollowMeTab", () => {
@@ -51,9 +55,30 @@ describe("FollowMeTab", () => {
     const h = harnessCtx();
     render(<FollowMeTab ctx={h.ctx} followOverride={commandingFollow} />);
     expect(screen.getByTestId("fm-commanding").textContent).toBe("Yes");
+    expect(screen.getByTestId("fm-fc-armed").textContent).toBe("Yes");
+    expect(screen.getByTestId("fm-fc-guided").textContent).toBe("Yes");
     expect(screen.getByTestId("fm-lock-state").textContent).toContain("Locked");
     expect(screen.getByTestId("fm-target-id").textContent).toBe("#42");
     expect(screen.getByTestId("fm-range").textContent).toBe("12.3 m");
+  });
+
+  it("shows the honest FC state when locked but the FC is not guided", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{
+          ...commandingFollow,
+          commanding: false,
+          fcArmed: true,
+          fcGuided: false,
+        }}
+      />,
+    );
+    // Locked but not commanding, and the FC rows explain why.
+    expect(screen.getByTestId("fm-commanding").textContent).toBe("No");
+    expect(screen.getByTestId("fm-fc-armed").textContent).toBe("Yes");
+    expect(screen.getByTestId("fm-fc-guided").textContent).toBe("No");
   });
 
   it("points to the native settings controls and edits no config from the iframe", () => {

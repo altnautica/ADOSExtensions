@@ -24,6 +24,10 @@ export interface FollowState {
   distanceSetpointM: number | null;
   heightSetpointM: number | null;
   commanding: boolean;
+  /** Flight-controller armed state (from HEARTBEAT). */
+  fcArmed: boolean;
+  /** Flight controller in a guided/offboard mode that accepts setpoints. */
+  fcGuided: boolean;
 }
 
 /** The agent emits snake_case keys; normalize to the camelCase shape. */
@@ -35,6 +39,8 @@ export interface RawFollowState {
   distance_setpoint_m?: number | null;
   height_setpoint_m?: number | null;
   commanding?: boolean;
+  fc_armed?: boolean;
+  fc_guided?: boolean;
 }
 
 /** The per-drone config the settings tab writes through ctx.config. */
@@ -45,6 +51,7 @@ export interface FollowConfig {
   gimbal_point: boolean;
   designate_camera: string;
   camera_hfov_deg: number;
+  mount_pitch_deg: number;
 }
 
 export const DEFAULT_CONFIG: FollowConfig = {
@@ -54,6 +61,7 @@ export const DEFAULT_CONFIG: FollowConfig = {
   gimbal_point: true,
   designate_camera: "uvc-0",
   camera_hfov_deg: 70,
+  mount_pitch_deg: 30,
 };
 
 /** Empty follow state baseline before the first read-back arrives. */
@@ -65,6 +73,8 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   distanceSetpointM: null,
   heightSetpointM: null,
   commanding: false,
+  fcArmed: false,
+  fcGuided: false,
 };
 
 /** Map the agent's snake_case read-back onto the camelCase FollowState. */
@@ -82,6 +92,8 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     heightSetpointM:
       typeof raw.height_setpoint_m === "number" ? raw.height_setpoint_m : null,
     commanding: raw.commanding === true,
+    fcArmed: raw.fc_armed === true,
+    fcGuided: raw.fc_guided === true,
   };
 }
 

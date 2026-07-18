@@ -30,7 +30,12 @@ class FollowConfig:
     gimbal_point: bool = True
     designate_camera: str = "uvc-0"
     camera_hfov_deg: float = 70.0
-    mount_pitch_deg: float = 0.0
+    # Fixed downward tilt of the designate camera below the horizon. A
+    # forward camera needs a positive tilt for its ground projection to
+    # intersect the ground plane at all, so the default is a modest
+    # forward-down angle rather than 0 (a level camera never resolves a
+    # ground point and the follow loop would never command).
+    mount_pitch_deg: float = 30.0
 
     @classmethod
     def resolve(
@@ -82,7 +87,10 @@ def _as_float(value: object, default: float) -> float:
 @dataclass
 class FollowState:
     """The published follow read-back. ``commanding`` is the honest bit:
-    True only while active, locked, and actually emitting setpoints."""
+    True only while active, locked, a pose exists, AND the flight controller
+    is armed and in a guided/offboard mode that accepts the setpoints.
+    ``fc_armed`` / ``fc_guided`` carry the flight-controller state so the
+    read-back explains why the loop is or is not commanding."""
 
     active: bool = False
     lock_state: str | None = None
@@ -91,6 +99,8 @@ class FollowState:
     distance_setpoint_m: float | None = None
     height_setpoint_m: float | None = None
     commanding: bool = False
+    fc_armed: bool = False
+    fc_guided: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

@@ -30,6 +30,7 @@ from follow_me.state import (
     LOCK_LOCKED,
     LOCK_LOST,
     LOCK_UNCERTAIN,
+    FollowConfig,
 )
 
 
@@ -144,6 +145,23 @@ def _level_pose(plugin: follow_me.FollowMePlugin) -> None:
     )
 
 
+def _arm_guided(
+    plugin: follow_me.FollowMePlugin,
+    *,
+    autopilot: int = 3,  # MAV_AUTOPILOT_ARDUPILOTMEGA
+    custom_mode: int = 4,  # ArduCopter GUIDED
+) -> None:
+    """Feed a HEARTBEAT that reports the FC armed and in a guided mode, the
+    precondition for the loop to actually command."""
+    plugin._on_heartbeat(
+        {
+            "base_mode": 0x81,  # MAV_MODE_FLAG_SAFETY_ARMED | CUSTOM_MODE
+            "custom_mode": custom_mode,
+            "autopilot": autopilot,
+        }
+    )
+
+
 def _bbox_center_frame() -> BoundingBox:
     # A box near the frame centre so the projection has a downward ray when
     # a mount pitch is configured.
@@ -211,6 +229,7 @@ async def test_locked_and_active_sends_a_setpoint() -> None:
     )
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
+    _arm_guided(plugin)
 
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
@@ -220,6 +239,8 @@ async def test_locked_and_active_sends_a_setpoint() -> None:
     states = _state_events(ctx)
     assert states, "the loop must publish a follow.state read-back"
     assert states[-1]["commanding"] is True
+    assert states[-1]["fc_armed"] is True
+    assert states[-1]["fc_guided"] is True
 
 
 @pytest.mark.asyncio
@@ -354,6 +375,7 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
     )
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
+    _arm_guided(plugin)
 
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
@@ -361,6 +383,111 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
 
     # One position-target frame plus one gimbal command frame.
     assert len(ctx.mavlink.sent) == 2
+
+
+# ---------------------------------------------------------------------------
+# Flight-controller command gate: commanding is honest about the FC state.
+# A locked, active, posed follow only commands when the FC is armed AND in a
+# guided/offboard mode that accepts the setpoints.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_armed_but_not_guided_holds_without_commanding() -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": False,
+            "designate_camera": "uvc-0",
+            "mount_pitch_deg": 45.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    _level_pose(plugin)
+    # Armed, but in a non-guided mode (ArduCopter LOITER == 5).
+    _arm_guided(plugin, custom_mode=5)
+
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
+
+    await plugin._tick()
+
+    assert not ctx.mavlink.sent, "a non-guided FC must not be commanded"
+    states = _state_events(ctx)
+    assert states and states[-1]["commanding"] is False
+    assert states[-1]["fc_armed"] is True
+    assert states[-1]["fc_guided"] is False
+    # The lock is retained; only the FC state blocks commanding.
+    assert states[-1]["lock_state"] == LOCK_LOCKED
+
+
+@pytest.mark.asyncio
+async def test_guided_but_disarmed_holds_without_commanding() -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": False,
+            "designate_camera": "uvc-0",
+            "mount_pitch_deg": 45.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    _level_pose(plugin)
+    # Guided mode selected, but the disarmed bit is clear in base_mode.
+    plugin._on_heartbeat(
+        {"base_mode": 0x01, "custom_mode": 4, "autopilot": 3}
+    )
+
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
+
+    await plugin._tick()
+
+    assert not ctx.mavlink.sent, "a disarmed FC must not be commanded"
+    states = _state_events(ctx)
+    assert states and states[-1]["commanding"] is False
+    assert states[-1]["fc_armed"] is False
+    assert states[-1]["fc_guided"] is True
+
+
+@pytest.mark.asyncio
+async def test_px4_offboard_is_treated_as_guided() -> None:
+    ctx = _Ctx(
+        config={
+            "active": True,
+            "gimbal_point": False,
+            "designate_camera": "uvc-0",
+            "mount_pitch_deg": 45.0,
+        }
+    )
+    plugin = _make_plugin(ctx)
+    _level_pose(plugin)
+    # PX4 (autopilot 12) packs the main mode into bits 16-23; OFFBOARD == 6.
+    _arm_guided(plugin, autopilot=12, custom_mode=(6 << 16))
+
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
+
+    await plugin._tick()
+
+    assert ctx.mavlink.sent, "PX4 OFFBOARD must be commanded like AP GUIDED"
+    states = _state_events(ctx)
+    assert states and states[-1]["commanding"] is True
+    assert states[-1]["fc_guided"] is True
+
+
+# ---------------------------------------------------------------------------
+# Config surface: mount_pitch_deg is a real, resolvable per-drone key.
+# ---------------------------------------------------------------------------
+
+
+def test_mount_pitch_default_is_a_usable_forward_tilt() -> None:
+    # A fresh install with nothing written must resolve a non-zero downward
+    # tilt, or a forward camera's ray never intersects the ground.
+    cfg = FollowConfig.resolve({}, {})
+    assert cfg.mount_pitch_deg == 30.0
+
+
+def test_mount_pitch_live_value_overrides_the_default() -> None:
+    cfg = FollowConfig.resolve({"mount_pitch_deg": 55.0}, {})
+    assert cfg.mount_pitch_deg == 55.0
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +584,38 @@ def test_batch_with_no_tracked_detection_adopts_nothing() -> None:
     plugin._on_batch(batch)
 
     assert plugin._tracker.has_lock is False
+
+
+def test_batch_from_a_different_camera_is_filtered_out() -> None:
+    # The plugin subscribes to every camera and filters to the configured
+    # designate camera locally, so a batch from another camera never locks.
+    ctx = _Ctx(config={"designate_camera": "uvc-0"})
+    plugin = _make_plugin(ctx)
+    plugin._active_camera = "uvc-0"
+
+    other = DetectionBatch(
+        model_id="coco-person",
+        camera_id="uvc-1",  # not the configured designate camera
+        frame_id=1,
+        ts_ms=0,
+        detections=[
+            Detection(
+                bbox=BoundingBox(100, 100, 20, 20),
+                class_label="person",
+                confidence=0.9,
+                track_id=7,
+                lock_state=LOCK_LOCKED,
+            )
+        ],
+    )
+    plugin._on_batch(other)
+    assert plugin._tracker.has_lock is False
+
+    # Retargeting to that camera at runtime lets its batches through with no
+    # re-subscription.
+    plugin._active_camera = "uvc-1"
+    plugin._on_batch(other)
+    assert plugin._tracker.track_id == 7
 
 
 def test_follow_state_topic_constant_matches_manifest() -> None:

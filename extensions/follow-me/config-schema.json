@@ -45,6 +45,20 @@
       "default": 70,
       "minimum": 30,
       "maximum": 160
+    },
+    "mount_pitch_deg": {
+      "type": "number",
+      "title": "Camera mount pitch (deg)",
+      "description": "Fixed downward tilt of the designate camera below the horizon, used by the image-to-ground projection. A forward camera needs a positive tilt to resolve a ground point; 90 is straight down.",
+      "default": 30,
+      "minimum": 0,
+      "maximum": 90
+    },
+    "detector": {
+      "type": "string",
+      "title": "Detector model",
+      "description": "The detection model the follow loop consumes, bound to the shared vision detector. Lists every registered detection model, including the generic person model this plugin contributes.",
+      "default": "coco-person"
     }
   },
   "required": ["active"]

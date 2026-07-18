@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.2.1"
+version: "0.2.2"
 description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a fixed
@@ -78,21 +78,27 @@ gcs:
         icon: "crosshair"
         category: behavior
         toggle: true
-        confirm: false
+        # Arming streams guided setpoints to the flight controller, so the
+        # Skill Bar toggle confirms before it arms rather than firing on a
+        # single keypress.
+        confirm: true
         arm_requirement: armed
+        # The Skill Bar toggle is a distinct chord from the click-a-target
+        # Follow action below so the two never share one key.
         default_binding:
-          key: "f"
+          key: "shift+f"
         activation:
           via: config
           config_key: active
         state:
           via: event
           topic: "follow.state"
-    # A cockpit target action: click a detected subject in the host overlay,
-    # pick Follow, and the drone designates + follows it. The host owns the
-    # overlay, the box drawing, the selection, and the designate + config
-    # write — this plugin only declares the action. Bound to `f` on the
-    # selected target.
+    # Cockpit target actions: click a detected subject in the host overlay and
+    # pick Follow (or Stop following). The host owns the overlay, the box
+    # drawing, the selection, and the designate + config write — this plugin
+    # only declares the actions. "Follow this target" is bound to `f` on the
+    # selected target and "Stop following" to `x`; both differ from the Skill
+    # Bar toggle's shift+f.
     target_actions:
       - id: follow
         label: "Follow this target"
@@ -103,6 +109,15 @@ gcs:
         config_key: active
         config_value: true
         default_key: "f"
+      - id: stop-follow
+        label: "Stop following"
+        icon: circle-stop
+        order: 21
+        applies_to_class: person
+        designate: false
+        config_key: active
+        config_value: false
+        default_key: "x"
     # The settings + live read-back tab on the drone's detail panel.
     tabs:
       - id: follow-me-tab
@@ -164,6 +179,23 @@ gcs:
           label: "settings.cameraHfov"
           group: "settings.title"
           order: 40
+      # Fixed downward tilt of the designate camera below the horizon. A
+      # forward camera needs a positive tilt for the image-to-ground
+      # projection to intersect; 90 is straight down. The default is a modest
+      # forward-down angle so a fresh install can resolve a ground point.
+      - key: mount_pitch_deg
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0
+          maximum: 90
+          step: 1
+          default: 30
+        ui:
+          widget: range
+          label: "settings.mountPitch"
+          group: "settings.title"
+          order: 42
       - key: designate_camera
         binding: plugin.config
         schema:

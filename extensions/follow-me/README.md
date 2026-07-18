@@ -28,17 +28,19 @@ subject. The operator re-designates to resume.
 
 ## Surfaces
 
-- **Flight Skill** (`follow-me`): an armed-only toggle in the cockpit Skill
-  Bar (default hotkey `f`). Arming writes the per-drone `active` config; the
-  agent reads it live and reports `follow.state`.
-- **Video overlay** (`video.overlay`): draws the live detection boxes over
-  the video, coloured by lock state (green locked, amber uncertain, red
-  lost). Dormant until the skill is armed; then it shows a designation
-  reticle and the boxes become clickable.
+- **Flight Skill** (`follow-me`): an armed-only, confirm-to-arm toggle in the
+  cockpit Skill Bar (default hotkey `⇧F`). Arming writes the per-drone
+  `active` config; the agent reads it live and reports `follow.state`.
+- **Target actions** (`contributes.target_actions`): click a detected subject
+  in the host's cockpit overlay and pick **Follow this target** (hotkey `f`)
+  to designate and follow it, or **Stop following** (hotkey `x`) to stop. The
+  host owns the overlay, the box drawing, the selection, and the designate +
+  config write; this plugin only declares the actions.
 - **Native settings** (`contributes.parameters`): the follow settings
-  (distance, height, gimbal point, camera, field of view, and the detector
-  model) render as native GCS controls from the manifest. The agent reads
-  the same per-drone keys live; the iframe does not re-implement them.
+  (distance, height, gimbal point, camera, field of view, mount pitch, and
+  the detector model) render as native GCS controls from the manifest. The
+  agent reads the same per-drone keys live; the iframe does not re-implement
+  them.
 - **Node-detail tab** (`node.detail.tab`, drone profile): Specs and a live
   read-back (lock state, the honest `commanding` flag, range, setpoints).
 
@@ -54,6 +56,8 @@ Per-drone configuration (see `config-schema.json`):
 | `gimbal_point`     | `true`   | —         | Point a gimbal at the subject if present. |
 | `designate_camera` | `uvc-0`  | —         | Camera the follow loop consumes.          |
 | `camera_hfov_deg`  | `70`     | `30`–`160`| Camera horizontal field of view.          |
+| `mount_pitch_deg`  | `30`     | `0`–`90`  | Camera downward tilt below the horizon.   |
+| `detector`         | `coco-person` | —    | Detection model the follow loop consumes. |
 
 ## Requirements
 
@@ -70,7 +74,7 @@ Per-drone configuration (see `config-schema.json`):
 pnpm -C gcs build      # esbuild -> gcs/plugin.bundle.js
 pnpm -C gcs test       # vitest (GCS half)
 ( cd agent && python -m pytest )   # agent half
-../../scripts/pack.sh follow-me    # -> dist/com.altnautica.follow-me-0.1.0.adosplug
+../../scripts/pack.sh follow-me    # -> dist/com.altnautica.follow-me-0.2.2.adosplug
 ```
 
 ## License

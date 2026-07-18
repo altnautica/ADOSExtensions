@@ -145,6 +145,16 @@ function MetricsSection({
         testId="fm-commanding"
       />
       <MetricRow
+        label={t("metrics.fcArmed")}
+        value={follow.fcArmed ? t("metrics.yes") : t("metrics.no")}
+        testId="fm-fc-armed"
+      />
+      <MetricRow
+        label={t("metrics.guidedMode")}
+        value={follow.fcGuided ? t("metrics.yes") : t("metrics.no")}
+        testId="fm-fc-guided"
+      />
+      <MetricRow
         label={t("metrics.targetId")}
         value={follow.targetId != null ? `#${follow.targetId}` : "—"}
         testId="fm-target-id"

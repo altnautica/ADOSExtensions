@@ -13,6 +13,8 @@ describe("normalizeFollowState", () => {
       distance_setpoint_m: 8,
       height_setpoint_m: 4,
       commanding: true,
+      fc_armed: true,
+      fc_guided: true,
     });
     expect(s).toEqual({
       active: true,
@@ -22,6 +24,8 @@ describe("normalizeFollowState", () => {
       distanceSetpointM: 8,
       heightSetpointM: 4,
       commanding: true,
+      fcArmed: true,
+      fcGuided: true,
     });
   });
 
@@ -42,6 +46,7 @@ describe("normalizeConfig", () => {
     expect(c.gimbal_point).toBe(true);
     expect(c.designate_camera).toBe("uvc-0");
     expect(c.camera_hfov_deg).toBe(70);
+    expect(c.mount_pitch_deg).toBe(30);
   });
 
   it("coerces a numeric string", () => {

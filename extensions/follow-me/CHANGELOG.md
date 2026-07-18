@@ -4,6 +4,33 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.2]
+
+### Added
+
+- A `mount_pitch_deg` setting (the camera's fixed downward tilt below the
+  horizon, default 30, range 0 to 90) exposed as a native parameter, in
+  `config-schema.json`, and in the GCS config. A forward camera left at 0
+  never resolves a ground point, so the follow loop would never command; the
+  new default and control fix that.
+- A "Stop following" cockpit target action (hotkey `x`) so a followed subject
+  can be released without opening the Skill Bar.
+- The live read-back now carries the flight controller's armed and
+  guided-mode state (`fc_armed`, `fc_guided`), shown on the node-detail tab.
+
+### Changed
+
+- `commanding` is now reported true only when the flight controller is armed
+  AND in a guided or offboard mode that accepts the setpoints, so the
+  read-back no longer claims to command an FC that would ignore it.
+- The Skill Bar toggle now confirms before it arms (arming streams guided
+  setpoints) and moved to `⇧F` so it no longer shares the `f` key with the
+  "Follow this target" action.
+- The follow loop reads the full config on a slow interval and only the live
+  arm/disarm toggle each tick, cutting the per-loop config IPC.
+- Changing the designate camera at runtime now takes effect without a
+  restart.
+
 ## [0.2.1]
 
 ### Changed

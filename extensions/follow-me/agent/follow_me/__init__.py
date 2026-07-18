@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from dataclasses import replace
 from typing import Any
 
 from ados.plugins.manifest import (
@@ -64,13 +65,47 @@ _COAST_WINDOW_S = 1.5
 # changed, so the GCS knows the agent is alive.
 _STATE_HEARTBEAT_S = 1.0
 
+# How often the full per-drone config key set is re-read. The follow loop
+# runs faster than this; between refreshes only the live ``active`` toggle
+# is re-read each tick so arm/disarm stays responsive, while the rarely-
+# changed geometry keys are served from cache instead of an IPC round-trip
+# per key on every loop.
+_CONFIG_REFRESH_S = 1.0
+
+# HEARTBEAT decode. MAV_MODE_FLAG_SAFETY_ARMED is bit 7 of base_mode.
+_BASE_MODE_ARMED = 0x80
+# MAV_AUTOPILOT ids we can decode a guided/offboard mode for.
+_AP_ARDUPILOTMEGA = 3
+_AP_PX4 = 12
+# ArduPilot Copter custom_mode values that accept companion position
+# setpoints: GUIDED and GUIDED_NOGPS.
+_ARDUCOPTER_GUIDED = 4
+_ARDUCOPTER_GUIDED_NOGPS = 20
+# PX4 packs the main mode into bits 16-23 of custom_mode; OFFBOARD is 6.
+_PX4_MAIN_MODE_OFFBOARD = 6
+
+
+def _is_guided_mode(autopilot: int, custom_mode: int) -> bool:
+    """Whether ``custom_mode`` is a guided/offboard mode for ``autopilot``.
+
+    Firmware-aware: ArduPilot Copter GUIDED / GUIDED_NOGPS, PX4 OFFBOARD. An
+    autopilot we do not decode returns False so the follow loop reports
+    ``fc_guided`` honestly rather than claiming to command an FC that would
+    ignore the setpoints.
+    """
+    if autopilot == _AP_PX4:
+        return ((custom_mode >> 16) & 0xFF) == _PX4_MAIN_MODE_OFFBOARD
+    if autopilot == _AP_ARDUPILOTMEGA:
+        return custom_mode in (_ARDUCOPTER_GUIDED, _ARDUCOPTER_GUIDED_NOGPS)
+    return False
+
 
 def get_manifest() -> PluginManifest:
     """In-code manifest mirror (the packed archive ships manifest.yaml)."""
     return PluginManifest(
         schema_version=2,
         id=PLUGIN_ID,
-        version="0.2.1",
+        version="0.2.2",
         name="ADOS Follow-Me",
         description=(
             "Locks onto an operator-designated subject and flies a "
@@ -126,12 +161,29 @@ class _Pose:
         return self.have_attitude and self.have_position
 
 
+class _FcState:
+    """Latest flight-controller arm + mode cached from HEARTBEAT.
+
+    ``guided`` is True only when the autopilot is positively identified
+    (ArduPilot or PX4) AND reports a mode that accepts companion position
+    setpoints. An unknown autopilot or a non-guided mode leaves it False so
+    the follow loop never claims to command an FC that would ignore it.
+    """
+
+    __slots__ = ("armed", "guided")
+
+    def __init__(self) -> None:
+        self.armed = False
+        self.guided = False
+
+
 class FollowMePlugin:
     """Lifecycle-hook plugin class the runner instantiates with no args."""
 
     def __init__(self) -> None:
         self._ctx: Any = None
         self._pose = _Pose()
+        self._fc = _FcState()
         # The shared locked-target safety gate: adopt only the engine's
         # designated target, coast briefly, stop on uncertain/lost, never
         # silently re-lock. One audited implementation for every behaviour.
@@ -139,26 +191,40 @@ class FollowMePlugin:
         self._loop_task: asyncio.Task | None = None
         self._published = FollowState()
         self._last_heartbeat: float = 0.0
+        # Cached per-drone config, refreshed on a slow interval (see
+        # _config_for_tick) instead of re-fetched every loop.
+        self._cfg: FollowConfig | None = None
+        self._cfg_read_at: float = 0.0
+        # The camera whose detections the follow loop consumes. ``None`` (no
+        # config read yet) accepts any camera; once set, _on_batch filters to
+        # it, so a runtime designate_camera change takes effect immediately.
+        self._active_camera: str | None = None
 
     # -- lifecycle ----------------------------------------------------
 
     async def on_start(self, ctx: Any) -> None:
         self._ctx = ctx
         cfg = await self._read_config()
+        self._cfg = cfg
+        self._cfg_read_at = time.monotonic()
+        self._active_camera = cfg.designate_camera
 
-        # FC pose. ATTITUDE gives roll/pitch/yaw; GLOBAL_POSITION_INT gives
-        # lat/lon and relative altitude (height AGL above home).
+        # FC state. ATTITUDE gives roll/pitch/yaw; GLOBAL_POSITION_INT gives
+        # lat/lon and relative altitude (height AGL above home); HEARTBEAT
+        # gives the armed + flight-mode state the command gate needs.
         await ctx.mavlink.subscribe("ATTITUDE", self._on_attitude)
         await ctx.mavlink.subscribe(
             "GLOBAL_POSITION_INT", self._on_global_position
         )
+        await ctx.mavlink.subscribe("HEARTBEAT", self._on_heartbeat)
 
-        # Detection stream from the configured camera. The operator designates
-        # through the vision engine; we follow whatever track it locks (see
-        # _on_batch), so there is no plugin-side designate path.
-        await ctx.vision.subscribe_detections(
-            self._on_batch, camera_id=cfg.designate_camera
-        )
+        # Detection stream. The operator designates through the vision engine;
+        # we follow whatever track it locks (see _on_batch), so there is no
+        # plugin-side designate path. The SDK has no unsubscribe, so we
+        # subscribe to every camera once and filter to the configured camera
+        # locally in _on_batch; changing designate_camera at runtime then takes
+        # effect immediately without re-subscribing.
+        await ctx.vision.subscribe_detections(self._on_batch, camera_id=None)
 
         self._loop_task = asyncio.create_task(self._follow_loop())
         ctx.log.info("follow_me_started", camera=cfg.designate_camera)
@@ -202,7 +268,34 @@ class FollowMePlugin:
         static = dict(getattr(self._ctx, "config", {}) or {})
         return FollowConfig.resolve(live, static)
 
+    async def _config_for_tick(self) -> FollowConfig:
+        """The per-drone config for one loop iteration.
+
+        The full key set is re-read only every ``_CONFIG_REFRESH_S``; between
+        refreshes the live ``active`` toggle is re-read each tick so arm/disarm
+        stays responsive, while the rarely-changed geometry keys are served
+        from cache. This cuts the per-loop IPC from one ``get`` per key to one
+        ``get`` for ``active`` on most ticks.
+        """
+        now = time.monotonic()
+        if self._cfg is None or (now - self._cfg_read_at) >= _CONFIG_REFRESH_S:
+            self._cfg = await self._read_config()
+            self._cfg_read_at = now
+        else:
+            active = await self._ctx.config_kv.get("active", None)
+            if active is not None:
+                self._cfg = replace(self._cfg, active=bool(active))
+        self._active_camera = self._cfg.designate_camera
+        return self._cfg
+
     # -- MAVLink pose handlers ---------------------------------------
+
+    def _on_heartbeat(self, msg: dict[str, Any]) -> None:
+        base_mode = int(msg.get("base_mode", 0) or 0)
+        custom_mode = int(msg.get("custom_mode", 0) or 0)
+        autopilot = int(msg.get("autopilot", 0) or 0)
+        self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
+        self._fc.guided = _is_guided_mode(autopilot, custom_mode)
 
     def _on_attitude(self, msg: dict[str, Any]) -> None:
         self._pose.roll = float(msg.get("roll", 0.0))
@@ -226,6 +319,14 @@ class FollowMePlugin:
     # -- detections --------------------------------------------------
 
     def _on_batch(self, batch: DetectionBatch) -> None:
+        # Subscribed to every camera, so filter to the configured designate
+        # camera here (see on_start); a None active camera (before the first
+        # config read) accepts any camera.
+        if (
+            self._active_camera is not None
+            and batch.camera_id != self._active_camera
+        ):
+            return
         # Hand the batch to the shared gate. It adopts the engine's designated
         # target (the one detection stamped with a track id + lock state) and
         # never chooses a target itself; the follow loop reads the effective
@@ -245,7 +346,7 @@ class FollowMePlugin:
                 self._ctx.log.warning("follow_me_tick_error", error=str(exc))
 
     async def _tick(self) -> None:
-        cfg = await self._read_config()
+        cfg = await self._config_for_tick()
 
         if not cfg.active or not self._tracker.has_lock:
             await self._publish_state(active=cfg.active, commanding=False)
@@ -271,6 +372,16 @@ class FollowMePlugin:
             return
 
         if not self._pose.ready:
+            await self._publish_state(
+                active=True, lock_state=LOCK_LOCKED, commanding=False
+            )
+            return
+
+        if not (self._fc.armed and self._fc.guided):
+            # Locked with a usable pose, but the FC is not armed and in a
+            # guided/offboard mode, so a position setpoint would be ignored.
+            # Report honestly (commanding stays False; the fc_armed/fc_guided
+            # flags in the read-back carry the reason) and do not command.
             await self._publish_state(
                 active=True, lock_state=LOCK_LOCKED, commanding=False
             )
@@ -381,6 +492,8 @@ class FollowMePlugin:
             distance_setpoint_m=distance_setpoint_m,
             height_setpoint_m=height_setpoint_m,
             commanding=commanding,
+            fc_armed=self._fc.armed,
+            fc_guided=self._fc.guided,
         )
         now = time.monotonic()
         heartbeat_due = (now - self._last_heartbeat) >= _STATE_HEARTBEAT_S

@@ -19,6 +19,7 @@ const manifestPath = resolve(here, "../../manifest.yaml");
 interface SkillBlock {
   id?: string;
   toggle?: boolean;
+  confirm?: boolean;
   armRequirement?: string;
   bindingKey?: string;
   stateTopic?: string;
@@ -88,6 +89,7 @@ function extractFirstSkill(text: string): SkillBlock {
       if (key === "key") out.bindingKey = value;
     } else {
       if (key === "toggle") out.toggle = value === "true";
+      if (key === "confirm") out.confirm = value === "true";
       if (key === "arm_requirement") out.armRequirement = value;
     }
   }
@@ -116,9 +118,16 @@ describe("manifest skill contract", () => {
     expect(skill.stateTopic).toBe("follow.state");
   });
 
-  it("is a toggle armed-only skill with a default key binding", () => {
+  it("is a toggle armed-only skill that confirms before arming", () => {
     expect(skill.toggle).toBe(true);
+    // Arming streams guided setpoints, so it must not arm on a bare keypress.
+    expect(skill.confirm).toBe(true);
     expect(skill.armRequirement).toBe("armed");
-    expect(skill.bindingKey).toBe("f");
+  });
+
+  it("binds a distinct chord from the click-to-follow target action", () => {
+    // The Skill Bar toggle uses shift+f so it never collides with the
+    // "Follow this target" action bound to plain f.
+    expect(skill.bindingKey).toBe("shift+f");
   });
 });

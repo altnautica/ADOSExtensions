@@ -95,6 +95,24 @@ describe("manifest target-action contract", () => {
   });
 });
 
+describe("a stop-following action on a distinct key (no dual-meaning key)", () => {
+  it("declares a stop-follow target action that clears the active flag", () => {
+    // A second target action releases the followed subject by writing the
+    // active flag false.
+    expect(manifest).toContain("- id: stop-follow");
+    expect(manifest).toContain("config_value: false");
+  });
+
+  it("binds the follow, stop, and Skill Bar toggle to three distinct keys", () => {
+    // Follow this target -> f, Stop following -> x (target actions), and the
+    // Skill Bar toggle -> shift+f (asserted in skill-contract), so no key
+    // carries two meanings.
+    expect(manifest).toContain('default_key: "f"');
+    expect(manifest).toContain('default_key: "x"');
+    expect(manifest).toContain('key: "shift+f"');
+  });
+});
+
 describe("the private video overlay is removed (host owns it now)", () => {
   it("no longer declares a video.overlay panel", () => {
     expect(manifest).not.toContain("slot: video.overlay");

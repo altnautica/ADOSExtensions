@@ -26,6 +26,7 @@ export function normalizeConfig(raw: unknown): FollowConfig {
         ? r.designate_camera
         : DEFAULT_CONFIG.designate_camera,
     camera_hfov_deg: numberOr(r.camera_hfov_deg, DEFAULT_CONFIG.camera_hfov_deg),
+    mount_pitch_deg: numberOr(r.mount_pitch_deg, DEFAULT_CONFIG.mount_pitch_deg),
   };
 }
 
