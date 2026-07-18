@@ -71,8 +71,16 @@ class _Video:
         return {"ok": True, "count": len(list(cameras))}
 
 
+class _Tools:
+    def __init__(self) -> None:
+        self.handlers: dict = {}
+
+    def register(self, name, handler) -> None:
+        self.handlers[name] = handler
+
+
 class _Ctx:
-    def __init__(self, *, with_video: bool = False) -> None:
+    def __init__(self, *, with_video: bool = False, with_tools: bool = False) -> None:
         self.config_kv = _ConfigKV()
         self.mavlink = _Mavlink()
         self.vision = _Vision()
@@ -80,6 +88,8 @@ class _Ctx:
         self.events = _Events()
         if with_video:
             self.video = _Video()
+        if with_tools:
+            self.tools = _Tools()
 
 
 def _zt30_factory(_cfg):
@@ -324,4 +334,136 @@ async def test_a2_mini_unsupported_controls_are_ignored_not_raised():
     ctx.config_kv.set("palette", 2)
     ctx.config_kv.set("laser_fire_nonce", 1)
     await plugin.apply_config_once()  # must not raise
+    await plugin.on_stop(ctx)
+
+
+async def test_skill_photo_center_and_nadir():
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+
+    ctx.config_kv.set("photo", True)
+    await plugin.apply_config_once()
+    assert transport.photos_taken == 1
+    # The one-shot key is cleared so a re-press fires again.
+    assert await ctx.config_kv.get("photo") is False
+
+    # Nadir points straight down (the model's lower pitch limit); center then
+    # returns the gimbal to zero.
+    ctx.config_kv.set("nadir", True)
+    await plugin.apply_config_once()
+    assert transport.pitch_deg == plugin.pod.profile.pitch_min_deg
+    ctx.config_kv.set("center", True)
+    await plugin.apply_config_once()
+    assert transport.pitch_deg == 0.0
+    await plugin.on_stop(ctx)
+
+
+async def test_skill_zoom_step_and_palette_cycle():
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+
+    # Zoom in steps the absolute zoom up and writes it back so the picker
+    # reflects it; zoom out steps it back, clamped at 1.0.
+    ctx.config_kv.set("zoom_in", True)
+    await plugin.apply_config_once()
+    assert transport.zoom == 2.0
+    assert await ctx.config_kv.get("zoom") == 2.0
+    ctx.config_kv.set("zoom_out", True)
+    await plugin.apply_config_once()
+    assert transport.zoom == 1.0
+
+    # Cycle palette advances the thermal palette and writes it back.
+    ctx.config_kv.set("palette_cycle", True)
+    await plugin.apply_config_once()
+    assert transport.palette == 1
+    assert await ctx.config_kv.get("palette") == 1
+    await plugin.on_stop(ctx)
+
+
+async def test_skill_laser_fire_measures_range():
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    plugin._on_global_position(
+        {"lat": int(12.9716 * 1e7), "lon": int(77.5946 * 1e7), "relative_alt": 50000}
+    )
+    plugin._on_attitude({"yaw": 0.0})
+
+    ctx.config_kv.set("laser_fire", True)
+    await plugin.apply_config_once()
+    assert plugin.state.laser_range_m == 42.0
+    assert "siyi.pod.laser_target" in [t for t, _ in ctx.events.published]
+    await plugin.on_stop(ctx)
+
+
+async def test_a2_mini_skills_are_safe_noops():
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(
+        transport_factory=lambda _cfg: MockTransport(model=HW_A2_MINI)
+    )
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+    # Zoom / thermal / laser are absent on the A2 mini; the Skills must be safe
+    # no-ops, not raises.
+    for key in ("zoom_in", "palette_cycle", "laser_fire"):
+        ctx.config_kv.set(key, True)
+    await plugin.apply_config_once()
+    assert transport.zoom == 1.0  # zoom-in was a no-op
+    await plugin.on_stop(ctx)
+
+
+async def test_mcp_tools_registered_and_callable():
+    ctx = _Ctx(with_tools=True)
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+    assert set(ctx.tools.handlers) == {
+        "status",
+        "set_zoom",
+        "set_palette",
+        "capture_photo",
+        "record",
+        "point_at",
+        "laser_range",
+        "geolocate_target",
+    }
+
+    status = await ctx.tools.handlers["status"]({})
+    assert status["model"] == "ZT30"
+
+    # set_zoom / set_palette write config the control loop applies.
+    await ctx.tools.handlers["set_zoom"]({"zoom": 5.0})
+    await ctx.tools.handlers["set_palette"]({"palette": 3})
+    await plugin.apply_config_once()
+    assert transport.zoom == 5.0
+    assert transport.palette == 3
+
+    # capture_photo / record bump the same nonces the panel writes.
+    await ctx.tools.handlers["capture_photo"]({})
+    await ctx.tools.handlers["record"]({})
+    await plugin.apply_config_once()
+    assert transport.photos_taken == 1
+    assert transport.recording is True
+
+    # point_at writes a designate box + bumps the designate nonce.
+    result = await ctx.tools.handlers["point_at"]({})
+    assert result["ok"] is True
+    assert isinstance(await ctx.config_kv.get("track_designate"), dict)
+
+    # laser_range returns the measured range.
+    lr = await ctx.tools.handlers["laser_range"]({})
+    assert lr == {"ok": True, "range_m": 42.0}
+
+    # geolocate_target needs a vehicle pose; feed one, then it returns a fix.
+    plugin._on_global_position(
+        {"lat": int(12.9716 * 1e7), "lon": int(77.5946 * 1e7), "relative_alt": 50000}
+    )
+    plugin._on_attitude({"yaw": 0.0})
+    geo = await ctx.tools.handlers["geolocate_target"]({})
+    assert geo["ok"] is True
+    assert "lat_deg" in geo and "lon_deg" in geo
     await plugin.on_stop(ctx)

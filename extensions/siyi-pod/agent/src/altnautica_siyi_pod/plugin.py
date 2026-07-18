@@ -83,6 +83,27 @@ _NONCE_KEYS = (
     "track_designate_nonce",
 )
 
+# One-shot boolean action keys the cockpit Skills flip to true. The control
+# loop fires the matching command on the rising edge and clears the key, so a
+# re-press fires again (the Skill Bar writes the flag true each press with no
+# nonce). Each command is gated on the negotiated capability profile, so a
+# Skill for a control the model lacks (zoom on an A2 mini) is a safe no-op.
+_ACTION_KEYS = (
+    "point_at",
+    "palette_cycle",
+    "laser_fire",
+    "center",
+    "nadir",
+    "zoom_in",
+    "zoom_out",
+    "photo",
+)
+
+# Per-press zoom step (absolute-zoom units) and the number of thermal palettes
+# the cycle-palette Skill rotates through.
+_ZOOM_STEP = 1.0
+_THERMAL_PALETTE_COUNT = 8
+
 
 class _Pose:
     """Latest flight-controller pose, for laser geolocation."""
@@ -123,6 +144,8 @@ class SiyiPodPlugin:
         self._nonces: dict[str, int] = {}
         # Which sensor each physical leg (main/sub) currently carries.
         self._assignment: dict[str, str] = {}
+        # The last geolocated laser target, returned by the geolocate tool.
+        self._last_laser_target: dict[str, Any] | None = None
         # Whether the pod is currently reporting an AI-track box (so a drop
         # publishes one "lost" batch rather than an empty batch every tick).
         self._track_present = False
@@ -179,6 +202,10 @@ class SiyiPodPlugin:
         # Route the default sensor assignment to the pod's streams, advertise the
         # legs to the video pipeline, and publish the read-back.
         await self._post_negotiation_setup()
+
+        # Register the MCP tools (guarded: the host injects ctx.tools only when
+        # the mcp.expose capability is granted; tests pass a ctx without it).
+        self._register_tools(ctx)
 
         self._control_task = asyncio.create_task(self._control_loop())
         self._telemetry_task = asyncio.create_task(self._telemetry_loop())
@@ -448,6 +475,12 @@ class SiyiPodPlugin:
             if nonce > self._nonces.get(key, 0):
                 self._nonces[key] = nonce
                 await self._fire_nonce(key)
+        # One-shot boolean action keys (the cockpit Skills): fire on the rising
+        # edge and clear so a re-press fires again.
+        for key in _ACTION_KEYS:
+            if bool(await self._cfg(key, False)):
+                await self._fire_action(key)
+                await self._reset_key(key)
 
     async def _apply_state(self, key: str, value: Any) -> None:
         pod = self._pod
@@ -491,12 +524,20 @@ class SiyiPodPlugin:
             log.warning("action %s failed: %s", key, exc)
 
     async def _fire_laser(self) -> None:
+        await self._measure_laser()
+
+    async def _measure_laser(self) -> float:
+        """Fire the rangefinder, mirror the range to the flight controller, and
+        (when a vehicle pose is available) resolve + publish the geolocated
+        target. Returns the measured slant range. Shared by the laser-fire
+        one-shot and the laser/geolocate tools."""
         pod = self._pod
         assert pod is not None
         range_m = await pod.read_laser_range()
         self._state.laser_range_m = range_m
         if self._bridge is not None:
             await self._bridge.send_distance(range_m)
+        self._last_laser_target = None
         if self._pose.ready:
             att = self._state
             target = geolocate(
@@ -508,18 +549,19 @@ class SiyiPodPlugin:
                 gimbal_pitch_deg=att.pitch_deg or 0.0,
                 slant_range_m=range_m,
             )
+            self._last_laser_target = {
+                "lat_deg": target.lat_deg,
+                "lon_deg": target.lon_deg,
+                "rel_alt_m": target.rel_alt_m,
+                "slant_range_m": target.slant_range_m,
+                "bearing_deg": target.bearing_deg,
+            }
             await self._safe(
                 self._ctx.events.publish(
-                    "siyi.pod.laser_target",
-                    {
-                        "lat_deg": target.lat_deg,
-                        "lon_deg": target.lon_deg,
-                        "rel_alt_m": target.rel_alt_m,
-                        "slant_range_m": target.slant_range_m,
-                        "bearing_deg": target.bearing_deg,
-                    },
+                    "siyi.pod.laser_target", self._last_laser_target
                 )
             )
+        return range_m
 
     async def _designate_from_config(self) -> None:
         pod = self._pod
@@ -533,6 +575,161 @@ class SiyiPodPlugin:
             int(box.get("width", 0)),
             int(box.get("height", 0)),
         )
+
+    # -- one-shot Skill actions -------------------------------------------
+    async def _fire_action(self, key: str) -> None:
+        pod = self._pod
+        if pod is None:
+            return
+        try:
+            if key == "photo":
+                await pod.take_photo()
+            elif key == "center":
+                await pod.center()
+            elif key == "nadir":
+                # Point straight down: recenter yaw, drive pitch to the model's
+                # lower mechanical limit.
+                await pod.set_attitude(0.0, pod.profile.pitch_min_deg)
+            elif key == "laser_fire":
+                await self._measure_laser()
+            elif key == "point_at":
+                await self._designate_center()
+            elif key == "palette_cycle":
+                await self._cycle_palette()
+            elif key == "zoom_in":
+                await self._step_zoom(_ZOOM_STEP)
+            elif key == "zoom_out":
+                await self._step_zoom(-_ZOOM_STEP)
+        except PodUnsupported as exc:
+            log.info("ignoring unsupported skill %s: %s", key, exc)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("skill %s failed: %s", key, exc)
+
+    async def _center_box(self) -> dict[str, int]:
+        """A centred designation box in pod-frame pixels for the point-at Skill.
+        The frame dimensions are configurable so a bench can match the pod's
+        actual stream resolution; the box is a tenth of the frame."""
+        fw = int(await self._cfg("track_frame_width", 1920))
+        fh = int(await self._cfg("track_frame_height", 1080))
+        bw = max(1, fw // 10)
+        bh = max(1, fh // 10)
+        return {"x": (fw - bw) // 2, "y": (fh - bh) // 2, "width": bw, "height": bh}
+
+    async def _designate_center(self) -> None:
+        pod = self._pod
+        assert pod is not None
+        box = await self._center_box()
+        await pod.ai_track_designate(
+            box["x"], box["y"], box["width"], box["height"]
+        )
+
+    async def _cycle_palette(self) -> None:
+        pod = self._pod
+        assert pod is not None
+        current = self._applied.get("palette")
+        if current is None:
+            current = self._state.palette if self._state.palette is not None else 0
+        nxt = (int(current) + 1) % _THERMAL_PALETTE_COUNT
+        await pod.set_palette(nxt)
+        self._applied["palette"] = nxt
+        self._state.palette = nxt
+        await self._set_cfg("palette", nxt)
+
+    async def _step_zoom(self, delta: float) -> None:
+        pod = self._pod
+        assert pod is not None
+        current = self._applied.get("zoom")
+        if current is None:
+            current = self._state.zoom if self._state.zoom is not None else 1.0
+        nxt = max(1.0, min(pod.profile.max_zoom, float(current) + delta))
+        await pod.set_zoom(nxt)
+        self._applied["zoom"] = nxt
+        self._state.zoom = nxt
+        await self._set_cfg("zoom", nxt)
+
+    async def _reset_key(self, key: str) -> None:
+        await self._set_cfg(key, False)
+
+    async def _set_cfg(self, key: str, value: Any) -> None:
+        setter = getattr(self._ctx.config_kv, "set", None)
+        if setter is None:
+            return
+        try:
+            await setter(key, value)
+        except Exception:  # noqa: BLE001
+            log.debug("siyi config write failed: %s", key, exc_info=True)
+
+    async def _bump_nonce(self, key: str) -> None:
+        try:
+            current = int(await self._cfg(key, 0) or 0)
+        except (TypeError, ValueError):
+            current = 0
+        await self._set_cfg(key, current + 1)
+
+    # -- MCP tools --------------------------------------------------------
+    def _register_tools(self, ctx: Any) -> None:
+        tools = getattr(ctx, "tools", None)
+        if tools is None or not hasattr(tools, "register"):
+            return
+        tools.register("status", self._tool_status)
+        tools.register("set_zoom", self._tool_set_zoom)
+        tools.register("set_palette", self._tool_set_palette)
+        tools.register("capture_photo", self._tool_capture_photo)
+        tools.register("record", self._tool_record)
+        tools.register("point_at", self._tool_point_at)
+        tools.register("laser_range", self._tool_laser_range)
+        tools.register("geolocate_target", self._tool_geolocate_target)
+
+    async def _tool_status(self, _args: dict) -> dict:
+        return self._state.to_dict()
+
+    async def _tool_set_zoom(self, args: dict) -> dict:
+        zoom = float(args.get("zoom", 1.0))
+        await self._set_cfg("zoom", zoom)
+        return {"ok": True, "zoom": zoom}
+
+    async def _tool_set_palette(self, args: dict) -> dict:
+        palette = int(args.get("palette", 0))
+        await self._set_cfg("palette", palette)
+        return {"ok": True, "palette": palette}
+
+    async def _tool_capture_photo(self, _args: dict) -> dict:
+        await self._bump_nonce("photo_nonce")
+        return {"ok": True}
+
+    async def _tool_record(self, _args: dict) -> dict:
+        await self._bump_nonce("record_nonce")
+        return {"ok": True}
+
+    async def _tool_point_at(self, args: dict) -> dict:
+        box = args.get("box")
+        if not isinstance(box, dict):
+            box = await self._center_box()
+        await self._set_cfg("track_designate", box)
+        await self._bump_nonce("track_designate_nonce")
+        return {"ok": True, "box": box}
+
+    async def _tool_laser_range(self, _args: dict) -> dict:
+        pod = self._pod
+        if pod is None:
+            return {"ok": False, "reason": "pod not connected"}
+        try:
+            range_m = await self._measure_laser()
+        except PodUnsupported as exc:
+            return {"ok": False, "reason": str(exc)}
+        return {"ok": True, "range_m": range_m}
+
+    async def _tool_geolocate_target(self, _args: dict) -> dict:
+        pod = self._pod
+        if pod is None:
+            return {"ok": False, "reason": "pod not connected"}
+        try:
+            await self._measure_laser()
+        except PodUnsupported as exc:
+            return {"ok": False, "reason": str(exc)}
+        if self._last_laser_target is None:
+            return {"ok": False, "reason": "no vehicle pose for geolocation"}
+        return {"ok": True, **self._last_laser_target}
 
     # -- telemetry loop ---------------------------------------------------
     async def _telemetry_loop(self) -> None:

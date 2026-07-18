@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.0
+
+- Added eight cockpit Skills: point at (lock the tracker on the frame centre),
+  cycle palette, fire rangefinder (confirmed), center, nadir, zoom in, zoom
+  out, and photo. Each is a one-shot the agent fires on the rising edge and
+  then clears, and each is gated on the negotiated model, so a Skill for a
+  control the pod lacks is a safe no-op.
+- Exposed eight tools for an assistant (status, set zoom, set palette, capture
+  photo, record, point at, measure range, geolocate subject), each writing the
+  same config key or command nonce the console writes, gated the same way.
+- Dropped the unused mission-template slot capability (no templates ship).
+
 ## 0.3.1
 
 - The console now has a per-leg source selector (main / sub) so the operator
