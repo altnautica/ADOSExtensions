@@ -1,0 +1,91 @@
+"""Pod facade tests: negotiation and per-model capability gating."""
+
+from __future__ import annotations
+
+import pytest
+
+from altnautica_siyi_pod import capability_profile as CP
+from altnautica_siyi_pod.pod import PodUnsupported
+from helpers import make_pod
+
+
+async def test_negotiate_resolves_each_model():
+    for hw_id, model in [
+        (CP.HW_A2_MINI, "A2 mini"),
+        (CP.HW_A8_MINI, "A8 mini"),
+        (CP.HW_ZR10, "ZR10"),
+        (CP.HW_ZR30, "ZR30"),
+        (CP.HW_ZT6, "ZT6"),
+        (CP.HW_ZT30, "ZT30"),
+    ]:
+        pod, session, _t = await make_pod(model=hw_id)
+        assert pod.negotiated is True
+        assert pod.profile.model == model
+        await session.stop()
+
+
+async def test_a2_mini_gates_everything_off():
+    pod, session, _t = await make_pod(model=CP.HW_A2_MINI)
+    with pytest.raises(PodUnsupported):
+        await pod.set_attitude(0, 0)  # fixed mount, no gimbal control
+    with pytest.raises(PodUnsupported):
+        await pod.set_zoom(2.0)
+    with pytest.raises(PodUnsupported):
+        await pod.read_laser_range()
+    with pytest.raises(PodUnsupported):
+        await pod.set_palette(1)
+    await session.stop()
+
+
+async def test_a8_mini_zoom_yes_thermal_and_laser_no():
+    pod, session, transport = await make_pod(model=CP.HW_A8_MINI)
+    await pod.set_zoom(3.0)  # digital zoom is allowed
+    assert transport.zoom == 3.0
+    with pytest.raises(PodUnsupported):
+        await pod.set_palette(1)
+    with pytest.raises(PodUnsupported):
+        await pod.read_laser_range()
+    await pod.set_attitude(10, -10)  # gimbal works
+    assert transport.yaw_deg == 10.0
+    await session.stop()
+
+
+async def test_zt30_full_control():
+    pod, session, transport = await make_pod(model=CP.HW_ZT30, laser_range_m=42.0)
+
+    await pod.set_attitude(30, -20)
+    assert transport.yaw_deg == 30.0
+    assert transport.pitch_deg == -20.0
+
+    att = await pod.read_attitude()
+    assert att.yaw_deg == 30.0
+    assert att.pitch_deg == -20.0
+
+    await pod.set_zoom(10.0)
+    assert transport.zoom == 10.0
+    assert await pod.read_zoom() == 10.0
+
+    assert await pod.read_laser_range() == 42.0
+
+    await pod.set_palette(2)
+    assert transport.palette == 2
+
+    await pod.take_photo()
+    assert transport.photos_taken == 1
+
+    assert transport.recording is False
+    await pod.toggle_record()
+    assert transport.recording is True
+
+    await pod.set_mode("lock")
+    assert transport.gimbal_mode == "lock"
+
+    await session.stop()
+
+
+async def test_zt30_clamps_gimbal_angles():
+    pod, session, transport = await make_pod(model=CP.HW_ZT30)
+    await pod.set_attitude(9999, 9999)
+    assert transport.yaw_deg == 360.0  # clamped to limitless-yaw bound
+    assert transport.pitch_deg == 25.0  # clamped to pitch max
+    await session.stop()
