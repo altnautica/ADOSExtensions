@@ -1,0 +1,54 @@
+.siyi-panel {
+  font: 13px/1.4 system-ui, sans-serif;
+  color: var(--text-primary, #e6f2ff);
+  padding: 8px;
+}
+.siyi-overlay-mode .siyi-panel {
+  display: none;
+}
+.siyi-header {
+  margin-bottom: 8px;
+}
+.siyi-dim {
+  opacity: 0.6;
+}
+.siyi-warn {
+  color: #e0a53a;
+  font-size: 12px;
+  margin-top: 2px;
+}
+.siyi-section {
+  margin: 6px 0;
+}
+.siyi-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.6;
+  margin-bottom: 3px;
+}
+.siyi-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.siyi-btn,
+.siyi-sel,
+.siyi-num,
+.siyi-range {
+  background: var(--surface-secondary, #1a2230);
+  color: inherit;
+  border: 1px solid var(--border, #2a3546);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+.siyi-range {
+  cursor: default;
+}
+.siyi-hud {
+  position: absolute;
+  inset: 0;
+}
