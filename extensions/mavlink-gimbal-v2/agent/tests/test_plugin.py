@@ -196,20 +196,6 @@ async def test_aim_inactive_produces_no_command() -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_mavlink_transport_skips_aim_wiring() -> None:
-    ctx = FakeCtx(live={"aim": True, "transport": "sbgc-uart"})
-    plugin = GimbalV2Plugin()
-    await plugin.on_start(ctx)
-    try:
-        # The stub serial driver reports no candidates, so on_start returns
-        # early: no component registration, no detection subscription.
-        assert ctx.vision.callback is None
-        assert ctx.mavlink.registered == []
-    finally:
-        await plugin.on_stop(ctx)
-
-
-@pytest.mark.asyncio
 async def test_on_stop_closes_cleanly_and_is_idempotent() -> None:
     ctx = FakeCtx(live={"aim": False})
     plugin = GimbalV2Plugin()

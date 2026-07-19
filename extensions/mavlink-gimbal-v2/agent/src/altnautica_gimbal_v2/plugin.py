@@ -26,22 +26,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Any
 
 from ados.sdk.cameras import CAMERA_SELECTOR_AUTO
 from ados.sdk.tracking import LOCK_LOCKED, EffectiveLock, LockedTargetTracker
 
 from altnautica_gimbal_v2.aim import AimConfig, GimbalAimController
 from altnautica_gimbal_v2.ctx_router import ONBOARD_COMPUTER_COMP_ID, _CtxRouter
-from altnautica_gimbal_v2.gremsy_driver import GremsyGimbalDriver
 from altnautica_gimbal_v2.mavlink_driver import MavlinkGimbalDriver
-from altnautica_gimbal_v2.sbgc_driver import SimpleBgcGimbalDriver
-from altnautica_gimbal_v2.storm32_driver import Storm32NtGimbalDriver
 
 log = logging.getLogger(__name__)
 
-# Only the MAVLink transport is wired for the vision-locked aim loop.
-_MAVLINK_TRANSPORT = "mavlink"
+# The extension speaks the open MAVLink Gimbal Manager Protocol v2 only; the
+# transport label reported on the health event and the status tool.
+_TRANSPORT = "mavlink"
 
 # How often the control loop reads the one-shot action keys (recenter / nadir)
 # and refreshes the rate-mode flag.
@@ -51,14 +49,6 @@ _CONTROL_HZ = 5.0
 # the matching command on the rising edge and resets the key so a re-press
 # fires again (the Skill Bar has no nonce; it writes the flag true each press).
 _ACTION_KEYS = ("recenter", "nadir")
-
-
-_DRIVER_FACTORIES: dict[str, Callable[[Any], Any]] = {
-    "mavlink": lambda router: MavlinkGimbalDriver(router=router),
-    "sbgc-uart": lambda _router: SimpleBgcGimbalDriver(),
-    "storm32-uart": lambda _router: Storm32NtGimbalDriver(),
-    "gremsy-uart": lambda _router: GremsyGimbalDriver(),
-}
 
 
 class GimbalV2Plugin:
@@ -94,7 +84,6 @@ class GimbalV2Plugin:
         self._ctx = ctx
         self._loop = asyncio.get_running_loop()
 
-        transport = str(await self._cfg("transport", _MAVLINK_TRANSPORT))
         target_system = int(await self._cfg("target_system", 1))
         target_component = int(await self._cfg("target_component", 154))
         limits = await self._cfg("limits", {})
@@ -115,39 +104,18 @@ class GimbalV2Plugin:
         aim_default = bool(await self._cfg("aim", False))
         self._rate_mode = bool(await self._cfg("rate_mode", False))
 
-        factory = _DRIVER_FACTORIES.get(transport)
-        if factory is None:
-            raise ValueError(
-                f"unknown gimbal transport: {transport!r}; "
-                f"expected one of {sorted(_DRIVER_FACTORIES)}"
-            )
-
         self._router = _CtxRouter(
             ctx_mavlink=ctx.mavlink,
             src_system=target_system,
             src_component=ONBOARD_COMPUTER_COMP_ID,
             loop=self._loop,
         )
-        self._transport = transport
-        self._driver = factory(self._router)
-
-        if transport != _MAVLINK_TRANSPORT:
-            # The serial drivers can still open a session and drive manual
-            # control, but the vision-locked aim loop is only wired for the
-            # MAVLink transport, so it is skipped for the others.
-            log.warning(
-                "gimbal aim is only wired for the '%s' transport; "
-                "'%s' will not run the aim-at-target loop",
-                _MAVLINK_TRANSPORT,
-                transport,
-            )
+        self._transport = _TRANSPORT
+        self._driver = MavlinkGimbalDriver(router=self._router)
 
         candidates = await self._driver.discover()
         if not candidates:
-            log.warning(
-                "gimbal driver for transport '%s' reported no candidates",
-                transport,
-            )
+            log.warning("gimbal driver reported no candidates")
             return
 
         driver_config = {
@@ -166,34 +134,33 @@ class GimbalV2Plugin:
         except Exception:  # noqa: BLE001
             self._nadir_pitch = -90.0
 
-        if transport == _MAVLINK_TRANSPORT:
-            await ctx.mavlink.register_component(target_component, "gimbal")
-            # Take the clamp limits from the driver's capabilities so the
-            # controller model and the driver agree on the axis bounds.
-            caps = self._driver.capabilities(self._session)
-            self._controller = GimbalAimController(
-                AimConfig(
-                    frame_width=frame_width,
-                    frame_height=frame_height,
-                    hfov_deg=hfov_deg,
-                    vfov_deg=vfov_deg,
-                    gain=aim_gain,
-                    deadband_frac=aim_deadband,
-                    invert_pitch=invert_pitch,
-                    invert_yaw=invert_yaw,
-                    pitch_min_deg=caps.pitch_min_deg,
-                    pitch_max_deg=caps.pitch_max_deg,
-                    yaw_min_deg=caps.yaw_min_deg,
-                    yaw_max_deg=caps.yaw_max_deg,
-                )
+        await ctx.mavlink.register_component(target_component, "gimbal")
+        # Take the clamp limits from the driver's capabilities so the
+        # controller model and the driver agree on the axis bounds.
+        caps = self._driver.capabilities(self._session)
+        self._controller = GimbalAimController(
+            AimConfig(
+                frame_width=frame_width,
+                frame_height=frame_height,
+                hfov_deg=hfov_deg,
+                vfov_deg=vfov_deg,
+                gain=aim_gain,
+                deadband_frac=aim_deadband,
+                invert_pitch=invert_pitch,
+                invert_yaw=invert_yaw,
+                pitch_min_deg=caps.pitch_min_deg,
+                pitch_max_deg=caps.pitch_max_deg,
+                yaw_min_deg=caps.yaw_min_deg,
+                yaw_max_deg=caps.yaw_max_deg,
             )
-            await ctx.vision.subscribe_detections(
-                self._on_batch, camera_id=designate_camera
-            )
+        )
+        await ctx.vision.subscribe_detections(
+            self._on_batch, camera_id=designate_camera
+        )
 
         await ctx.events.publish(
             "sensor.gimbal.health",
-            {"transport": transport, "responsive": True},
+            {"transport": _TRANSPORT, "responsive": True},
         )
 
         # Register the MCP tools (guarded: the host injects ctx.tools only when
@@ -205,8 +172,7 @@ class GimbalV2Plugin:
         self._control_task = asyncio.create_task(self._control_loop())
 
         log.info(
-            "gimbal started (transport=%s, aim_default=%s, rate_mode=%s)",
-            transport,
+            "gimbal started (aim_default=%s, rate_mode=%s)",
             aim_default,
             self._rate_mode,
         )

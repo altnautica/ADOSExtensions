@@ -7,18 +7,16 @@ gimbal device messages, and publishes attitude on the event bus. The
 GCS half mounts a control panel under Flight Control with manual
 sliders, an ROI form, and a live state readout.
 
-## Drivers
+## Driver
 
 | Driver | Status | Path |
 |--------|--------|------|
 | MAVLink Gimbal v2 (ArduPilot SITL, Storm32 NT, Gremsy, any spec-compliant device) | Working | `agent/src/altnautica_gimbal_v2/mavlink_driver.py` |
-| SimpleBGC native protocol over UART | Stub | `agent/src/altnautica_gimbal_v2/sbgc_driver.py` |
-| Storm32 NT serial direct | Stub | `agent/src/altnautica_gimbal_v2/storm32_driver.py` |
-| Gremsy serial direct | Stub | `agent/src/altnautica_gimbal_v2/gremsy_driver.py` |
 
-The MAVLink driver is the first-class path. The serial drivers exist
-as concrete `GimbalDriver` subclasses so vendors can fork the pattern;
-they raise `NotImplementedError` from `open()` until their parsers land.
+The extension drives any gimbal that speaks the open MAVLink Gimbal
+Manager Protocol v2. A gimbal on the companion's serial bus is reached
+by connecting it to the flight controller's MAVLink network, where the
+same driver controls it.
 
 ## Build
 
@@ -38,7 +36,6 @@ signed-eligible `.adosplug` archive under `dist/`.
 
 | Permission | Use |
 |------------|-----|
-| `agent.hardware.uart` | SimpleBGC bridging path. |
 | `agent.mavlink.read` | Decode GCS and FC commands. |
 | `agent.mavlink.write` | Emit gimbal manager and device messages. |
 | `agent.mavlink.component.gimbal` | Register `MAV_COMP_ID_GIMBAL` (154). |
@@ -55,9 +52,9 @@ signed-eligible `.adosplug` archive under `dist/`.
 | `gcs.mission.read` and `gcs.mission.write` | Generate orbit missions. |
 | `gcs.command.send` | Send gimbal commands to the agent. |
 
-Risk band: medium. `command.send`, `mavlink.write`, and `hardware.uart`
-trigger the host's "high" badge on `command.send`. No vehicle command,
-no host file system, no network.
+Risk band: medium. `command.send` and `mavlink.write` trigger the host's
+"high" badge on `command.send`. No vehicle command, no host file system,
+no network.
 
 ## MAVLink commands the driver issues
 
@@ -74,7 +71,7 @@ the agent's MAVLink router handle.
 
 ## Configuration
 
-Edit transport, axis limits, behaviour, and pre-arm rules under
+Edit axis limits, behaviour, and pre-arm rules under
 Settings -> Plugins -> Gimbal Controller. Schema lives at
 `config-schema.json` and is rendered automatically by the host's JSON
 Schema form.

@@ -2,12 +2,11 @@ schema_version: 3
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
 version: "1.3.0"
-description: "MAVLink Gimbal v2 control with optional SimpleBGC, Storm32 NT, and Gremsy driver paths. Manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
+description: "MAVLink Gimbal v2 control: manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 description_long: |
-  Drives a MAVLink gimbal-manager (component 154), with optional SimpleBGC,
-  Storm32 NT, and Gremsy serial driver paths. Beyond manual pitch/yaw control
-  it runs an on-companion visual servo: click a detected subject in the
-  cockpit and the gimbal keeps it centred. A lock-state safety gate stops
+  Drives a MAVLink gimbal-manager (component 154). Beyond manual pitch/yaw
+  control it runs an on-companion visual servo: click a detected subject in
+  the cockpit and the gimbal keeps it centred. A lock-state safety gate stops
   commanding the instant the vision engine reports the subject uncertain or
   lost, and it never silently re-locks onto a different subject. Cockpit
   Skills arm the aim behaviour, recenter the gimbal, point it straight down,
@@ -15,7 +14,6 @@ description_long: |
   as tools for an assistant.
 features:
   - "MAVLink gimbal-manager control (component 154)"
-  - "Optional SimpleBGC, Storm32 NT, and Gremsy serial drivers"
   - "Aim-at-target visual servo with a lock-state safety gate"
   - "Angle and rate control modes"
   - "Recenter and nadir one-touch pointing"
@@ -23,7 +21,6 @@ hardware_requirements:
   fc_firmware: "ArduPilot or PX4 forwarding the gimbal-manager messages"
   optional:
     - "A MAVLink gimbal-manager gimbal (component 154)"
-    - "Or a SimpleBGC, Storm32 NT, or Gremsy gimbal on a serial port"
 resource_impact:
   cpu_percent_peak: 8
   ram_mb: 48
@@ -49,7 +46,6 @@ agent:
   isolation: subprocess
   per_drone_config: true
   permissions:
-    - id: hardware.uart
     - id: mavlink.read
     - id: mavlink.write
     - id: mavlink.component.gimbal

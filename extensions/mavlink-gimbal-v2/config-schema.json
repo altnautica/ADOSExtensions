@@ -3,30 +3,6 @@
   "type": "object",
   "title": "Gimbal Controller",
   "properties": {
-    "transport": {
-      "type": "string",
-      "title": "Gimbal transport",
-      "default": "mavlink",
-      "enum": ["mavlink", "sbgc-uart", "storm32-uart", "gremsy-uart", "simulated"]
-    },
-    "uart": {
-      "type": "object",
-      "title": "UART (serial drivers)",
-      "properties": {
-        "device": {
-          "type": "string",
-          "title": "Device path",
-          "default": "/dev/ttyACM0"
-        },
-        "baudrate": {
-          "type": "integer",
-          "title": "Baud rate",
-          "default": 115200,
-          "minimum": 9600,
-          "maximum": 921600
-        }
-      }
-    },
     "limits": {
       "type": "object",
       "title": "Axis limits",

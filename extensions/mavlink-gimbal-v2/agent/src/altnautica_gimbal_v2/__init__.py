@@ -1,24 +1,18 @@
 """MAVLink Gimbal v2 Controller plugin (agent half).
 
-Public re-exports cover the four ``GimbalDriver`` subclasses plus the
-plugin entry point. Concrete drivers live in the per-protocol modules.
+Public re-exports cover the MAVLink ``GimbalDriver`` and the plugin entry
+point. The driver talks the open MAVLink Gimbal Manager Protocol v2.
 """
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.3.0"
 
-from altnautica_gimbal_v2.gremsy_driver import GremsyGimbalDriver
 from altnautica_gimbal_v2.mavlink_driver import MavlinkGimbalDriver
 from altnautica_gimbal_v2.plugin import GimbalV2Plugin
-from altnautica_gimbal_v2.sbgc_driver import SimpleBgcGimbalDriver
-from altnautica_gimbal_v2.storm32_driver import Storm32NtGimbalDriver
 
 __all__ = [
     "GimbalV2Plugin",
-    "GremsyGimbalDriver",
     "MavlinkGimbalDriver",
-    "SimpleBgcGimbalDriver",
-    "Storm32NtGimbalDriver",
     "__version__",
 ]
