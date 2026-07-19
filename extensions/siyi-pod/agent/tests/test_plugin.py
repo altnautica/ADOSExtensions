@@ -416,6 +416,106 @@ async def test_a2_mini_skills_are_safe_noops():
     await plugin.on_stop(ctx)
 
 
+async def test_skill_record_toggles_recording_via_the_pod():
+    # The record Skill's config key must fire the real recording path: the pod's
+    # record-toggle command flips its recording state, and the read-back tracks
+    # it so the Skill Bar shows the true on/off.
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+    assert transport.recording is False
+
+    ctx.config_kv.set("recording", True)
+    await plugin.apply_config_once()
+    assert transport.recording is True
+    assert plugin.state.recording is True
+
+    # Idempotent: re-applying the same desired state does not toggle it back.
+    await plugin.apply_config_once()
+    assert transport.recording is True
+    assert plugin.state.recording is True
+
+    ctx.config_kv.set("recording", False)
+    await plugin.apply_config_once()
+    assert transport.recording is False
+    assert plugin.state.recording is False
+    await plugin.on_stop(ctx)
+
+
+async def test_skill_track_toggle_starts_then_stops_tracking():
+    # The track toggle's rising edge designates a subject (starts the pod
+    # tracker); the falling edge stops it. Neither edge is a silent no-op.
+    from altnautica_siyi_pod import commands as C
+    from altnautica_siyi_pod.framing import parse_frame
+
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    transport = plugin._session._transport
+
+    transport.sent.clear()
+    ctx.config_kv.set("track_active", True)
+    await plugin.apply_config_once()
+    cmds = [parse_frame(f).cmd_id for f in transport.sent]
+    assert C.CMD_AI_TRACK in cmds  # a designate went out (tracking started)
+
+    transport.sent.clear()
+    ctx.config_kv.set("track_active", False)
+    await plugin.apply_config_once()
+    cmds = [parse_frame(f).cmd_id for f in transport.sent]
+    assert C.CMD_AI_TRACK in cmds  # a stop went out
+    await plugin.on_stop(ctx)
+
+
+async def test_a2_mini_publishes_disabled_skill_states():
+    # An A2 mini has no zoom / thermal / laser / tracking / gimbal, so those
+    # Skills publish a disabled state (Rule 44) instead of offering a silent
+    # no-op; photo (a base camera feature) stays available.
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(
+        transport_factory=lambda _cfg: MockTransport(model=HW_A2_MINI)
+    )
+    await plugin.on_start(ctx)
+    events = dict(ctx.events.published)  # latest payload per topic
+    for topic in (
+        "siyi.pod.zoom",
+        "siyi.pod.palette",
+        "siyi.pod.laser",
+        "siyi.pod.point_at",
+        "siyi.pod.center",
+        "siyi.pod.nadir",
+        "siyi.pod.track",
+    ):
+        assert events[topic]["state"] == "disabled", (topic, events.get(topic))
+        assert events[topic].get("reason")
+    assert events["siyi.pod.photo"]["state"] == "idle"
+    assert events["siyi.pod.record"]["state"] == "idle"
+    await plugin.on_stop(ctx)
+
+
+async def test_zt30_publishes_enabled_skill_states():
+    # Every capability-gated Skill is available on the ZT30, so each publishes
+    # an idle (enabled) state.
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    events = dict(ctx.events.published)
+    for topic in (
+        "siyi.pod.zoom",
+        "siyi.pod.palette",
+        "siyi.pod.laser",
+        "siyi.pod.point_at",
+        "siyi.pod.center",
+        "siyi.pod.nadir",
+        "siyi.pod.photo",
+        "siyi.pod.track",
+        "siyi.pod.record",
+    ):
+        assert events[topic]["state"] == "idle", (topic, events.get(topic))
+    await plugin.on_stop(ctx)
+
+
 async def test_mcp_tools_registered_and_callable():
     ctx = _Ctx(with_tools=True)
     plugin = SiyiPodPlugin(transport_factory=_zt30_factory)

@@ -1,6 +1,6 @@
 {
   "name": "@altnautica/siyi-pod-gcs",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",

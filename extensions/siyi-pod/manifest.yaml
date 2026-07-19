@@ -56,7 +56,6 @@ agent:
     - id: mavlink.write
     - id: mavlink.component.gimbal
     - id: mavlink.component.camera
-    - id: sensor.camera.register
     - id: vision.detection.publish
     - id: vision.track.designate
     - id: telemetry.extend
@@ -135,14 +134,17 @@ agent:
       - name: laser_range
         title: "Measure range"
         description: "Fire the laser rangefinder and report the slant range in metres (laser models). Fires the laser."
-        safety_class: safe_write
+        # Firing the laser is an operator-present, confirmed action (matching the
+        # human fire-rangefinder Skill's confirm), so it carries the flight class.
+        safety_class: flight
         inputSchema:
           type: object
           properties: {}
       - name: geolocate_target
         title: "Geolocate the subject"
         description: "Fire the rangefinder and resolve the pointed subject's latitude and longitude from the gimbal angles and vehicle pose (laser models). Fires the laser."
-        safety_class: safe_write
+        # Fires the laser to range the subject, so it too carries the flight class.
+        safety_class: flight
         inputSchema:
           type: object
           properties: {}
@@ -199,7 +201,7 @@ gcs:
         arm_requirement: any
         default_binding: { key: "t" }
         activation: { via: config, config_key: track_active }
-        state: { via: event, topic: "siyi.pod.state" }
+        state: { via: event, topic: "siyi.pod.track" }
       - id: siyi-record
         label: "skill.record"
         icon: "video"
@@ -209,12 +211,12 @@ gcs:
         arm_requirement: any
         default_binding: { key: "r" }
         activation: { via: config, config_key: recording }
-        state: { via: event, topic: "siyi.pod.state" }
+        state: { via: event, topic: "siyi.pod.record" }
       # One-shot Skills the agent fires on the rising edge and clears. Each is
       # declared for every model; the agent gates on the negotiated capability
       # profile, so a Skill for a control the model lacks is a safe no-op.
       - id: point-at
-        label: "Point at"
+        label: "skill.pointAt"
         icon: "crosshair"
         category: camera
         toggle: false
@@ -224,7 +226,7 @@ gcs:
         activation: { via: config, config_key: point_at }
         state: { via: event, topic: "siyi.pod.point_at" }
       - id: cycle-palette
-        label: "Cycle palette"
+        label: "skill.cyclePalette"
         icon: "palette"
         category: camera
         toggle: false
@@ -234,7 +236,7 @@ gcs:
         activation: { via: config, config_key: palette_cycle }
         state: { via: event, topic: "siyi.pod.palette" }
       - id: fire-lrf
-        label: "Fire rangefinder"
+        label: "skill.fireRangefinder"
         icon: "scan-line"
         category: camera
         toggle: false
@@ -244,7 +246,7 @@ gcs:
         activation: { via: config, config_key: laser_fire }
         state: { via: event, topic: "siyi.pod.laser" }
       - id: center
-        label: "Center gimbal"
+        label: "skill.centerGimbal"
         icon: "locate-fixed"
         category: camera
         toggle: false
@@ -254,7 +256,7 @@ gcs:
         activation: { via: config, config_key: center }
         state: { via: event, topic: "siyi.pod.center" }
       - id: nadir
-        label: "Nadir"
+        label: "skill.nadir"
         icon: "arrow-down-to-line"
         category: camera
         toggle: false
@@ -264,7 +266,7 @@ gcs:
         activation: { via: config, config_key: nadir }
         state: { via: event, topic: "siyi.pod.nadir" }
       - id: zoom-in
-        label: "Zoom in"
+        label: "skill.zoomIn"
         icon: "zoom-in"
         category: camera
         toggle: false
@@ -274,7 +276,7 @@ gcs:
         activation: { via: config, config_key: zoom_in }
         state: { via: event, topic: "siyi.pod.zoom" }
       - id: zoom-out
-        label: "Zoom out"
+        label: "skill.zoomOut"
         icon: "zoom-out"
         category: camera
         toggle: false
@@ -284,7 +286,7 @@ gcs:
         activation: { via: config, config_key: zoom_out }
         state: { via: event, topic: "siyi.pod.zoom" }
       - id: photo
-        label: "Photo"
+        label: "skill.photo"
         icon: "camera"
         category: camera
         toggle: false

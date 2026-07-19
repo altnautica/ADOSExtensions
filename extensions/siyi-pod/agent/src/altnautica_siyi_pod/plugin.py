@@ -55,8 +55,33 @@ _STATE_KEYS = (
     "palette",
     "thermal_gain",
     "track_active",
+    "recording",
     "stream_assignment",
 )
+
+# Each capability-gated Skill's state-read-back topic mapped to the capability
+# it needs. A Skill for a control the negotiated model lacks publishes a
+# disabled state so the cockpit Skill Bar greys it out (Rule 44) instead of
+# offering a silent no-op; a supported Skill publishes idle. Photo is a base
+# camera feature every model has, so it has no capability gate.
+_SKILL_TOPIC_CAP: dict[str, str | None] = {
+    "siyi.pod.point_at": "ai_track",
+    "siyi.pod.palette": "thermal",
+    "siyi.pod.laser": "laser",
+    "siyi.pod.zoom": "zoom",
+    "siyi.pod.center": "gimbal",
+    "siyi.pod.nadir": "gimbal",
+    "siyi.pod.photo": None,
+}
+
+# The reason string the Skill Bar shows on a greyed-out control.
+_CAP_UNAVAILABLE_REASON = {
+    "ai_track": "Tracking is unavailable on this pod model",
+    "thermal": "Thermal is unavailable on this pod model",
+    "laser": "The rangefinder is unavailable on this pod model",
+    "zoom": "Zoom is unavailable on this pod model",
+    "gimbal": "The gimbal is fixed on this pod model",
+}
 
 # SIYI RTSP stream layout: the pod serves exactly two concurrent streams,
 # `main` and `sub`, each on its own :8554 path and each assignable to a sensor
@@ -142,6 +167,9 @@ class SiyiPodPlugin:
         self._state = PodState()
         self._applied: dict[str, Any] = {}
         self._nonces: dict[str, int] = {}
+        # Last per-skill state published on each read-back topic, so the Skill
+        # Bar states are republished only on change (enabled/disabled/active).
+        self._last_skill_states: dict[str, dict] = {}
         # Which sensor each physical leg (main/sub) currently carries.
         self._assignment: dict[str, str] = {}
         # The last geolocated laser target, returned by the geolocate tool.
@@ -495,8 +523,22 @@ class SiyiPodPlugin:
             elif key == "thermal_gain":
                 await pod.set_gain(bool(value))
             elif key == "track_active":
-                if not value:
+                # The toggle's rising edge starts the pod tracker on the last
+                # designated subject (or the frame centre); the falling edge
+                # stops it. No silent no-op on either edge.
+                if value:
+                    await self._start_tracking()
+                else:
                     await pod.ai_track_stop()
+            elif key == "recording":
+                # The record toggle drives the pod's start/stop through its
+                # single toggle command: send it only when the desired state
+                # differs from what the pod is doing, and track the result so
+                # the Skill Bar reflects it.
+                desired = bool(value)
+                if desired != self._state.recording:
+                    await pod.toggle_record()
+                    self._state.recording = desired
             elif key == "stream_assignment":
                 await self._reassign_streams(value)
         except PodUnsupported as exc:
@@ -512,6 +554,10 @@ class SiyiPodPlugin:
                 await pod.take_photo()
             elif key == "record_nonce":
                 await pod.toggle_record()
+                # Keep the read-back in step with the toggle so the record
+                # Skill reflects it whether it was fired by the tool or the
+                # Skill Bar.
+                self._state.recording = not self._state.recording
             elif key == "recenter_nonce":
                 await pod.center()
             elif key == "laser_fire_nonce":
@@ -569,6 +615,25 @@ class SiyiPodPlugin:
         box = await self._cfg("track_designate", None)
         if not isinstance(box, dict):
             return
+        await pod.ai_track_designate(
+            int(box.get("x", 0)),
+            int(box.get("y", 0)),
+            int(box.get("width", 0)),
+            int(box.get("height", 0)),
+        )
+
+    async def _start_tracking(self) -> None:
+        """Start the pod's tracker for the track toggle's rising edge.
+
+        Re-designates the last operator-designated box when there is one, else
+        the frame centre, so arming the toggle actually locks the pod onto a
+        subject (gated on ai_track: a model without it raises PodUnsupported,
+        which the caller treats as a safe no-op)."""
+        pod = self._pod
+        assert pod is not None
+        box = await self._cfg("track_designate", None)
+        if not isinstance(box, dict):
+            box = await self._center_box()
         await pod.ai_track_designate(
             int(box.get("x", 0)),
             int(box.get("y", 0)),
@@ -807,9 +872,50 @@ class SiyiPodPlugin:
         payload = self._state.to_dict()
         # Rides the heartbeat under the "siyi" channel (GCS subscribes
         # telemetry.subscribe.siyi) and the event bus under siyi.pod.state (the
-        # overlay + skill read-back).
+        # overlay + console read-back).
         await self._safe(self._ctx.telemetry.extend("siyi", payload))
         await self._safe(self._ctx.events.publish("siyi.pod.state", payload))
+        await self._publish_skill_states()
+
+    async def _publish_skill_states(self) -> None:
+        """Publish each Skill's enabled / disabled / active state on its own
+        read-back topic so the cockpit Skill Bar reflects the negotiated model.
+
+        A capability-gated Skill the model lacks (zoom / thermal / laser / track
+        / gimbal on an A2 mini) shows disabled with a reason instead of a silent
+        no-op (Rule 44); the two toggles carry their live on/off state.
+        Republished only on change so steady state is silent."""
+        pod = self._pod
+        if pod is None:
+            return
+        profile = pod.profile
+        states: dict[str, dict] = {}
+        for topic, cap in _SKILL_TOPIC_CAP.items():
+            if cap is None or profile.supports(cap):
+                states[topic] = {"state": "idle"}
+            else:
+                states[topic] = {
+                    "state": "disabled",
+                    "reason": _CAP_UNAVAILABLE_REASON.get(
+                        cap, "Unavailable on this pod model"
+                    ),
+                }
+        if profile.supports("ai_track"):
+            states["siyi.pod.track"] = {
+                "state": "active" if self._state.track_active else "idle"
+            }
+        else:
+            states["siyi.pod.track"] = {
+                "state": "disabled",
+                "reason": _CAP_UNAVAILABLE_REASON["ai_track"],
+            }
+        states["siyi.pod.record"] = {
+            "state": "active" if self._state.recording else "idle"
+        }
+        for topic, payload in states.items():
+            if self._last_skill_states.get(topic) != payload:
+                self._last_skill_states[topic] = payload
+                await self._safe(self._ctx.events.publish(topic, payload))
 
     # -- helpers ----------------------------------------------------------
     async def _safe(self, awaitable) -> None:
