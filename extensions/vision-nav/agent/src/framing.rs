@@ -109,11 +109,12 @@ pub fn frame_to_gray(frame: &Frame) -> Option<GrayImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_protocol::framebus::FrameDescriptor;
+    use ados_protocol::framebus::{FrameDescriptor, FRAMEBUS_DESCRIPTOR_VERSION};
 
     fn frame(format: FrameFormat, w: u32, h: u32, pixels: Vec<u8>) -> Frame {
         Frame {
             descriptor: FrameDescriptor {
+                v: FRAMEBUS_DESCRIPTOR_VERSION,
                 camera_id: "uvc-0".into(),
                 frame_id: 1,
                 ts_ms: 0,

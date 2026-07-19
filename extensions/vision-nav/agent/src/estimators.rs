@@ -190,12 +190,12 @@ impl Estimator for OpticalFlowDegradedEstimator {
     fn step(&mut self, inputs: &StepInputs<'_>) -> Option<EstimatorOutput> {
         let pick = self.ladder.as_ref().map(|l| l.pick(monotonic_ns()));
         let distance = pick.map(|p| p.distance_m);
-        let label = pick.and_then(|p| match p.source {
-            ScaleRung::Baro => Some(ScaleSourceLabel::Baro),
-            ScaleRung::Gps => Some(ScaleSourceLabel::Gps),
+        let label = pick.map(|p| match p.source {
+            ScaleRung::Baro => ScaleSourceLabel::Baro,
+            ScaleRung::Gps => ScaleSourceLabel::Gps,
             // The static rung is reported as baro (the physical fallback
             // expectation); the quality multiplier flags it degraded.
-            ScaleRung::Static => Some(ScaleSourceLabel::Baro),
+            ScaleRung::Static => ScaleSourceLabel::Baro,
         });
 
         let mut sample = self.inner.run(inputs, distance, label)?;
