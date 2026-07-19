@@ -5,6 +5,7 @@ import {
   clientToFrame,
   frameExtrema,
   frameToCanvas,
+  readSpot,
 } from "../src/spotMeter";
 import {
   DEFAULT_TLINEAR_RESOLUTION_K_PER_COUNT,
@@ -105,6 +106,44 @@ describe("frameExtrema", () => {
     const extrema = frameExtrema(frame);
     expect(extrema.minC).toBeCloseTo(0, 6);
     expect(extrema.maxC).toBeCloseTo(60, 6);
+  });
+});
+
+describe("celsiusAt without a Y16 grid", () => {
+  it("returns null for a lightweight read-back (no pixels client-side)", () => {
+    const frame: ThermalFrame = {
+      timestampNs: 0,
+      sequence: 0,
+      width: 160,
+      height: 120,
+      spot: { x: 80, y: 60, temperatureC: 42.5 },
+    };
+    expect(celsiusAt(frame, 80, 60)).toBeNull();
+  });
+});
+
+describe("readSpot", () => {
+  it("uses the agent-measured spot on a lightweight read-back", () => {
+    const frame: ThermalFrame = {
+      timestampNs: 0,
+      sequence: 0,
+      width: 160,
+      height: 120,
+      spot: { x: 80, y: 60, temperatureC: 42.5 },
+      minC: 20,
+      maxC: 42.5,
+    };
+    const s = readSpot(frame, { x: 10, y: 10 });
+    // The agent's spot wins over the client fallback position.
+    expect(s).toEqual({ x: 80, y: 60, temperatureC: 42.5 });
+  });
+
+  it("reads the Y16 grid client-side on a full-frame payload", () => {
+    const frame = frameOf(4, 2, 25);
+    const s = readSpot(frame, { x: 2, y: 1 });
+    expect(s.x).toBe(2);
+    expect(s.y).toBe(1);
+    expect(s.temperatureC).toBeCloseTo(25, 6);
   });
 });
 

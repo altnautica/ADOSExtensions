@@ -28,6 +28,11 @@ from typing import Any, Callable
 
 from altnautica_thermal_camera.driver import LeptonUvcDriver
 from altnautica_thermal_camera.palettes import list_palettes
+from altnautica_thermal_camera.tlinear import (
+    DEFAULT_TLINEAR_RESOLUTION_K_PER_COUNT,
+    celsius_from_y16,
+    celsius_grid_extrema,
+)
 from altnautica_thermal_camera.uvc_backend import LibUvcBackend, MockUvcBackend
 
 log = logging.getLogger(__name__)
@@ -35,11 +40,63 @@ log = logging.getLogger(__name__)
 # How often the control loop reads the config keys and applies changes.
 _CONTROL_HZ = 5.0
 
+# The telemetry channel the GCS overlay subscribes to for the live spot
+# temperature. The colorized image itself rides the video pipeline (the
+# thermal stream leg); this channel carries only the lightweight radiometric
+# read-back the overlay draws over the video (Rule 44 — the overlay reads the
+# video leg for the picture and this channel for temperatures).
+_FRAME_CHANNEL = "camera.thermal.frame"
+
 # The radiometric linear resolution (kelvin per count) each gain setting maps
 # to: high gain trades range for temperature sensitivity, low gain the reverse.
 _GAIN_TLINEAR = {True: 0.01, False: 0.1}
 
 BackendFactory = Callable[[], LibUvcBackend]
+
+
+def _frame_readout(frame: Any) -> dict[str, Any] | None:
+    """Compute the centre-reticle spot temperature and frame extrema from a
+    radiometric frame, as the lightweight overlay read-back.
+
+    Returns ``None`` when the frame carries no usable Y16 grid."""
+    import array
+    import sys
+
+    data = getattr(frame, "data", None)
+    width = int(getattr(frame, "width", 0) or 0)
+    height = int(getattr(frame, "height", 0) or 0)
+    if data is None or width <= 0 or height <= 0:
+        return None
+    grid = array.array("H")
+    try:
+        grid.frombytes(bytes(data))
+    except (ValueError, TypeError):
+        return None
+    if sys.byteorder == "big":
+        grid.byteswap()
+    if len(grid) < width * height:
+        return None
+    meta = getattr(frame, "metadata", None) or {}
+    res = float(
+        meta.get(
+            "tlinear_resolution_k_per_count",
+            DEFAULT_TLINEAR_RESOLUTION_K_PER_COUNT,
+        )
+    )
+    # Centre reticle: the conventional fixed spot-meter position. The operator
+    # aims the camera to place the subject under it.
+    sx = width // 2
+    sy = height // 2
+    spot_c = celsius_from_y16(grid[sy * width + sx], res)
+    min_c, max_c = celsius_grid_extrema(grid, res)
+    return {
+        "width": width,
+        "height": height,
+        "spot": {"x": sx, "y": sy, "temperatureC": round(spot_c, 2)},
+        "minC": round(min_c, 2),
+        "maxC": round(max_c, 2),
+        "resolutionKPerCount": res,
+    }
 
 
 class ThermalUsbPlugin:
@@ -60,6 +117,9 @@ class ThermalUsbPlugin:
         self._ctx: Any = None
         self._driver: LeptonUvcDriver | None = None
         self._session: Any = None
+        # The open frame stream; the control loop pulls one frame per tick to
+        # compute the spot temperature the overlay renders.
+        self._frames: Any = None
         self._control_task: asyncio.Task | None = None
         # Declarative-key cache so a control tick only re-applies a changed key.
         self._applied: dict[str, Any] = {}
@@ -92,6 +152,14 @@ class ThermalUsbPlugin:
             return
         self._applied["palette"] = initial_palette
 
+        # Open the radiometric frame stream so the control loop can read a live
+        # spot temperature off the Y16 grid and publish it for the overlay.
+        try:
+            self._frames = await self._driver.frame_iterator(self._session)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"thermal frame stream open failed: {exc}")
+            self._frames = None
+
         # Advertise the thermal stream leg to the video pipeline when a
         # colorized stream endpoint is configured (hardware-gated: no endpoint
         # means no leg, never a phantom stream).
@@ -113,6 +181,12 @@ class ThermalUsbPlugin:
             except asyncio.CancelledError:
                 pass
             self._control_task = None
+        if self._frames is not None:
+            try:
+                await self._frames.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+            self._frames = None
         if self._driver is not None and self._session is not None:
             try:
                 await self._driver.close(self._session)
@@ -205,6 +279,37 @@ class ThermalUsbPlugin:
             await self._reset_key("ffc")
 
         await self._publish_state()
+        await self._publish_frame_readout()
+
+    async def _publish_frame_readout(self) -> None:
+        """Read one radiometric frame and publish the spot temperature the
+        overlay renders on the ``camera.thermal.frame`` channel.
+
+        The colorized picture rides the video pipeline (the stream leg); this
+        carries only the lightweight radiometric read-back (spot temperature at
+        the centre reticle plus the frame extrema), so the overlay has a live
+        temperature to draw over the video without shipping the whole Y16 grid
+        over the heartbeat."""
+        frames = self._frames
+        if frames is None:
+            return
+        try:
+            frame = await anext(frames, None)
+        except Exception as exc:  # noqa: BLE001
+            self._log(f"thermal frame read failed: {exc}")
+            return
+        if frame is None:
+            return
+        readout = _frame_readout(frame)
+        if readout is None:
+            return
+        tel = getattr(self._ctx, "telemetry", None)
+        if tel is None or not hasattr(tel, "extend"):
+            return
+        try:
+            await tel.extend(_FRAME_CHANNEL, readout)
+        except Exception:  # noqa: BLE001
+            log.debug("thermal frame telemetry extend failed", exc_info=True)
 
     async def _publish_state(self) -> None:
         """Publish the thermal read-back (connected, palette, gain) on change,

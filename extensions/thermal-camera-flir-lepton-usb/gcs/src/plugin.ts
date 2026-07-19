@@ -9,7 +9,7 @@ import { definePlugin } from "@altnautica/plugin-sdk";
 
 import { listPalettes } from "./palettes";
 import { paintFrame } from "./render";
-import { celsiusAt, clientToFrame, frameToCanvas } from "./spotMeter";
+import { celsiusAt, clientToFrame, frameToCanvas, readSpot } from "./spotMeter";
 import {
   DEFAULT_THERMAL_CONFIG,
   type PaletteName,
@@ -33,7 +33,7 @@ let spot: SpotMeterState = {
 
 definePlugin({
   id: "com.altnautica.thermal-flir-lepton-usb",
-  version: "1.0.0",
+  version: "1.2.0",
   async mount(ctx) {
     mountDom();
     renderActionRail();
@@ -112,30 +112,33 @@ function renderActionRail(): void {
 
 function ingestFrame(frame: ThermalFrame): void {
   lastFrame = frame;
-  if (!canvasEl) return;
-  if (
-    canvasEl.width !== frame.width ||
-    canvasEl.height !== frame.height ||
-    !imageData
-  ) {
-    canvasEl.width = frame.width;
-    canvasEl.height = frame.height;
-    const ctx2d = canvasEl.getContext("2d");
-    if (!ctx2d) return;
-    imageData = ctx2d.createImageData(frame.width, frame.height);
+
+  // The colorized image rides the video leg; the overlay draws the spot marker
+  // and readout over it. A lightweight read-back carries the agent-measured
+  // spot temperature; a full-frame payload (with y16) is colorized here and
+  // metered client-side.
+  spot = readSpot(frame, { x: spot.x, y: spot.y });
+
+  if (frame.y16 && canvasEl) {
+    if (
+      canvasEl.width !== frame.width ||
+      canvasEl.height !== frame.height ||
+      !imageData
+    ) {
+      canvasEl.width = frame.width;
+      canvasEl.height = frame.height;
+      const ctx2d = canvasEl.getContext("2d");
+      if (!ctx2d) return;
+      imageData = ctx2d.createImageData(frame.width, frame.height);
+    }
+    drawCurrentFrame();
   }
-  drawCurrentFrame();
-  spot = {
-    x: spot.x,
-    y: spot.y,
-    temperatureC: celsiusAt(frame, spot.x, spot.y),
-  };
   placeSpotMarker();
   updateReadout();
 }
 
 function drawCurrentFrame(): void {
-  if (!canvasEl || !lastFrame || !imageData) return;
+  if (!canvasEl || !lastFrame?.y16 || !imageData) return;
   paintFrame(
     lastFrame,
     {
@@ -178,7 +181,9 @@ function updateReadout(): void {
 }
 
 function handleCanvasClick(event: MouseEvent): void {
-  if (!canvasEl || !lastFrame) return;
+  // Client-side spot metering needs the Y16 grid. On the lightweight read-back
+  // the reticle is fixed by the agent (centre), so a click is a no-op here.
+  if (!canvasEl || !lastFrame?.y16) return;
   const rect = canvasEl.getBoundingClientRect();
   const point = clientToFrame(
     {

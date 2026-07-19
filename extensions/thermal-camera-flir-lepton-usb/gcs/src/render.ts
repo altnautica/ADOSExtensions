@@ -47,6 +47,11 @@ export function paintFrame(
     );
   }
 
+  // A lightweight read-back (no Y16 grid) has no pixels to paint; the image is
+  // the video leg. Leave the buffer untouched.
+  const y16 = frame.y16;
+  if (!y16) return imageData;
+
   const lut = paletteLut(options.palette);
   const pixels = frame.width * frame.height;
   const resolution =
@@ -65,7 +70,7 @@ export function paintFrame(
 
   const out = imageData.data;
   for (let i = 0; i < pixels; i += 1) {
-    const raw = frame.y16[i];
+    const raw = y16[i];
     if (raw === undefined) continue;
     const clamped = raw < loY16 ? loY16 : raw > hiY16 ? hiY16 : raw;
     const t = (clamped - loY16) / span;
@@ -122,10 +127,12 @@ function computeRange(
     const hi = celsiusToY16(options.fixedRange.maxC, resolution);
     return { loY16: Math.min(lo, hi), hiY16: Math.max(lo, hi) };
   }
+  const y16 = frame.y16;
+  if (!y16) return { loY16: 0, hiY16: 1 };
   let lo = Number.POSITIVE_INFINITY;
   let hi = Number.NEGATIVE_INFINITY;
   for (let i = 0; i < frame.width * frame.height; i += 1) {
-    const v = frame.y16[i];
+    const v = y16[i];
     if (v === undefined) continue;
     if (v < lo) lo = v;
     if (v > hi) hi = v;

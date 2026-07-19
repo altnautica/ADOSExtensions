@@ -12,6 +12,7 @@
 import {
   DEFAULT_TLINEAR_RESOLUTION_K_PER_COUNT,
   KELVIN_C_OFFSET,
+  type SpotMeterState,
   type ThermalFrame,
 } from "./types";
 
@@ -61,7 +62,7 @@ export function celsiusAt(
   x: number,
   y: number,
 ): number | null {
-  if (!frame) return null;
+  if (!frame || !frame.y16) return null;
   if (x < 0 || y < 0) return null;
   if (x >= frame.width || y >= frame.height) return null;
   const index = y * frame.width + x;
@@ -80,6 +81,10 @@ export function celsiusAt(
 export function frameExtrema(
   frame: ThermalFrame,
 ): { minC: number; maxC: number } {
+  if (!frame.y16) {
+    // A lightweight read-back carries the agent-computed extrema directly.
+    return { minC: frame.minC ?? 0, maxC: frame.maxC ?? 0 };
+  }
   const resolution =
     frame.resolutionKPerCount ?? DEFAULT_TLINEAR_RESOLUTION_K_PER_COUNT;
   let minRaw = Number.POSITIVE_INFINITY;
@@ -114,4 +119,30 @@ export function frameToCanvas(
   const clientX = ((point.x + 0.5) / frame.width) * canvasRect.width;
   const clientY = ((point.y + 0.5) / frame.height) * canvasRect.height;
   return { clientX, clientY };
+}
+
+/**
+ * Resolve the spot-meter reading for a received frame.
+ *
+ * A lightweight read-back carries the agent-measured `spot` (position and
+ * temperature) directly — the overlay renders it over the video leg. A
+ * full-frame payload has no `spot`, so the reading is taken client-side from
+ * the Y16 grid at the current reticle position (`fallback`). Pure.
+ */
+export function readSpot(
+  frame: ThermalFrame,
+  fallback: FramePoint,
+): SpotMeterState {
+  if (frame.spot) {
+    return {
+      x: frame.spot.x,
+      y: frame.spot.y,
+      temperatureC: frame.spot.temperatureC,
+    };
+  }
+  return {
+    x: fallback.x,
+    y: fallback.y,
+    temperatureC: celsiusAt(frame, fallback.x, fallback.y),
+  };
 }

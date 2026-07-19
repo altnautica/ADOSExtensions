@@ -2,8 +2,12 @@
  * Shared types for the thermal camera plugin GCS half.
  *
  * `ThermalFrame` is the host-normalised event shape published on the
- * `camera.thermal.frame` topic. The agent half computes Y16 plus a
- * matching kelvin grid; the GCS half receives both and renders.
+ * `camera.thermal.frame` topic. The agent ships a lightweight radiometric
+ * read-back — the centre-reticle `spot` temperature plus the frame extrema —
+ * while the colorized picture rides the video pipeline (the stream leg), so
+ * the overlay reads the video leg for the image and this event for the
+ * temperatures. A full-frame payload carrying the whole `y16` grid is also
+ * accepted (client-side colorize + click-to-spot), so both shapes render.
  */
 
 export type PaletteName = "ironbow" | "rainbow" | "grayscale";
@@ -27,10 +31,18 @@ export interface ThermalFrame {
   height: number;
   /**
    * Flat ``Uint16Array`` of length ``width * height`` carrying raw Y16
-   * counts. Hosts that ship structured-clone-safe transports may pass
-   * an Array; both shapes are accepted.
+   * counts. Present only on a full-frame payload; the lightweight agent
+   * read-back omits it and carries `spot` instead. Hosts that ship
+   * structured-clone-safe transports may pass an Array; both shapes are
+   * accepted.
    */
-  y16: ArrayLike<number>;
+  y16?: ArrayLike<number>;
+  /**
+   * The agent-computed spot temperature at a reticle position. Present on the
+   * lightweight read-back (the agent measured the Y16 grid on the drone); the
+   * overlay renders this directly rather than reading pixels client-side.
+   */
+  spot?: { x: number; y: number; temperatureC: number };
   /** Per-frame extrema in deg C, as reported by the agent. Optional. */
   minC?: number;
   maxC?: number;

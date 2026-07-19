@@ -1,6 +1,6 @@
 {
   "name": "@altnautica/thermal-camera-flir-lepton-usb",
-  "version": "1.0.2",
+  "version": "1.2.0",
   "private": true,
   "license": "GPL-3.0-or-later",
   "scripts": {
