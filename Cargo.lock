@@ -6,6 +6,7 @@ version = 4
 name = "ados-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "getrandom 0.2.17",
  "hex",
  "hmac",
@@ -1633,7 +1634,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vision-nav"
-version = "0.3.0"
+version = "0.3.3"
 dependencies = [
  "ados-protocol",
  "ados-sdk",

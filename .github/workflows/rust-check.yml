@@ -1,0 +1,47 @@
+# Builds, lints, and tests the Rust extension crates against the current agent
+# SDK. The SDK (ados-sdk / ados-protocol) is consumed via a workspace path dep
+# to the sibling ADOSDroneAgent checkout, so this job clones that repo first and
+# catches SDK drift early — before a release tag tries to build the same crate.
+name: rust-check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extensions/vision-nav/agent/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust-check.yml"
+  pull_request:
+    paths:
+      - "extensions/vision-nav/agent/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+
+jobs:
+  vision-nav-crate:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the agent SDK (sibling path for the workspace path dep)
+        run: |
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --depth 1 --branch main \
+            https://github.com/altnautica/ADOSDroneAgent "${dest}"
+          echo "agent SDK from ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+
+      - name: Install Rust toolchain (musl target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+          components: clippy
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy -p vision-nav -- -D warnings
+
+      - name: Test
+        run: cargo test -p vision-nav
+
+      - name: Check the release target compiles
+        run: cargo check -p vision-nav --target aarch64-unknown-linux-musl

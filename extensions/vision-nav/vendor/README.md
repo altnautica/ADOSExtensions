@@ -2,10 +2,10 @@
 
 The two VIO modes (`vio_openvins`, `vio_vins_fusion`) spawn a C++
 binary that runs the upstream estimator inside the plugin host's
-subprocess sandbox. The Python shim layer
-(`agent/src/altnautica_vision_nav/shim/`) feeds camera frames over a
-shared-memory ring and exchanges IMU samples + pose messages over a
-length-prefixed msgpack channel on a Unix domain socket.
+subprocess sandbox. The Rust agent's VIO bridge (`agent/src/vio.rs`)
+feeds camera frames over a shared-memory ring and exchanges IMU
+samples + pose messages over a length-prefixed msgpack channel on a
+Unix domain socket.
 
 Two binaries live here, one per estimator:
 
@@ -19,8 +19,8 @@ Both binaries:
 * Open `/run/ados/vision-nav/<mode>.sock` as a connect-side UDS.
 * Open the SHM region at `/dev/shm/ados-vision-nav-frames` for camera
   frame I/O.
-* Speak the msgpack wire format documented at
-  `agent/src/altnautica_vision_nav/shim/ipc.py`.
+* Speak the length-prefixed msgpack wire format the Rust agent's VIO
+  bridge implements (`agent/src/vio.rs`).
 
 The binaries are not committed to git. CI builds them on tag push and
 attaches the signed tarballs to the GitHub release; the install path

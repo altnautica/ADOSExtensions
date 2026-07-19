@@ -2,6 +2,16 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.3.3]
+
+- Release-pipeline completion: the release now cross-compiles the Rust agent
+  binary (`bin/vision-nav`) for the static aarch64 target and stages it into the
+  archive, so the published `.adosplug` is a complete, installable extension
+  rather than a half-archive. Signing and the checksum sidecar now match the
+  other first-party extensions.
+- Stamped the frame-descriptor wire version in the framing tests and tidied the
+  scale-source mapping. No runtime behavior change.
+
 ## [0.3.2]
 
 - Added an Engage cockpit Skill that arms and disarms vision navigation. The
