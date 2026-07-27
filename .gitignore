@@ -12,4 +12,5 @@ extensions/*/gcs/plugin.bundle.js
 /target
 
 # Local agent tooling directory (not part of the project)
-.omp/
+.opencode/
+opencode.jsonc
