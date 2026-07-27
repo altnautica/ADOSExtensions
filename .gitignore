@@ -10,3 +10,6 @@ extensions/*/gcs/plugin.bundle.js
 
 # Rust build output (the cargo workspace at the repo root)
 /target
+
+# Local agent tooling directory (not part of the project)
+.omp/
