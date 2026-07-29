@@ -8,7 +8,9 @@
     "build:thermal-camera": "pnpm --filter ./extensions/thermal-camera-flir-lepton-usb/gcs build",
     "test:thermal-camera": "pnpm --filter ./extensions/thermal-camera-flir-lepton-usb/gcs test",
     "build:mavlink-gimbal-v2": "pnpm --filter ./extensions/mavlink-gimbal-v2/gcs build",
-    "test:mavlink-gimbal-v2": "pnpm --filter ./extensions/mavlink-gimbal-v2/gcs test"
+    "test:mavlink-gimbal-v2": "pnpm --filter ./extensions/mavlink-gimbal-v2/gcs test",
+    "build:follow-me": "pnpm --filter ./extensions/follow-me/gcs build",
+    "test:follow-me": "pnpm --filter ./extensions/follow-me/gcs test"
   },
   "engines": {
     "pnpm": ">=9"

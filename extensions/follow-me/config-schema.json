@@ -36,7 +36,7 @@
       "type": "string",
       "title": "Designate camera",
       "description": "The camera id whose detection stream the follow loop consumes and whose video the operator designates from.",
-      "default": "uvc-0"
+      "default": "auto"
     },
     "camera_hfov_deg": {
       "type": "number",

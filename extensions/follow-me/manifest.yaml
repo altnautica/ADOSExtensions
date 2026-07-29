@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.2.5"
+version: "0.2.6"
 description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a fixed
@@ -29,7 +29,7 @@ features:
 hardware_requirements:
   cameras: "USB UVC or CSI camera bound to the vision pipeline"
   fc_firmware: "ArduPilot or PX4 in a guided position-hold mode"
-  boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5"]
+  boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "a733", "sun60iw2"]
 resource_impact:
   output_rate_hz: 6
   cpu_percent_peak: 25
@@ -47,7 +47,7 @@ risk: high
 compatibility:
   ados_version: ">=0.99.180"
   gcs_version: ">=0.56.0"
-  supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5"]
+  supported_boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "a733", "sun60iw2"]
 
 agent:
   runtime: python

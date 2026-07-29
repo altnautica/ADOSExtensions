@@ -4,6 +4,14 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.6]
+
+### Added
+
+- Added Radxa Cubie A7S / Allwinner A733 (`cubie-a7s`, `a733`, `sun60iw2`) to
+  `hardware_requirements.boards` and `compatibility.supported_boards`, so the
+  board-compatibility gate no longer blocks install on that board.
+
 ## [0.2.5]
 
 ### Changed

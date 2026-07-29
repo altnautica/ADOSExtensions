@@ -54,7 +54,7 @@ Per-drone configuration (see `config-schema.json`):
 | `follow_distance_m`| `8`      | `3`–`30`  | Standoff distance behind the subject.     |
 | `follow_height_m`  | `4`      | `0`–`20`  | Follow height above the arming altitude.  |
 | `gimbal_point`     | `true`   | —         | Point a gimbal at the subject if present. |
-| `designate_camera` | `uvc-0`  | —         | Camera the follow loop consumes.          |
+| `designate_camera` | `auto`  | —         | Camera the follow loop consumes.          |
 | `camera_hfov_deg`  | `70`     | `30`–`160`| Camera horizontal field of view.          |
 | `mount_pitch_deg`  | `30`     | `0`–`90`  | Camera downward tilt below the horizon.   |
 | `detector`         | `coco-person` | —    | Detection model the follow loop consumes. |
@@ -74,7 +74,7 @@ Per-drone configuration (see `config-schema.json`):
 pnpm -C gcs build      # esbuild -> gcs/plugin.bundle.js
 pnpm -C gcs test       # vitest (GCS half)
 ( cd agent && python -m pytest )   # agent half
-../../scripts/pack.sh follow-me    # -> dist/com.altnautica.follow-me-0.2.2.adosplug
+../../scripts/pack.sh follow-me    # -> dist/com.altnautica.follow-me-0.2.6.adosplug
 ```
 
 ## License
