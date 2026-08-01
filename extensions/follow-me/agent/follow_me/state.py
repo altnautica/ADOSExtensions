@@ -19,6 +19,21 @@ LOCK_LOCKED = "locked"
 LOCK_UNCERTAIN = "uncertain"
 LOCK_LOST = "lost"
 
+# Why the loop is not commanding, on the wire. ``commanding: false`` on its
+# own tells an operator that the follow is not flying the aircraft but not
+# which of several very different causes is responsible — a disarmed FC is a
+# normal pre-flight state, while telemetry that stopped arriving mid-follow
+# is a fault. Every non-commanding branch names itself with one of these.
+HOLD_INACTIVE = "inactive"
+HOLD_NO_LOCK = "no-lock"
+HOLD_LOCK_UNCERTAIN = "lock-uncertain"
+HOLD_LOCK_LOST = "lock-lost"
+HOLD_POSE_STALE = "pose-stale"
+HOLD_FC_STALE = "fc-stale"
+HOLD_FC_DISARMED = "fc-disarmed"
+HOLD_FC_NOT_GUIDED = "fc-not-guided"
+HOLD_NO_GROUND_FIX = "no-ground-fix"
+
 
 @dataclass(frozen=True)
 class FollowConfig:
@@ -90,10 +105,12 @@ def _as_float(value: object, default: float) -> float:
 @dataclass
 class FollowState:
     """The published follow read-back. ``commanding`` is the honest bit:
-    True only while active, locked, a pose exists, AND the flight controller
-    is armed and in a guided/offboard mode that accepts the setpoints.
-    ``fc_armed`` / ``fc_guided`` carry the flight-controller state so the
-    read-back explains why the loop is or is not commanding."""
+    True only while active, locked, the vehicle pose is CURRENT, AND the
+    flight controller is armed and in a guided/offboard mode that accepts the
+    setpoints. ``fc_armed`` / ``fc_guided`` carry the flight-controller state,
+    and are reported False once the HEARTBEAT they came from goes stale — a
+    remembered arm state is not an observed one. ``hold_reason`` names which
+    gate is holding, so ``commanding: false`` is never a cause-free reading."""
 
     active: bool = False
     lock_state: str | None = None
@@ -104,6 +121,7 @@ class FollowState:
     commanding: bool = False
     fc_armed: bool = False
     fc_guided: bool = False
+    hold_reason: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -117,6 +135,15 @@ __all__ = [
     "LOCK_LOCKED",
     "LOCK_UNCERTAIN",
     "LOCK_LOST",
+    "HOLD_INACTIVE",
+    "HOLD_NO_LOCK",
+    "HOLD_LOCK_UNCERTAIN",
+    "HOLD_LOCK_LOST",
+    "HOLD_POSE_STALE",
+    "HOLD_FC_STALE",
+    "HOLD_FC_DISARMED",
+    "HOLD_FC_NOT_GUIDED",
+    "HOLD_NO_GROUND_FIX",
     "FollowConfig",
     "FollowState",
 ]

@@ -27,6 +27,10 @@ from ados.sdk.vision import BoundingBox, Detection, DetectionBatch
 import follow_me
 from follow_me.state import (
     FOLLOW_STATE_TOPIC,
+    HOLD_FC_DISARMED,
+    HOLD_FC_NOT_GUIDED,
+    HOLD_FC_STALE,
+    HOLD_POSE_STALE,
     LOCK_LOCKED,
     LOCK_LOST,
     LOCK_UNCERTAIN,
@@ -184,6 +188,33 @@ def _make_plugin(ctx: _Ctx) -> follow_me.FollowMePlugin:
     return plugin
 
 
+class _Clock:
+    """A controllable stand-in for the plugin's monotonic clock, so a test can
+    let a telemetry stream go stale without sleeping through a real window."""
+
+    def __init__(self) -> None:
+        self.now = time.monotonic()
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _install_clock(monkeypatch: Any) -> _Clock:
+    """Point the plugin's clock seam at a controllable clock.
+
+    ``raising=False`` on purpose: against a build with no seam this patch is
+    a no-op and the plugin keeps reading real time, so a staleness test still
+    runs and fails on its behavioural assertion (a setpoint that should never
+    have been emitted) rather than erroring on a missing attribute.
+    """
+    clock = _Clock()
+    monkeypatch.setattr(follow_me, "_monotonic", clock, raising=False)
+    return clock
+
+
 def _seed_lock(
     plugin: follow_me.FollowMePlugin,
     *,
@@ -191,12 +222,15 @@ def _seed_lock(
     lock_state: str = LOCK_LOCKED,
     bbox: BoundingBox | None = None,
     aged: bool = False,
+    at: float | None = None,
 ) -> None:
     """Seed the plugin's locked-target tracker as if a detection batch had
     just arrived carrying the engine's designated target. ``aged=True``
     records the sighting far in the past so the coast window treats it as
-    lost on the next tick."""
-    seen_at = time.monotonic() - 1e6 if aged else time.monotonic()
+    lost on the next tick. ``at`` records it at a specific monotonic time,
+    for tests running on a controllable clock."""
+    base = time.monotonic() if at is None else at
+    seen_at = base - 1e6 if aged else base
     batch = DetectionBatch(
         model_id="coco-person",
         camera_id="uvc-0",
@@ -686,6 +720,268 @@ async def test_coasting_holds_the_last_setpoint_without_recomputing(
     assert ctx.flight.setpoints[-1] == first_setpoint, "the held setpoint is re-sent"
     states = _state_events(ctx)
     assert states[-1]["commanding"] is True
+
+
+# ---------------------------------------------------------------------------
+# Telemetry freshness: the loop projects only through CURRENT vehicle state.
+#
+# The detection side has always been aged (the coast window). The vehicle side
+# was not: a boolean said a pose had once arrived, and once set it never
+# cleared. A telemetry subscription can stall while the write path still works
+# — a stream-rate change, a lagged receiver, a router reconnect, an FC that
+# stops emitting one message — and the loop would then keep commanding at
+# 6 Hz, projecting fresh bounding boxes through a frozen attitude and lat/lon,
+# with the error growing for as long as the stall lasted and the read-back
+# reporting commanding: true throughout.
+# ---------------------------------------------------------------------------
+
+
+def _telemetry_config() -> dict[str, Any]:
+    return {
+        "active": True,
+        "gimbal_point": False,
+        "designate_camera": "uvc-0",
+        "camera_hfov_deg": 70.0,
+        "mount_pitch_deg": 45.0,
+        "follow_distance_m": 6.0,
+        "follow_height_m": 4.0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_pose_stops_commanding_and_names_the_reason(
+    monkeypatch: Any,
+) -> None:
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    # Telemetry stops. Time passes: longer than the pose window, still inside
+    # the detection coast window, so the subject stays locked and the ONLY
+    # thing wrong is that the vehicle state is no longer current.
+    clock.advance(1.0)
+
+    await plugin._tick()
+
+    assert not ctx.flight.setpoints, (
+        "a pose that stopped updating must not be projected through: the "
+        "setpoint would be computed from where the aircraft used to be"
+    )
+    states = _state_events(ctx)
+    assert states and states[-1]["commanding"] is False
+    assert states[-1]["hold_reason"] == HOLD_POSE_STALE, (
+        "commanding: false with no cause is indistinguishable from a normal "
+        "pre-arm hold; the read-back must name the stall"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_attitude_alone_stops_commanding(
+    monkeypatch: Any,
+) -> None:
+    # ATTITUDE and GLOBAL_POSITION_INT are separate messages at separate
+    # rates and either can stop on its own. A single shared freshness mark
+    # would be refreshed by whichever one still flowed, hiding the stall
+    # completely — so each half is aged independently.
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    clock.advance(1.0)
+    # Position keeps arriving; attitude does not.
+    plugin._on_global_position(
+        {
+            "lat": int(round(12.0 * 1e7)),
+            "lon": int(round(77.0 * 1e7)),
+            "relative_alt": 20_000,
+        }
+    )
+    _arm_guided(plugin)
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    await plugin._tick()
+
+    assert not ctx.flight.setpoints, (
+        "a stalled attitude alone must stop the follow; a still-flowing "
+        "position message must not mask it"
+    )
+    states = _state_events(ctx)
+    assert states and states[-1]["hold_reason"] == HOLD_POSE_STALE
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_position_alone_stops_commanding(
+    monkeypatch: Any,
+) -> None:
+    # The mirror image: attitude keeps flowing, position dries up.
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    clock.advance(1.0)
+    plugin._on_attitude({"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
+    _arm_guided(plugin)
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    await plugin._tick()
+
+    assert not ctx.flight.setpoints, "a stalled position alone must stop the follow"
+    states = _state_events(ctx)
+    assert states and states[-1]["hold_reason"] == HOLD_POSE_STALE
+
+
+@pytest.mark.asyncio
+async def test_the_follow_resumes_when_pose_telemetry_comes_back(
+    monkeypatch: Any,
+) -> None:
+    # Staleness is a hold, not a latch of its own: the loop must command
+    # again as soon as current telemetry resumes, with no re-designate.
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    clock.advance(1.0)
+    await plugin._tick()
+    assert not ctx.flight.setpoints
+
+    # Telemetry resumes.
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    _seed_lock(
+        plugin,
+        track_id=7,
+        lock_state=LOCK_LOCKED,
+        bbox=BoundingBox(316.0, 236.0, 10.0, 10.0),
+        at=clock.now,
+    )
+    await plugin._tick()
+
+    assert ctx.flight.setpoints, "current telemetry must resume the follow"
+    states = _state_events(ctx)
+    assert states[-1]["commanding"] is True
+    assert states[-1]["hold_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_heartbeat_stops_commanding_and_clears_the_arm_readback(
+    monkeypatch: Any,
+) -> None:
+    # armed/guided are readings of the FC as of the last HEARTBEAT, not
+    # standing facts. Once it stops arriving nothing confirms the aircraft is
+    # still armed or still in a mode that accepts setpoints, so the loop must
+    # hold AND the read-back must stop asserting an arm state.
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    # Past the heartbeat window. Pose and lock are refreshed so the heartbeat
+    # is the only stale input.
+    clock.advance(4.0)
+    _level_pose(plugin)
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    await plugin._tick()
+
+    assert not ctx.flight.setpoints, "a silent flight controller must not be commanded"
+    states = _state_events(ctx)
+    assert states and states[-1]["commanding"] is False
+    assert states[-1]["hold_reason"] == HOLD_FC_STALE
+    assert states[-1]["fc_armed"] is False, (
+        "a remembered arm state is not an observed one"
+    )
+    assert states[-1]["fc_guided"] is False
+
+
+@pytest.mark.asyncio
+async def test_a_stale_heartbeat_is_reported_apart_from_a_disarmed_one(
+    monkeypatch: Any,
+) -> None:
+    # Both read fc_armed: false, and they mean very different things — one is
+    # a normal pre-flight state, the other is a lost link mid-follow.
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    plugin._on_heartbeat({"base_mode": 0x01, "custom_mode": 4, "autopilot": 3})
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    await plugin._tick()
+
+    states = _state_events(ctx)
+    assert states[-1]["hold_reason"] == HOLD_FC_DISARMED
+    assert states[-1]["fc_guided"] is True, "a live heartbeat still reports its mode"
+
+
+@pytest.mark.asyncio
+async def test_a_non_guided_mode_is_named_distinctly(monkeypatch: Any) -> None:
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin, custom_mode=5)  # ArduCopter LOITER
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    await plugin._tick()
+
+    states = _state_events(ctx)
+    assert states[-1]["hold_reason"] == HOLD_FC_NOT_GUIDED
+
+
+@pytest.mark.asyncio
+async def test_a_stalled_gimbal_report_falls_back_to_the_commanded_angle(
+    monkeypatch: Any,
+) -> None:
+    # A MOUNT_ORIENTATION report is the boresight only while it is current.
+    # Once it stops arriving, the angle the plugin itself last commanded
+    # tracks the gimbal's real aim better than a report that predates it.
+    cfg = _telemetry_config()
+    cfg["gimbal_point"] = True
+    cfg["mount_pitch_deg"] = 30.0
+    ctx = _Ctx(config=cfg)
+    plugin = _make_plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    plugin._on_mount_orientation({"pitch": -40.0, "yaw": 15.0})
+    _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+
+    await plugin._tick()
+    assert plugin._commanded_gimbal is not None
+    commanded = plugin._commanded_gimbal
+    assert commanded != (40.0, 15.0), "the test needs the two angles to differ"
+
+    # The gimbal stops reporting. Everything else is refreshed.
+    clock.advance(2.5)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+    _seed_lock(
+        plugin,
+        track_id=7,
+        lock_state=LOCK_LOCKED,
+        bbox=BoundingBox(320.0, 240.0, 12.0, 12.0),
+        at=clock.now,
+    )
+
+    captured = _spy_projection(monkeypatch)
+    await plugin._tick()
+
+    assert (captured["gimbal_pitch_deg"], captured["gimbal_yaw_deg"]) == commanded, (
+        "a stale gimbal report must decay to the commanded angle, not be "
+        "believed indefinitely"
+    )
 
 
 # ---------------------------------------------------------------------------

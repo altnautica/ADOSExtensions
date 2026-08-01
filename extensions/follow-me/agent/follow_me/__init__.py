@@ -42,8 +42,18 @@ from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 from ados.sdk.vision import BoundingBox, DetectionBatch
 
 from follow_me import mavlink_frames, projection
+from follow_me.freshness import FreshnessGate
 from follow_me.state import (
     FOLLOW_STATE_TOPIC,
+    HOLD_FC_DISARMED,
+    HOLD_FC_NOT_GUIDED,
+    HOLD_FC_STALE,
+    HOLD_INACTIVE,
+    HOLD_LOCK_LOST,
+    HOLD_LOCK_UNCERTAIN,
+    HOLD_NO_GROUND_FIX,
+    HOLD_NO_LOCK,
+    HOLD_POSE_STALE,
     LOCK_LOCKED,
     LOCK_LOST,
     FollowConfig,
@@ -61,6 +71,40 @@ _LOOP_PERIOD = 1.0 / _LOOP_HZ
 # How long the loop coasts on the last good lock before declaring the
 # subject lost when its detection stops arriving.
 _COAST_WINDOW_S = 1.5
+
+# Freshness windows for the flight-controller telemetry the loop projects
+# through. Every one of these inputs can stop arriving while the write path
+# still works — a stream-rate change, a lagged broadcast receiver, a router
+# reconnect, an FC that simply stops emitting one message — so each is aged
+# rather than latched, and each gets a window sized from the cadence that
+# message is actually expected at. One shared window would be wrong for all
+# three: they are requested at 10 Hz, 5 Hz and 1 Hz respectively.
+#
+# Pose. The agent's MAVLink router requests ATTITUDE at 10 Hz and
+# GLOBAL_POSITION_INT at 5 Hz, so the slower of the two nominally arrives
+# every 0.2 s. 0.5 s is three follow-loop periods (the loop runs at 6 Hz)
+# and two and a half position periods: one dropped message plus link jitter
+# still reads current, while a real stall is caught within about three
+# ticks. Deliberately much tighter than the 1.5 s detection coast window,
+# because a frozen pose corrupts the ORIGIN and heading the projection
+# measures from, which grows the setpoint error without bound as the
+# aircraft flies on. A frozen bounding box only misplaces the subject
+# within the frame, and the loop already holds its last setpoint for that.
+_POSE_MAX_AGE_S = 0.5
+
+# Flight-controller arm + mode. HEARTBEAT is requested at 1 Hz, so a window
+# sized like the pose one would report stale between every message. Three
+# seconds is three missed heartbeats — the same "the link is gone" rule of
+# thumb ground stations apply to a MAVLink system.
+_FC_MAX_AGE_S = 3.0
+
+# Gimbal boresight. MOUNT_ORIENTATION is NOT one of the streams the router
+# requests, so its cadence is whatever the firmware happens to emit; this
+# window is correspondingly generous. Expiring here is benign rather than a
+# stop: the projection falls back to the angle the plugin last commanded the
+# gimbal to, which is a better estimate than an attitude report old enough
+# to predate the current aim.
+_GIMBAL_MAX_AGE_S = 2.0
 
 # A slow heartbeat for the follow.state read-back even when nothing
 # changed, so the GCS knows the agent is alive.
@@ -103,6 +147,13 @@ class _LastCommand:
     range_m: float
     distance_setpoint_m: float
     height_setpoint_m: float
+
+
+def _monotonic() -> float:
+    """The one clock every freshness mark and window check in this plugin
+    reads. Routed through a single function so the whole staleness surface
+    can be driven from a test without sleeping through real windows."""
+    return time.monotonic()
 
 
 def _is_guided_mode(autopilot: int, custom_mode: int) -> bool:
@@ -155,7 +206,14 @@ manifest = get_manifest()
 
 
 class _Pose:
-    """Latest FC pose cached from the MAVLink telemetry stream."""
+    """Latest FC pose cached from the MAVLink telemetry stream.
+
+    Attitude and position arrive on two different messages, at two different
+    rates, and can stop independently — an FC can keep emitting ATTITUDE long
+    after GLOBAL_POSITION_INT dries up. They therefore carry two separate
+    freshness gates rather than one shared mark, which whichever message was
+    still flowing would keep refreshing, hiding the partial stall entirely.
+    """
 
     __slots__ = (
         "roll",
@@ -164,23 +222,28 @@ class _Pose:
         "lat_deg",
         "lon_deg",
         "rel_alt_m",
-        "have_attitude",
-        "have_position",
+        "attitude",
+        "position",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, max_age_s: float = _POSE_MAX_AGE_S) -> None:
         self.roll = 0.0
         self.pitch = 0.0
         self.yaw = 0.0
         self.lat_deg = 0.0
         self.lon_deg = 0.0
         self.rel_alt_m = 0.0
-        self.have_attitude = False
-        self.have_position = False
+        self.attitude = FreshnessGate(max_age_s)
+        self.position = FreshnessGate(max_age_s)
 
-    @property
-    def ready(self) -> bool:
-        return self.have_attitude and self.have_position
+    def ready(self, now_monotonic_s: float) -> bool:
+        """Whether BOTH halves of the pose are current enough to project
+        through. Not "have we ever had a pose" — a pose the aircraft has
+        since flown away from is worse than no pose, because it looks
+        usable."""
+        return self.attitude.is_fresh(now_monotonic_s) and self.position.is_fresh(
+            now_monotonic_s
+        )
 
 
 class _FcState:
@@ -190,29 +253,47 @@ class _FcState:
     (ArduPilot or PX4) AND reports a mode that accepts companion position
     setpoints. An unknown autopilot or a non-guided mode leaves it False so
     the follow loop never claims to command an FC that would ignore it.
+
+    Both bits are readings, not facts: they describe the FC as of the last
+    HEARTBEAT. Once that heartbeat ages out they are no longer evidence of
+    anything, so the accessors below report False rather than continuing to
+    assert an arm state nothing has confirmed for seconds.
     """
 
-    __slots__ = ("armed", "guided")
+    __slots__ = ("armed", "guided", "heartbeat")
 
-    def __init__(self) -> None:
+    def __init__(self, max_age_s: float = _FC_MAX_AGE_S) -> None:
         self.armed = False
         self.guided = False
+        self.heartbeat = FreshnessGate(max_age_s)
+
+    def is_fresh(self, now_monotonic_s: float) -> bool:
+        return self.heartbeat.is_fresh(now_monotonic_s)
+
+    def armed_at(self, now_monotonic_s: float) -> bool:
+        return self.armed and self.heartbeat.is_fresh(now_monotonic_s)
+
+    def guided_at(self, now_monotonic_s: float) -> bool:
+        return self.guided and self.heartbeat.is_fresh(now_monotonic_s)
 
 
 class _GimbalState:
     """Gimbal boresight attitude reported by the FC, in the PROJECTION's
     convention (pitch degrees positive = down, yaw degrees positive = right of
     the nose). MOUNT_ORIENTATION reports pitch negative = down, so the handler
-    negates it on the way in. ``have_reported`` stays False until a real
-    attitude arrives, so the follow loop knows to fall back to the last
-    commanded angle (then to the fixed mount)."""
+    negates it on the way in.
 
-    __slots__ = ("pitch_deg", "yaw_deg", "have_reported")
+    The report is only the boresight while it is current; a report old enough
+    to predate the gimbal's current aim is a worse estimate than the angle the
+    plugin itself last commanded. The gate therefore decays back to that
+    fallback (and then to the fixed mount) instead of latching."""
 
-    def __init__(self) -> None:
+    __slots__ = ("pitch_deg", "yaw_deg", "report")
+
+    def __init__(self, max_age_s: float = _GIMBAL_MAX_AGE_S) -> None:
         self.pitch_deg = 0.0
         self.yaw_deg = 0.0
-        self.have_reported = False
+        self.report = FreshnessGate(max_age_s)
 
 
 class FollowMePlugin:
@@ -255,7 +336,7 @@ class FollowMePlugin:
         self._ctx = ctx
         cfg = await self._read_config()
         self._cfg = cfg
-        self._cfg_read_at = time.monotonic()
+        self._cfg_read_at = _monotonic()
         self._active_camera = self._resolve_designate_camera(cfg.designate_camera)
 
         # FC state. ATTITUDE gives roll/pitch/yaw; GLOBAL_POSITION_INT gives
@@ -287,7 +368,7 @@ class FollowMePlugin:
 
         self._loop_task = asyncio.create_task(self._follow_loop())
         ctx.log.info("follow_me_started", camera=cfg.designate_camera)
-        await self._publish_state(force=True)
+        await self._publish_state(force=True, hold_reason=HOLD_INACTIVE)
 
     # -- camera binding + MCP tools -----------------------------------
 
@@ -346,7 +427,9 @@ class FollowMePlugin:
         self._tracker.drop()
         self._last_command = None
         if self._ctx is not None:
-            await self._publish_state(force=True, active=False)
+            await self._publish_state(
+                force=True, active=False, hold_reason=HOLD_INACTIVE
+            )
 
     # -- config -------------------------------------------------------
 
@@ -376,7 +459,7 @@ class FollowMePlugin:
         from cache. This cuts the per-loop IPC from one ``get`` per key to one
         ``get`` for ``active`` on most ticks.
         """
-        now = time.monotonic()
+        now = _monotonic()
         if self._cfg is None or (now - self._cfg_read_at) >= _CONFIG_REFRESH_S:
             self._cfg = await self._read_config()
             self._cfg_read_at = now
@@ -397,6 +480,7 @@ class FollowMePlugin:
         autopilot = int(msg.get("autopilot", 0) or 0)
         self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
         self._fc.guided = _is_guided_mode(autopilot, custom_mode)
+        self._fc.heartbeat.mark(_monotonic())
 
     def _on_mount_orientation(self, msg: dict[str, Any]) -> None:
         # MOUNT_ORIENTATION carries degrees: pitch negative = down, yaw
@@ -409,13 +493,16 @@ class FollowMePlugin:
             return
         self._gimbal.pitch_deg = -float(pitch)
         self._gimbal.yaw_deg = float(yaw)
-        self._gimbal.have_reported = True
+        self._gimbal.report.mark(_monotonic())
 
     def _on_attitude(self, msg: dict[str, Any]) -> None:
         self._pose.roll = float(msg.get("roll", 0.0))
         self._pose.pitch = float(msg.get("pitch", 0.0))
         self._pose.yaw = float(msg.get("yaw", 0.0))
-        self._pose.have_attitude = True
+        # Marked separately from position: ATTITUDE and GLOBAL_POSITION_INT
+        # are different messages at different rates and either can stall on
+        # its own.
+        self._pose.attitude.mark(_monotonic())
 
     def _on_global_position(self, msg: dict[str, Any]) -> None:
         # lat/lon are 1e7 integer degrees; relative_alt is millimetres.
@@ -428,7 +515,7 @@ class FollowMePlugin:
             self._pose.lon_deg = float(lon) / 1e7
         if rel is not None:
             self._pose.rel_alt_m = float(rel) / 1000.0
-        self._pose.have_position = True
+        self._pose.position.mark(_monotonic())
 
     # -- detections --------------------------------------------------
 
@@ -451,7 +538,7 @@ class FollowMePlugin:
         # target (the one detection stamped with a track id + lock state) and
         # never chooses a target itself; the follow loop reads the effective
         # lock (with the coast window) each tick.
-        self._tracker.record(batch, time.monotonic())
+        self._tracker.record(batch, _monotonic())
 
     # -- the follow loop ---------------------------------------------
 
@@ -466,13 +553,21 @@ class FollowMePlugin:
                 self._ctx.log.warning("follow_me_tick_error", error=str(exc))
 
     async def _tick(self) -> None:
+        # One clock for the whole tick, so every freshness question is asked
+        # about the same instant and the read-back cannot disagree with the
+        # gate that produced it.
+        now = _monotonic()
         cfg = await self._config_for_tick()
 
         if not cfg.active or not self._tracker.has_lock:
-            await self._publish_state(active=cfg.active, commanding=False)
+            await self._publish_state(
+                now=now,
+                active=cfg.active,
+                commanding=False,
+                hold_reason=HOLD_INACTIVE if not cfg.active else HOLD_NO_LOCK,
+            )
             return
 
-        now = time.monotonic()
         lock = self._tracker.effective_lock(now)
 
         if lock is EffectiveLock.LOST:
@@ -481,7 +576,12 @@ class FollowMePlugin:
             self._tracker.drop()
             self._last_command = None
             await self._publish_state(
-                active=True, lock_state=LOCK_LOST, commanding=False, force=True
+                now=now,
+                active=True,
+                lock_state=LOCK_LOST,
+                commanding=False,
+                hold_reason=HOLD_LOCK_LOST,
+                force=True,
             )
             return
 
@@ -489,36 +589,70 @@ class FollowMePlugin:
         if target is None:
             # uncertain (or coasting): hold, stop commanding.
             await self._publish_state(
-                active=True, lock_state=lock.value, commanding=False
+                now=now,
+                active=True,
+                lock_state=lock.value,
+                commanding=False,
+                hold_reason=HOLD_LOCK_UNCERTAIN,
             )
             return
 
-        if not self._pose.ready:
+        if not self._pose.ready(now):
+            # The subject is locked and the write path may well still work,
+            # but the pose the projection measures from is either absent or
+            # no longer current. Commanding here would fly the aircraft to a
+            # point computed from where it used to be, with the error growing
+            # for as long as the telemetry stays stalled. Hold, and say why —
+            # silence here reads identical to a healthy pre-arm hold.
             await self._publish_state(
-                active=True, lock_state=LOCK_LOCKED, commanding=False
+                now=now,
+                active=True,
+                lock_state=LOCK_LOCKED,
+                commanding=False,
+                hold_reason=HOLD_POSE_STALE,
+            )
+            return
+
+        if not self._fc.is_fresh(now):
+            # The HEARTBEAT stopped. Whatever the FC was doing when it last
+            # reported, nothing confirms it is still armed or still in a mode
+            # that accepts setpoints.
+            await self._publish_state(
+                now=now,
+                active=True,
+                lock_state=LOCK_LOCKED,
+                commanding=False,
+                hold_reason=HOLD_FC_STALE,
             )
             return
 
         if not (self._fc.armed and self._fc.guided):
-            # Locked with a usable pose, but the FC is not armed and in a
-            # guided/offboard mode, so a position setpoint would be ignored.
-            # Report honestly (commanding stays False; the fc_armed/fc_guided
-            # flags in the read-back carry the reason) and do not command.
+            # Locked with a usable pose and a live heartbeat, but the FC is not
+            # armed and in a guided/offboard mode, so a position setpoint would
+            # be ignored. Report honestly and do not command.
             await self._publish_state(
-                active=True, lock_state=LOCK_LOCKED, commanding=False
+                now=now,
+                active=True,
+                lock_state=LOCK_LOCKED,
+                commanding=False,
+                hold_reason=(
+                    HOLD_FC_DISARMED if not self._fc.armed else HOLD_FC_NOT_GUIDED
+                ),
             )
             return
 
-        await self._command_follow(cfg, target.bbox)
+        await self._command_follow(cfg, target.bbox, now)
 
-    async def _command_follow(self, cfg: FollowConfig, bbox: BoundingBox) -> None:
+    async def _command_follow(
+        self, cfg: FollowConfig, bbox: BoundingBox, now: float
+    ) -> None:
         # Coast hold: while the tracker holds LOCKED through the coast window it
         # returns the SAME frozen bbox object from the last sighting. Re-
         # projecting that stale bbox through fresh vehicle attitude each tick
         # would drift the world setpoint on stale image data, so hold (re-send)
         # the last commanded setpoint until a fresh detection replaces the bbox.
         if self._last_command is not None and bbox is self._last_command.bbox:
-            await self._resend_last_command()
+            await self._resend_last_command(now)
             return
 
         frame_w, frame_h = self._frame_size()
@@ -526,7 +660,7 @@ class FollowMePlugin:
         # Which pitch/yaw the camera boresight is actually at. A reported or
         # commanded gimbal angle is the TOTAL orientation relative to the
         # vehicle, so it replaces the fixed mount tilt rather than adding to it.
-        gimbal = self._gimbal_angles_deg(cfg)
+        gimbal = self._gimbal_angles_deg(cfg, now)
         if gimbal is None:
             mount_pitch_deg = cfg.mount_pitch_deg
             gimbal_pitch_deg = 0.0
@@ -558,7 +692,11 @@ class FollowMePlugin:
         if setpoint is None:
             # No ground intersection (subject above the horizon / no AGL).
             await self._publish_state(
-                active=True, lock_state=LOCK_LOCKED, commanding=False
+                now=now,
+                active=True,
+                lock_state=LOCK_LOCKED,
+                commanding=False,
+                hold_reason=HOLD_NO_GROUND_FIX,
             )
             return
 
@@ -605,6 +743,7 @@ class FollowMePlugin:
             height_setpoint_m=cfg.follow_height_m,
         )
         await self._publish_state(
+            now=now,
             active=True,
             lock_state=LOCK_LOCKED,
             commanding=True,
@@ -613,7 +752,7 @@ class FollowMePlugin:
             height_setpoint_m=cfg.follow_height_m,
         )
 
-    async def _resend_last_command(self) -> None:
+    async def _resend_last_command(self, now: float) -> None:
         """Re-send the last commanded setpoint (and gimbal frame) unchanged,
         holding position while coasting on a frozen bbox."""
         cmd = self._last_command
@@ -626,6 +765,7 @@ class FollowMePlugin:
             except Exception as exc:  # noqa: BLE001
                 self._ctx.log.info("follow_me_gimbal_skipped", error=str(exc))
         await self._publish_state(
+            now=now,
             active=True,
             lock_state=LOCK_LOCKED,
             commanding=True,
@@ -646,17 +786,20 @@ class FollowMePlugin:
         return (_DEFAULT_FRAME_W, _DEFAULT_FRAME_H)
 
     def _gimbal_angles_deg(
-        self, cfg: FollowConfig
+        self, cfg: FollowConfig, now: float
     ) -> tuple[float, float] | None:
         """The camera boresight pitch/yaw (projection convention: pitch
         positive = down, yaw positive = right of the nose), or ``None`` for a
         fixed camera whose tilt is the configured mount pitch.
 
-        Preference: the FC's reported gimbal attitude, then the last angle the
-        plugin commanded the gimbal to (only when gimbal pointing is enabled),
-        then ``None`` (no gimbal in play).
+        Preference: the FC's CURRENT reported gimbal attitude, then the last
+        angle the plugin commanded the gimbal to (only when gimbal pointing is
+        enabled), then ``None`` (no gimbal in play). A report that has aged out
+        drops to the commanded angle rather than being believed indefinitely:
+        once MOUNT_ORIENTATION stops arriving, the angle the plugin asked for
+        tracks the gimbal's real aim better than a report that predates it.
         """
-        if self._gimbal.have_reported:
+        if self._gimbal.report.is_fresh(now):
             return (self._gimbal.pitch_deg, self._gimbal.yaw_deg)
         if cfg.gimbal_point and self._commanded_gimbal is not None:
             return self._commanded_gimbal
@@ -668,13 +811,19 @@ class FollowMePlugin:
         self,
         *,
         force: bool = False,
+        now: float | None = None,
         active: bool | None = None,
         lock_state: str | None = None,
         commanding: bool = False,
+        hold_reason: str | None = None,
         range_m: float | None = None,
         distance_setpoint_m: float | None = None,
         height_setpoint_m: float | None = None,
     ) -> None:
+        # Callers inside a tick pass that tick's clock so the published FC
+        # flags are aged against the same instant the command gate used.
+        if now is None:
+            now = _monotonic()
         new = FollowState(
             active=bool(active) if active is not None else False,
             lock_state=lock_state,
@@ -683,10 +832,14 @@ class FollowMePlugin:
             distance_setpoint_m=distance_setpoint_m,
             height_setpoint_m=height_setpoint_m,
             commanding=commanding,
-            fc_armed=self._fc.armed,
-            fc_guided=self._fc.guided,
+            # Aged, not remembered: once the HEARTBEAT these came from is stale
+            # the read-back stops asserting an arm/mode state nothing has
+            # confirmed. hold_reason carries "fc-stale" so the operator can
+            # tell a lost heartbeat from a genuinely disarmed aircraft.
+            fc_armed=self._fc.armed_at(now),
+            fc_guided=self._fc.guided_at(now),
+            hold_reason=None if commanding else hold_reason,
         )
-        now = time.monotonic()
         heartbeat_due = (now - self._last_heartbeat) >= _STATE_HEARTBEAT_S
         if not force and not new.changed_from(self._published) and not heartbeat_due:
             return
