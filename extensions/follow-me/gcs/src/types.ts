@@ -11,6 +11,54 @@
 /** Lock state words shared with the agent + vision contract. */
 export type LockState = "locked" | "uncertain" | "lost";
 
+/**
+ * Why the loop is not commanding, as published by the agent.
+ *
+ * `commanding: false` alone cannot be read: a disarmed flight controller is
+ * a normal pre-flight state, while telemetry that stopped arriving mid-follow
+ * is a fault, and both look identical without this. `pose-stale` and
+ * `fc-stale` are the fault readings.
+ */
+export type HoldReason =
+  | "inactive"
+  | "no-lock"
+  | "lock-uncertain"
+  | "lock-lost"
+  | "pose-stale"
+  | "fc-stale"
+  | "fc-disarmed"
+  | "fc-not-guided"
+  | "no-ground-fix";
+
+const HOLD_REASONS: readonly HoldReason[] = [
+  "inactive",
+  "no-lock",
+  "lock-uncertain",
+  "lock-lost",
+  "pose-stale",
+  "fc-stale",
+  "fc-disarmed",
+  "fc-not-guided",
+  "no-ground-fix",
+];
+
+/** Hold reasons that mean an input the follow depends on stopped arriving,
+ * rather than a normal not-flying-yet state. */
+const STALE_HOLD_REASONS: readonly HoldReason[] = ["pose-stale", "fc-stale"];
+
+/** Whether a hold reason represents a telemetry fault worth flagging. */
+export function isStaleHold(reason: HoldReason | null): boolean {
+  return reason != null && STALE_HOLD_REASONS.includes(reason);
+}
+
+/** The locale key for a hold reason label. */
+export function holdReasonLabelKey(reason: HoldReason): string {
+  const camel = reason.replace(/-([a-z])/g, (_m, c: string) =>
+    c.toUpperCase(),
+  );
+  return `hold.${camel}`;
+}
+
 /** The topic the agent publishes its follow read-back on (must equal the
  * manifest skill state.topic). */
 export const FOLLOW_STATE_TOPIC = "follow.state";
@@ -24,10 +72,13 @@ export interface FollowState {
   distanceSetpointM: number | null;
   heightSetpointM: number | null;
   commanding: boolean;
-  /** Flight-controller armed state (from HEARTBEAT). */
+  /** Flight-controller armed state, as of the last HEARTBEAT. False once
+   * that heartbeat goes stale: a remembered arm state is not an observed one. */
   fcArmed: boolean;
   /** Flight controller in a guided/offboard mode that accepts setpoints. */
   fcGuided: boolean;
+  /** Which gate is holding, when not commanding. Null while commanding. */
+  holdReason: HoldReason | null;
 }
 
 /** The agent emits snake_case keys; normalize to the camelCase shape. */
@@ -41,6 +92,7 @@ export interface RawFollowState {
   commanding?: boolean;
   fc_armed?: boolean;
   fc_guided?: boolean;
+  hold_reason?: HoldReason | string | null;
 }
 
 /** The per-drone config the settings tab writes through ctx.config. */
@@ -75,6 +127,7 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   commanding: false,
   fcArmed: false,
   fcGuided: false,
+  holdReason: null,
 };
 
 /** Map the agent's snake_case read-back onto the camelCase FollowState. */
@@ -94,10 +147,18 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     commanding: raw.commanding === true,
     fcArmed: raw.fc_armed === true,
     fcGuided: raw.fc_guided === true,
+    holdReason: normalizeHoldReason(raw.hold_reason),
   };
 }
 
 function normalizeLockState(v: unknown): LockState | null {
   if (v === "locked" || v === "uncertain" || v === "lost") return v;
   return null;
+}
+
+function normalizeHoldReason(v: unknown): HoldReason | null {
+  // An unrecognized reason is dropped rather than rendered raw: a key the
+  // locale has no label for would surface as an untranslated token, and a
+  // wrong-looking label is worse than none on a status surface.
+  return HOLD_REASONS.includes(v as HoldReason) ? (v as HoldReason) : null;
 }

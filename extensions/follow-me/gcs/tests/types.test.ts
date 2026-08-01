@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_FOLLOW_STATE, normalizeFollowState } from "../src/types";
+import {
+  EMPTY_FOLLOW_STATE,
+  holdReasonLabelKey,
+  isStaleHold,
+  normalizeFollowState,
+} from "../src/types";
 import { normalizeConfig } from "../src/config";
+import enLocale from "../../locales/en.json";
 
 describe("normalizeFollowState", () => {
   it("maps the agent snake_case read-back onto camelCase", () => {
@@ -26,6 +32,7 @@ describe("normalizeFollowState", () => {
       commanding: true,
       fcArmed: true,
       fcGuided: true,
+      holdReason: null,
     });
   });
 
@@ -35,6 +42,54 @@ describe("normalizeFollowState", () => {
 
   it("rejects an unknown lock-state string", () => {
     expect(normalizeFollowState({ lock_state: "bogus" as never }).lockState).toBeNull();
+  });
+
+  it("carries the hold reason the agent published", () => {
+    // Without this the tab can only say "not commanding", which reads the
+    // same for a disarmed aircraft and for one whose telemetry died.
+    const s = normalizeFollowState({ commanding: false, hold_reason: "pose-stale" });
+    expect(s.holdReason).toBe("pose-stale");
+  });
+
+  it("drops an unrecognized hold reason rather than rendering it raw", () => {
+    expect(
+      normalizeFollowState({ hold_reason: "bogus" as never }).holdReason,
+    ).toBeNull();
+    expect(normalizeFollowState({}).holdReason).toBeNull();
+  });
+});
+
+describe("hold reasons", () => {
+  const reasons = [
+    "inactive",
+    "no-lock",
+    "lock-uncertain",
+    "lock-lost",
+    "pose-stale",
+    "fc-stale",
+    "fc-disarmed",
+    "fc-not-guided",
+    "no-ground-fix",
+  ] as const;
+
+  it("has a locale label for every reason the agent can publish", () => {
+    // A reason with no label renders as a bare key on a status surface.
+    for (const reason of reasons) {
+      expect(
+        (enLocale as Record<string, string>)[holdReasonLabelKey(reason)],
+        `missing label for ${reason}`,
+      ).toBeTruthy();
+    }
+  });
+
+  it("flags only the telemetry faults as stale", () => {
+    // A disarmed controller is a normal pre-flight state and must not be
+    // coloured as a fault; telemetry that stopped arriving must be.
+    expect(isStaleHold("pose-stale")).toBe(true);
+    expect(isStaleHold("fc-stale")).toBe(true);
+    expect(isStaleHold("fc-disarmed")).toBe(false);
+    expect(isStaleHold("inactive")).toBe(false);
+    expect(isStaleHold(null)).toBe(false);
   });
 });
 

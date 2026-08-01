@@ -20,6 +20,8 @@ import { useFollowState } from "./follow-state";
 import { card, labelRow, lockColor, sectionTitle } from "./style";
 import {
   DEFAULT_CONFIG,
+  holdReasonLabelKey,
+  isStaleHold,
   type FollowConfig,
   type FollowState,
 } from "./types";
@@ -144,6 +146,24 @@ function MetricsSection({
         value={follow.commanding ? t("metrics.yes") : t("metrics.no")}
         testId="fm-commanding"
       />
+      {!follow.commanding && follow.holdReason !== null ? (
+        // "Not commanding" on its own reads the same whether the aircraft is
+        // sitting disarmed on the ground or its telemetry died mid-follow.
+        // Name the gate, and colour the two telemetry faults as faults.
+        <div style={labelRow} data-testid="fm-hold-reason-row">
+          <span>{t("metrics.holdReason")}</span>
+          <span
+            style={{
+              color: isStaleHold(follow.holdReason)
+                ? "var(--fm-error, #ef4444)"
+                : "var(--fm-text-muted, #94a3b8)",
+            }}
+            data-testid="fm-hold-reason"
+          >
+            {t(holdReasonLabelKey(follow.holdReason))}
+          </span>
+        </div>
+      ) : null}
       <MetricRow
         label={t("metrics.fcArmed")}
         value={follow.fcArmed ? t("metrics.yes") : t("metrics.no")}

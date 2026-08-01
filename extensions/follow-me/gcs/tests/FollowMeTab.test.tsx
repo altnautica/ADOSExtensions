@@ -27,6 +27,7 @@ const idleFollow: FollowState = {
   commanding: false,
   fcArmed: false,
   fcGuided: false,
+  holdReason: "inactive",
 };
 
 const commandingFollow: FollowState = {
@@ -39,6 +40,7 @@ const commandingFollow: FollowState = {
   commanding: true,
   fcArmed: true,
   fcGuided: true,
+  holdReason: null,
 };
 
 describe("FollowMeTab", () => {
@@ -72,6 +74,7 @@ describe("FollowMeTab", () => {
           commanding: false,
           fcArmed: true,
           fcGuided: false,
+          holdReason: "fc-not-guided",
         }}
       />,
     );
@@ -79,6 +82,55 @@ describe("FollowMeTab", () => {
     expect(screen.getByTestId("fm-commanding").textContent).toBe("No");
     expect(screen.getByTestId("fm-fc-armed").textContent).toBe("Yes");
     expect(screen.getByTestId("fm-fc-guided").textContent).toBe("No");
+  });
+
+  it("names the gate that is holding instead of only saying not commanding", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{
+          ...commandingFollow,
+          commanding: false,
+          fcArmed: false,
+          fcGuided: false,
+          holdReason: "pose-stale",
+        }}
+      />,
+    );
+    expect(screen.getByTestId("fm-commanding").textContent).toBe("No");
+    // A stalled pose is a fault, and must read as one rather than looking
+    // like an aircraft that is simply sitting on the ground.
+    expect(screen.getByTestId("fm-hold-reason").textContent).toBe(
+      "Vehicle telemetry stopped",
+    );
+  });
+
+  it("distinguishes a lost heartbeat from a disarmed flight controller", () => {
+    // Both show FC armed: No. Only the read-back's reason separates them.
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{
+          ...commandingFollow,
+          commanding: false,
+          fcArmed: false,
+          fcGuided: false,
+          holdReason: "fc-stale",
+        }}
+      />,
+    );
+    expect(screen.getByTestId("fm-fc-armed").textContent).toBe("No");
+    expect(screen.getByTestId("fm-hold-reason").textContent).toBe(
+      "No flight controller heartbeat",
+    );
+  });
+
+  it("shows no hold reason while the follow is commanding", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={commandingFollow} />);
+    expect(screen.queryByTestId("fm-hold-reason-row")).toBeNull();
   });
 
   it("points to the native settings controls and edits no config from the iframe", () => {

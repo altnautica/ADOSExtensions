@@ -21,6 +21,7 @@
   "metrics.title": "Live",
   "metrics.lockState": "Lock state",
   "metrics.commanding": "Commanding",
+  "metrics.holdReason": "Holding because",
   "metrics.fcArmed": "FC armed",
   "metrics.guidedMode": "Guided mode",
   "metrics.targetId": "Target",
@@ -32,5 +33,14 @@
   "lock.locked": "Locked",
   "lock.uncertain": "Uncertain",
   "lock.lost": "Lost",
-  "lock.none": "No lock"
+  "lock.none": "No lock",
+  "hold.inactive": "Follow is off",
+  "hold.noLock": "No subject designated",
+  "hold.lockUncertain": "Subject uncertain",
+  "hold.lockLost": "Subject lost",
+  "hold.poseStale": "Vehicle telemetry stopped",
+  "hold.fcStale": "No flight controller heartbeat",
+  "hold.fcDisarmed": "Flight controller disarmed",
+  "hold.fcNotGuided": "Not in a guided mode",
+  "hold.noGroundFix": "Subject not on the ground plane"
 }
