@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "altnautica-follow-me"
-version = "0.2.5"
+version = "0.2.7"
 description = "Follow-Me agent plugin: lock onto a designated subject and fly a fixed-distance standoff follow."
 authors = [{ name = "Altnautica" }]
 license = "GPL-3.0-or-later"

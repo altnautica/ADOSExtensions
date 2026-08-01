@@ -4,6 +4,36 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.7]
+
+### Fixed
+
+- The follow loop no longer flies on flight-controller telemetry that has
+  stopped arriving. Vehicle attitude, position, arm state and gimbal
+  attitude were each guarded by a flag set on the first message and never
+  cleared, so once any of them had arrived once the loop treated it as
+  current forever. If a telemetry subscription stalled while the write path
+  still worked, the loop kept commanding at its full rate and projected
+  fresh bounding boxes through a frozen attitude and position, steering
+  toward a point computed from where the aircraft used to be, with the error
+  growing for as long as the stall lasted. Each input now carries its own
+  freshness window, sized from the rate that message is expected at, and
+  attitude and position are aged separately because either can stop alone.
+- The live read-back no longer reports the flight controller as armed and in
+  a guided mode once the heartbeat carrying that state has stopped arriving.
+
+### Added
+
+- The read-back names which gate is holding the follow, and the tab renders
+  it. Reporting only that the loop was not commanding made a stalled
+  telemetry stream look exactly like a normal disarmed, on-the-ground hold.
+  The two readings that mean an input stopped arriving render as faults.
+
+### Changed
+
+- Package versions across the extension are aligned to the manifest version,
+  which the previous release left behind at 0.2.5.
+
 ## [0.2.6]
 
 ### Added

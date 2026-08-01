@@ -176,7 +176,7 @@ def get_manifest() -> PluginManifest:
     return PluginManifest(
         schema_version=3,
         id=PLUGIN_ID,
-        version="0.2.5",
+        version="0.2.7",
         name="ADOS Follow-Me",
         description=(
             "Locks onto an operator-designated subject and flies a "

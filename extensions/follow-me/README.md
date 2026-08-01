@@ -74,7 +74,7 @@ Per-drone configuration (see `config-schema.json`):
 pnpm -C gcs build      # esbuild -> gcs/plugin.bundle.js
 pnpm -C gcs test       # vitest (GCS half)
 ( cd agent && python -m pytest )   # agent half
-../../scripts/pack.sh follow-me    # -> dist/com.altnautica.follow-me-0.2.6.adosplug
+../../scripts/pack.sh follow-me    # -> dist/com.altnautica.follow-me-0.2.7.adosplug
 ```
 
 ## License
