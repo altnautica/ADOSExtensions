@@ -3,6 +3,7 @@
   "private": true,
   "license": "GPL-3.0-or-later",
   "scripts": {
+    "typecheck": "pnpm --filter @altnautica/plugin-sdk build && pnpm -r typecheck",
     "build:battery-health": "pnpm --filter ./extensions/battery-health-panel/gcs build",
     "test:battery-health": "pnpm --filter ./extensions/battery-health-panel/gcs test",
     "build:thermal-camera": "pnpm --filter ./extensions/thermal-camera-flir-lepton-usb/gcs build",

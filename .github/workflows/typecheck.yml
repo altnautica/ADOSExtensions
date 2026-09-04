@@ -1,0 +1,80 @@
+name: typecheck
+
+# Type checking for every TypeScript package in the workspace.
+#
+# Until this existed, none of it was checked. Each extension's `build` is a bare
+# `esbuild --bundle`, and esbuild strips types WITHOUT checking them, so six
+# `extensions/*/gcs` packages shipped with `tsconfig.json` files nothing ever
+# read. `packages/extension-ui` had a `typecheck` script no workflow called.
+# There was also no pull-request Node gate here at all: `release.yml` and
+# `vision-nav-release.yml` are tag-triggered, so nothing ran on a PR.
+#
+# `pnpm typecheck` at the root builds `@altnautica/plugin-sdk` first and then
+# runs `pnpm -r typecheck`. The build is not optional: every gcs half resolves
+# `@altnautica/plugin-sdk` through `"types": "./dist/index.d.ts"`, so without
+# `dist/` present the SDK fails to resolve and the errors are meaningless.
+# Measured: 19 errors with `dist/` removed, 0 with it built.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Frozen deliberately, unlike release.yml and vision-nav-release.yml which
+      # both use `--frozen-lockfile=false`. Measured on this lockfile: a frozen
+      # install succeeds, so the stronger guarantee is available and a resolution
+      # that drifts from the committed lockfile should fail the gate rather than
+      # be silently accepted.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # A run that type-checked nothing must not report success. `pnpm -r` is
+      # silent when a filter matches no package, so a renamed script or a
+      # changed workspace glob in pnpm-workspace.yaml would otherwise pass
+      # green while checking less than it claims.
+      #
+      # 9 = the six extensions/*/gcs halves, packages/plugin-sdk,
+      # packages/extension-ui, and the root aggregator that owns the ordered
+      # `typecheck` script itself.
+      - name: The gate actually checked the packages it exists for
+        run: |
+          set -euo pipefail
+          expected=9
+          found=$(pnpm -r list --depth -1 --json | python3 -c '
+          import json, pathlib, sys
+          n = 0
+          for pkg in json.load(sys.stdin):
+              manifest = pathlib.Path(pkg["path"]) / "package.json"
+              if not manifest.is_file():
+                  continue
+              if "typecheck" in json.loads(manifest.read_text()).get("scripts", {}):
+                  n += 1
+          print(n)
+          ')
+          echo "packages carrying a typecheck script: ${found} (expected ${expected})"
+          if [ "${found}" -lt "${expected}" ]; then
+            echo "FAIL: only ${found} package(s) carry a typecheck script, expected ${expected}." >&2
+            echo "  A package lost its script, or the workspace globs changed." >&2
+            echo "  This job would have reported success while checking less than it claims." >&2
+            exit 1
+          fi
