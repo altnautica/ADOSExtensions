@@ -1,17 +1,35 @@
+> **Development preview. Not published and not installable.**
+>
+> The capture path depends on a native libuvc backend that does not exist in
+> this repository, so there is no configuration in which this extension
+> produces a thermal reading. It is excluded from the release tag patterns in
+> `.github/workflows/release.yml`, so no archive of it is published. What is
+> present and covered by tests is the driver, the TLinear conversion, the spot
+> meter, the palettes, the config control loop and the overlay; they become
+> functional when a concrete backend is supplied. Until then the plugin reports
+> an explicit unavailable state and publishes no readings.
+
 # Thermal Camera FLIR Lepton USB UVC
 
-Hybrid extension that adds FLIR Lepton 3.5 radiometric thermal imaging
-to ADOS. The agent half opens a PureThermal 2 USB UVC dongle, decodes
-Y16 frames into per-pixel kelvin via TLinear, registers a MAVLink
-camera component, and publishes frames on the event bus. The GCS half
-mounts a thermal video overlay with a draggable spot meter, three
-palettes, and a configurable isotherm band.
+Hybrid extension that adds a FLIR Lepton 3.5 radiometric thermal driver
+and cockpit surfaces to ADOS. The agent half drives a PureThermal 2 USB
+UVC dongle: it discovers and opens the device, locks the radiometric
+linear resolution, converts Y16 counts to degrees Celsius via TLinear,
+meters a centre-reticle spot plus the frame extrema, and publishes that
+read-back for the overlay. The GCS half mounts a thermal video overlay
+with a spot meter, three palettes, and a configurable isotherm band.
 
-The native libuvc binding is not wired in this version. The driver
-talks to a `LibUvcBackend` Protocol; the in-tree implementation is a
-`MockUvcBackend` that produces synthetic Y16 frames with a hot region
-in the center. The real binding lands when hardware procurement
-closes.
+**Reaching the dongle needs a native libuvc backend, and this repository
+does not contain one.** The driver talks to the `LibUvcBackend` Protocol
+and the agent injects a concrete backend through
+`ThermalUsbPlugin(backend_factory=...)`. With no backend injected, no
+device on the bus, a failed open, or a frame stream that will not start,
+the plugin logs an error, publishes `{"connected": false, "reason": ...}`
+on the `thermal` state channel, and starts neither its control loop nor
+its frame stream. It never synthesises a temperature: the overlay shows
+why the camera is unavailable rather than a plausible-looking reading.
+The unit suite's synthetic backend lives in `agent/tests/mock_backend.py`
+and is not importable from the installed package.
 
 ## Build
 
@@ -40,23 +58,26 @@ scripts/pack.sh thermal-camera-flir-lepton-usb
 
 | Slot | Purpose |
 |------|---------|
-| `video.overlay` | Live thermal canvas above the visible-camera pane. |
-| `fc.tab` | "Thermal Camera" configuration tab. |
-| `mission.template` | "Thermal survey grid" lawnmower mission generator. |
-| `notification.channel` | Alarm channel for max-temperature events. |
-| `settings.section` | Plugin settings. |
+| `video.overlay` | Thermal canvas, spot readout, and palette rail above the video pane. |
+| `settings.section` | Native palette and gain settings the agent reads each control tick. |
+| Flight Skills | Cycle palette and flat field correction, fired from the Skill Bar. |
+
+## Telemetry channels
+
+| Channel | Payload |
+|---------|---------|
+| `thermal` | State read-back: `connected`, plus `reason` when there is no open session, plus `palette` and `gain`. |
+| `camera.thermal.frame` | Frame read-back only, published only while a session is open: `width`, `height`, `spot`, `minC`, `maxC`, `resolutionKPerCount`. |
+| `camera.thermal.palette`, `camera.thermal.ffc` | Per-Skill state; `disabled` with the reason while there is no session. |
 
 ## Permissions
 
-Agent: `hardware.usb.uvc`, `sensor.camera.register`, `telemetry.extend`,
-`event.publish`, `event.subscribe`, `recording.write`,
-`mavlink.component.camera`.
+Agent: `hardware.usb.uvc`, `video.source.set`, `telemetry.extend`,
+`event.publish`, `mavlink.component.camera`.
 
-GCS: `ui.slot.fc-tab`, `ui.slot.video-overlay`,
-`ui.slot.mission-template`, `ui.slot.notification`,
-`ui.slot.settings-section`, `telemetry.subscribe.thermal`,
-`telemetry.subscribe.mavlink`, `mission.read`, `mission.write`,
-`recording.write`.
+GCS: `ui.slot.video-overlay`, `ui.slot.settings-section`,
+`ui.slot.flight-skill`, `telemetry.subscribe.thermal`,
+`telemetry.subscribe.camera.thermal.frame`.
 
 Risk band: medium. No vehicle command, no MAVLink write, no network.
 
@@ -74,7 +95,7 @@ at 0.01 K per count. Implementation in `agent/.../tlinear.py`.
 
 ## Palettes
 
-Three 256-entry RGB palettes ship in v1.0.0:
+Three 256-entry RGB palettes ship:
 
 | Palette | Visual character |
 |---------|-------------------|
@@ -83,25 +104,23 @@ Three 256-entry RGB palettes ship in v1.0.0:
 | `grayscale` | Black to white. Linear. |
 
 The Python and TypeScript palette tables share the same anchor-stop
-formulas so playback in the GCS matches the agent's encode-side
-colorize step. A fourth `arctic` palette is reserved for v1.1.
+formulas so the cockpit render matches the agent's colorize step.
 
 ## Hardware
 
-PureThermal 2 (GroupGets) plus FLIR Lepton 3.5 plus a USB-C cable.
-Detail in the spec. The native libuvc binding is deferred until the
-hardware kit lands on the bench.
+PureThermal 2 (GroupGets) plus FLIR Lepton 3.5 plus a USB-C cable. The
+native libuvc backend is supplied by the agent, not by this repository;
+see the note at the top.
 
-## Roadmap: thermal as a cockpit video stream
+## Why thermal is an overlay and not a cockpit video stream
 
-The agent's video pipeline can serve any number of named streams, and the
-cockpit stream switcher flips between them. This plugin could publish its
-colorized thermal feed as its own leg (`ctx.video.set_source([...])`) so it
-appears as a selectable stream beside the primary EO feed, rather than only as
-an overlay.
+The agent's video pipeline serves named streams and the cockpit stream switcher
+flips between them, so a thermal leg would appear beside the primary EO feed.
+This plugin does not advertise one, for a concrete missing dependency: unlike an
+IP pod that already serves RTSP, the Lepton feed is per-pixel Y16 that this
+plugin colorizes in-process, so a stream leg needs a colorized-stream source
+(an RTSP or MJPEG endpoint the pipeline can pull) that nothing here provides.
 
-That step is hardware-gated. Unlike an IP pod that already streams RTSP, the
-Lepton feed is per-pixel Y16 that this plugin colorizes in-process; exposing it
-as a stream leg needs a plugin-side colorized-stream source (an RTSP/MJPEG
-endpoint the pipeline can pull) plus a real Lepton to validate the pixel path.
-It is deferred with the native libuvc binding, not shipped inert.
+`ctx.video.set_source([...])` is wired and is called when the `stream_source`
+config key names an endpoint. With no endpoint configured no leg is advertised,
+so the stream switcher never offers one that cannot be served.

@@ -3,6 +3,12 @@
  * the GCS plugin host inside a sandboxed iframe. The plugin renders
  * a thermal video overlay on top of the host's video pane and exposes
  * palette, spot meter, and isotherm controls in a compact action rail.
+ *
+ * It subscribes to two host channels: `thermal` for whether the agent holds
+ * an open radiometric session, and `camera.thermal.frame` for the frame
+ * read-backs that only exist while one is open. The readout renders from
+ * both, so an absent sensor reads as unavailable rather than as a camera
+ * whose frames are still on their way.
  */
 
 import { definePlugin } from "@altnautica/plugin-sdk";
@@ -10,6 +16,7 @@ import { definePlugin } from "@altnautica/plugin-sdk";
 import { listPalettes } from "./palettes";
 import { paintFrame } from "./render";
 import { celsiusAt, clientToFrame, frameToCanvas, readSpot } from "./spotMeter";
+import { parseThermalState, readout, type ThermalState } from "./status";
 import {
   DEFAULT_THERMAL_CONFIG,
   type PaletteName,
@@ -25,6 +32,7 @@ let readoutEl: HTMLDivElement | null = null;
 let imageData: ImageData | null = null;
 let lastFrame: ThermalFrame | null = null;
 let config: ThermalCameraConfig = { ...DEFAULT_THERMAL_CONFIG };
+let thermalState: ThermalState | null = null;
 let spot: SpotMeterState = {
   x: DEFAULT_THERMAL_CONFIG.spotMeter.x,
   y: DEFAULT_THERMAL_CONFIG.spotMeter.y,
@@ -33,11 +41,14 @@ let spot: SpotMeterState = {
 
 definePlugin({
   id: "com.altnautica.thermal-flir-lepton-usb",
-  version: "1.2.0",
+  version: "1.3.0",
   async mount(ctx) {
     mountDom();
     renderActionRail();
 
+    await ctx.telemetry.subscribe<unknown>("thermal", (raw) => {
+      ingestState(raw);
+    });
     await ctx.telemetry.subscribe<ThermalFrame>(
       "camera.thermal.frame",
       (frame) => {
@@ -81,8 +92,8 @@ function mountDom(): void {
 
   readoutEl = document.createElement("div");
   readoutEl.className = "thm-overlay__readout";
-  readoutEl.textContent = "Awaiting thermal frames...";
   overlay.appendChild(readoutEl);
+  updateReadout();
 
   canvasEl.addEventListener("click", (event) => handleCanvasClick(event));
 }
@@ -137,6 +148,19 @@ function ingestFrame(frame: ThermalFrame): void {
   updateReadout();
 }
 
+function ingestState(raw: unknown): void {
+  const next = parseThermalState(raw);
+  if (next === null) return;
+  thermalState = next;
+  if (!next.connected) {
+    // No open session on the agent side means the last frame is stale and no
+    // further one is coming; drop the reading so the readout cannot keep
+    // showing a temperature for a camera that is gone.
+    spot = { x: spot.x, y: spot.y, temperatureC: null };
+  }
+  updateReadout();
+}
+
 function drawCurrentFrame(): void {
   if (!canvasEl || !lastFrame?.y16 || !imageData) return;
   paintFrame(
@@ -168,16 +192,17 @@ function placeSpotMarker(): void {
 
 function updateReadout(): void {
   if (!readoutEl) return;
-  if (spot.temperatureC === null) {
-    readoutEl.textContent = "Awaiting thermal frames...";
-    return;
-  }
-  readoutEl.textContent = `Spot ${spot.temperatureC.toFixed(1)} °C`;
-  if (config.alarm.enabled && spot.temperatureC >= config.alarm.thresholdC) {
-    readoutEl.classList.add("thm-overlay__readout--hot");
-  } else {
-    readoutEl.classList.remove("thm-overlay__readout--hot");
-  }
+  const view = readout({ state: thermalState, spotC: spot.temperatureC });
+  readoutEl.textContent = view.text;
+  readoutEl.classList.toggle(
+    "thm-overlay__readout--unavailable",
+    view.kind === "unavailable" || view.kind === "unknown",
+  );
+  const hot =
+    view.kind === "spot" &&
+    config.alarm.enabled &&
+    (spot.temperatureC ?? 0) >= config.alarm.thresholdC;
+  readoutEl.classList.toggle("thm-overlay__readout--hot", hot);
 }
 
 function handleCanvasClick(event: MouseEvent): void {
@@ -204,6 +229,8 @@ function handleCanvasClick(event: MouseEvent): void {
 
 export const __test = {
   ingestFrame,
+  ingestState,
   getSpot: (): SpotMeterState => ({ ...spot }),
   getConfig: (): ThermalCameraConfig => ({ ...config }),
+  getReadout: () => readout({ state: thermalState, spotC: spot.temperatureC }),
 };

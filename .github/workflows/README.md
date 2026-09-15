@@ -8,55 +8,53 @@ release manager can pick the pipeline that matches the situation.
 
 | Workflow                       | Trigger tag pattern                | What it does |
 |--------------------------------|------------------------------------|-------------|
-| `release.yml`                  | `battery-health-panel-v*`, `thermal-camera-flir-lepton-usb-v*`, `mavlink-gimbal-v2-v*` | Per-extension legacy release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. |
-| `vision-nav-release.yml`       | `vision-nav-v*`                    | Specialised pipeline for vision-nav, builds vendor binaries in a matrix job then packs and signs. |
-| `vision-nav-vendor-binaries.yml` | `workflow_dispatch` (manual)     | Standalone vendor-binary rebuild for vision-nav. |
-| `sign-release.yml`             | `extensions/<ext>-v*`              | Generic pack-and-sign pipeline using the `ados plugin sign` CLI shipped by the drone agent. Targets any extension under `extensions/`. |
+| `release.yml`                  | `battery-health-panel-v*`, `mavlink-gimbal-v2-v*`, `follow-me-v*`, `siyi-pod-v*` | Per-extension release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. The tag list is the publish allowlist. |
+| `vision-nav-release.yml`       | `vision-nav-v*`                    | Pipeline for vision-nav: cross-compiles the Rust agent half against the SDK revision pinned in `ADOS_AGENT_REV`, then packs with `scripts/pack-rust.sh` and signs. |
+| `rust-check.yml`               | pull request, push to main         | Builds, clippies and tests the Rust agent half against the pinned SDK revision. |
+| `typecheck.yml`                | pull request, push to main         | TypeScript typecheck across every GCS package. |
 
-## Triggering a release with the generic sign pipeline
+## Publishing a new extension
 
-The `sign-release.yml` workflow uses the canonical signing CLI from
-the drone agent, so the bytes it produces are guaranteed to match
-what the agent verifies at install time. Use it for new extensions
-that do not yet have a custom pipeline.
+An extension is publishable only once a tag pattern for it exists in
+`release.yml`. Adding that pattern is the act that makes its archive
+publishable, so do not add one for an extension whose advertised
+capability cannot execute:
+`thermal-camera-flir-lepton-usb` is deliberately absent because its
+capture path needs a libuvc backend that is not in this repository.
 
 ```bash
-# After landing the extension code on main:
-git tag extensions/my-new-extension-v0.1.0
-git push origin extensions/my-new-extension-v0.1.0
+# After adding the tag pattern and landing the extension code on main:
+git tag my-new-extension-v0.1.0
+git push origin my-new-extension-v0.1.0
 ```
 
-The tag triggers the workflow. The job:
-
-1. Checks out the repo with submodules.
-2. Installs the drone agent from git so the `ados plugin sign`
-   CLI is on `PATH`.
-3. Loads the signing key from the `ALTNAUTICA_PLUGIN_KEY_A`
-   repository secret. The secret is the base64-encoded contents of
-   the Ed25519 private PEM. See
-   `ADOSDroneAgent/docs/plugin-signing/key-generation.md` for the
-   founder-side runbook.
-4. Runs `ados plugin sign extensions/<name> --key … --signer-id
-   altnautica-2026-A --output dist/com.altnautica.<name>-<ver>.signed.adosplug`.
-5. Wipes the private key from the runner.
-6. Uploads the signed `.adosplug` and its `.sha256` sidecar to the
-   GitHub Release matching the tag.
+The tag triggers `release.yml`. The job checks out the repo, installs
+the workspace, runs that extension's GCS tests, packs the archive with
+`scripts/pack.sh` (which refuses to write a half-archive: both the GCS
+bundle and the module named by a Python `agent.entrypoint` have to be in
+the stage), signs it with `scripts/sign.sh` against the
+`ADOS_SIGNING_KEY` secret, and uploads the signed `.adosplug` to the
+GitHub Release matching the tag. See
+`ADOSDroneAgent/docs/plugin-signing/key-generation.md` for the
+maintainer key-generation runbook.
 
 ## Required secrets
 
+One repository secret is used. `ADOS_SIGNING_KEY`, `ADOS_SIGNING_KEY_INLINE`
+and `ADOS_SIGNING_KEY_ID` are step environment variables the workflows set from
+it, not secrets to configure.
+
 | Secret name                  | Format                                   | Used by |
 |------------------------------|------------------------------------------|--------|
-| `ALTNAUTICA_PLUGIN_KEY_A`    | Base64-encoded Ed25519 private PEM (PKCS#8) | `sign-release.yml` |
-| `ADOS_SIGNING_KEY`           | Base64-encoded Ed25519 private PEM       | `release.yml`, `vision-nav-release.yml` (legacy `scripts/sign.sh` path) |
-| `ADOS_SIGNING_KEY_ID`        | Signer id string (e.g. `altnautica-2026-A`) | `release.yml`, `vision-nav-release.yml` |
+| `ALTNAUTICA_PLUGIN_KEY_A`    | Base64-encoded Ed25519 private PEM (PKCS#8) | `release.yml`, `vision-nav-release.yml` |
 
 Set secrets via GitHub repo settings: **Settings > Secrets and
 variables > Actions**.
 
-## Dry-running a workflow locally
+## Reproducing the signing step locally
 
-The `sign-release.yml` workflow steps are reproducible on a developer
-workstation:
+The signing step is reproducible on a developer workstation with the
+agent's own CLI:
 
 ```bash
 # Install the agent so `ados plugin sign` is on PATH.

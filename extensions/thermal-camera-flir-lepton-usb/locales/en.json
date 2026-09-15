@@ -30,7 +30,8 @@
   "config.ffc.autoOnDisarm": "Auto trigger on disarm",
   "config.ffc.autoInterval": "Auto interval (minutes)",
   "config.ffc.triggerNow": "Trigger now",
-  "alarm.title": "Thermal alarm",
-  "alarm.body": "Max {value} exceeds threshold {threshold}",
-  "missionTemplate.label": "Thermal survey grid"
+  "settings.title": "Thermal camera",
+  "settings.palette": "Palette",
+  "settings.gain": "High gain",
+  "settings.gainHelp": "High gain favours temperature sensitivity; low gain favours range."
 }

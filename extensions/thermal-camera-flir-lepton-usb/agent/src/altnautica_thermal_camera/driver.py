@@ -2,8 +2,8 @@
 
 The driver subclasses :class:`ados.sdk.drivers.camera.CameraDriver`. It
 delegates physical I/O to a :class:`LibUvcBackend` so the same code
-runs against the in-tree :class:`MockUvcBackend` in tests and against
-a real libuvc binding once that drops in.
+runs against any backend satisfying that Protocol: a native libuvc
+binding in the field, and the unit suite's synthetic backend in tests.
 
 The driver does NOT own the colorize step or the H.264 encode. Those
 live in the agent's video pipeline, which serves the thermal stream
@@ -145,8 +145,8 @@ class LeptonUvcDriver(CameraDriver):
     """CameraDriver subclass for FLIR Lepton 3.5 over PureThermal 2.
 
     The driver constructs against a backend that satisfies
-    :class:`LibUvcBackend`. Tests pass a :class:`MockUvcBackend`. The
-    real native binding lands once procurement closes.
+    :class:`LibUvcBackend` and holds no opinion about which one; the
+    plugin entry point decides.
 
     The backend's ``frames`` is a synchronous iterator. The driver
     bridges it into the SDK's async ``frame_iterator`` via

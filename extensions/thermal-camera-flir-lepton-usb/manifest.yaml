@@ -1,23 +1,33 @@
 schema_version: 2
 id: com.altnautica.thermal-flir-lepton-usb
 name: "ADOS Thermal Camera FLIR Lepton USB UVC"
-version: "1.2.0"
-description: "FLIR Lepton 3.5 radiometric thermal imaging via PureThermal 2 USB UVC dongle. Adds video overlay, FC config tab, and a MAVLink camera component."
+version: "1.3.0"
+description: "FLIR Lepton 3.5 radiometric thermal driver, palettes and spot-meter overlay for a PureThermal 2 USB UVC dongle. Capture requires a UVC backend supplied by the agent; without one the extension reports the camera as unavailable."
 description_long: |
-  Drives a FLIR Lepton 3.5 over a PureThermal 2 USB UVC dongle. The plugin
-  opens the device, colorizes the radiometric Y16 feed with a selectable
-  palette, and exposes controls for high and low gain and a one-touch flat
-  field correction. Cockpit Skills cycle the palette and trigger an FFC; the
-  same palette and gain render on the video overlay, which reads a live spot
-  temperature under the reticle. When a colorized stream endpoint is available
-  the thermal feed is offered to the video pipeline as its own selectable
-  stream leg.
+  Driver and cockpit surfaces for a FLIR Lepton 3.5 on a PureThermal 2 USB UVC
+  dongle. The driver discovers and opens the device, locks the radiometric
+  linear resolution so Y16 counts convert to known temperatures, converts
+  counts to degrees Celsius, meters a centre-reticle spot plus the frame
+  extrema, and colorizes the Y16 feed with a selectable palette. A control
+  loop applies palette and high/low gain from per-drone config and fires a
+  one-touch flat field correction. The video overlay draws the spot reading
+  and palette over the video pane.
+
+  Reaching the dongle needs a native libuvc backend, which this package does
+  not contain: the agent injects one. With no backend, no device on the bus,
+  or a failed open, the extension publishes an explicit unavailable state with
+  the reason and captures nothing — it never synthesises a temperature. When a
+  colorized stream endpoint is configured the thermal feed is also offered to
+  the video pipeline as its own selectable stream leg.
 features:
-  - "Radiometric Y16 thermal imaging with selectable colour palettes"
+  - "Radiometric Y16 to degrees Celsius conversion with a locked linear resolution"
+  - "Three colour palettes matched between the agent and the cockpit overlay"
+  - "Centre-reticle spot metering plus per-frame extrema"
   - "High / low gain (temperature sensitivity vs range)"
   - "One-touch flat field correction"
   - "Cockpit Skills to cycle the palette and run an FFC"
-  - "Video overlay with a live spot temperature"
+  - "Video overlay showing the spot reading, or an explicit unavailable state when there is no sensor"
+  - "Requires a UVC backend supplied by the agent; fails closed without one"
 hardware_requirements:
   cameras: "FLIR Lepton 3.5 on a PureThermal 2 USB UVC dongle (firmware 1.2.2 or newer)"
   boards: ["cm4", "cm5", "rk3582", "rk3576", "rk3566", "x86"]
@@ -46,12 +56,15 @@ agent:
   isolation: subprocess
   per_drone_config: true
   permissions:
+    # hardware.usb.uvc: the injected UVC backend reaches the dongle on the bus.
     - id: hardware.usb.uvc
+    # video.source.set: plugin.py _maybe_declare_source -> ctx.video.set_source.
     - id: video.source.set
+    # telemetry.extend: plugin.py publishes the thermal state and frame read-back.
     - id: telemetry.extend
+    # event.publish: plugin.py publishes each Skill's declared state topic.
     - id: event.publish
-    - id: event.subscribe
-    - id: recording.write
+    # mavlink.component.camera: backed by the mavlink_components block below.
     - id: mavlink.component.camera
   resources:
     max_ram_mb: 192
@@ -66,34 +79,26 @@ gcs:
   entrypoint: "gcs/plugin.bundle.js"
   isolation: iframe
   permissions:
-    - id: ui.slot.node-detail-tab
+    # ui.slot.video-overlay: the only surface the bundle mounts.
     - id: ui.slot.video-overlay
-    - id: ui.slot.notification-channel
+    # ui.slot.settings-section: the parameters contributions below.
     - id: ui.slot.settings-section
+    # ui.slot.flight-skill: the skills contributions below.
     - id: ui.slot.flight-skill
+    # The two topics plugin.ts subscribes to; the host checks one capability
+    # per topic, so both must be declared.
+    - id: telemetry.subscribe.thermal
     - id: telemetry.subscribe.camera.thermal.frame
-    - id: mission.read
-    - id: mission.write
-    - id: recording.write
   contributes:
-    tabs:
-      - id: thermal-config
-        slot: node.detail.tab
-        profile: ["drone"]
-        title: "Thermal Camera"
-        icon: "camera"
-        order: 50
     panels:
       - id: thermal-overlay
         slot: video.overlay
         title: "Thermal"
         icon: "thermometer"
-    notifications:
-      - id: thermal-alarm
-        title: "Thermal alarm"
-        severity: warning
     # One-shot cockpit Skills the agent fires on the rising edge and then
     # clears: advance the colour palette and trigger a flat field correction.
+    # Each Skill's state topic is published by the agent's control loop, and
+    # reports disabled with a reason while there is no open session.
     skills:
       - id: cycle-palette
         label: "Cycle palette"

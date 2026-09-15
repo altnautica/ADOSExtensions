@@ -1,23 +1,12 @@
 # vision-nav-release
 #
-# End-to-end pipeline that fires on a `vision-nav-v*` tag push:
-#   1. `vendor-binaries` matrix job builds the OpenVINS and VINS-Fusion shim
-#      binaries for every supported target. Artifacts are uploaded as same-run
-#      artifacts (no cross-run download dance).
-#   2. `build-and-release` waits on the matrix via `needs:`, downloads the
-#      vendor-binary tarballs, runs the agent + GCS tests, packs and signs the
-#      .adosplug archive, and attaches both the .adosplug and the vendor
-#      tarballs to the GitHub Release.
+# Fires on a `vision-nav-v*` tag push: builds the GCS bundle, runs its tests,
+# cross-compiles the Rust agent binary against the pinned agent SDK revision,
+# then packs, signs, and attaches the .adosplug archive to the GitHub Release.
 #
-# Consolidating both halves into one workflow removes the cross-workflow
-# artifact download race the previous split-workflow design had: the release
-# job no longer needs to guess which run produced the vendor binaries, because
-# they live in the same run.
-#
-# The standalone `vision-nav-vendor-binaries.yml` workflow is kept for manual
-# rebuilds via `workflow_dispatch` (founder can rebuild vendor binaries against
-# any commit ref without cutting a release tag) but no longer fires on tag
-# pushes; the release pipeline below owns the on-tag path end to end.
+# The extension ships no third-party binaries, so there is no vendor-build
+# matrix and nothing to stage into the archive beyond the agent binary and the
+# GCS bundle.
 
 name: vision-nav-release
 
@@ -27,122 +16,7 @@ on:
       - "vision-nav-v*"
 
 jobs:
-  vendor-binaries:
-    name: build ${{ matrix.binary }} (${{ matrix.target }})
-    runs-on: ubuntu-22.04
-    strategy:
-      fail-fast: false
-      matrix:
-        binary: [openvins, vins-fusion]
-        target:
-          - aarch64-unknown-linux-gnu
-          - x86_64-unknown-linux-gnu
-        # The rockchip-specific aarch64 variant builds against a
-        # different sysroot (Radxa BSP libc + OpenCV pins). The
-        # bench validation gate adds it back once the Rock 5C Lite
-        # sysroot drops are mirrored.
-        # - aarch64-rockchip-linux-gnu
-    env:
-      BINARY_DIR: extensions/vision-nav/vendor/${{ matrix.binary }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: false
-
-      - name: Install cross-compile toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            cmake build-essential git \
-            crossbuild-essential-arm64
-
-      - name: Install sysroot dependencies
-        # The current scaffold shims only need a C++ compiler + libpthread,
-        # which crossbuild-essential-arm64 already supplies for the cross
-        # case. We keep this step as a no-op stub so the matrix layout
-        # stays stable for future revisions of the shim that adopt the
-        # real OpenVINS / Ceres / VINS-Fusion estimators — at which point
-        # the per-arch sysroot package list reappears here.
-        run: |
-          echo "scaffold build: no extra sysroot packages required"
-
-      - name: Configure
-        working-directory: ${{ env.BINARY_DIR }}
-        run: |
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
-            cmake -S . -B build \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_C_COMPILER=/usr/bin/aarch64-linux-gnu-gcc \
-              -DCMAKE_CXX_COMPILER=/usr/bin/aarch64-linux-gnu-g++ \
-              -DCMAKE_SYSTEM_NAME=Linux \
-              -DCMAKE_SYSTEM_PROCESSOR=aarch64
-          else
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-          fi
-
-      - name: Build
-        working-directory: ${{ env.BINARY_DIR }}
-        run: cmake --build build -j$(nproc) --verbose
-
-      - name: Conformance (x86_64 only)
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        working-directory: ${{ env.BINARY_DIR }}
-        run: |
-          binary_name="ados_$(echo ${{ matrix.binary }} | tr '-' '_')_shim"
-          # Capture stderr so we can distinguish the intentional
-          # "not yet implemented" scaffold exit from a real
-          # crash. The grep check is the conformance gate until the
-          # upstream integration lands and the binary returns 0.
-          set +e
-          ./build/${binary_name} --conformance 2> conformance.log
-          status=$?
-          set -e
-          cat conformance.log
-          if grep -q "not yet implemented" conformance.log; then
-            echo "scaffold exit accepted"
-            exit 0
-          fi
-          exit $status
-
-      - name: Sign artefact
-        working-directory: ${{ env.BINARY_DIR }}
-        env:
-          ADOS_SIGNING_KEY: ${{ secrets.ADOS_SIGNING_KEY }}
-        run: |
-          binary_name="ados_$(echo ${{ matrix.binary }} | tr '-' '_')_shim"
-          out="build/${binary_name}-${{ matrix.target }}.tar.gz"
-          tar -czf "$out" -C build "$binary_name"
-          if [ -n "$ADOS_SIGNING_KEY" ]; then
-            # The secret is base64-encoded PEM (so the main release
-            # path's sign.sh works with ADOS_SIGNING_KEY_INLINE=1).
-            # Decode before handing to cryptography.load_pem_private_key.
-            echo "$ADOS_SIGNING_KEY" | base64 -d > /tmp/signing.key
-            python3 -m pip install --quiet cryptography
-            python3 - "$out" /tmp/signing.key <<'PY'
-          import base64, sys
-          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-          from cryptography.hazmat.primitives.serialization import load_pem_private_key
-          payload = open(sys.argv[1], "rb").read()
-          key = load_pem_private_key(open(sys.argv[2], "rb").read(), password=None)
-          assert isinstance(key, Ed25519PrivateKey)
-          sig = key.sign(payload)
-          open(sys.argv[1] + ".sig", "wb").write(base64.b64encode(sig))
-          PY
-          else
-            echo "ADOS_SIGNING_KEY not set; skipping signature"
-          fi
-
-      - name: Upload artefact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.binary }}-${{ matrix.target }}
-          path: |
-            ${{ env.BINARY_DIR }}/build/*.tar.gz
-            ${{ env.BINARY_DIR }}/build/*.tar.gz.sig
-
   build-and-release:
-    needs: vendor-binaries
     # Native arm64 so the agent binary cross-compiles to the static
     # aarch64-unknown-linux-musl target with musl-tools (one binary runs on
     # every supported board regardless of glibc).
@@ -152,9 +26,10 @@ jobs:
     env:
       # The agent SDK crates (ados-sdk / ados-protocol) are consumed via the
       # workspace path dep `{ path = "../ADOSDroneAgent/crates/..." }`, so the
-      # sibling repo is cloned at this ref before the crate builds. rust-check.yml
-      # builds the same way and catches SDK drift early.
-      ADOS_AGENT_REF: main
+      # sibling repo is cloned before the crate builds. The revision comes from
+      # the committed ADOS_AGENT_REV file, so re-running this tag builds against
+      # the same SDK commit.
+      ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
     steps:
       - uses: actions/checkout@v4
         with:
@@ -199,12 +74,14 @@ jobs:
       - name: Run GCS tests
         run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" test
 
-      - name: Check out the agent SDK (sibling path for the workspace path dep)
+      - name: Check out the agent SDK at the pinned revision
         run: |
+          set -e
+          rev="$(cat ADOS_AGENT_REV)"
           dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
-          git clone --depth 1 --branch "${ADOS_AGENT_REF}" \
-            https://github.com/altnautica/ADOSDroneAgent "${dest}"
-          echo "agent SDK from ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
+          git -C "${dest}" checkout "${rev}"
+          echo "agent SDK pinned at ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
 
       - name: Install Rust toolchain (musl target)
         uses: dtolnay/rust-toolchain@stable
@@ -214,59 +91,10 @@ jobs:
       - name: Install musl cross tools
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
-      - name: Stage vendor binaries from matrix
-        # Vendor binaries are produced by the `vendor-binaries` job in this
-        # same run. `needs:` guarantees they exist; the download step pulls
-        # every matrix artifact into one directory.
-        uses: actions/download-artifact@v4
-        with:
-          path: extensions/${{ steps.route.outputs.ext }}/vendor/_staged
-          pattern: "*-*-unknown-linux-gnu"
-          merge-multiple: true
-
-      - name: Extract staged vendor tarballs
-        run: |
-          set -e
-          staged_dir="extensions/${{ steps.route.outputs.ext }}/vendor/_staged"
-          if [ ! -d "${staged_dir}" ]; then
-            echo "::error::Vendor staging directory missing: ${staged_dir}"
-            exit 1
-          fi
-          shopt -s nullglob
-          found=0
-          while IFS= read -r tarball; do
-            target_dir="extensions/${{ steps.route.outputs.ext }}/vendor/$(basename "${tarball}" .tar.gz)"
-            mkdir -p "${target_dir}"
-            tar -xzf "${tarball}" -C "${target_dir}"
-            echo "extracted ${tarball} -> ${target_dir}"
-            found=$((found + 1))
-          done < <(find "${staged_dir}" -name '*.tar.gz' 2>/dev/null)
-          if [ "${found}" -eq 0 ]; then
-            echo "::error::No vendor tarballs found under ${staged_dir}"
-            exit 1
-          fi
-
-      - name: Verify vendor binaries present
-        run: |
-          set -e
-          missing=0
-          for binary in ados_openvins_shim ados_vins_fusion_shim; do
-            if ! find extensions/${{ steps.route.outputs.ext }} -name "${binary}" -type f 2>/dev/null | grep -q .; then
-              echo "::error::Missing vendor binary: ${binary}"
-              missing=$((missing + 1))
-            else
-              echo "Found: $(find extensions/${{ steps.route.outputs.ext }} -name "${binary}" -type f | head -1)"
-            fi
-          done
-          if [ ${missing} -gt 0 ]; then
-            echo "::error::${missing} vendor binary(ies) missing despite vendor-binaries matrix completing. Inspect the matrix job logs."
-            exit 1
-          fi
-
       - name: Pack archive
         # pack-rust.sh cross-compiles the agent binary (bin/vision-nav) via
-        # scripts/build-rust.sh, stages it + the GCS bundle + the vendor shims,
-        # and refuses to pack a half-archive missing the agent.entrypoint.
+        # scripts/build-rust.sh, stages it + the GCS bundle, and refuses to pack
+        # a half-archive missing the agent.entrypoint.
         run: ./scripts/pack-rust.sh "${{ steps.route.outputs.ext }}" aarch64-unknown-linux-musl
 
       - name: Sign archive
@@ -301,21 +129,10 @@ jobs:
           printf '%s  %s\n' "${digest}" "$(basename "${signed}")" > "${signed}.sha256"
           cat "${signed}.sha256"
 
-      - name: Stage vendor tarballs for release upload
-        run: |
-          set -e
-          staged_dir="extensions/${{ steps.route.outputs.ext }}/vendor/_staged"
-          release_dir="extensions/${{ steps.route.outputs.ext }}/dist/vendor-tarballs"
-          mkdir -p "${release_dir}"
-          find "${staged_dir}" \( -name '*.tar.gz' -o -name '*.tar.gz.sig' \) \
-            -exec cp -v {} "${release_dir}/" \;
-
       - name: Upload to GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
             extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug.sha256
-            extensions/${{ steps.route.outputs.ext }}/dist/vendor-tarballs/*.tar.gz
-            extensions/${{ steps.route.outputs.ext }}/dist/vendor-tarballs/*.tar.gz.sig
             extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md

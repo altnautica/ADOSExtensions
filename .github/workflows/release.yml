@@ -3,8 +3,15 @@ name: release
 on:
   push:
     tags:
+      # One tag pattern per publishable extension. An extension is listed here
+      # only when the capability it advertises can execute; adding a pattern is
+      # what makes an archive publishable.
+      #
+      # thermal-camera-flir-lepton-usb is deliberately absent: its capture path
+      # needs a libuvc backend that does not exist in this tree, so no
+      # configuration of it can produce a reading. It builds and tests as a
+      # development preview; it is not published.
       - "battery-health-panel-v*"
-      - "thermal-camera-flir-lepton-usb-v*"
       - "mavlink-gimbal-v2-v*"
       - "follow-me-v*"
       - "siyi-pod-v*"

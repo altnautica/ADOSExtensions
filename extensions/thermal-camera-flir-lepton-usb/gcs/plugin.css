@@ -1,4 +1,4 @@
-/* Minimal styling for the thermal overlay and configuration tab.
+/* Minimal styling for the thermal overlay.
    The host injects its theme CSS variables; we only define plugin-local
    structure. The canvas sizes itself to its container. */
 
@@ -37,6 +37,14 @@
   border-left: 3px solid var(--ados-color-warning, #ff8a00);
 }
 
+/* The readout when the agent reports no open thermal session, or has not
+   reported at all. Muted rather than alarming: there is nothing to read,
+   which is not the same as a hot reading. */
+.thm-overlay__readout--unavailable {
+  border-left: 3px solid var(--ados-color-muted, #7a7a7a);
+  color: var(--ados-color-text-muted, #b0b0b0);
+}
+
 .thm-spot {
   position: absolute;
   width: 12px;
@@ -70,23 +78,4 @@
 
 .thm-action-rail__button:hover {
   background: var(--ados-color-hover, rgba(255, 255, 255, 0.08));
-}
-
-.thm-config {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-}
-
-.thm-config__section h3 {
-  margin: 0 0 4px 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.thm-config__row {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
 }

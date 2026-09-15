@@ -16,8 +16,8 @@ from altnautica_thermal_camera.plugin import ThermalUsbPlugin
 from altnautica_thermal_camera.uvc_backend import (
     DEFAULT_HEIGHT,
     DEFAULT_WIDTH,
-    MockUvcBackend,
 )
+from mock_backend import MockUvcBackend
 
 
 def _run(coro: Any) -> Any:
@@ -225,6 +225,14 @@ class _FakeTelemetry:
         self.extended.append((channel, payload))
 
 
+class _FakeEvents:
+    def __init__(self) -> None:
+        self.published: list[tuple[str, dict]] = []
+
+    async def publish(self, topic: str, payload: dict) -> None:
+        self.published.append((topic, payload))
+
+
 class _FakeContext:
     def __init__(
         self,
@@ -233,6 +241,7 @@ class _FakeContext:
         with_telemetry: bool = False,
     ) -> None:
         self.config_kv = _FakeConfigKv(config)
+        self.events = _FakeEvents()
         if with_video:
             self.video = _FakeVideo()
         if with_telemetry:
@@ -242,12 +251,27 @@ class _FakeContext:
             def info(self, *args: Any, **kwargs: Any) -> None:
                 pass
 
+            def error(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
         self.log = _Log()
+
+
+def _plugin(**backend_kwargs: Any) -> ThermalUsbPlugin:
+    """A plugin wired to the suite's synthetic backend.
+
+    The production plugin has no default backend: without an injected factory
+    it reports an unavailable camera and captures nothing, so every test that
+    needs an open session injects one explicitly.
+    """
+    return ThermalUsbPlugin(
+        backend_factory=lambda: MockUvcBackend(**backend_kwargs)
+    )
 
 
 def test_plugin_opens_and_closes_the_device() -> None:
     async def scenario() -> None:
-        plugin = ThermalUsbPlugin()
+        plugin = _plugin()
         ctx = _FakeContext()
         await plugin.on_start(ctx)
         assert plugin.driver is not None
@@ -284,7 +308,7 @@ def test_plugin_uses_injected_backend_factory() -> None:
 
 def test_palette_config_applies_to_the_driver() -> None:
     async def scenario() -> None:
-        plugin = ThermalUsbPlugin()
+        plugin = _plugin()
         ctx = _FakeContext(config={"palette": "ironbow"})
         await plugin.on_start(ctx)
         try:
@@ -299,7 +323,7 @@ def test_palette_config_applies_to_the_driver() -> None:
 
 def test_gain_config_sets_the_radiometric_resolution() -> None:
     async def scenario() -> None:
-        plugin = ThermalUsbPlugin()
+        plugin = _plugin()
         ctx = _FakeContext()
         await plugin.on_start(ctx)
         try:
@@ -319,7 +343,7 @@ def test_cycle_palette_advances_and_writes_back() -> None:
     from altnautica_thermal_camera.palettes import list_palettes
 
     async def scenario() -> None:
-        plugin = ThermalUsbPlugin()
+        plugin = _plugin()
         ctx = _FakeContext(config={"palette": "ironbow"})
         await plugin.on_start(ctx)
         try:
@@ -358,7 +382,7 @@ def test_ffc_action_triggers_and_resets() -> None:
 
 def test_thermal_state_is_published_on_telemetry() -> None:
     async def scenario() -> None:
-        plugin = ThermalUsbPlugin()
+        plugin = _plugin()
         ctx = _FakeContext(config={"palette": "ironbow"}, with_telemetry=True)
         await plugin.on_start(ctx)
         try:
@@ -367,6 +391,9 @@ def test_thermal_state_is_published_on_telemetry() -> None:
             payload = dict(ctx.telemetry.extended[-1][1])
             assert payload["connected"] is True
             assert payload["palette"] == "ironbow"
+            # A genuinely open session carries no unavailable reason.
+            assert "reason" not in payload
+            assert plugin.unavailable_reason == ""
         finally:
             await plugin.on_stop(ctx)
 
@@ -375,15 +402,16 @@ def test_thermal_state_is_published_on_telemetry() -> None:
 
 def test_video_source_declared_only_when_an_endpoint_is_configured() -> None:
     async def scenario() -> None:
-        # No stream endpoint -> no leg advertised (Rule 44: no phantom stream).
-        plugin = ThermalUsbPlugin()
+        # No stream endpoint -> no leg advertised, because a stream leg is
+        # offered only when something actually serves it.
+        plugin = _plugin()
         ctx = _FakeContext(with_video=True)
         await plugin.on_start(ctx)
         assert ctx.video.sources == []
         await plugin.on_stop(ctx)
 
         # With an endpoint -> the thermal leg is advertised to the pipeline.
-        plugin2 = ThermalUsbPlugin()
+        plugin2 = _plugin()
         ctx2 = _FakeContext(
             config={"stream_source": "rtsp://127.0.0.1:8554/thermal"},
             with_video=True,

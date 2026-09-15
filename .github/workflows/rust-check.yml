@@ -10,12 +10,14 @@ on:
     paths:
       - "extensions/vision-nav/agent/**"
       - "Cargo.toml"
+      - "ADOS_AGENT_REV"
       - "Cargo.lock"
       - ".github/workflows/rust-check.yml"
   pull_request:
     paths:
       - "extensions/vision-nav/agent/**"
       - "Cargo.toml"
+      - "ADOS_AGENT_REV"
       - "Cargo.lock"
 
 jobs:
@@ -27,8 +29,9 @@ jobs:
       - name: Check out the agent SDK (sibling path for the workspace path dep)
         run: |
           dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
-          git clone --depth 1 --branch main \
+          git clone --filter=blob:none \
             https://github.com/altnautica/ADOSDroneAgent "${dest}"
+          git -C "${dest}" checkout "$(cat ADOS_AGENT_REV)"
           echo "agent SDK from ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
 
       - name: Install Rust toolchain (musl target)

@@ -2,6 +2,46 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.3.0
+
+- The extension now requires a real UVC backend. `ThermalUsbPlugin` no longer
+  defaults `backend_factory` to a synthetic backend, so it can no longer open
+  a device that is not there. The synthetic backend has moved out of the
+  package into the unit suite (`agent/tests/mock_backend.py`) and is not
+  importable from `altnautica_thermal_camera`; `uvc_backend` now ships only
+  the `LibUvcBackend` Protocol and its data classes.
+- `on_start` fails closed on every path that leaves it without an open
+  radiometric session — no injected backend, no device on the bus, a failed
+  open, or a frame stream that will not start. In each case it logs an error,
+  publishes `{"connected": false, "reason": ...}` on the `thermal` state
+  channel, and starts neither the control loop nor the frame stream, so no
+  spot temperature or frame extrema is published without a device behind it.
+  Previously the default synthetic backend meant a bench install published
+  invented temperatures on `camera.thermal.frame` as live telemetry and
+  reported `connected: true`.
+- The video overlay renders the unavailable state and names its reason
+  instead of showing "Awaiting thermal frames..." forever, and it shows an
+  explicit unknown state before the agent has reported anything. It now
+  subscribes to the `thermal` state channel as well as
+  `camera.thermal.frame`, so `telemetry.subscribe.thermal` is declared (the
+  host checks one capability per subscribed topic).
+- Both cockpit Skills now publish the state topics they declare
+  (`camera.thermal.palette`, `camera.thermal.ffc`), reporting `disabled` with
+  the reason while there is no session. Nothing published them before, so the
+  Skill Bar had no state to read.
+- Manifest reconciled against the code. Removed the `thermal-config` tab
+  contribution and `ui.slot.node-detail-tab`: the bundle builds only the
+  video overlay, so a "Thermal Camera" tab opened a floating HUD. Removed the
+  `thermal-alarm` notification contribution and `ui.slot.notification-channel`
+  (nothing publishes a notification), the GCS `mission.read`, `mission.write`
+  and `recording.write` grants (no such call site in the bundle), and the
+  agent `event.subscribe` and `recording.write` grants (no such call site in
+  the agent half).
+- `description`, `description_long` and `features` no longer claim a working
+  live capture path. They describe the driver, palettes, temperature
+  conversion and spot metering that are implemented, and state that capture
+  needs a UVC backend the agent supplies.
+
 ## 1.2.0
 
 - The plugin now opens and drives the Lepton directly. It replaces the old
