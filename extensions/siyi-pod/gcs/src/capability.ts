@@ -9,7 +9,7 @@
 
 import type { PodCapabilities, PodState } from "./types";
 
-export type PodFeature = "gimbal" | "zoom" | "thermal" | "laser" | "ai_track";
+export type PodFeature = "gimbal" | "zoom" | "thermal" | "laser";
 
 export function capabilitiesOf(state: PodState | null): Partial<PodCapabilities> {
   return state?.capabilities ?? {};

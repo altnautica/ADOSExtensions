@@ -60,7 +60,8 @@ class SiyiSession:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._open = False
         # Liveness: total frames received. A watchdog compares this across a
-        # window to catch a live-but-silent link (Rule 37).
+        # rolling window to catch a transport that is up but has gone silent —
+        # an open socket is not evidence that the pod is answering.
         self.frames_received = 0
 
     # -- lifecycle --------------------------------------------------------

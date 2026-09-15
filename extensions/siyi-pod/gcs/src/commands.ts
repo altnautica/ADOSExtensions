@@ -43,23 +43,6 @@ export const setPalette = (ctx: PluginContext, palette: number) =>
 export const setGain = (ctx: PluginContext, high: boolean) =>
   writeConfig(ctx, "thermal_gain", high);
 
-export const setTrackActive = (ctx: PluginContext, active: boolean) =>
-  writeConfig(ctx, "track_active", active);
-
-/**
- * Reassign which sensor a physical stream carries.
- *
- * `leg` is "main" | "sub"; `source` is one of eo_zoom / eo_wide / ir / split.
- * The agent re-routes the pod and re-advertises the leg with the new role, so
- * the cockpit reaches EO-wide (or the on-pod split composite) by reassigning a
- * leg rather than by opening a third stream the pod cannot serve.
- */
-export const setStreamSource = (
-  ctx: PluginContext,
-  leg: string,
-  source: string,
-) => writeConfig(ctx, "stream_assignment", { [leg]: source });
-
 // -- one-shot actions (nonce) ----------------------------------------------
 export const takePhoto = (ctx: PluginContext) =>
   writeConfig(ctx, "photo_nonce", nextNonce());
@@ -72,12 +55,3 @@ export const recenter = (ctx: PluginContext) =>
 
 export const fireLaser = (ctx: PluginContext) =>
   writeConfig(ctx, "laser_fire_nonce", nextNonce());
-
-/** Hand the pod a box to lock its on-pod tracker onto (pod-frame pixels). */
-export async function designate(
-  ctx: PluginContext,
-  box: { x: number; y: number; width: number; height: number },
-): Promise<void> {
-  await writeConfig(ctx, "track_designate", box);
-  await writeConfig(ctx, "track_designate_nonce", nextNonce());
-}

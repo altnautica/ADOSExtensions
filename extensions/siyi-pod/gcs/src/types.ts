@@ -15,10 +15,7 @@ export interface PodCapabilities {
   max_zoom: number;
   thermal: boolean;
   laser: boolean;
-  ai_track: boolean;
   sensors: string[];
-  streams: string[];
-  supports_pip: boolean;
   yaw_min: number;
   yaw_max: number;
   pitch_min: number;
@@ -31,7 +28,7 @@ export interface PodState {
   connected: boolean;
   firmware: string | null;
   capabilities: Partial<PodCapabilities>;
-  /** Which sensor source each physical leg (main/sub) currently carries. */
+  /** Which sensor each physical leg (main/sub) carries. */
   assignment: Record<string, string>;
   yaw_deg: number | null;
   pitch_deg: number | null;
@@ -42,8 +39,6 @@ export interface PodState {
   recording: boolean;
   laser_range_m: number | null;
   spot_temp_c: number | null;
-  track_active: boolean;
-  track_id: number | null;
   link_ok: boolean;
   frames_received: number;
 }

@@ -8,46 +8,31 @@ from altnautica_siyi_pod import capability_profile as CP
 
 
 @pytest.mark.parametrize(
-    "hw_id,model,zoom,thermal,laser,ai,gimbal",
+    "hw_id,model,zoom,thermal,laser,gimbal",
     [
-        (CP.HW_A2_MINI, "A2 mini", False, False, False, False, False),
-        (CP.HW_A8_MINI, "A8 mini", True, False, False, True, True),
-        (CP.HW_ZR10, "ZR10", True, False, True, False, True),
-        (CP.HW_ZR30, "ZR30", True, False, True, False, True),
-        (CP.HW_ZT6, "ZT6", False, True, False, True, True),
-        (CP.HW_ZT30, "ZT30", True, True, True, True, True),
+        (CP.HW_A2_MINI, "A2 mini", False, False, False, False),
+        (CP.HW_A8_MINI, "A8 mini", True, False, False, True),
+        (CP.HW_ZR10, "ZR10", True, False, True, True),
+        (CP.HW_ZR30, "ZR30", True, False, True, True),
+        (CP.HW_ZT6, "ZT6", False, True, False, True),
+        (CP.HW_ZT30, "ZT30", True, True, True, True),
     ],
 )
-def test_profiles(hw_id, model, zoom, thermal, laser, ai, gimbal):
+def test_profiles(hw_id, model, zoom, thermal, laser, gimbal):
     p = CP.profile_for(hw_id)
     assert p.model == model
     assert p.known is True
     assert p.supports("zoom") is zoom
     assert p.supports("thermal") is thermal
     assert p.supports("laser") is laser
-    assert p.supports("ai_track") is ai
     assert p.supports("gimbal") is gimbal
 
 
 def test_zt30_is_the_full_pod():
     p = CP.profile_for(CP.HW_ZT30)
     assert set(p.sensors) == {"eo_zoom", "eo_wide", "ir"}
-    assert set(p.streams) == {"eo_zoom", "eo_wide", "ir", "split"}
-    assert p.supports_pip is True
     assert p.max_zoom == 180.0
     assert p.yaw_max_deg == 360.0  # limitless
-
-
-def test_streams_are_the_assignable_source_roles():
-    # Single-EO pods advertise only eo_zoom; the ZT6 adds ir + the on-pod split
-    # composite; the ZT30 adds the wide EO too.
-    assert CP.profile_for(CP.HW_A2_MINI).streams == ("eo_zoom",)
-    assert CP.profile_for(CP.HW_A8_MINI).streams == ("eo_zoom",)
-    assert set(CP.profile_for(CP.HW_ZT6).streams) == {"eo_zoom", "ir", "split"}
-    # can_stream gates a source against the model's assignable set.
-    assert CP.profile_for(CP.HW_ZT30).can_stream("split") is True
-    assert CP.profile_for(CP.HW_A8_MINI).can_stream("split") is False
-    assert CP.profile_for(CP.HW_A8_MINI).can_stream("ir") is False
 
 
 def test_resolve_leading_code():
@@ -64,11 +49,18 @@ def test_resolve_unknown_returns_none():
     assert CP.resolve_hardware_code(b"") is None
 
 
-def test_unknown_falls_back_conservatively():
+def test_unidentified_pod_supports_nothing():
+    # A device that has not identified itself has no known mechanical range and
+    # no known feature set, so every control is closed. Assuming a
+    # gimbal-capable profile here would command an unknown device against
+    # limits that belong to no real model.
     p = CP.profile_for(None)
     assert p is CP.FALLBACK_PROFILE
     assert p.known is False
-    assert p.supports("gimbal") is True
-    assert p.supports("zoom") is False
-    assert p.supports("thermal") is False
-    assert p.supports("laser") is False
+    for feature in ("gimbal", "zoom", "thermal", "laser"):
+        assert p.supports(feature) is False
+    assert p.sensors == ()
+    assert p.yaw_min_deg == 0.0
+    assert p.yaw_max_deg == 0.0
+    assert p.pitch_min_deg == 0.0
+    assert p.pitch_max_deg == 0.0

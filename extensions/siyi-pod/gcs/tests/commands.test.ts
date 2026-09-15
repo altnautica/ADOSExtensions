@@ -3,12 +3,9 @@ import { describe, expect, it } from "vitest";
 import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
 
 import {
-  designate,
   fireLaser,
   setGimbalMode,
   setPalette,
-  setStreamSource,
-  setTrackActive,
   setZoom,
   takePhoto,
 } from "../src/commands";
@@ -51,17 +48,6 @@ describe("config-write commands", () => {
     expect(nth(calls, 1).args).toEqual({ key: "gimbal_mode", value: "lock" });
     await setPalette(ctx, 3);
     expect(nth(calls, 1).args).toEqual({ key: "palette", value: 3 });
-    await setTrackActive(ctx, true);
-    expect(nth(calls, 1).args).toEqual({ key: "track_active", value: true });
-    await teardown();
-  });
-
-  it("setStreamSource writes a leg-source delta under stream_assignment", async () => {
-    const { ctx, calls, teardown } = await withHarness();
-    await setStreamSource(ctx, "sub", "eo_wide");
-    const o = nth(calls, 1);
-    expect(o.args.key).toBe("stream_assignment");
-    expect(o.args.value).toEqual({ sub: "eo_wide" });
     await teardown();
   });
 
@@ -75,18 +61,6 @@ describe("config-write commands", () => {
     o = nth(calls, 1);
     expect(o.args.key).toBe("laser_fire_nonce");
     expect(typeof o.args.value).toBe("number");
-    await teardown();
-  });
-
-  it("designate writes the box then a nonce", async () => {
-    const { ctx, calls, teardown } = await withHarness();
-    await designate(ctx, { x: 1, y: 2, width: 3, height: 4 });
-    const box = nth(calls, 2);
-    expect(box.args.key).toBe("track_designate");
-    expect(box.args.value).toEqual({ x: 1, y: 2, width: 3, height: 4 });
-    const nonce = nth(calls, 1);
-    expect(nonce.args.key).toBe("track_designate_nonce");
-    expect(typeof nonce.args.value).toBe("number");
     await teardown();
   });
 

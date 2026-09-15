@@ -1,12 +1,12 @@
 """The capability-negotiated SIYI pod facade.
 
-:class:`SiyiPod` is what the plugin, the MAVLink bridge, the tracker bridge, and
-the geolocation path talk to. It runs one negotiation on connect (firmware +
-hardware-id), resolves the model's :class:`CapabilityProfile`, and then exposes
-typed control methods that gate on the profile: a call to an absent feature
-(zoom on an A2 mini, thermal on a ZR10) raises :class:`PodUnsupported` rather
-than sending a command the pod cannot honour. Gimbal angles are clamped to the
-model's mechanical range before they go out.
+:class:`SiyiPod` is what the plugin, the MAVLink bridge and the geolocation path
+talk to. It runs one negotiation on connect (firmware + hardware-id), resolves
+the model's :class:`CapabilityProfile`, and then exposes typed control methods
+that gate on it: a call to an absent feature (zoom on an A2 mini, thermal on a
+ZR10), or any call at all before the pod has identified itself, raises
+:class:`PodUnsupported` rather than sending a command the pod may not honour.
+Gimbal angles are clamped to the model's mechanical range before they go out.
 """
 
 from __future__ import annotations
@@ -75,9 +75,32 @@ class SiyiPod:
         return self.profile
 
     def _require(self, feature: str) -> None:
+        """Gate a control on a completed negotiation and on the model's profile.
+
+        The negotiation check comes first: until the pod has said what it is,
+        nothing is known about it — not its mechanical range, not its sensor
+        set, not that it is a SIYI pod at all — so no command may be sent to
+        it. The profile check is the second line of defence for a pod that has
+        identified itself as a model without the feature.
+        """
+        if not self.negotiated:
+            raise PodUnsupported(
+                f"{feature} is unavailable: the pod has not identified itself"
+            )
         if not self.profile.supports(feature):
             raise PodUnsupported(
                 f"{feature} is not supported by {self.profile.model}"
+            )
+
+    def _require_negotiated(self, control: str) -> None:
+        """Gate a control that every model carries on a completed negotiation.
+
+        A device that has not answered the identity query is not known to be a
+        SIYI pod at all, so even a base camera command must not be sent to it.
+        """
+        if not self.negotiated:
+            raise PodUnsupported(
+                f"{control} is unavailable: the pod has not identified itself"
             )
 
     # -- gimbal -----------------------------------------------------------
@@ -90,8 +113,15 @@ class SiyiPod:
         await self._session.request(C.set_gimbal_attitude(yaw, pitch))
 
     async def command_rate(self, yaw: int, pitch: int) -> None:
+        """Rate command, both axes as a percentage of the model's maximum rate.
+
+        Clamped at the facade as well as in the encoder, so the bound the
+        facade advertises is the bound it enforces.
+        """
         self._require("gimbal")
-        await self._session.command(C.gimbal_speed(yaw, pitch))
+        yaw_pct = max(-100, min(100, int(yaw)))
+        pitch_pct = max(-100, min(100, int(pitch)))
+        await self._session.command(C.gimbal_speed(yaw_pct, pitch_pct))
 
     async def center(self) -> None:
         self._require("gimbal")
@@ -102,6 +132,7 @@ class SiyiPod:
         await self._session.request(C.set_gimbal_mode(mode))
 
     async def read_attitude(self) -> C.GimbalAttitude:
+        self._require_negotiated("gimbal attitude")
         reply = await self._session.request(C.request_gimbal_attitude())
         return C.decode_gimbal_attitude(reply.data)
 
@@ -116,46 +147,37 @@ class SiyiPod:
         await self._session.command(C.manual_zoom(direction))
 
     async def autofocus(self) -> None:
+        self._require_negotiated("autofocus")
         await self._session.request(C.autofocus())
 
     async def read_zoom(self) -> float:
+        self._require_negotiated("zoom read-back")
         reply = await self._session.request(C.request_current_zoom())
         return C.decode_current_zoom(reply.data)
 
     async def take_photo(self) -> None:
+        self._require_negotiated("photo")
         await self._session.request(C.take_photo())
 
     async def toggle_record(self) -> None:
+        self._require_negotiated("recording")
         await self._session.request(C.record_toggle())
-
-    # -- image-source assignment (multi-sensor pods) ----------------------
-    async def set_image_source(self, stream: str, source: str) -> None:
-        """Assign which sensor a physical stream (main/sub) carries.
-
-        ``source`` is one of eo_zoom / eo_wide / ir / split; ``split`` also
-        enables the on-pod composite. Gated on the model's assignable streams so
-        a source the pod cannot output raises :class:`PodUnsupported`.
-        """
-        if not self.profile.can_stream(source):
-            raise PodUnsupported(
-                f"{source} is not an assignable source on {self.profile.model}"
-            )
-        if source == "split":
-            await self.set_split_mode(True)
-        await self._session.request(C.set_image_source(stream, source))
-
-    async def set_split_mode(self, enabled: bool) -> None:
-        """Toggle the pod's on-pod split / PiP composite (gated on supports_pip)."""
-        if not self.profile.supports_pip:
-            raise PodUnsupported(
-                f"split/PiP is not supported by {self.profile.model}"
-            )
-        await self._session.request(C.set_split_mode(enabled))
 
     # -- thermal ----------------------------------------------------------
     async def set_palette(self, palette_code: int) -> None:
+        """Select a thermal palette by code, refusing an out-of-range value.
+
+        A code outside the accepted range is rejected here rather than wrapped
+        into a different palette by the encoder.
+        """
         self._require("thermal")
-        await self._session.request(C.set_thermal_palette(palette_code))
+        try:
+            code = int(palette_code)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"palette code must be an integer, got {palette_code!r}"
+            ) from exc
+        await self._session.request(C.set_thermal_palette(code))
 
     async def set_gain(self, high: bool) -> None:
         self._require("thermal")
@@ -167,24 +189,6 @@ class SiyiPod:
         self._require("laser")
         reply = await self._session.request(C.request_laser_range())
         return C.decode_laser_range(reply.data)
-
-    # -- AI tracking ------------------------------------------------------
-    async def ai_track_designate(
-        self, x: int, y: int, width: int, height: int
-    ) -> None:
-        """Lock the pod's on-pod tracker onto a box (pod-frame pixels)."""
-        self._require("ai_track")
-        await self._session.command(C.ai_track_designate(x, y, width, height))
-
-    async def ai_track_stop(self) -> None:
-        self._require("ai_track")
-        await self._session.command(C.ai_track_stop())
-
-    async def read_track_box(self) -> C.TrackBox | None:
-        """Read the pod's live AI-track box (None when it reports no track)."""
-        self._require("ai_track")
-        reply = await self._session.request(C.request_track_box())
-        return C.decode_track_box(reply.data)
 
 
 def _clamp(value: float, low: float, high: float) -> float:

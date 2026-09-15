@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.5.0
+
+- The plugin sends nothing to a pod that has not identified itself. Until the
+  hardware-id query is answered every control raises rather than transmitting,
+  no stream leg is advertised, and the read-back reports the unidentified
+  state. The profile for an unidentified device now supports nothing and
+  carries no assumed mechanical range, so a future model or an unrelated
+  listener on the pod address is never commanded against limits that belong to
+  no real device. The negotiation retry is unbounded and on a fixed interval, so
+  a pod that is unpowered at boot or power-cycled in flight comes online with
+  no restart.
+- Removed the per-leg image-source assignment, the on-pod split composite
+  toggle, and on-pod AI tracking, along with the `point_at` tool, the track and
+  point-at Skills, and the track-with-pod target action. Their wire formats were
+  not published ones; an unrecognised opcode on gimbal firmware is not reliably
+  a no-op. The two physical RTSP legs are still advertised, now as the layout
+  the pod ships with.
+- Link health is derived from whether the pod answered the last telemetry poll,
+  instead of being reported as up whenever the transport was open.
+- Thermal palette codes are range-checked instead of masked into a byte, so an
+  out-of-range value is refused rather than silently selecting a different
+  palette. Gimbal rate commands are clamped at the facade as well as the
+  encoder. `set_zoom` and `set_palette` answer a non-numeric argument with the
+  `{ok, reason}` contract rather than raising out of the tool handler.
+- A one-shot nonce left in config by an earlier session no longer re-fires a
+  photo or the rangefinder when the pod comes online.
+- Dropped the `mission.read`, `mission.write`, `recording.write`,
+  `ui.slot.notification-channel` and `ui.slot.map-overlay` capabilities and the
+  map-overlay panel contribution: none had an implementation or a call site.
+  Corrected the declared palette and zoom parameter bounds.
+
 ## 0.4.0
 
 - Added eight cockpit Skills: point at (lock the tracker on the frame centre),

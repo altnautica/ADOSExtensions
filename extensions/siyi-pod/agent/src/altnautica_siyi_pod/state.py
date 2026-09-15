@@ -3,8 +3,8 @@
 Published on the ``siyi.pod.state`` event and mirrored onto the agent heartbeat
 via ``ctx.telemetry.extend`` so the GCS console, cockpit panel, and video overlay
 render live pod state (model, capabilities, attitude, zoom, range, temperatures,
-tracker, link health). The GCS gates its controls on the ``capabilities`` block,
-so one payload drives every model.
+link health). The GCS gates its controls on the ``capabilities`` block, so one
+payload drives every model.
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ class PodState:
     firmware: str | None = None
     # Which controls to show, mirrored from the negotiated capability profile.
     capabilities: dict[str, object] = field(default_factory=dict)
-    # Which sensor source each physical leg (main/sub) currently carries, so the
-    # console's per-leg source selector reflects the live assignment.
+    # Which sensor source each physical leg (main/sub) carries, from the
+    # resolved model's stream layout.
     assignment: dict[str, str] = field(default_factory=dict)
     # Live readings (None until first read / for unsupported sensors).
     yaw_deg: float | None = None
@@ -35,9 +35,8 @@ class PodState:
     recording: bool = False
     laser_range_m: float | None = None
     spot_temp_c: float | None = None
-    track_active: bool = False
-    track_id: int | None = None
-    # Link health (Rule 37): frames seen and whether the pod is answering.
+    # Link health: frames seen, and whether the pod answered the last poll. A
+    # transport that is up but has stopped answering reads as not ok.
     link_ok: bool = False
     frames_received: int = 0
 

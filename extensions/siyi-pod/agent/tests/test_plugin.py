@@ -113,67 +113,10 @@ async def test_configure_video_advertises_two_legs_zt30():
     await plugin.on_stop(ctx)
 
 
-async def test_start_assigns_main_eo_sub_ir_zt30():
-    # On start the plugin routes distinct sensors: main = EO-zoom, sub = IR.
-    from altnautica_siyi_pod import commands as C
-
-    ctx = _Ctx()
-    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
-    await plugin.on_start(ctx)
-    transport = plugin._session._transport
-    assert transport.image_sources == {
-        C.STREAM_MAIN: C.IMG_SOURCE_EO_ZOOM,
-        C.STREAM_SUB: C.IMG_SOURCE_IR,
-    }
-    # The live assignment is published so the console's per-leg selector reflects
-    # it (main = EO-zoom, sub = IR).
-    assert plugin.state.assignment == {"main": "eo_zoom", "sub": "ir"}
-    await plugin.on_stop(ctx)
-
-
-async def test_reassign_stream_source_to_wide():
-    # The GCS reaches EO-wide by reassigning a leg's source; the plugin re-routes
-    # the pod and re-advertises the leg with the new role.
-    from altnautica_siyi_pod import commands as C
-
-    ctx = _Ctx(with_video=True)
-    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
-    await plugin.on_start(ctx)
-    transport = plugin._session._transport
-
-    ctx.config_kv.set("stream_assignment", {"sub": "eo_wide"})
-    await plugin.apply_config_once()
-    assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_EO_WIDE
-    legs = ctx.video.sources[-1]
-    sub = next(leg for leg in legs if leg["id"] == "sub")
-    assert sub["role"] == "eo_wide"
-    assert plugin.state.assignment["sub"] == "eo_wide"
-    await plugin.on_stop(ctx)
-
-
-async def test_reassign_stream_source_to_split_enables_composite():
-    # Selecting the split source enables the pod's on-pod split/PiP composite and
-    # advertises the leg with the split role.
-    from altnautica_siyi_pod import commands as C
-
-    ctx = _Ctx(with_video=True)
-    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
-    await plugin.on_start(ctx)
-    transport = plugin._session._transport
-
-    ctx.config_kv.set("stream_assignment", {"sub": "split"})
-    await plugin.apply_config_once()
-    assert transport.split_mode is True
-    assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_SPLIT
-    legs = ctx.video.sources[-1]
-    sub = next(leg for leg in legs if leg["id"] == "sub")
-    assert sub["role"] == "split"
-    await plugin.on_stop(ctx)
-
-
 async def test_video_source_apply_failure_is_surfaced(caplog):
     # The host reports ok=False when the pipeline restart failed (config saved,
-    # streams not live). The plugin must warn, not swallow it (Rule 44).
+    # streams not live). The plugin must warn, not swallow it: a failed apply
+    # has to be visible.
     import logging
 
     class _FailVideo:
@@ -215,9 +158,6 @@ async def test_start_negotiates_and_registers_components():
     assert (100, "camera") in ctx.mavlink.components
     assert "ATTITUDE" in ctx.mavlink.subscriptions
     assert any(ch == "siyi" for ch, _ in ctx.telemetry.extended)
-    # The tracker stamps its box with the primary advertised leg id (not the
-    # old "siyi-pod" placeholder), so the overlay renders it on the shown leg.
-    assert plugin._tracker.camera_id == "main"
     await plugin.on_stop(ctx)
 
 
@@ -286,38 +226,6 @@ async def test_start_survives_unreachable_pod_and_recovers():
     assert plugin.state.connected is True
     legs = ctx.video.sources[-1]
     assert [leg["id"] for leg in legs] == ["main", "sub"]
-    await plugin.on_stop(ctx)
-
-
-async def test_pod_track_box_is_republished_to_vision():
-    # The pod owns the track loop; the plugin mirrors its box onto the shared
-    # detection bus, stamped with the primary advertised leg id so the cockpit
-    # overlay renders it. A drop publishes one "lost" batch, not a silent stall.
-    ctx = _Ctx()
-    transport = MockTransport(model=HW_ZT30, track_box=(7, 100, 120, 40, 60, True))
-    plugin = SiyiPodPlugin(transport_factory=lambda _cfg: transport)
-    await plugin.on_start(ctx)
-
-    await plugin.poll_track_once()
-    assert len(ctx.vision.published) >= 1
-    batch = ctx.vision.published[-1]
-    assert batch.camera_id == "main"
-    assert len(batch.detections) == 1
-    det = batch.detections[0]
-    assert det.track_id == 7
-    assert det.lock_state == "locked"
-    assert (det.bbox.x, det.bbox.y, det.bbox.width, det.bbox.height) == (100, 120, 40, 60)
-    assert plugin.state.track_active is True
-    assert plugin.state.track_id == 7
-
-    # The track drops: exactly one empty batch, then nothing further.
-    transport.track_box = None
-    await plugin.poll_track_once()
-    assert ctx.vision.published[-1].detections == []
-    assert plugin.state.track_active is False
-    published_after_lost = len(ctx.vision.published)
-    await plugin.poll_track_once()
-    assert len(ctx.vision.published) == published_after_lost  # no repeat empty batch
     await plugin.on_stop(ctx)
 
 
@@ -443,34 +351,9 @@ async def test_skill_record_toggles_recording_via_the_pod():
     await plugin.on_stop(ctx)
 
 
-async def test_skill_track_toggle_starts_then_stops_tracking():
-    # The track toggle's rising edge designates a subject (starts the pod
-    # tracker); the falling edge stops it. Neither edge is a silent no-op.
-    from altnautica_siyi_pod import commands as C
-    from altnautica_siyi_pod.framing import parse_frame
-
-    ctx = _Ctx()
-    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
-    await plugin.on_start(ctx)
-    transport = plugin._session._transport
-
-    transport.sent.clear()
-    ctx.config_kv.set("track_active", True)
-    await plugin.apply_config_once()
-    cmds = [parse_frame(f).cmd_id for f in transport.sent]
-    assert C.CMD_AI_TRACK in cmds  # a designate went out (tracking started)
-
-    transport.sent.clear()
-    ctx.config_kv.set("track_active", False)
-    await plugin.apply_config_once()
-    cmds = [parse_frame(f).cmd_id for f in transport.sent]
-    assert C.CMD_AI_TRACK in cmds  # a stop went out
-    await plugin.on_stop(ctx)
-
-
 async def test_a2_mini_publishes_disabled_skill_states():
     # An A2 mini has no zoom / thermal / laser / tracking / gimbal, so those
-    # Skills publish a disabled state (Rule 44) instead of offering a silent
+    # Skills publish a disabled state instead of offering a silent
     # no-op; photo (a base camera feature) stays available.
     ctx = _Ctx()
     plugin = SiyiPodPlugin(
@@ -482,10 +365,8 @@ async def test_a2_mini_publishes_disabled_skill_states():
         "siyi.pod.zoom",
         "siyi.pod.palette",
         "siyi.pod.laser",
-        "siyi.pod.point_at",
         "siyi.pod.center",
         "siyi.pod.nadir",
-        "siyi.pod.track",
     ):
         assert events[topic]["state"] == "disabled", (topic, events.get(topic))
         assert events[topic].get("reason")
@@ -505,11 +386,9 @@ async def test_zt30_publishes_enabled_skill_states():
         "siyi.pod.zoom",
         "siyi.pod.palette",
         "siyi.pod.laser",
-        "siyi.pod.point_at",
         "siyi.pod.center",
         "siyi.pod.nadir",
         "siyi.pod.photo",
-        "siyi.pod.track",
         "siyi.pod.record",
     ):
         assert events[topic]["state"] == "idle", (topic, events.get(topic))
@@ -527,7 +406,6 @@ async def test_mcp_tools_registered_and_callable():
         "set_palette",
         "capture_photo",
         "record",
-        "point_at",
         "laser_range",
         "geolocate_target",
     }
@@ -549,11 +427,6 @@ async def test_mcp_tools_registered_and_callable():
     assert transport.photos_taken == 1
     assert transport.recording is True
 
-    # point_at writes a designate box + bumps the designate nonce.
-    result = await ctx.tools.handlers["point_at"]({})
-    assert result["ok"] is True
-    assert isinstance(await ctx.config_kv.get("track_designate"), dict)
-
     # laser_range returns the measured range.
     lr = await ctx.tools.handlers["laser_range"]({})
     assert lr == {"ok": True, "range_m": 42.0}
@@ -566,4 +439,67 @@ async def test_mcp_tools_registered_and_callable():
     geo = await ctx.tools.handlers["geolocate_target"]({})
     assert geo["ok"] is True
     assert "lat_deg" in geo and "lon_deg" in geo
+    await plugin.on_stop(ctx)
+
+
+async def test_unidentified_pod_is_never_commanded():
+    # A device that never answers the identity query is not known to be a SIYI
+    # pod at all, so nothing may be sent to it. Every declarative key, nonce and
+    # one-shot action is armed here; a control tick must still produce no write
+    # beyond the identity/firmware queries the negotiation retry itself sends.
+    ctx = _Ctx(with_video=True)
+    transport = MockTransport(model=HW_ZT30, answer_identity=False)
+    plugin = SiyiPodPlugin(
+        transport_factory=lambda _cfg: transport, session_timeout_s=0.02
+    )
+    await plugin.on_start(ctx)
+    assert plugin.pod.negotiated is False
+
+    ctx.config_kv.set("zoom", 5.0)
+    ctx.config_kv.set("gimbal_mode", "lock")
+    ctx.config_kv.set("palette", 3)
+    ctx.config_kv.set("thermal_gain", True)
+    ctx.config_kv.set("recording", True)
+    ctx.config_kv.set("photo_nonce", 7)
+    ctx.config_kv.set("laser_fire_nonce", 4)
+    ctx.config_kv.set("center", True)
+    ctx.config_kv.set("nadir", True)
+    ctx.config_kv.set("zoom_in", True)
+
+    await plugin.apply_config_once()
+
+    # The mock carries the pod's own power-on defaults; none of them moved.
+    assert transport.zoom == 1.0
+    assert transport.palette == 0
+    assert transport.gimbal_mode == "follow"
+    assert transport.photos_taken == 0
+    assert transport.recording is False
+    assert plugin.state.connected is False
+    # No stream leg is advertised for a device that has not said it serves one.
+    assert ctx.video.sources == []
+    await plugin.on_stop(ctx)
+
+
+async def test_stale_nonce_does_not_refire_when_the_pod_comes_online():
+    # A one-shot nonce left in config by an earlier session is history, not a
+    # fresh operator press: it must not fire a photo or the rangefinder the
+    # moment the pod identifies itself.
+    ctx = _Ctx()
+    transport = MockTransport(model=HW_ZT30, answer_identity=False)
+    plugin = SiyiPodPlugin(
+        transport_factory=lambda _cfg: transport, session_timeout_s=0.02
+    )
+    ctx.config_kv.set("photo_nonce", 9)
+    await plugin.on_start(ctx)
+    assert plugin.pod.negotiated is False
+
+    transport.answer_identity = True
+    await plugin.apply_config_once()
+    assert plugin.pod.negotiated is True
+    assert transport.photos_taken == 0
+
+    # A genuinely new press does fire.
+    ctx.config_kv.set("photo_nonce", 10)
+    await plugin.apply_config_once()
+    assert transport.photos_taken == 1
     await plugin.on_stop(ctx)

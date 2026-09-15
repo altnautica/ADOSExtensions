@@ -7,9 +7,10 @@ message on the profile, so one plugin drives an A2 mini (a fixed EO camera) and 
 ZT30 (a four-sensor pod) from the same code with no per-model branches in the
 call sites.
 
-An unknown or future code resolves to a conservative gimbal-plus-EO fallback so a
-new pod still connects and streams video while the operator is told to report the
-model.
+A code that is not in the table, and a pod that never answers the query at all,
+both resolve to :data:`FALLBACK_PROFILE`, which supports nothing: an
+unidentified device has no known mechanical range and no known feature set, and
+guessing one drives it against limits that belong to no real model.
 """
 
 from __future__ import annotations
@@ -42,21 +43,14 @@ class CapabilityProfile:
     max_zoom: float
     has_thermal: bool
     has_laser: bool
-    has_ai_track: bool
     # Physical sensors the pod carries: a subset of eo_zoom / eo_wide / ir.
     sensors: tuple[str, ...] = field(default_factory=tuple)
-    # Assignable source roles a physical stream (main/sub) can be set to. A
-    # multi-sensor pod adds "split" when it can composite two sensors on-pod.
-    streams: tuple[str, ...] = field(default_factory=tuple)
-    # The pod can composite a split / picture-in-picture view on-pod into one
-    # stream (the "combined" source role).
-    supports_pip: bool = False
     known: bool = True
 
     def supports(self, feature: str) -> bool:
         """Feature gate used by the pod facade and the surfaces.
 
-        ``feature`` is one of: gimbal, zoom, thermal, laser, ai_track.
+        ``feature`` is one of: gimbal, zoom, thermal, laser.
         """
         return {
             "gimbal": self.has_gimbal_control,
@@ -65,19 +59,12 @@ class CapabilityProfile:
             "zoom": self.max_zoom > 1.0,
             "thermal": self.has_thermal,
             "laser": self.has_laser,
-            "ai_track": self.has_ai_track,
         }.get(feature, False)
 
-    def can_stream(self, source: str) -> bool:
-        """True when a physical stream can be assigned this source role.
 
-        ``source`` is one of eo_zoom / eo_wide / ir / split.
-        """
-        return source in self.streams
-
-
-# The lineup. Ranges and sensor sets follow the SIYI product specifications;
-# the ZT30 (the bench reference) is validated on real hardware (Rule 25).
+# The lineup. Ranges and sensor sets follow the published SIYI product
+# specifications; the ZT30 is the reference model the driver is validated against
+# on real hardware.
 PROFILES: dict[int, CapabilityProfile] = {
     HW_A2_MINI: CapabilityProfile(
         model="A2 mini",
@@ -91,9 +78,7 @@ PROFILES: dict[int, CapabilityProfile] = {
         max_zoom=1.0,
         has_thermal=False,
         has_laser=False,
-        has_ai_track=False,
         sensors=("eo_zoom",),
-        streams=("eo_zoom",),
     ),
     HW_A8_MINI: CapabilityProfile(
         model="A8 mini",
@@ -107,9 +92,7 @@ PROFILES: dict[int, CapabilityProfile] = {
         max_zoom=6.0,
         has_thermal=False,
         has_laser=False,
-        has_ai_track=True,
         sensors=("eo_zoom",),
-        streams=("eo_zoom",),
     ),
     HW_ZR10: CapabilityProfile(
         model="ZR10",
@@ -123,9 +106,7 @@ PROFILES: dict[int, CapabilityProfile] = {
         max_zoom=30.0,
         has_thermal=False,
         has_laser=True,
-        has_ai_track=False,
         sensors=("eo_zoom",),
-        streams=("eo_zoom",),
     ),
     HW_ZR30: CapabilityProfile(
         model="ZR30",
@@ -139,9 +120,7 @@ PROFILES: dict[int, CapabilityProfile] = {
         max_zoom=180.0,
         has_thermal=False,
         has_laser=True,
-        has_ai_track=False,
         sensors=("eo_zoom",),
-        streams=("eo_zoom",),
     ),
     HW_ZT6: CapabilityProfile(
         model="ZT6",
@@ -155,10 +134,7 @@ PROFILES: dict[int, CapabilityProfile] = {
         max_zoom=1.0,
         has_thermal=True,
         has_laser=False,
-        has_ai_track=True,
         sensors=("eo_zoom", "ir"),
-        streams=("eo_zoom", "ir", "split"),
-        supports_pip=True,
     ),
     HW_ZT30: CapabilityProfile(
         model="ZT30",
@@ -172,31 +148,30 @@ PROFILES: dict[int, CapabilityProfile] = {
         max_zoom=180.0,
         has_thermal=True,
         has_laser=True,
-        has_ai_track=True,
         sensors=("eo_zoom", "eo_wide", "ir"),
-        streams=("eo_zoom", "eo_wide", "ir", "split"),
-        supports_pip=True,
     ),
 }
 
-# The fallback for an unrecognised pod: control the gimbal and the EO stream,
-# hide every model-specific feature, and flag the model as unknown so the GCS can
-# ask the operator to report it.
+# The fallback for a pod that has not identified itself: a device that has not
+# answered the hardware-id query has no known mechanical range, no known sensor
+# set and no known feature set, so it supports nothing and is flagged unknown.
+# Assuming a gimbal-capable profile here would drive an unidentified device
+# against limits that belong to no real model — and on a non-SIYI listener it
+# would spray SDK frames at an unrelated service. Every control stays closed
+# until the pod says what it is.
 FALLBACK_PROFILE = CapabilityProfile(
     model="Unknown SIYI pod",
     hw_id=None,
-    yaw_min_deg=-135.0,
-    yaw_max_deg=135.0,
-    pitch_min_deg=-90.0,
-    pitch_max_deg=25.0,
-    has_gimbal_control=True,
+    yaw_min_deg=0.0,
+    yaw_max_deg=0.0,
+    pitch_min_deg=0.0,
+    pitch_max_deg=0.0,
+    has_gimbal_control=False,
     has_optical_zoom=False,
     max_zoom=1.0,
     has_thermal=False,
     has_laser=False,
-    has_ai_track=False,
-    sensors=("eo_zoom",),
-    streams=("eo_zoom",),
+    sensors=(),
     known=False,
 )
 

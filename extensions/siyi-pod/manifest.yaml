@@ -2,26 +2,27 @@ schema_version: 3
 id: com.altnautica.siyi-pod
 name: "ADOS SIYI Optical Pod"
 version: "0.4.0"
-description: "Native driver for the SIYI optical-pod line (A2 mini, A8 mini, ZR10, ZR30, ZT6, ZT30) with per-model capability negotiation: gimbal, zoom, focus, photo/record, thermal palette and spot temperature, laser rangefinder with subject geolocation, and on-pod AI tracking."
+description: "Native driver for the SIYI optical-pod line (A2 mini, A8 mini, ZR10, ZR30, ZT6, ZT30) with per-model capability negotiation: gimbal, zoom, focus, photo/record, thermal palette and gain, and a laser rangefinder with subject geolocation."
 description_long: |
   Speaks the SIYI Gimbal Camera External SDK over UDP, TCP, or a TTL serial port
   directly, so the agent drives the features a stock autopilot mount cannot:
-  thermal palettes and temperature, the laser rangefinder, subject geolocation,
-  and AI tracking. On start the plugin queries firmware and the hardware id,
-  resolves the exact model's capability profile, and exposes only the controls
-  that model supports. The pod's own tracker box is republished onto the shared
-  detection bus so cockpit click-to-track and follow behaviours work with no
-  on-board accelerator. The laser range plus the gimbal angles and the flight
-  controller pose resolve a subject latitude and longitude that drops a marker on
-  the map. Gimbal attitude and the laser range are mirrored up to the flight
-  controller as standard MAVLink so the built-in gimbal panel lights up too.
+  thermal palette and gain, the laser rangefinder, and subject geolocation. On
+  start the plugin queries firmware and the hardware id, resolves the exact
+  model's capability profile, and exposes only the controls that model supports.
+  Until the pod answers that identity query it is sent nothing at all, and the
+  negotiation is retried on a fixed interval with no attempt cap, so a pod that
+  is unpowered at boot comes online without a restart. The laser range plus the
+  gimbal angles and the flight controller pose resolve a subject latitude and
+  longitude that drops a marker on the map. Gimbal attitude and the laser range
+  are mirrored up to the flight controller as standard MAVLink so the built-in
+  gimbal panel lights up too.
 features:
   - "Auto-detects A2 mini / A8 mini / ZR10 / ZR30 / ZT6 / ZT30 and negotiates capabilities"
   - "Gimbal aim, rate, recenter, and lock/follow/FPV modes"
   - "Optical and absolute zoom, autofocus (zoom models)"
-  - "Thermal palette, gain, and spot temperature (thermal models)"
+  - "Thermal palette and gain (thermal models)"
   - "Laser rangefinder with subject geolocation on the map (laser models)"
-  - "On-pod AI tracking republished to the cockpit (no accelerator required)"
+  - "Sends nothing to a pod that has not identified itself"
 hardware_requirements:
   cameras: "A SIYI optical pod (A2 mini, A8 mini, ZR10, ZR30, ZT6, or ZT30) on the pod network (192.168.144.x) or a TTL serial port"
   boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "x86"]
@@ -56,12 +57,9 @@ agent:
     - id: mavlink.write
     - id: mavlink.component.gimbal
     - id: mavlink.component.camera
-    - id: vision.detection.publish
-    - id: vision.track.designate
     - id: telemetry.extend
     - id: video.source.set
     - id: event.publish
-    - id: event.subscribe
     - id: mcp.expose
   resources:
     max_ram_mb: 128
@@ -82,7 +80,7 @@ agent:
     tools:
       - name: status
         title: "Pod status"
-        description: "Report the pod model, capabilities, attitude, zoom, palette, range, and tracker state."
+        description: "Report the pod model, capabilities, attitude, zoom, palette, range, and link health."
         safety_class: read
         inputSchema:
           type: object
@@ -94,7 +92,7 @@ agent:
         inputSchema:
           type: object
           properties:
-            zoom: { type: number }
+            zoom: { type: number, minimum: 1, maximum: 180 }
       - name: set_palette
         title: "Set thermal palette"
         description: "Set the thermal colour palette by code (thermal models)."
@@ -102,7 +100,7 @@ agent:
         inputSchema:
           type: object
           properties:
-            palette: { type: integer }
+            palette: { type: integer, minimum: 0, maximum: 7 }
       - name: capture_photo
         title: "Capture a photo"
         description: "Take a still on the pod."
@@ -117,20 +115,6 @@ agent:
         inputSchema:
           type: object
           properties: {}
-      - name: point_at
-        title: "Point at a subject"
-        description: "Lock the pod's tracker onto a box (pod-frame pixels), or the frame centre when no box is given. Moves the gimbal."
-        safety_class: safe_write
-        inputSchema:
-          type: object
-          properties:
-            box:
-              type: object
-              properties:
-                x: { type: integer }
-                y: { type: integer }
-                width: { type: integer }
-                height: { type: integer }
       - name: laser_range
         title: "Measure range"
         description: "Fire the laser rangefinder and report the slant range in metres (laser models). Fires the laser."
@@ -158,13 +142,8 @@ gcs:
     - id: ui.slot.video-overlay
     - id: ui.slot.flight-skill
     - id: ui.slot.settings-section
-    - id: ui.slot.map-overlay
-    - id: ui.slot.notification-channel
     - id: telemetry.subscribe.siyi
     - id: command.send
-    - id: recording.write
-    - id: mission.read
-    - id: mission.write
   contributes:
     tabs:
       - id: siyi-console
@@ -183,25 +162,7 @@ gcs:
         slot: video.overlay
         title: "SIYI pod HUD"
         icon: "crosshair"
-      - id: siyi-map
-        slot: map.overlay
-        title: "Laser target"
-        icon: "target"
-    notifications:
-      - id: siyi-health
-        title: "SIYI pod health"
-        severity: warning
     skills:
-      - id: siyi-track
-        label: "skill.track"
-        icon: "crosshair"
-        category: camera
-        toggle: true
-        confirm: false
-        arm_requirement: any
-        default_binding: { key: "t" }
-        activation: { via: config, config_key: track_active }
-        state: { via: event, topic: "siyi.pod.track" }
       - id: siyi-record
         label: "skill.record"
         icon: "video"
@@ -215,16 +176,6 @@ gcs:
       # One-shot Skills the agent fires on the rising edge and clears. Each is
       # declared for every model; the agent gates on the negotiated capability
       # profile, so a Skill for a control the model lacks is a safe no-op.
-      - id: point-at
-        label: "skill.pointAt"
-        icon: "crosshair"
-        category: camera
-        toggle: false
-        confirm: false
-        arm_requirement: any
-        default_binding: { key: "y" }
-        activation: { via: config, config_key: point_at }
-        state: { via: event, topic: "siyi.pod.point_at" }
       - id: cycle-palette
         label: "skill.cyclePalette"
         icon: "palette"
@@ -295,19 +246,10 @@ gcs:
         default_binding: { key: "k" }
         activation: { via: config, config_key: photo }
         state: { via: event, topic: "siyi.pod.photo" }
-    target_actions:
-      - id: siyi-designate
-        label: "Track with pod"
-        icon: crosshair
-        order: 25
-        designate: true
-        config_key: track_designate
-        config_value: true
-        default_key: "t"
     parameters:
       - key: zoom
         binding: plugin.config
-        schema: { type: number, minimum: 1, maximum: 30, step: 0.1, default: 1 }
+        schema: { type: number, minimum: 1, maximum: 180, step: 0.1, default: 1 }
         ui: { widget: range, label: "settings.zoom", group: "settings.optics", order: 10 }
       - key: gimbal_mode
         binding: plugin.config
@@ -315,7 +257,7 @@ gcs:
         ui: { widget: enum, label: "settings.gimbalMode", group: "settings.gimbal", order: 30 }
       - key: palette
         binding: plugin.config
-        schema: { type: integer, minimum: 0, maximum: 8, default: 0 }
+        schema: { type: integer, minimum: 0, maximum: 7, default: 0 }
         ui: { widget: number, label: "settings.palette", group: "settings.thermal", order: 40 }
       - key: thermal_gain
         binding: plugin.config

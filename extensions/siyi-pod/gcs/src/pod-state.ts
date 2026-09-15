@@ -62,8 +62,6 @@ function normalise(raw: Record<string, unknown>): PodState {
     recording: raw.recording === true,
     laser_range_m: num(raw.laser_range_m),
     spot_temp_c: num(raw.spot_temp_c),
-    track_active: raw.track_active === true,
-    track_id: num(raw.track_id),
     link_ok: raw.link_ok === true,
     frames_received: num(raw.frames_received) ?? 0,
   };

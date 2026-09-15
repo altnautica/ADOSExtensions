@@ -93,44 +93,6 @@ async def test_zt30_clamps_gimbal_angles():
     await session.stop()
 
 
-async def test_zt30_assigns_image_source_and_split():
-    from altnautica_siyi_pod import commands as C
-
-    pod, session, transport = await make_pod(model=CP.HW_ZT30)
-    await pod.set_image_source("main", "eo_zoom")
-    await pod.set_image_source("sub", "ir")
-    assert transport.image_sources == {
-        C.STREAM_MAIN: C.IMG_SOURCE_EO_ZOOM,
-        C.STREAM_SUB: C.IMG_SOURCE_IR,
-    }
-    # Assigning a leg to the split source enables the on-pod composite.
-    await pod.set_image_source("sub", "split")
-    assert transport.split_mode is True
-    assert transport.image_sources[C.STREAM_SUB] == C.IMG_SOURCE_SPLIT
-    await session.stop()
-
-
-async def test_read_track_box():
-    pod, session, transport = await make_pod(model=CP.HW_ZT30)
-    # No active track by default.
-    assert await pod.read_track_box() is None
-    transport.track_box = (3, 10, 20, 30, 40, True)
-    box = await pod.read_track_box()
-    assert box is not None
-    assert box.track_id == 3
-    assert box.locked is True
-    assert (box.x, box.y, box.width, box.height) == (10.0, 20.0, 30.0, 40.0)
-    await session.stop()
-
-
-async def test_read_track_box_gated_on_ai_track():
-    # The ZR10 has no on-pod tracker.
-    pod, session, _t = await make_pod(model=CP.HW_ZR10)
-    with pytest.raises(PodUnsupported):
-        await pod.read_track_box()
-    await session.stop()
-
-
 async def test_negotiate_survives_unreachable_pod():
     # A pod that never answers the identity query must not raise out of
     # negotiate; it stays on the conservative fallback until it appears.
@@ -140,22 +102,10 @@ async def test_negotiate_survives_unreachable_pod():
     pod = SiyiPod(session)
     profile = await pod.negotiate()  # must not raise
     assert pod.negotiated is False
-    assert profile is CP.FALLBACK_PROFILE  # not a guessed model (Rule 44)
+    assert profile is CP.FALLBACK_PROFILE  # not a guessed model
     # Once the pod answers, a re-run resolves the real model — idempotent.
     transport.answer_identity = True
     await pod.negotiate()
     assert pod.negotiated is True
     assert pod.profile.model == "ZT30"
-    await session.stop()
-
-
-async def test_single_eo_pod_rejects_multi_sensor_sources():
-    pod, session, _t = await make_pod(model=CP.HW_A8_MINI)
-    # A single-EO pod has no wide / thermal / split source to assign.
-    with pytest.raises(PodUnsupported):
-        await pod.set_image_source("sub", "ir")
-    with pytest.raises(PodUnsupported):
-        await pod.set_image_source("main", "split")
-    with pytest.raises(PodUnsupported):
-        await pod.set_split_mode(True)
     await session.stop()
