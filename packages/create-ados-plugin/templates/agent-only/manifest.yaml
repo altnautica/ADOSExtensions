@@ -9,7 +9,6 @@ risk: low
 
 compatibility:
   ados_version: ">=0.10.0"
-  supported_boards: ["*"]
 
 agent:
   entrypoint: "agent/plugin.py"

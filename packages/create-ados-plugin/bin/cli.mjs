@@ -27,6 +27,11 @@ async function main() {
   );
   const half = await pickHalf(opts.half);
   const author = await prompt(opts.author, "Author", "Anonymous");
+  const signer = await prompt(
+    opts.signer,
+    "Signer id for `pnpm pack` (see README: ados plugin sign)",
+    `${slug(author) || "example"}-2026-A`,
+  );
 
   const dest = resolve(process.cwd(), target);
   if (existsSync(dest)) {
@@ -34,7 +39,20 @@ async function main() {
   }
 
   const tpl = resolve(TEMPLATES, half);
-  copyTemplate(tpl, dest, { id, half, author });
+  copyTemplate(tpl, dest, { id, half, author, signer });
+  // Inside the ADOSExtensions pnpm workspace the SDK is a sibling package, so
+  // the published range would resolve to the registry copy and a first-party
+  // extension would silently build against a stale SDK. Outside it — every
+  // third-party developer — the workspace protocol is unresolvable and the
+  // very first command in the generated README fails, which is why the
+  // template ships the published range and this rewrites it rather than the
+  // other way round.
+  if (findWorkspaceRoot(dest)) {
+    rewriteSdkDepToWorkspace(dest);
+    process.stdout.write(
+      "\nDetected the ADOSExtensions pnpm workspace: pinned @altnautica/plugin-sdk to workspace:^\n",
+    );
+  }
 
   process.stdout.write(`\nCreated ${relative(process.cwd(), dest)}\n`);
   process.stdout.write(`\nNext steps:\n`);
@@ -47,14 +65,38 @@ async function main() {
   process.stdout.write(`  See README.md for the full release flow.\n`);
 }
 
+/** Walk up from `dir` looking for a pnpm workspace root. */
+function findWorkspaceRoot(dir) {
+  let cur = resolve(dir);
+  for (;;) {
+    if (existsSync(join(cur, "pnpm-workspace.yaml"))) return cur;
+    const parent = dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+/** Point the scaffolded GCS half at the workspace SDK. No-op for a template
+ * half that ships no GCS package.json (agent-only). */
+function rewriteSdkDepToWorkspace(dest) {
+  const pkg = join(dest, "gcs", "package.json");
+  if (!existsSync(pkg)) return;
+  const body = readFileSync(pkg, "utf-8").replace(
+    /("@altnautica\/plugin-sdk":\s*)"[^"]+"/,
+    '$1"workspace:^"',
+  );
+  writeFileSync(pkg, body);
+}
+
 function parseArgs(argv) {
-  const out = { target: null, id: null, half: null, author: null };
+  const out = { target: null, id: null, half: null, author: null, signer: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--target") out.target = argv[++i];
     else if (a === "--id") out.id = argv[++i];
     else if (a === "--half") out.half = argv[++i];
     else if (a === "--author") out.author = argv[++i];
+    else if (a === "--signer") out.signer = argv[++i];
     else if (!a.startsWith("--") && out.target === null) out.target = a;
   }
   return out;
@@ -102,7 +144,8 @@ function copyTemplate(srcDir, destDir, vars) {
     body = body
       .replace(/__PLUGIN_ID__/g, vars.id)
       .replace(/__PLUGIN_AUTHOR__/g, vars.author)
-      .replace(/__PLUGIN_HALF__/g, vars.half);
+      .replace(/__PLUGIN_HALF__/g, vars.half)
+      .replace(/__PLUGIN_SIGNER__/g, vars.signer);
     writeFileSync(destPath, body);
   }
 }

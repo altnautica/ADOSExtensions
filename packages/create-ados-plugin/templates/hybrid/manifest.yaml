@@ -10,7 +10,6 @@ risk: low
 compatibility:
   ados_version: ">=0.95.0"
   gcs_version: ">=0.34.0"
-  supported_boards: ["*"]
 
 agent:
   runtime: python

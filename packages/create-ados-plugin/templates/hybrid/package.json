@@ -6,6 +6,6 @@
   "scripts": {
     "build": "pnpm -C gcs build",
     "test": "pnpm -C gcs test && cd agent && uv run pytest",
-    "pack": "../../scripts/pack.sh ."
+    "pack": "ados plugin sign . --key ./signing-key.pem --signer-id __PLUGIN_SIGNER__ --output dist/__PLUGIN_ID__.adosplug"
   }
 }

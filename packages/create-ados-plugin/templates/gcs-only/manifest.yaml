@@ -10,7 +10,6 @@ risk: low
 compatibility:
   ados_version: ">=0.10.0"
   gcs_version: ">=0.5.0"
-  supported_boards: ["*"]
 
 gcs:
   entrypoint: "gcs/plugin.bundle.js"

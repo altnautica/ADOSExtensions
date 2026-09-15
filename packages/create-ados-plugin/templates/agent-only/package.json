@@ -5,6 +5,6 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "test": "cd agent && uv run pytest",
-    "pack": "../../scripts/pack.sh ."
+    "pack": "ados plugin sign . --key ./signing-key.pem --signer-id __PLUGIN_SIGNER__ --output dist/__PLUGIN_ID__.adosplug"
   }
 }

@@ -116,8 +116,17 @@ export interface PluginParameterContribution {
  * Node-detail tabs (gcs.contributes.tabs[])
  * ------------------------------------------------------------------ */
 
-/** The node profiles a tab can be offered on. */
-export type NodeProfile = "drone" | "ground-station" | "compute";
+/** The node profiles a tab can be offered on.
+ *
+ * One vocabulary with the rest of the stack: the agent's Pydantic
+ * `agent.target_profiles`, the GCS `PluginTargetProfile`, and the Convex
+ * `gcsContributes[].profile` validator all say `workstation`. The SDK used to
+ * say `compute`, so a developer following these types wrote
+ * `profile: ["compute"]` and the install write was rejected by the Convex
+ * validator (or, if used on the agent half, by the strict Pydantic literal) —
+ * the tab silently never matched any node.
+ */
+export type NodeProfile = "drone" | "ground-station" | "workstation";
 
 /**
  * One `gcs.contributes.tabs[]` entry: a detail tab the plugin mounts on a
@@ -260,7 +269,17 @@ export interface PluginSkillContribution {
   state: { via: "event"; topic: string };
 }
 
-/** The UI slots an iframe panel can mount into. */
+/** The UI slots an iframe panel can mount into.
+ *
+ * Byte-identical to `PLUGIN_SLOTS` in the GCS host
+ * (`src/lib/plugins/types.ts`), which is the registry that decides what can
+ * actually mount. `connection.protocol` and `recording.processor` used to be
+ * listed here and exist in no capability catalog and no host slot registry: a
+ * panel declared in either parsed on both sides, showed an "unknown
+ * capability" placeholder in the install dialog, and then never appeared, with
+ * nothing anywhere the developer could see. `tests/slot-parity.test.ts` fails
+ * the build if the two lists diverge again.
+ */
 export type PluginSlotName =
   | "fc.tab"
   | "hardware.tab"
@@ -269,8 +288,6 @@ export type PluginSlotName =
   | "video.overlay"
   | "notification.channel"
   | "settings.section"
-  | "connection.protocol"
-  | "recording.processor"
   | "node.detail.tab"
   | "cockpit.panel"
   | "flight.skill";
