@@ -5,15 +5,16 @@ Gimbal Manager Protocol v2: the ArduPilot SITL ``mount_servo`` model,
 Storm32 NT, Gremsy, and any other spec-compliant gimbal that emits
 ``GIMBAL_DEVICE_ATTITUDE_STATUS`` and accepts the four manager commands.
 
-The driver is constructed with a ``router_handle`` that exposes a
-``send_command_int`` callable. The agent's MAVLink router supplies
-this handle at plugin start. Tests inject a mock router that records
-the byte payloads the driver emits.
+The driver is constructed with a router handle that exposes a
+``send_command`` callable. The agent's MAVLink router supplies this
+handle at plugin start. Tests inject a mock router that records the
+byte payloads the driver emits.
 """
 
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from dataclasses import replace
 from typing import Any, AsyncIterator, Callable, Protocol
@@ -116,13 +117,20 @@ class MavlinkGimbalDriver(GimbalDriver):
     ) -> GimbalSession:
         target_system = int(config.get("target_system", 1))
         target_component = int(config.get("target_component", 154))
+        # The component that will actually transmit every pitch/yaw command,
+        # supplied by the plugin from the router it builds. It has to be the
+        # component announced as holding primary control: a spec-compliant
+        # manager that enforces the primary-control handshake is entitled to
+        # ignore commands from any other sender, and would then refuse to move
+        # while the plugin still reported itself as commanding.
+        src_component = int(config.get("src_component", 191))
         session = _MavlinkSession(candidate, config, target_system, target_component)
         # Announce primary control by default. The configure call is
         # idempotent on the gimbal side; the manager replies with
         # GIMBAL_MANAGER_STATUS at its next 1 Hz tick.
         configure = encode_gimbal_manager_configure(
             primary_sysid=target_system,
-            primary_compid=200,
+            primary_compid=src_component,
             target_system=target_system,
             target_component=target_component,
         )
@@ -170,8 +178,12 @@ class MavlinkGimbalDriver(GimbalDriver):
     ) -> None:
         sess = self._typed(session)
         caps = self.capabilities(sess)
-        clamped_pitch = _clamp(pitch_deg, caps.pitch_min_deg, caps.pitch_max_deg)
-        clamped_yaw = _clamp(yaw_deg, caps.yaw_min_deg, caps.yaw_max_deg)
+        clamped_pitch = _clamp(
+            _finite("pitch_deg", pitch_deg), caps.pitch_min_deg, caps.pitch_max_deg
+        )
+        clamped_yaw = _clamp(
+            _finite("yaw_deg", yaw_deg), caps.yaw_min_deg, caps.yaw_max_deg
+        )
         cmd = encode_gimbal_manager_pitchyaw(
             pitch_deg=clamped_pitch,
             yaw_deg=clamped_yaw,
@@ -184,7 +196,11 @@ class MavlinkGimbalDriver(GimbalDriver):
             timestamp_ns=self._clock(),
             pitch_deg=clamped_pitch,
             yaw_deg=clamped_yaw,
-            roll_deg=_clamp(roll_deg, caps.roll_min_deg, caps.roll_max_deg),
+            roll_deg=_clamp(
+                _finite("roll_deg", roll_deg),
+                caps.roll_min_deg,
+                caps.roll_max_deg,
+            ),
             mode="manual",
         )
 
@@ -196,14 +212,33 @@ class MavlinkGimbalDriver(GimbalDriver):
         roll_rate_dps: float = 0.0,
     ) -> None:
         sess = self._typed(session)
+        caps = self.capabilities(sess)
+        # The driver advertises a max_rate_dps ceiling in its capabilities, so
+        # it enforces it: whatever the visual-servo gain or camera field of
+        # view in the per-drone config, no commanded rate leaves here above the
+        # declared maximum.
+        pitch_rate = _clamp(
+            _finite("pitch_rate_dps", pitch_rate_dps),
+            -caps.max_rate_dps,
+            caps.max_rate_dps,
+        )
+        yaw_rate = _clamp(
+            _finite("yaw_rate_dps", yaw_rate_dps),
+            -caps.max_rate_dps,
+            caps.max_rate_dps,
+        )
+        # The PITCHYAW frame carries no roll rate, so roll is validated but not
+        # transmitted: a caller passing a non-finite roll rate gets an error
+        # rather than the silent drop.
+        _finite("roll_rate_dps", roll_rate_dps)
         # Rate commands are sent as PITCHYAW with the rate fields filled
         # and the position fields left at the current state. The gimbal
         # device integrates the rate against its own clock.
         cmd = encode_gimbal_manager_pitchyaw(
             pitch_deg=sess.state.pitch_deg,
             yaw_deg=sess.state.yaw_deg,
-            pitch_rate_dps=pitch_rate_dps,
-            yaw_rate_dps=yaw_rate_dps,
+            pitch_rate_dps=pitch_rate,
+            yaw_rate_dps=yaw_rate,
             target_system=sess.target_system,
             target_component=sess.target_component,
         )
@@ -311,8 +346,28 @@ class MavlinkGimbalDriver(GimbalDriver):
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
+    """Clamp into ``[lo, hi]``.
+
+    Comparison-based and therefore only meaningful for a finite value; callers
+    put every axis value through :func:`_finite` first.
+    """
     if value < lo:
         return lo
     if value > hi:
         return hi
     return value
+
+
+def _finite(name: str, value: float) -> float:
+    """Return ``value`` as a float, rejecting NaN and the infinities.
+
+    Every comparison against NaN is false, so a comparison-based clamp returns
+    NaN unchanged. In the Gimbal Manager v2 protocol a NaN parameter has the
+    defined meaning "do not change", so an unguarded NaN is transmitted as a
+    silent no-op while the plugin still reports the axis as commanded. An axis
+    value that cannot be represented is an error, not something to clamp.
+    """
+    as_float = float(value)
+    if not math.isfinite(as_float):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    return as_float

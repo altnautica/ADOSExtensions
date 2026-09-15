@@ -275,6 +275,26 @@ def _ensure_tracking_stub() -> None:
     sys.modules["ados.sdk.tracking"] = tracking
 
 
+def _ensure_cameras_stub() -> None:
+    """Provide ``ados.sdk.cameras`` (the camera-selector vocabulary the plugin
+    resolves the designate-camera config against). The host package owns the
+    authoritative version; this mirrors the one constant the plugin reads.
+    """
+    try:
+        importlib.import_module("ados.sdk.cameras")
+        return
+    except ModuleNotFoundError:
+        pass
+
+    sdk = sys.modules.get("ados.sdk")
+    cameras = ModuleType("ados.sdk.cameras")
+    cameras.CAMERA_SELECTOR_AUTO = "auto"
+    if sdk is not None:
+        sdk.cameras = cameras  # type: ignore[attr-defined]
+    sys.modules["ados.sdk.cameras"] = cameras
+
+
 _ensure_sdk_stub()
 _ensure_vision_stub()
 _ensure_tracking_stub()
+_ensure_cameras_stub()

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from typing import Any
 
@@ -87,12 +88,30 @@ class GimbalV2Plugin:
         target_system = int(await self._cfg("target_system", 1))
         target_component = int(await self._cfg("target_component", 154))
         limits = await self._cfg("limits", {})
-        frame_width = float(await self._cfg("camera_frame_width", 1280))
-        frame_height = float(await self._cfg("camera_frame_height", 720))
-        hfov_deg = float(await self._cfg("camera_hfov_deg", 66.0))
-        vfov_deg = float(await self._cfg("camera_vfov_deg", 41.0))
-        aim_gain = float(await self._cfg("aim_gain", 0.3))
-        aim_deadband = float(await self._cfg("aim_deadband_frac", 0.04))
+        # The aim-loop geometry comes from per-drone config, which the GCS
+        # widget bounds but an MCP client, a restored config file or a direct
+        # write does not. config-schema.json is the public contract, so each
+        # value is checked against the range it declares and falls back to the
+        # documented default when it is outside — an out-of-range gain or field
+        # of view otherwise scales straight into the commanded gimbal rate.
+        frame_width = await self._cfg_bounded(
+            "camera_frame_width", default=1280.0, low=1.0, high=None
+        )
+        frame_height = await self._cfg_bounded(
+            "camera_frame_height", default=720.0, low=1.0, high=None
+        )
+        hfov_deg = await self._cfg_bounded(
+            "camera_hfov_deg", default=66.0, low=1.0, high=180.0
+        )
+        vfov_deg = await self._cfg_bounded(
+            "camera_vfov_deg", default=41.0, low=1.0, high=180.0
+        )
+        aim_gain = await self._cfg_bounded(
+            "aim_gain", default=0.3, low=0.05, high=1.0
+        )
+        aim_deadband = await self._cfg_bounded(
+            "aim_deadband_frac", default=0.04, low=0.0, high=0.3
+        )
         invert_pitch = bool(await self._cfg("aim_invert_pitch", False))
         invert_yaw = bool(await self._cfg("aim_invert_yaw", False))
         # Empty string (the schema default) means "all cameras": the
@@ -122,6 +141,9 @@ class GimbalV2Plugin:
             "target_system": target_system,
             "target_component": target_component,
             "limits": limits,
+            # The component the router transmits as, so the driver announces
+            # primary control for the sender the gimbal will actually see.
+            "src_component": ONBOARD_COMPUTER_COMP_ID,
         }
         self._session = await self._driver.open(candidates[0], driver_config)
 
@@ -208,6 +230,43 @@ class GimbalV2Plugin:
         static config, then to ``default``."""
         static = self._ctx.config_kv.static(key, default)
         return await self._ctx.config_kv.get(key, static)
+
+    async def _cfg_bounded(
+        self,
+        key: str,
+        *,
+        default: float,
+        low: float,
+        high: float | None,
+    ) -> float:
+        """A numeric config value validated against the range the extension's
+        config schema declares for it.
+
+        A value that is not a finite number, or that falls outside
+        ``[low, high]``, is a config error: the documented default is used and
+        the substitution is logged. Silently clamping instead would leave the
+        aim model running on geometry the operator never chose.
+        """
+        raw = await self._cfg(key, default)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            log.warning("gimbal config %s is not a number (%r); using %s", key, raw, default)
+            return default
+        if not math.isfinite(value):
+            log.warning("gimbal config %s is not finite (%r); using %s", key, raw, default)
+            return default
+        if value < low or (high is not None and value > high):
+            log.warning(
+                "gimbal config %s=%s is outside the declared range [%s, %s]; using %s",
+                key,
+                value,
+                low,
+                "inf" if high is None else high,
+                default,
+            )
+            return default
+        return value
 
     # -- detections (the aim safety gate) -----------------------------
 
@@ -374,8 +433,8 @@ class GimbalV2Plugin:
             )
         except Exception:  # noqa: BLE001
             pass
-        # Publish the rate-mode Skill state on change (Rule 44: the toggle
-        # reflects the true mode, not a permanent idle).
+        # Publish the rate-mode Skill state on change, so the Skill Bar toggle
+        # reflects the mode the loop is actually in rather than a permanent idle.
         if self._rate_mode != self._last_rate_published:
             self._last_rate_published = self._rate_mode
             try:
@@ -458,9 +517,20 @@ class GimbalV2Plugin:
         }
 
     async def _tool_point_at(self, args: dict) -> dict:
-        pitch = float(args.get("pitch_deg", 0.0))
-        yaw = float(args.get("yaw_deg", 0.0))
-        return await self._point_at(pitch, yaw)
+        # Every other tool here answers with the {ok, reason} contract, so a
+        # non-numeric or non-finite argument must too: raising out of the
+        # handler would show the caller a transport error instead of a usable
+        # refusal, and a NaN angle means "do not change" on the wire.
+        angles: dict[str, float] = {}
+        for name, default in (("pitch_deg", 0.0), ("yaw_deg", 0.0)):
+            try:
+                value = float(args.get(name, default))
+            except (TypeError, ValueError):
+                return {"ok": False, "reason": f"{name} must be a number"}
+            if not math.isfinite(value):
+                return {"ok": False, "reason": f"{name} must be finite"}
+            angles[name] = value
+        return await self._point_at(angles["pitch_deg"], angles["yaw_deg"])
 
     async def _tool_recenter(self, _args: dict) -> dict:
         return await self._point_at(0.0, 0.0, recenter_model=True)

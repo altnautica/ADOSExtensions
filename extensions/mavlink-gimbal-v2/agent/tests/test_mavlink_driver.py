@@ -287,3 +287,63 @@ async def test_state_iterator_produces_pushed_samples(
     sample = await asyncio.wait_for(iterator.__anext__(), timeout=0.5)
     assert sample.pitch_deg == -5.0
     assert sample.yaw_deg == 10.0
+
+
+@pytest.mark.asyncio
+async def test_command_rate_clamps_to_the_declared_max_rate(
+    driver: MavlinkGimbalDriver, router: MockRouter
+) -> None:
+    # The driver advertises max_rate_dps in its capabilities; a rate above it
+    # must be clamped, never transmitted. An out-of-range visual-servo gain or
+    # camera field of view in the per-drone config is what produces one.
+    candidates = await driver.discover()
+    session = await driver.open(candidates[0], config={})
+    ceiling = driver.capabilities(session).max_rate_dps
+    router.sent.clear()
+
+    await driver.command_rate(
+        session, pitch_rate_dps=ceiling * 40.0, yaw_rate_dps=-ceiling * 40.0
+    )
+    pitchyaw = [
+        c for c in router.sent
+        if getattr(c, "command", None) == MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+    ]
+    assert len(pitchyaw) == 1
+    assert pitchyaw[0].param3 == ceiling
+    assert pitchyaw[0].param4 == -ceiling
+
+
+@pytest.mark.asyncio
+async def test_non_finite_axis_commands_are_refused(
+    driver: MavlinkGimbalDriver, router: MockRouter
+) -> None:
+    # Every comparison against NaN is false, so a comparison-based clamp lets
+    # NaN through, and in Gimbal Manager v2 a NaN parameter means "do not
+    # change" — a silent no-op the plugin would still report as commanded.
+    candidates = await driver.discover()
+    session = await driver.open(candidates[0], config={})
+    router.sent.clear()
+
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError):
+            await driver.command_rate(session, pitch_rate_dps=bad, yaw_rate_dps=0.0)
+        with pytest.raises(ValueError):
+            await driver.command_attitude(session, pitch_deg=bad, yaw_deg=0.0)
+    assert router.sent == []
+
+
+@pytest.mark.asyncio
+async def test_configure_announces_the_component_that_transmits(
+    driver: MavlinkGimbalDriver, router: MockRouter
+) -> None:
+    # A spec-compliant manager may ignore commands from a sender that does not
+    # hold primary control, so the component announced as primary has to be the
+    # one the router actually transmits from.
+    candidates = await driver.discover()
+    await driver.open(candidates[0], config={"src_component": 191})
+    configure = [
+        c for c in router.sent
+        if getattr(c, "command", None) == MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE
+    ]
+    assert len(configure) == 1
+    assert configure[0].param2 == 191.0
