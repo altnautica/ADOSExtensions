@@ -35,6 +35,7 @@ from typing import Any
 from ados.plugins.manifest import (
     AgentBlock,
     Compatibility,
+    MavlinkComponent,
     PluginManifest,
 )
 from ados.sdk.cameras import CAMERA_SELECTOR_AUTO
@@ -197,6 +198,13 @@ def get_manifest() -> PluginManifest:
                 "event.publish",
                 "event.subscribe",
                 "mcp.expose",
+            ],
+            mavlink_components=[
+                MavlinkComponent(
+                    component_id=mavlink_frames.ONBOARD_COMPUTER_COMP_ID,
+                    component_kind="generic",
+                    sub_id=0,
+                )
             ],
         ),
     )

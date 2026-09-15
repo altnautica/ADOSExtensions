@@ -2,6 +2,17 @@
 
 All notable changes to the Battery Health Panel.
 
+## 1.2.1
+
+- Declares `telemetry.subscribe.mavlink.STATUSTEXT` instead of
+  `telemetry.subscribe.mavlink`. The host derives the capability string from the
+  full dotted topic, so the partial declaration was denied: the panel lost
+  FC-emitted battery alarm strings and the rejected subscription aborted the
+  rest of mount, including the config-change handler.
+- README permission table corrected to the capabilities the manifest actually
+  declares, and the configuration location corrected to the node's Battery
+  Health tab.
+
 ## 1.2.0
 
 - Enriched manifest: a long description, a feature list, and the `battery`

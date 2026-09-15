@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.2.7"
+version: "0.2.8"
 description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a fixed
@@ -62,6 +62,13 @@ agent:
     - id: event.publish
     - id: event.subscribe
     - id: mcp.expose
+  mavlink_components:
+    # The companion's own component id: the guided setpoints and the gimbal
+    # pitch/yaw frames are transmitted from it (ONBOARD_COMPUTER_COMP_ID in
+    # agent/follow_me/mavlink_frames.py).
+    - component_id: 191
+      component_kind: generic
+      sub_id: 0
   resources:
     max_ram_mb: 128
     max_cpu_percent: 25

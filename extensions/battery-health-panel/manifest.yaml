@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.battery-health-panel
 name: "ADOS Battery Health Panel"
-version: "1.2.0"
+version: "1.2.1"
 description: "Cell-level battery diagnostics, predictive time-to-min, and anomaly alerts."
 description_long: |
   A per-drone diagnostics tab that reads the battery telemetry already on
@@ -38,7 +38,7 @@ gcs:
     - id: ui.slot.node-detail-tab
     - id: ui.slot.notification-channel
     - id: telemetry.subscribe.battery
-    - id: telemetry.subscribe.mavlink
+    - id: telemetry.subscribe.mavlink.STATUSTEXT
     - id: recording.write
   contributes:
     tabs:

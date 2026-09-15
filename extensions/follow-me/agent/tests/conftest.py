@@ -66,6 +66,8 @@ def _try_real_host_sdk() -> bool:
         try:
             importlib.import_module("ados.plugins.manifest")
             importlib.import_module("ados.sdk.vision")
+            importlib.import_module("ados.sdk.cameras")
+            importlib.import_module("ados.sdk.tracking")
             return True
         except Exception:  # noqa: BLE001
             # Remove the speculative entry and try the next layout.
@@ -93,11 +95,18 @@ def _install_sdk_stub() -> None:
     vision = ModuleType("ados.sdk.vision")
 
     @dataclass
+    class MavlinkComponent:
+        component_id: int
+        component_kind: str
+        sub_id: int | None = None
+
+    @dataclass
     class AgentBlock:
         entrypoint: str
         isolation: str = "subprocess"
         runtime: str = "python"
         permissions: list[Any] = field(default_factory=list)
+        mavlink_components: list[Any] = field(default_factory=list)
 
     @dataclass
     class Compatibility:
@@ -118,6 +127,7 @@ def _install_sdk_stub() -> None:
         agent: Any = None
 
     manifest.AgentBlock = AgentBlock
+    manifest.MavlinkComponent = MavlinkComponent
     manifest.Compatibility = Compatibility
     manifest.PluginManifest = PluginManifest
 
@@ -173,6 +183,11 @@ def _install_sdk_stub() -> None:
     sys.modules["ados.plugins.manifest"] = manifest
     sys.modules["ados.sdk"] = sdk
     sys.modules["ados.sdk.vision"] = vision
+
+    cameras = ModuleType("ados.sdk.cameras")
+    cameras.CAMERA_SELECTOR_AUTO = "auto"
+    sdk.cameras = cameras  # type: ignore[attr-defined]
+    sys.modules["ados.sdk.cameras"] = cameras
 
 
 if not _try_real_host_sdk():

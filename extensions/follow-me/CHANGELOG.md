@@ -4,6 +4,13 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.8]
+
+- Declares the MAVLink component the plugin transmits as (191) under
+  `agent.mavlink_components`, and keeps the in-code manifest mirror in step. The
+  one extension that commands the vehicle's flight path previously declared
+  nothing about its MAVLink component surface.
+
 ## [0.2.7]
 
 ### Fixed

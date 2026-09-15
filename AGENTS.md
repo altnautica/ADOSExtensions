@@ -28,16 +28,45 @@ contracts explicit and permission-scoped.
 
 ```bash
 pnpm install
-pnpm build:battery-health
-pnpm test:battery-health
-pnpm build:thermal-camera
-pnpm test:thermal-camera
-pnpm build:mavlink-gimbal-v2
-pnpm test:mavlink-gimbal-v2
+
+# GCS halves - one build + test pair per extension.
+pnpm build:battery-health          pnpm test:battery-health
+pnpm build:thermal-camera          pnpm test:thermal-camera
+pnpm build:mavlink-gimbal-v2       pnpm test:mavlink-gimbal-v2
+pnpm build:follow-me               pnpm test:follow-me
+pnpm build:siyi-pod                pnpm test:siyi-pod
+pnpm build:vision-nav              pnpm test:vision-nav
+
+# Manifest against the code it describes (permissions, slots, versions).
+node scripts/lint-manifest.mjs extensions/<name>/manifest.yaml
 ```
 
-For Python agent halves, run focused tests from the changed agent package using
-the local environment or workspace tooling already present in that extension.
+Python agent halves run from the uv workspace at the repo root. Run one
+extension at a time: several extensions use the same test-module basenames, so
+collecting two agent suites in a single pytest invocation is an import-file
+mismatch.
+
+```bash
+uv sync --all-packages --all-extras --group dev
+uv run pytest extensions/follow-me/agent/tests
+uv run pytest extensions/mavlink-gimbal-v2/agent/tests
+uv run pytest extensions/siyi-pod/agent/tests
+uv run pytest extensions/thermal-camera-flir-lepton-usb/agent/tests
+```
+
+The Rust agent half builds against a sibling `ADOSDroneAgent` checkout:
+
+```bash
+DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo test -p vision-nav
+```
+
+Packing asserts both halves are present, so pack before you claim an extension
+ships:
+
+```bash
+./scripts/pack.sh <name>          # python or gcs-only extension
+./scripts/pack-rust.sh <name>     # rust agent half
+```
 
 ## Repository Map
 

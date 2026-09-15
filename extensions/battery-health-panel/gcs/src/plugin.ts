@@ -27,7 +27,7 @@ let rootEl: HTMLElement | null = null;
 
 definePlugin({
   id: "com.altnautica.battery-health-panel",
-  version: "1.2.0",
+  version: "1.2.1",
   async mount(ctx) {
     rootEl = document.getElementById("battery-health-root");
     if (!rootEl) {

@@ -21,12 +21,14 @@ battery-health-panel` from the repo root to produce a signed-eligible
 
 | Permission | Use |
 |------------|-----|
-| `ui.slot.fc-tab` | Mount the panel under the Flight Control tab. |
-| `ui.slot.notification` | Emit anomaly notifications. |
-| `ui.slot.settings-section` | Render the configuration form under Settings -> Plugins. |
+| `ui.slot.node-detail-tab` | Mount the panel as a per-node detail tab. |
+| `ui.slot.notification-channel` | Emit anomaly notifications. |
 | `telemetry.subscribe.battery` | Read normalized battery samples. |
-| `telemetry.subscribe.mavlink` | Pick up FC-emitted battery alarm strings from STATUSTEXT. |
+| `telemetry.subscribe.mavlink.STATUSTEXT` | Pick up FC-emitted battery alarm strings. |
 | `recording.write` | Add markers to active recordings on anomaly. |
+
+This table is the manifest's `gcs.permissions` list; `node
+../../scripts/lint-manifest.mjs manifest.yaml` fails if the two disagree.
 
 Risk band: low. No vehicle command, no host file system, no network.
 
@@ -53,7 +55,6 @@ A Coulomb-counted nonlinear model is reserved for v1.1.
 
 ## Configuration
 
-Edit thresholds and the predictive window under
-Settings -> Plugins -> Battery Health -> Configuration. Schema lives at
-`config-schema.json` and is rendered automatically by the host's JSON
-Schema form.
+Edit thresholds and the predictive window on the node's Battery Health tab.
+Schema lives at `config-schema.json` and is rendered automatically by the
+host's JSON Schema form.

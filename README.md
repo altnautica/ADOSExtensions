@@ -30,9 +30,11 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 | Extension | Kind | What it adds |
 |-----------|------|--------------|
 | **battery-health-panel** | GCS panel | Cell-level battery diagnostics, predicted time to minimum voltage, and anomaly alerts |
-| **thermal-camera-flir-lepton-usb** | Agent + GCS | FLIR Lepton 3.5 thermal capture over USB UVC, with a live GCS overlay and a flight-controller tab |
-| **mavlink-gimbal-v2** | Agent + GCS | MAVLink Gimbal v2 mount control with SimpleBGC, Storm32 NT, and Gremsy drivers, plus region-of-interest lock |
-| **vision-nav** | Agent + GCS | GPS-denied navigation from optical flow and monocular visual-inertial odometry (OpenVINS, VINS-Fusion) |
+| **thermal-camera-flir-lepton-usb** | Agent + GCS | Development preview, not published. FLIR Lepton 3.5 radiometric driver, palettes and spot metering with a GCS overlay. The capture path needs a libuvc backend that does not exist in this repository, so it reports an explicit unavailable state instead of producing readings |
+| **mavlink-gimbal-v2** | Agent + GCS | MAVLink Gimbal v2 manager control, region-of-interest lock, and an aim-at-target visual servo with a lock-state safety gate |
+| **vision-nav** | Agent + GCS | GPS-denied navigation from downward optical flow, with a calibration wizard and a pre-arm gate |
+| **follow-me** | Agent + GCS | Operator-designated subject follow at a fixed standoff via guided setpoints, with a lock-state safety gate |
+| **siyi-pod** | Agent + GCS | Native SIYI optical-pod driver with per-model capability negotiation: gimbal, zoom, thermal, and a laser rangefinder with subject geolocation |
 
 ---
 
@@ -53,8 +55,10 @@ Packages an extension author builds against:
 ```
 extensions/                        first-party extensions, versioned independently
   battery-health-panel/
-  thermal-camera-flir-lepton-usb/
+  follow-me/
   mavlink-gimbal-v2/
+  siyi-pod/
+  thermal-camera-flir-lepton-usb/
   vision-nav/
 packages/
   create-ados-plugin/              scaffolder + templates
@@ -62,6 +66,9 @@ packages/
   extension-ui/                    shared React UI primitives
 scripts/
   pack.sh                          build + manifest hash + zip to .adosplug
+  pack-rust.sh                     same, for an extension whose agent half is a crate
+  build-rust.sh                    cross-compile a rust agent half
+  lint-manifest.mjs                check a manifest against the code it describes
   sign.sh                          Ed25519-sign the archive against the publisher key
 .github/workflows/
   release.yml                      build, sign, and release on tag push
@@ -79,6 +86,36 @@ pnpm build
 ```
 
 This produces `dist/com.altnautica.battery-health-panel-<version>.adosplug`. The archive layout matches the public extension spec at [docs.altnautica.com/developers/manifest](https://docs.altnautica.com/developers/manifest).
+
+`pack.sh` refuses to write a half-archive: if the manifest declares a GCS entrypoint the built bundle has to be in the archive, and if it declares a Python `agent.entrypoint` the module that entrypoint names has to be there too. An archive with no agent source installs cleanly and verifies, then the supervisor dies importing a module that was never packed.
+
+Check a manifest against the code it describes before you pack:
+
+```sh
+node scripts/lint-manifest.mjs extensions/battery-health-panel/manifest.yaml
+```
+
+It fails on a declared permission with no call site, a declared UI slot with no implementation, and a version that disagrees across `manifest.yaml`, the two `package.json` files and the `definePlugin({ version })` literal the host registers.
+
+## Building a Rust extension
+
+An extension whose agent half is a crate (`vision-nav`) builds against the agent SDK in a sibling checkout, so the two repositories have to sit next to each other:
+
+```
+<root>/ADOSDroneAgent
+<root>/ADOSExtensions
+```
+
+`Cargo.toml` uses a path dependency on that sibling for local development. CI clones the agent repository and checks out the revision in the repo-root `ADOS_AGENT_REV` file, so a release tag resolves the SDK at a fixed commit rather than whatever `main` happened to be. Update `ADOS_AGENT_REV` when a release needs a newer SDK.
+
+Cross-compiling for a drone needs the musl target and an aarch64 musl linker. Apple's `ld` is not one, so a plain macOS build compiles everything and then fails at the link step; `scripts/build-rust.sh` documents the linker env vars, including a `zig cc` fallback where no musl toolchain is installed.
+
+```sh
+rustup target add aarch64-unknown-linux-musl
+./scripts/pack-rust.sh vision-nav
+```
+
+`pack-rust.sh` asserts both halves are in the archive before it zips: the compiled binary at the manifest's `agent.entrypoint` and, when one is declared, the built GCS bundle.
 
 ## Signing
 
