@@ -14,15 +14,28 @@
 # supported boards without matching a glibc version. The build uses the release
 # profile (stripped, LTO) so the binary stays small in the .adosplug archive.
 #
-# A static aarch64 build needs an aarch64 musl linker. Set the linker with the
-# usual cargo env var, for example:
+# A static aarch64 build needs an aarch64 musl linker. Apple's `ld` is not one:
+# it rejects the GNU-style arguments rustc passes for this target, so a plain
+# macOS build compiles the whole dependency graph and then fails at the link
+# step. Set the linker with the usual cargo env var, for example:
 #
 #   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc \
 #     scripts/build-rust.sh hello-rust
 #
+# `zig cc` also works as a cross-linker where no musl toolchain is installed.
+# It ships its own musl start files, so the rust-provided ones have to be
+# turned off or the link fails on duplicate `_start` symbols, and it does not
+# implement the `--fix-cortex-a53-843419` erratum flag rustc passes, so a thin
+# wrapper has to drop that argument:
+#
+#   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=/path/to/zig-cc-wrapper \
+#   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-self-contained=no" \
+#     scripts/build-rust.sh hello-rust
+#
 # or build inside a container/CI runner that has the aarch64 musl cross tool
-# chain installed. The script does not install a toolchain; it builds with
-# whatever the environment provides and reports the binary path on success.
+# chain installed (the release workflow uses ubuntu-24.04-arm with musl-tools).
+# The script does not install a toolchain; it builds with whatever the
+# environment provides and reports the binary path on success.
 
 set -euo pipefail
 

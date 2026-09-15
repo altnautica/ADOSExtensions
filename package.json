@@ -11,7 +11,11 @@
     "build:mavlink-gimbal-v2": "pnpm --filter ./extensions/mavlink-gimbal-v2/gcs build",
     "test:mavlink-gimbal-v2": "pnpm --filter ./extensions/mavlink-gimbal-v2/gcs test",
     "build:follow-me": "pnpm --filter ./extensions/follow-me/gcs build",
-    "test:follow-me": "pnpm --filter ./extensions/follow-me/gcs test"
+    "test:follow-me": "pnpm --filter ./extensions/follow-me/gcs test",
+    "build:siyi-pod": "pnpm --filter ./extensions/siyi-pod/gcs build",
+    "test:siyi-pod": "pnpm --filter ./extensions/siyi-pod/gcs test",
+    "build:vision-nav": "pnpm --filter ./extensions/vision-nav/gcs build",
+    "test:vision-nav": "pnpm --filter ./extensions/vision-nav/gcs test"
   },
   "engines": {
     "pnpm": ">=9"

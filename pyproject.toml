@@ -9,4 +9,25 @@ requires-python = ">=3.11"
 members = [
   "extensions/*/agent",
 ]
-exclude = []
+# vision-nav's agent half is a Rust crate, not a python package, so the
+# members glob has to skip it: uv treats a matched directory without a
+# pyproject.toml as a hard workspace error and every `uv run` in the repo
+# fails, not just that extension's.
+exclude = [
+  "extensions/vision-nav/agent",
+]
+
+[dependency-groups]
+# The agent-half test suites prefer the real host SDK over their in-tree stubs
+# (each conftest probes for a sibling ADOSDroneAgent checkout first). The host
+# package parses YAML at import time, so without pyyaml every probe fails and
+# the suites silently fall back to stubs — or fail to import where a stub is
+# incomplete.
+dev = [
+  "pytest>=8",
+  "pytest-asyncio>=0.23",
+  "pyyaml>=6",
+  "pydantic>=2",
+  "structlog>=24",
+  "msgpack>=1",
+]

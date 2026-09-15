@@ -55,11 +55,14 @@ if [[ ! -f "${manifest_src}" ]]; then
   exit 2
 fi
 
-# Parse id, version, runtime, and the entrypoint (the in-archive binary path).
+# Parse id, version, and the agent block's runtime + entrypoint (the in-archive
+# binary path). The agent fields are read out of the `agent:` block specifically:
+# a first-match grep over the whole manifest would pick up the `gcs:` block's
+# entrypoint on any manifest that declares the gcs half first.
 plugin_id="$(grep -E '^id:' "${manifest_src}" | head -n1 | sed -E 's/^id:[[:space:]]*//; s/[[:space:]]*$//')"
 plugin_version="$(grep -E '^version:' "${manifest_src}" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
-runtime="$(grep -E '^[[:space:]]*runtime:' "${manifest_src}" | head -n1 | sed -E 's/^[[:space:]]*runtime:[[:space:]]*"?([^"]*)"?/\1/')"
-entrypoint="$(grep -E '^[[:space:]]*entrypoint:' "${manifest_src}" | head -n1 | sed -E 's/^[[:space:]]*entrypoint:[[:space:]]*"?([^"]*)"?/\1/')"
+runtime="$(manifest_agent_runtime "${manifest_src}")"
+entrypoint="$(manifest_agent_entrypoint "${manifest_src}")"
 
 if [[ -z "${plugin_id}" || -z "${plugin_version}" ]]; then
   echo "could not parse plugin id/version from manifest" >&2

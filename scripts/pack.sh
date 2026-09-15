@@ -66,6 +66,14 @@ if [[ -z "${plugin_id}" || -z "${plugin_version}" ]]; then
   exit 1
 fi
 
+# A rust agent half is a compiled binary the packer has to build and stage at
+# agent.entrypoint; this packer does neither. Refuse rather than write an
+# archive whose declared binary is missing.
+if [[ "$(manifest_agent_runtime "${manifest_src}")" == "rust" ]]; then
+  echo "manifest declares 'agent.runtime: rust'; use scripts/pack-rust.sh instead" >&2
+  exit 2
+fi
+
 archive_name="${plugin_id}-${plugin_version}.adosplug"
 dist_dir="${ext_dir}/dist"
 mkdir -p "${dist_dir}"
@@ -79,9 +87,13 @@ trap 'rm -rf "${stage}"' EXIT
 # artifacts and the dist folder we just created.
 rsync -a "${PACK_RSYNC_EXCLUDES[@]}" "${ext_dir}/" "${stage}/"
 
-# Never publish a half-archive: if the manifest declares a GCS entrypoint, the
-# built bundle must be in the stage (the pnpm build above must have produced it).
+# Never publish a half-archive. Both halves the manifest declares must be in
+# the stage before the zip:
+#   - the built GCS bundle (the pnpm build above must have produced it);
+#   - the python module named by agent.entrypoint (the rsync above must have
+#     kept it, which is what the anchored /gcs/src exclude exists for).
 assert_entrypoint_in_stage "${stage}" "$(manifest_gcs_entrypoint "${manifest_src}")" "gcs.entrypoint"
+assert_agent_entrypoint_in_stage "${stage}" "${manifest_src}"
 
 (cd "${stage}" && zip -qr "${archive_path}" .)
 
