@@ -45,17 +45,18 @@ repository = "https://github.com/altnautica/ADOSExtensions"
 # dependency, so an extension crate only names `ados-sdk` and gets the whole
 # wire transitively.
 #
-# CI builds against a pinned git revision of the same crate instead of the local
-# path. A per-crate `Cargo.toml` overrides this dependency with a git source and
-# `rev = "<commit>"` when building in CI; see docs/rust-plugins.md.
+# This is a path dependency in every build, CI included. CI does not rewrite it
+# to a git source: it clones the sibling repository next to this checkout and
+# checks out the commit recorded in the `ADOS_AGENT_REV` file at this workspace
+# root, so a release tag resolves to one fixed SDK revision instead of whatever
+# `main` happens to be at the time.
 [workspace.dependencies]
 ados-sdk = { path = "../ADOSDroneAgent/crates/ados-sdk" }
 # The vision framebus value types (FrameDescriptor, Detection, BoundingBox,
 # FrameFormat, ModelMetadata, ...) live in ados-protocol. The SDK re-exports
 # the vision client and the Frame ergonomics but not these contract types, so a
 # vision extension names ados-protocol directly for them. It is the same crate
-# the SDK pulls in transitively, resolved here to one path so a CI build can
-# override it with a pinned git rev the same way it overrides ados-sdk.
+# the SDK pulls in transitively, resolved here to the same sibling checkout.
 ados-protocol = { path = "../ADOSDroneAgent/crates/ados-protocol" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
 rmpv = "1.3"

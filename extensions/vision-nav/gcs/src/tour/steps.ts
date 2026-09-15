@@ -8,8 +8,7 @@ import type { VisionNavTelemetry } from "../types";
  * and highlights it. ``title`` and ``body`` carry the step copy
  * (English defaults; the orchestrator resolves the matching i18n key
  * if a translation is registered). ``precondition`` optionally skips
- * the step when the gate fails (e.g. the VIO step is hidden on
- * agents that do not advertise VIO support).
+ * the step when the telemetry does not support it.
  */
 export interface TourStep {
   id: string;
@@ -22,7 +21,7 @@ export interface TourStep {
 }
 
 /**
- * The seven-step first-run tour. The order matches how an operator
+ * The six-step first-run tour. The order matches how an operator
  * works through the tab on a new drone.
  */
 export const TOUR_STEPS: TourStep[] = [
@@ -33,8 +32,8 @@ export const TOUR_STEPS: TourStep[] = [
     titleFallback: "Pick a mode",
     bodyKey: "navigation.tour.modeBody",
     bodyFallback:
-      "This is where you pick the estimator. Six modes; the card " +
-      "filters the list against what the agent can actually run.",
+      "This is where you pick the estimator. The card filters the list " +
+      "against what the agent can actually run.",
   },
   {
     id: "sensors-card",
@@ -65,9 +64,8 @@ export const TOUR_STEPS: TourStep[] = [
     titleFallback: "Telemetry trends",
     bodyKey: "navigation.tour.chartsBody",
     bodyFallback:
-      "Sixty seconds of rolling history. Watch the sync offset " +
-      "stay green and the feature count stay above twenty for " +
-      "healthy VIO.",
+      "Sixty seconds of rolling history. Watch the flow quality stay " +
+      "above the gate and the camera-IMU sync offset stay green.",
   },
   {
     id: "pre-arm",

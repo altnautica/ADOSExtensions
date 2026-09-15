@@ -6,7 +6,6 @@ import type { VisionNavTelemetry } from "./types";
 
 const EMPTY: VisionNavTelemetry = {
   opticalFlowSupported: false,
-  vioSupported: false,
 };
 
 /**
@@ -24,22 +23,17 @@ export function useVisionNavTelemetry(
     let cancelled = false;
     let off: (() => void) | null = null;
 
-    void ctx.telemetry
-      .subscribe<VisionNavTelemetry>("navigation", (next) => {
+    void ctx.telemetry.subscribe<VisionNavTelemetry>("navigation", (next) => {
         if (cancelled || !next) return;
         // Defensive normalization: the agent may publish a partial
-        // payload during warm-up. Keep the support flags sticky once
+        // payload during warm-up. Keep the support flag sticky once
         // observed so the UI does not flicker between firmware tiers.
         setSnapshot((prev) => ({
           opticalFlowSupported:
             next.opticalFlowSupported ?? prev.opticalFlowSupported,
-          vioSupported: next.vioSupported ?? prev.vioSupported,
           flowQuality: next.flowQuality,
           flowRateHz: next.flowRateHz,
           flowDistanceM: next.flowDistanceM,
-          vioState: next.vioState,
-          vioResetCounter: next.vioResetCounter,
-          vioQuality: next.vioQuality,
           companionState: next.companionState,
           rangefinderTopology: next.rangefinderTopology,
           recommendedCameraId: next.recommendedCameraId,
@@ -50,8 +44,6 @@ export function useVisionNavTelemetry(
           availableEstimators: next.availableEstimators,
           estimatorState: next.estimatorState,
           flowScaleSource: next.flowScaleSource,
-          estimatorFeatureCount: next.estimatorFeatureCount,
-          estimatorDriftEstimateM: next.estimatorDriftEstimateM,
           imuSource: next.imuSource,
           imuRateHz: next.imuRateHz,
           cameraIntrinsicsLoaded: next.cameraIntrinsicsLoaded,

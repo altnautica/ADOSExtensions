@@ -2,14 +2,14 @@
 //!
 //! On start the plugin:
 //!
-//! 1. registers MAVLink components 198 (peripheral) and 197 (VIO),
+//! 1. registers MAVLink component 198 (peripheral),
 //! 2. subscribes to the FC message streams the modes consume (RAW_IMU,
 //!    DISTANCE_SENSOR, TIMESYNC, GLOBAL_POSITION_INT, VFR_HUD,
 //!    GPS_RAW_INT),
 //! 3. subscribes to the shared vision frame bus (`ctx.vision`),
 //! 4. starts the TIMESYNC + companion-HEARTBEAT + health ticks,
-//! 5. runs the estimator on every frame pair and routes the MAVLink
-//!    emission to the matching component.
+//! 5. runs the estimator on every frame pair and emits the flow sample
+//!    on component 198.
 //!
 //! The frame subscription callback runs on the IPC reader task and must
 //! not block, so it forwards each grayscale-converted frame down a
@@ -17,9 +17,9 @@
 //! emit, health, pre-arm). The degradation ladder lives in the worker:
 //! a 2 s degraded/failed streak flips the companion to CRITICAL.
 //!
-//! An in-flight mode change (operator `set_mode` event) rebuilds the
-//! estimator + scale source and swaps the worker's estimator on the
-//! next tick.
+//! The mode is fixed for the lifetime of a worker. A config change
+//! arrives through `on_configure`, which the host follows with a stop /
+//! start of the plugin, so the worker is rebuilt with the new mode.
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -33,25 +33,25 @@ use rmpv::Value;
 use tokio::sync::mpsc;
 
 use crate::clock_align::ClockAlign;
-use crate::config::{Firmware, Mode, Topology, VisionNavConfig};
-use crate::estimator::{Estimator, EstimatorOutput, EstimatorState, OutputMode, RangeReading, StepInputs, VioFrame};
+use crate::config::{Mode, Topology, VisionNavConfig};
+use crate::estimator::{
+    Estimator, EstimatorOutput, EstimatorState, RangeReading, StepInputs,
+};
 use crate::estimators::{
-    available_estimators, HybridEstimator, NullEstimator, OpticalFlowDegradedEstimator,
-    OpticalFlowEstimator, VioEstimator,
+    available_estimators, NullEstimator, OpticalFlowDegradedEstimator, OpticalFlowEstimator,
 };
 use crate::flow::GyroReading;
 use crate::framing::{frame_to_gray, GrayImage};
 use crate::health::{companion_system_status, CompanionState, HealthSnapshot};
 use crate::imu::{ImuBuffer, TimeAligner};
 use crate::mavlink_emit::{
-    build_timesync, monotonic_ns, of_frame, ComponentRouter, COMPONENT_OF, COMPONENT_VIO,
+    build_timesync, monotonic_ns, of_frame, ComponentRouter, COMPONENT_OF,
 };
 use crate::pre_arm::{PreArmGate, PreArmInputs};
 use crate::rangefinder::{
     I2cRangefinder, Rangefinder, RelayDistanceSensor, TfLunaUart,
 };
 use crate::scale::ScaleLadder;
-use crate::vio::{EngineConfig, VioEngine};
 
 const SENSOR_ID: u8 = 0;
 const DEGRADED_GRACE_NS: i64 = 2_000_000_000;
@@ -83,9 +83,12 @@ impl Plugin for VisionNavPlugin {
         match VisionNavConfig::from_map(config) {
             Ok(cfg) => self.config = cfg,
             Err(e) => {
-                // Bad config keeps the previous (or default) config and
-                // logs; the host re-invokes on_configure on a fix.
-                eprintln!("vision-nav: config invalid: {e}");
+                // A config that fails validation disengages vision
+                // navigation rather than falling back to a mode the
+                // operator did not pick; the host re-invokes
+                // on_configure on a fix.
+                eprintln!("vision-nav: config invalid, staying disengaged: {e}");
+                self.config = VisionNavConfig::disengaged();
             }
         }
         Ok(())
@@ -94,17 +97,12 @@ impl Plugin for VisionNavPlugin {
     async fn on_start(&mut self, ctx: &PluginContext) -> Result<(), ClientError> {
         let cfg = self.config.clone();
 
-        // Register the MAVLink components so subscribers see the
-        // peripherals on the bus before the first emit. Idempotent.
+        // Register the MAVLink component so subscribers see the
+        // peripheral on the bus before the first emit. Idempotent.
         let _ = ctx
             .mavlink
             .register_component(COMPONENT_OF as i64, "peripheral")
             .await;
-        let _ = ctx
-            .mavlink
-            .register_component(COMPONENT_VIO as i64, "vio")
-            .await;
-        let _ = ctx.vision.register_vio_component().await;
 
         let clock = Arc::new(ClockAlign::new());
         let imu = Arc::new(ImuBuffer::default());
@@ -170,11 +168,9 @@ impl Plugin for VisionNavPlugin {
     }
 }
 
-/// A grayscale frame plus the raw frame bytes (for the VIO SHM bridge)
-/// and the agent monotonic ingest time.
+/// A grayscale frame plus the agent monotonic ingest time.
 struct GrayFramePair {
     gray: GrayImage,
-    vio_frame: VioFrame,
     ts_ns: i64,
 }
 
@@ -192,20 +188,8 @@ impl VisionNavPlugin {
             let Some(gray) = frame_to_gray(&frame) else {
                 return;
             };
-            // VIO bridge wants the grayscale plane (the C++ shim is
-            // monocular and reads GRAY8). The shared luma plane is the
-            // same bytes for both the OF tracker and the SHM ring.
-            let vio_frame = VioFrame {
-                ts_us: (frame.descriptor.ts_ms.max(0) as u64) * 1000,
-                width: gray.width,
-                height: gray.height,
-                stride: gray.width,
-                pixel_format: crate::vio::FRAME_FORMAT_GRAY8,
-                pixels: gray.data.clone(),
-            };
             let pair = GrayFramePair {
                 gray,
-                vio_frame,
                 ts_ns: monotonic_ns(),
             };
             // Drop the frame if the worker is behind (latest-wins; the
@@ -229,22 +213,20 @@ impl VisionNavPlugin {
     ) {
         let ctx = ctx.clone();
         let health = self.health.clone();
-        let install_dir = install_dir();
         let task = tokio::spawn(async move {
             let router = ComponentRouter::new(SENSOR_ID, clock.clone());
             let gate = PreArmGate::with_flow_quality_gate(cfg.flow_quality_min);
             let mut aligner = TimeAligner::new(0.0, 60);
-            // Try to load a persisted calibration's timeshift so VIO can
-            // pre-arm without re-uploading on every boot.
+            // A persisted calibration supplies the static camera-IMU
+            // timeshift the aligner needs to pair a frame with the gyro
+            // sample that was taken at the same instant.
             let mut intrinsics_loaded = false;
-            if let Some((_engine_cfg, timeshift)) = load_calibration(&install_dir) {
+            if let Some(timeshift) = load_calibration_timeshift() {
                 aligner.set_timeshift(timeshift);
                 intrinsics_loaded = true;
             }
 
-            let mut estimator: Box<dyn Estimator> =
-                build_estimator(&cfg, ladder.clone(), &install_dir);
-            estimator.configure();
+            let mut estimator: Box<dyn Estimator> = build_estimator(&cfg, ladder.clone());
 
             let mut prev_gray: Option<GrayImage> = None;
             let mut prev_ts_ns: Option<i64> = None;
@@ -277,10 +259,8 @@ impl VisionNavPlugin {
                 let inputs = StepInputs {
                     prev_gray: Some(prev),
                     curr_gray: Some(&pair.gray),
-                    curr_vio_frame: Some(&pair.vio_frame),
                     dt_seconds: dt,
                     gyro,
-                    imu_sample,
                     range_reading,
                 };
 
@@ -324,8 +304,6 @@ impl VisionNavPlugin {
                 prev_gray = Some(pair.gray);
                 prev_ts_ns = Some(ts_ns);
             }
-
-            estimator.shutdown();
         });
         self.tasks.push(task);
     }
@@ -468,7 +446,9 @@ impl VisionNavPlugin {
                 let snapshot = health.lock().expect("health lock").to_value();
                 let _ = ctx.telemetry.extend("navigation", snapshot).await;
                 // The engage Skill reads this state event to reflect whether
-                // vision navigation is engaged (not a false-idle bar, Rule 44).
+                // vision navigation is actually engaged, so a disengaged or
+                // off-mode plugin reports idle instead of a permanent idle
+                // bar that never tracks the running state.
                 let _ = ctx
                     .events
                     .publish(
@@ -489,74 +469,19 @@ impl VisionNavPlugin {
 // Estimator + rangefinder construction
 // ---------------------------------------------------------------------------
 
-/// Build the estimator for a config mode. VIO modes that would run on
-/// iNav (a config-level rejection bypassed by a hand-edited config)
-/// fall back to the null estimator, matching the prior belt-and-braces
-/// guard.
-pub fn build_estimator(
-    cfg: &VisionNavConfig,
-    ladder: Arc<ScaleLadder>,
-    install_dir: &str,
-) -> Box<dyn Estimator> {
+/// Build the estimator for a config mode.
+pub fn build_estimator(cfg: &VisionNavConfig, ladder: Arc<ScaleLadder>) -> Box<dyn Estimator> {
     // The engage Skill can disengage the estimator (active=false); the
-    // effective mode is then Off, so the null estimator runs and no pose is
-    // emitted.
-    let mode = cfg.effective_mode();
-    if cfg.firmware.firmware == Firmware::Inav
-        && matches!(
-            mode,
-            Mode::VioOpenvins | Mode::VioVinsFusion | Mode::HybridOfPlusVio
-        )
-    {
-        eprintln!("vision-nav: VIO not supported on iNav; falling back to off");
-        return Box::new(NullEstimator);
-    }
-    match mode {
+    // effective mode is then Off, so the null estimator runs and nothing
+    // is emitted.
+    match cfg.effective_mode() {
         Mode::Off => Box::new(NullEstimator),
         Mode::OpticalFlow => Box::new(OpticalFlowEstimator::new(cfg.flow_quality_min)),
         Mode::OpticalFlowDegraded => Box::new(OpticalFlowDegradedEstimator::new(
             cfg.flow_quality_min,
             Some(ladder),
         )),
-        Mode::VioOpenvins => build_vio_estimator(cfg, "vio_openvins", install_dir),
-        Mode::VioVinsFusion => build_vio_estimator(cfg, "vio_vins_fusion", install_dir),
-        Mode::HybridOfPlusVio => {
-            let of = OpticalFlowEstimator::new(cfg.flow_quality_min);
-            let vio = build_vio_estimator(cfg, "vio_openvins", install_dir);
-            Box::new(HybridEstimator::new(of, vio))
-        }
     }
-}
-
-/// Build a VIO estimator. When the vendor binary is missing on disk the
-/// estimator is still constructed but its engine will fail to start
-/// (logged), leaving it in a no-emit state — fail safe. The pre-arm gate
-/// independently refuses to arm a VIO mode without calibration.
-fn build_vio_estimator(_cfg: &VisionNavConfig, id: &'static str, install_dir: &str) -> Box<dyn Estimator> {
-    let engine = match id {
-        "vio_vins_fusion" => VioEngine::vins_fusion(
-            "/run/ados/plugins/vision-nav-vio.sock",
-            "/ados_vio_frames",
-        ),
-        _ => VioEngine::openvins(
-            "/run/ados/plugins/vision-nav-vio.sock",
-            "/ados_vio_frames",
-        ),
-    };
-    let engine_cfg = load_calibration(install_dir)
-        .map(|(c, _)| c)
-        .unwrap_or_else(default_engine_config);
-    let leaked_id: &'static str = if id == "vio_vins_fusion" {
-        "vio_vins_fusion"
-    } else {
-        "vio_openvins"
-    };
-    Box::new(VioEstimator::new(
-        leaked_id,
-        engine,
-        engine_cfg,
-        install_dir.to_string(),
-    ))
 }
 
 fn build_rangefinder(cfg: &VisionNavConfig, relay: Arc<RelayDistanceSensor>) -> Box<dyn Rangefinder> {
@@ -634,64 +559,36 @@ fn i2c_bus(device: Option<&str>) -> u32 {
 // Calibration loading
 // ---------------------------------------------------------------------------
 
-/// Load the persisted camchain.yaml: returns `(EngineConfig, timeshift)`
-/// or `None` when no calibration is on disk. The calibration wizard
+/// Load the camera-IMU timeshift from the persisted camchain.yaml, or
+/// `None` when no calibration is on disk. The calibration wizard
 /// (Python helper) produces this file; the Rust agent only reads it.
-fn load_calibration(install_dir: &str) -> Option<(EngineConfig, f64)> {
-    let path = calibration_path(install_dir);
-    let text = std::fs::read_to_string(path).ok()?;
-    crate::pipeline::camchain::parse(&text)
+fn load_calibration_timeshift() -> Option<f64> {
+    let text = std::fs::read_to_string(calibration_path()).ok()?;
+    camchain::timeshift(&text)
 }
 
-fn calibration_path(_install_dir: &str) -> std::path::PathBuf {
+fn calibration_path() -> std::path::PathBuf {
     let data_dir = std::env::var("ADOS_PLUGIN_DATA_DIR")
         .unwrap_or_else(|_| "/var/ados/plugins/com.altnautica.vision-nav/data".to_string());
     std::path::PathBuf::from(data_dir).join("camchain.yaml")
 }
 
-fn default_engine_config() -> EngineConfig {
-    // Placeholder; the vendor binary rejects it for missing intrinsics,
-    // which surfaces as a start failure (fail safe).
-    EngineConfig {
-        camera_model: "pinhole".into(),
-        fx: 500.0,
-        fy: 500.0,
-        cx: 320.0,
-        cy: 240.0,
-        width: 640,
-        height: 480,
-        distortion_model: "none".into(),
-        distortion_coeffs: vec![],
-        t_cam_imu: vec![
-            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-        ],
-        timeshift_cam_imu_s: 0.0,
-        imu_rate_hz: 100.0,
-        camera_rate_hz: 30.0,
-    }
-}
-
 /// Kalibr `cam0` camchain.yaml parsing (the subset the agent needs).
 pub mod camchain {
-    use super::EngineConfig;
     use serde::Deserialize;
 
     #[derive(Deserialize)]
     struct Cam {
-        camera_model: Option<String>,
         intrinsics: Option<Vec<f64>>,
-        distortion_model: Option<String>,
-        distortion_coeffs: Option<Vec<f64>>,
-        resolution: Option<Vec<u32>>,
-        #[serde(rename = "T_cam_imu")]
-        t_cam_imu: Option<Vec<Vec<f64>>>,
         timeshift_cam_imu: Option<f64>,
     }
 
-    /// Parse a camchain.yaml string. Accepts both the `cam0:` wrapper
-    /// and a bare block. Returns `(EngineConfig, timeshift_s)` or `None`
-    /// when the required fields are missing.
-    pub fn parse(text: &str) -> Option<(EngineConfig, f64)> {
+    /// Read `timeshift_cam_imu` (seconds) out of a camchain.yaml string.
+    /// Accepts both the `cam0:` wrapper and a bare block. `None` when
+    /// the file does not carry a calibrated camera, in which case the
+    /// aligner keeps its zero offset and the heartbeat reports the
+    /// calibration as not loaded.
+    pub fn timeshift(text: &str) -> Option<f64> {
         // Try the `cam0` wrapper first, then a bare block.
         let cam: Cam = serde_yaml::from_str::<std::collections::BTreeMap<String, Cam>>(text)
             .ok()
@@ -702,32 +599,7 @@ pub mod camchain {
         if intr.len() < 4 {
             return None;
         }
-        let res = cam.resolution.unwrap_or_else(|| vec![640, 480]);
-        let timeshift = cam.timeshift_cam_imu.unwrap_or(0.0);
-        let t_flat: Vec<f64> = cam
-            .t_cam_imu
-            .map(|rows| rows.into_iter().flatten().collect())
-            .unwrap_or_else(|| {
-                vec![
-                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-                ]
-            });
-        let cfg = EngineConfig {
-            camera_model: cam.camera_model.unwrap_or_else(|| "pinhole".into()),
-            fx: intr[0],
-            fy: intr[1],
-            cx: intr[2],
-            cy: intr[3],
-            width: *res.first().unwrap_or(&640),
-            height: *res.get(1).unwrap_or(&480),
-            distortion_model: cam.distortion_model.unwrap_or_else(|| "none".into()),
-            distortion_coeffs: cam.distortion_coeffs.unwrap_or_default(),
-            t_cam_imu: t_flat,
-            timeshift_cam_imu_s: timeshift,
-            imu_rate_hz: 100.0,
-            camera_rate_hz: 30.0,
-        };
-        Some((cfg, timeshift))
+        Some(cam.timeshift_cam_imu.unwrap_or(0.0))
     }
 }
 
@@ -784,14 +656,9 @@ fn publish_health(
     let inputs = PreArmInputs {
         mode: cfg.effective_mode(),
         companion_state,
-        estimator_state,
         flow_quality: output.and_then(|o| o.flow_quality),
         flow_scale_source: flow_scale_source.clone(),
         rangefinder_topology: topology.clone(),
-        intrinsics_loaded,
-        extrinsics_loaded: intrinsics_loaded,
-        sync_offset_ms,
-        feature_count: output.and_then(|o| o.feature_count),
     };
     let report = gate.evaluate(&inputs);
 
@@ -807,18 +674,8 @@ fn publish_health(
     if dt > 0.0 {
         h.flow_rate_hz = Some(1.0 / dt);
     }
-    if let Some(o) = output {
-        if let Some(q) = o.flow_quality {
-            h.flow_quality = Some(q);
-        }
-        if o.output_mode == OutputMode::Vio {
-            h.vio_state = Some(estimator_state.as_str().to_string());
-            h.vio_quality = o.feature_count;
-            h.feature_count = o.feature_count;
-            if let Some(rc) = o.reset_counter {
-                h.vio_reset_counter = rc;
-            }
-        }
+    if let Some(q) = output.and_then(|o| o.flow_quality) {
+        h.flow_quality = Some(q);
     }
 }
 
@@ -855,10 +712,6 @@ fn system_status_to_enum(status: u8) -> ados_protocol::mavlink::ardupilotmega::M
         8 => MavState::MAV_STATE_FLIGHT_TERMINATION,
         _ => MavState::MAV_STATE_STANDBY,
     }
-}
-
-fn install_dir() -> String {
-    std::env::var("ADOS_PLUGIN_INSTALL_DIR").unwrap_or_else(|_| ".".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -953,11 +806,9 @@ cam0:
     - [0.0, 0.0, 0.0, 1.0]
   timeshift_cam_imu: -0.005
 "#;
-        let (cfg, ts) = camchain::parse(yaml).unwrap();
-        assert!((cfg.fx - 500.0).abs() < 1e-9);
-        assert_eq!(cfg.width, 640);
-        assert_eq!(cfg.distortion_model, "radtan");
-        assert_eq!(cfg.t_cam_imu.len(), 16);
+        // The aligner consumes the timeshift; the other blocks are
+        // tolerated and ignored.
+        let ts = camchain::timeshift(yaml).unwrap();
         assert!((ts - (-0.005)).abs() < 1e-9);
     }
 
@@ -968,16 +819,17 @@ camera_model: pinhole
 intrinsics: [400.0, 400.0, 200.0, 150.0]
 resolution: [400, 300]
 "#;
-        let (cfg, ts) = camchain::parse(yaml).unwrap();
-        assert!((cfg.fx - 400.0).abs() < 1e-9);
-        assert_eq!(cfg.height, 300);
-        assert_eq!(ts, 0.0);
+        // A calibration with no timeshift key aligns at zero offset.
+        assert_eq!(camchain::timeshift(yaml).unwrap(), 0.0);
     }
 
     #[test]
-    fn camchain_missing_intrinsics_is_none() {
+    fn camchain_without_intrinsics_is_not_a_calibration() {
+        // No intrinsics block: the file is not a usable calibration, so
+        // the heartbeat must report the calibration as absent rather
+        // than aligning on a zero offset it never measured.
         let yaml = "cam0:\n  camera_model: pinhole\n";
-        assert!(camchain::parse(yaml).is_none());
+        assert!(camchain::timeshift(yaml).is_none());
     }
 
     #[test]

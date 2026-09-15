@@ -1,20 +1,13 @@
 /**
  * Shared types for the vision-nav GCS plugin. The shape of
  * VisionNavTelemetry mirrors the agent heartbeat's navigation
- * capability block: optical flow stats, optional VIO stats, the
- * companion process state, the selected estimator mode, and the
- * camera + IMU + calibration health every estimator now reports.
- * The agent emits this as a single object on the "navigation"
- * telemetry topic.
+ * capability block: optical flow stats, the companion process state,
+ * the selected estimator mode, and the camera + IMU + calibration
+ * health the estimator reports. The agent emits this as a single
+ * object on the "navigation" telemetry topic.
  */
 
-export type EstimatorMode =
-  | "off"
-  | "optical_flow"
-  | "optical_flow_degraded"
-  | "vio_openvins"
-  | "vio_vins_fusion"
-  | "hybrid_of_plus_vio";
+export type EstimatorMode = "off" | "optical_flow" | "optical_flow_degraded";
 
 export type EstimatorState =
   | "off"
@@ -36,12 +29,8 @@ export interface VisionNavTelemetry {
   flowQuality?: number;
   flowRateHz?: number;
   flowDistanceM?: number | null;
-  vioState?: "active" | "degraded" | "lost" | "absent";
-  vioResetCounter?: number;
-  vioQuality?: number;
   companionState?: "active" | "critical" | "terminating" | "inactive";
   opticalFlowSupported: boolean;
-  vioSupported: boolean;
   /**
    * Where the rangefinder is wired. Mirrors the agent's
    * ``RangefinderConfig.topology`` field. The cloud relay validator
@@ -67,10 +56,6 @@ export interface VisionNavTelemetry {
   estimatorState?: EstimatorState | string;
   /** Where the optical-flow scale comes from this tick. */
   flowScaleSource?: ScaleSource | null;
-  /** Features tracked by the VIO estimator. ``null`` for non-VIO. */
-  estimatorFeatureCount?: number;
-  /** Rolling drift estimate from the VIO estimator, in metres. */
-  estimatorDriftEstimateM?: number;
   /** Which IMU source the estimator is currently consuming. */
   imuSource?: ImuSourceId | string;
   /** IMU sample rate in Hz, smoothed by the source's EMA. */
@@ -89,11 +74,6 @@ export interface VisionNavTelemetry {
   /** One-line explanation of why the suggestion was picked. Surfaced
    * on the ModeCard tooltip. */
   suggestedModeReason?: string;
-  /** Camera direction the agent recommends for the suggested mode.
-   * Only meaningful for VIO modes; optical-flow modes are always
-   * downward. ``"auto"`` means the wizard should let the operator
-   * pick (or defer to HAL board metadata). */
-  recommendedCameraOrientation?: "forward" | "downward" | "side" | "auto";
   /** Number of cameras the auto-detect pass found on the host. */
   detectedCameraCount?: number;
   /** Driver name of the rangefinder the auto-detect pass selected,

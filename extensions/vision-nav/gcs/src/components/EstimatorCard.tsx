@@ -21,19 +21,13 @@ interface Props {
 }
 
 /**
- * Estimator status card. Shows the engine name, current state, and
- * the VIO-specific telemetry the agent reports back: feature count,
- * drift estimate, reset counter, IMU-camera sync offset trend.
- *
- * The card renders for every estimator mode; for non-VIO modes the
- * VIO rows are hidden so the operator does not see "—" rows that
- * never populate.
+ * Estimator status card. Shows the engine name, the current state, the
+ * flow quality, and the camera-IMU sync offset the aligner measures.
  */
 export function EstimatorCard({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;
   const mode = (telemetry.mode as EstimatorMode | undefined) ?? "off";
   const state = (telemetry.estimatorState as EstimatorState | undefined) ?? "off";
-  const isVio = mode === "vio_openvins" || mode === "vio_vins_fusion" || mode === "hybrid_of_plus_vio";
 
   const engineLabel = ENGINE_LABELS[mode] ?? "—";
 
@@ -58,34 +52,6 @@ export function EstimatorCard({ ctx, telemetry }: Props): JSX.Element {
               : "—"
           }
         />
-        {isVio && (
-          <>
-            <Row
-              label={tr(t, "navigation.estimatorCard.features", "Features")}
-              value={
-                typeof telemetry.estimatorFeatureCount === "number"
-                  ? String(telemetry.estimatorFeatureCount)
-                  : "—"
-              }
-            />
-            <Row
-              label={tr(t, "navigation.estimatorCard.drift", "Drift")}
-              value={
-                typeof telemetry.estimatorDriftEstimateM === "number"
-                  ? `${telemetry.estimatorDriftEstimateM.toFixed(2)} m`
-                  : "—"
-              }
-            />
-            <Row
-              label={tr(t, "navigation.estimatorCard.resets", "Resets")}
-              value={
-                typeof telemetry.vioResetCounter === "number"
-                  ? String(telemetry.vioResetCounter)
-                  : "—"
-              }
-            />
-          </>
-        )}
         <Row
           label={tr(t, "navigation.estimatorCard.syncOffset", "Sync offset")}
           value={
@@ -103,9 +69,6 @@ const ENGINE_LABELS: Partial<Record<EstimatorMode, string>> = {
   off: "—",
   optical_flow: "Lucas-Kanade",
   optical_flow_degraded: "Lucas-Kanade (degraded)",
-  vio_openvins: "OpenVINS",
-  vio_vins_fusion: "VINS-Fusion",
-  hybrid_of_plus_vio: "OpenVINS + Lucas-Kanade",
 };
 
 interface PillProps {

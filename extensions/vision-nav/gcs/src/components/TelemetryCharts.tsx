@@ -46,8 +46,6 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;
   const flowQualityRef = useRef<number[]>([]);
   const syncOffsetRef = useRef<number[]>([]);
-  const featureCountRef = useRef<number[]>([]);
-  const driftRef = useRef<number[]>([]);
   const [, setTick] = useState(0);
 
   useEffect(() => {
@@ -66,29 +64,10 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
       );
       changed = true;
     }
-    if (typeof telemetry.estimatorFeatureCount === "number") {
-      featureCountRef.current = pushAndCap(
-        featureCountRef.current,
-        telemetry.estimatorFeatureCount,
-      );
-      changed = true;
-    }
-    if (typeof telemetry.estimatorDriftEstimateM === "number") {
-      driftRef.current = pushAndCap(
-        driftRef.current,
-        telemetry.estimatorDriftEstimateM,
-      );
-      changed = true;
-    }
     if (changed) {
       setTick((n) => n + 1);
     }
-  }, [
-    telemetry.flowQuality,
-    telemetry.cameraImuSyncOffsetMs,
-    telemetry.estimatorFeatureCount,
-    telemetry.estimatorDriftEstimateM,
-  ]);
+  }, [telemetry.flowQuality, telemetry.cameraImuSyncOffsetMs]);
 
   const series: Series[] = [
     {
@@ -106,20 +85,6 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
       colorVar: "var(--vn-warn, #f59e0b)",
       yMin: 0,
       yMax: 40,
-    },
-    {
-      label: tr(t, "navigation.charts.features", "Features"),
-      unit: "",
-      values: featureCountRef.current,
-      colorVar: "var(--vn-ok, #34d399)",
-      yMin: 0,
-    },
-    {
-      label: tr(t, "navigation.charts.drift", "Drift"),
-      unit: "m",
-      values: driftRef.current,
-      colorVar: "var(--vn-warn, #f59e0b)",
-      yMin: 0,
     },
   ];
 

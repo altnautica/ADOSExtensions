@@ -92,7 +92,6 @@ function fakeCtx(): {
 function mkTelemetry(): VisionNavTelemetry {
   return {
     opticalFlowSupported: true,
-    vioSupported: false,
     flowQuality: 0,
     flowRateHz: 30,
     flowDistanceM: 1.0,

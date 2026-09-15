@@ -12,13 +12,6 @@ interface ParamGroup {
 
 const GROUPS: ParamGroup[] = [
   {
-    title: "External vision",
-    rows: [
-      { id: "EKF2_EV_CTRL", description: "External vision fusion control bitmask." },
-      { id: "EKF2_EV_DELAY", description: "External vision measurement delay (ms)." },
-    ],
-  },
-  {
     title: "Optical flow",
     rows: [
       { id: "EKF2_OF_CTRL", description: "Optical flow fusion control bitmask." },

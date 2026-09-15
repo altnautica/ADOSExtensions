@@ -1,22 +1,18 @@
 //! MAVLink frame builders + the component router.
 //!
-//! Four messages cover the optical-flow + range + VIO-injection
-//! surface, built from the shared ardupilotmega codec rather than
-//! hand-packed bytes:
+//! Three messages cover the optical-flow + range surface, built from
+//! the shared ardupilotmega codec rather than hand-packed bytes:
 //!
 //! * `OPTICAL_FLOW_RAD` (#106) — angular-rate flow on comp 198.
 //! * `DISTANCE_SENSOR` (#132) — downward rangefinder injection on
 //!   comp 198.
-//! * `VISION_POSITION_ESTIMATE` (#102) — VIO pose on comp 197 (built
-//!   through the SDK pose helper where it fits).
 //! * `TIMESYNC` (#111) / `HEARTBEAT` (#0) — the companion node's clock
 //!   query + 1 Hz liveness, on comp 198.
 //!
 //! The router reads each [`crate::estimator::EstimatorOutput`]'s
-//! `output_mode` and picks the component the sample rides:
-//! `optical_flow` -> 198, `vio` -> 197, hybrid -> both. The
-//! `time_usec` on each frame is the FC-clock time from
-//! [`ClockAlign`](crate::clock_align::ClockAlign).
+//! `output_mode` and emits an `optical_flow` sample on comp 198; a
+//! `none` sample emits nothing. The `time_usec` on each frame is the
+//! FC-clock time from [`ClockAlign`](crate::clock_align::ClockAlign).
 
 use std::sync::Arc;
 
@@ -28,7 +24,6 @@ use ados_protocol::mavlink::{
     serialize_v2, MavHeader, MavMessage,
 };
 use ados_sdk::context::PluginContext;
-use ados_sdk::vision::Pose;
 
 use crate::clock_align::ClockAlign;
 use crate::estimator::{EstimatorOutput, OutputMode};
@@ -36,9 +31,6 @@ use crate::estimator::{EstimatorOutput, OutputMode};
 /// OF peripheral component id (`MAV_COMP_ID_PERIPHERAL`-class). Emits
 /// OPTICAL_FLOW_RAD + DISTANCE_SENSOR.
 pub const COMPONENT_OF: u8 = 198;
-/// VIO component id (`MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY`). Emits
-/// VISION_POSITION_ESTIMATE.
-pub const COMPONENT_VIO: u8 = 197;
 
 const DEFAULT_SYS_ID: u8 = 1;
 
@@ -125,10 +117,8 @@ pub fn of_frame(msg: &MavMessage) -> Option<Vec<u8>> {
     frame_for(COMPONENT_OF, msg)
 }
 
-/// Routes an estimator output to the matching MAVLink component over
-/// the host's MAVLink path. OF samples ride comp 198; VIO samples ride
-/// comp 197 (built through the SDK pose helper). Hybrid ticks carry an
-/// OF sample in `extras_of` so a single tick emits on both components.
+/// Routes an estimator output to the MAVLink path the host owns. Flow
+/// samples ride comp 198; a `none` sample emits nothing.
 pub struct ComponentRouter {
     sensor_id: u8,
     clock: Arc<ClockAlign>,
@@ -145,14 +135,6 @@ impl ComponentRouter {
     pub async fn emit(&self, ctx: &PluginContext, sample: &EstimatorOutput) {
         match sample.output_mode {
             OutputMode::OpticalFlow => self.emit_of(ctx, sample).await,
-            OutputMode::Vio => {
-                self.emit_vio(ctx, sample).await;
-                // Hybrid: a co-emitted OF sample rides in extras so one
-                // tick produces emissions on both 197 and 198.
-                if let Some(of) = &sample.extras_of {
-                    self.emit_of(ctx, of).await;
-                }
-            }
             OutputMode::None => {}
         }
     }
@@ -176,29 +158,6 @@ impl ComponentRouter {
         if let Some(frame) = of_frame(&msg) {
             let _ = ctx.mavlink.send(&frame, Some(COMPONENT_OF as i64)).await;
         }
-    }
-
-    async fn emit_vio(&self, ctx: &PluginContext, sample: &EstimatorOutput) {
-        let Some(pose6) = sample.pose else {
-            return;
-        };
-        // pose6 = (x, y, z, roll, pitch, yaw). The SDK pose helper
-        // builds VISION_POSITION_ESTIMATE from a quaternion, so convert
-        // the Euler attitude back to a quaternion and let the helper own
-        // the frame assembly + component id 197.
-        let (x, y, z, roll, pitch, yaw) = pose6;
-        let q = euler_to_quat(roll, pitch, yaw);
-        let now = monotonic_ns();
-        let pose = Pose {
-            position: (x, y, z),
-            orientation: q,
-            timestamp_us: self.clock.fc_time_us(now),
-            covariance: covariance_to_array(sample.covariance.as_deref()),
-        };
-        // register_vio_component is idempotent at the host; the pipeline
-        // also registers it explicitly on start. inject_pose builds the
-        // VISION_POSITION_ESTIMATE and sends it under component 197.
-        let _ = ctx.vision.inject_pose(&pose).await;
     }
 
     /// Build + send a DISTANCE_SENSOR co-emission on comp 198. PX4 wants
@@ -230,31 +189,6 @@ impl ComponentRouter {
             let _ = ctx.mavlink.send(&frame, Some(COMPONENT_OF as i64)).await;
         }
     }
-}
-
-/// Coerce a 21-or-other-length covariance slice into the fixed
-/// `[f32; 21]` the SDK pose helper expects, or `None` (unknown marker)
-/// when the slice is absent or the wrong length.
-fn covariance_to_array(cov: Option<&[f32]>) -> Option<[f32; 21]> {
-    let cov = cov?;
-    if cov.len() != 21 {
-        return None;
-    }
-    let mut out = [0.0f32; 21];
-    out.copy_from_slice(cov);
-    Some(out)
-}
-
-/// Aerospace ZYX Euler -> quaternion `(w, x, y, z)`.
-fn euler_to_quat(roll: f32, pitch: f32, yaw: f32) -> (f32, f32, f32, f32) {
-    let (sr, cr) = (roll * 0.5).sin_cos();
-    let (sp, cp) = (pitch * 0.5).sin_cos();
-    let (sy, cy) = (yaw * 0.5).sin_cos();
-    let w = cr * cp * cy + sr * sp * sy;
-    let x = sr * cp * cy - cr * sp * sy;
-    let y = cr * sp * cy + sr * cp * sy;
-    let z = cr * cp * sy - sr * sp * cy;
-    (w, x, y, z)
 }
 
 /// Monotonic clock in nanoseconds.
@@ -321,14 +255,5 @@ mod tests {
             }
             other => panic!("expected TIMESYNC, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn euler_quat_round_trips_yaw() {
-        // 90 deg yaw -> q = (cos45, 0, 0, sin45).
-        let q = euler_to_quat(0.0, 0.0, std::f32::consts::FRAC_PI_2);
-        let s = std::f32::consts::FRAC_1_SQRT_2;
-        assert!((q.0 - s).abs() < 1e-5);
-        assert!((q.3 - s).abs() < 1e-5);
     }
 }

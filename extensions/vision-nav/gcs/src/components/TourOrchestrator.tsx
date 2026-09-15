@@ -25,9 +25,7 @@ interface Props {
  * tour completing. Walks the operator through every visible card in
  * the order they will interact with the tab. Each step has an
  * optional pre-condition that skips the step when the telemetry does
- * not support it (e.g. the synthetic-fallback-banner preview step is
- * always shown; the VIO step is filtered out on agents without VIO
- * support).
+ * not support it.
  *
  * The component renders nothing when the tour is dismissed.
  */

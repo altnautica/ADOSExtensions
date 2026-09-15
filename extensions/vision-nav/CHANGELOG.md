@@ -2,6 +2,59 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.4.0]
+
+### Removed
+
+- **The visual-inertial odometry modes are withdrawn.** `vio_openvins`,
+  `vio_vins_fusion`, and `hybrid_of_plus_vio` are gone from the config schema,
+  the agent's estimator registry, the GCS mode picker, and the heartbeat's
+  advertised estimator list. The extension ships optical-flow navigation only:
+  `off`, `optical_flow`, and `optical_flow_degraded`. The estimators behind
+  those modes were never implemented — the shipped code was a scaffold that
+  started no estimator and produced no pose — so the modes advertised a
+  capability the build could not deliver. A config naming a withdrawn mode is
+  now rejected and leaves vision navigation disengaged rather than falling back
+  to a mode the operator did not select.
+- With the modes go their whole surface: the vendored C++ estimator sources and
+  their build files, the agent-side subprocess bridge (shared-memory frame ring
+  + msgpack control channel + restart watchdog), MAVLink component 197 and the
+  `VISION_POSITION_ESTIMATE` emission, the `secondary_camera` config field, the
+  camera-intrinsics / extrinsics / sync-offset / feature-count pre-arm checks,
+  and the `vioSupported` / `vioState` / `vioResetCounter` / `vioQuality` /
+  `estimatorFeatureCount` / `estimatorDriftEstimateM` heartbeat fields. The
+  vision-pose EKF source set is no longer offered in the source-set switcher,
+  and the external-vision firmware parameters are no longer listed.
+- Manifest grants reconciled against call sites: `process.spawn`,
+  `estimator.pose.inject`, `mavlink.component.vio`, `event.subscribe`, and
+  `ui.slot.notification-channel` are dropped, along with the vendor-binary
+  attribution block, the subprocess allowlist, and the notification channel that
+  had no publisher. `telemetry_fields` now lists the keys the agent actually
+  emits.
+- The release workflow no longer builds or stages vendor binaries, and the
+  conformance gate that passed on the scaffold's own error string is gone.
+
+### Changed
+
+- The agent SDK revision CI builds against is pinned in the `ADOS_AGENT_REV`
+  file at the repository root instead of tracking a moving branch, so a release
+  tag resolves to one fixed SDK commit.
+- Version sites (manifest, extension package, GCS package, agent crate, and the
+  registered plugin version) now agree; the GCS bundle previously registered
+  `0.3.2` while the manifest declared `0.3.3`.
+- The GCS locale bundle is read from the shipped `locales/en.json` instead of a
+  hand-maintained copy inside `plugin.tsx`.
+- The mode card is read-only. It lists the modes the agent advertises as
+  runnable and marks the active one; the mode is set through the plugin's
+  per-drone configuration (`mode` in `config-schema.json`). The card used to
+  offer clickable mode buttons that called an agent method the plugin never
+  implemented, so every click ended in an error line. It also no longer renders
+  a default mode set before the agent has advertised one.
+- The calibration wizard's two telemetry subscriptions
+  (`vision-nav.calibration_progress`, `vision-nav.calibration_complete`) are
+  now declared in the manifest. The host takes the full dotted topic as the
+  capability string, so both subscriptions were being denied.
+
 ## [0.3.3]
 
 - Release-pipeline completion: the release now cross-compiles the Rust agent

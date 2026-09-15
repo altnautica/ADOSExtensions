@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
@@ -32,8 +32,8 @@ interface ModeOption {
 }
 
 /**
- * The six modes the estimator framework can host. The card filters
- * this list against ``availableEstimators`` from the heartbeat so an
+ * The modes the estimator framework can host. The card filters this
+ * list against ``availableEstimators`` from the heartbeat so an
  * operator never sees an option the agent cannot actually run.
  */
 const ALL_MODES: ModeOption[] = [
@@ -62,39 +62,6 @@ const ALL_MODES: ModeOption[] = [
       "the GCS marks the estimator state as degraded.",
     needs: "Downward camera. No rangefinder required.",
   },
-  {
-    id: "vio_openvins",
-    label: "VIO (OpenVINS)",
-    description:
-      "Camera plus the FC IMU, fused by OpenVINS. Reports a full " +
-      "6-DOF pose. Forward camera is the default for indoor and " +
-      "corridor flight; downward camera fits over-ground flight " +
-      "(agriculture, survey, SAR, pipeline patrol) where ground " +
-      "texture dominates. Best fit for low-cost NPU boards.",
-    needs:
-      "Forward or downward camera (calibrated for its orientation) " +
-      "and an NPU-capable SBC.",
-  },
-  {
-    id: "vio_vins_fusion",
-    label: "VIO (VINS-Fusion)",
-    description:
-      "Camera plus the FC IMU, fused by VINS-Fusion. Higher CPU " +
-      "cost than OpenVINS, more accurate on fast motion. Accepts " +
-      "either a forward camera (indoor / corridor) or a downward " +
-      "camera (over-ground).",
-    needs:
-      "Forward or downward camera (calibrated for its orientation) " +
-      "and a higher-end SBC (Rock 5C / CM4 class).",
-  },
-  {
-    id: "hybrid_of_plus_vio",
-    label: "Hybrid (OF + VIO)",
-    description:
-      "Both estimators running in parallel: a downward camera feeds " +
-      "OF and a forward camera feeds VIO. The EKF fuses both inputs.",
-    needs: "Two cameras, an NPU board, and the headroom for two cores.",
-  },
 ];
 
 export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
@@ -104,44 +71,10 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
   const estimatorState =
     (telemetry.estimatorState as EstimatorState | undefined) ?? "off";
 
-  // Optimistic UI: when the operator clicks a mode the card flips
-  // selected state immediately. The next heartbeat from the agent
-  // confirms or reverts based on the actual runtime swap.
-  const [pendingMode, setPendingMode] = useState<EstimatorMode | null>(null);
-  const [pendingError, setPendingError] = useState<string | null>(null);
-
-  // Clear the optimistic state once the heartbeat catches up.
-  useEffect(() => {
-    if (pendingMode !== null && current === pendingMode) {
-      setPendingMode(null);
-      setPendingError(null);
-    }
-  }, [pendingMode, current]);
-
-  const selectedNow = pendingMode ?? current;
-
-  async function handleModeClick(mode: EstimatorMode): Promise<void> {
-    setPendingMode(mode);
-    setPendingError(null);
-    try {
-      // The SDK's generic RPC escape hatch. The plugin host routes
-      // plugin-namespaced methods to the matching agent-side plugin,
-      // which translates the call into an ``on_configure`` with the
-      // new mode. Capability ``vehicle.command`` is the closest
-      // permission already on the plugin's grants.
-      await ctx.client.request(
-        "vision-nav.set_mode",
-        "vehicle.command",
-        { mode },
-      );
-    } catch (err) {
-      setPendingError(err instanceof Error ? err.message : String(err));
-      setPendingMode(null);
-    }
-  }
-
-  const options = ALL_MODES.filter((opt) => available.includes(opt.id));
-  const renderable = options.length > 0 ? options : ALL_MODES.slice(0, 2);
+  // Only the modes the agent has advertised are listed. Until the first
+  // heartbeat arrives the card shows the hint below and no rows, rather
+  // than guessing at a mode set.
+  const renderable = ALL_MODES.filter((opt) => available.includes(opt.id));
 
   return (
     <section style={card} data-testid="vn-mode-card">
@@ -152,60 +85,28 @@ export function ModeCard({ ctx, telemetry }: Props): JSX.Element {
       <p style={subhead}>
         {tr(t,
           "navigation.modeCard.subhead",
-          "Choose the estimator the plugin feeds to the flight controller.",
+          "The estimator the plugin feeds to the flight controller. Set " +
+            "`mode` in the plugin's per-drone configuration to change it.",
         )}
       </p>
       <div style={row}>
         {renderable.map((opt) => {
-          const selected = opt.id === selectedNow;
-          const isPending = pendingMode === opt.id && current !== opt.id;
-          const isSuggested =
-            telemetry.suggestedMode === opt.id && current !== opt.id;
+          const selected = opt.id === current;
           return (
-            <button
+            <div
               key={opt.id}
-              type="button"
               style={button(selected)}
-              data-testid={`vn-mode-button-${opt.id}`}
-              aria-pressed={selected}
-              title={
-                isSuggested && telemetry.suggestedModeReason
-                  ? `${opt.description}\n\n${opt.needs}\n\nSuggested: ${telemetry.suggestedModeReason}`
-                  : `${opt.description}\n\n${opt.needs}`
-              }
-              onClick={() => {
-                void handleModeClick(opt.id);
-              }}
+              data-testid={`vn-mode-${opt.id}`}
+              aria-current={selected ? "true" : undefined}
+              title={`${opt.description}\n\n${opt.needs}`}
             >
-              <div style={btnLabel}>
-                {opt.label}
-                {isPending ? " ..." : null}
-                {isSuggested && !isPending ? (
-                  <span
-                    style={suggestedBadge}
-                    data-testid={`vn-mode-suggested-${opt.id}`}
-                  >
-                    {tr(t, "navigation.modeCard.suggested", "Suggested")}
-                  </span>
-                ) : null}
-              </div>
+              <div style={btnLabel}>{opt.label}</div>
               <div style={btnNeeds}>{opt.needs}</div>
-            </button>
+            </div>
           );
         })}
       </div>
-      {pendingError !== null ? (
-        <p style={errorText} data-testid="vn-mode-error">
-          {tr(
-            t,
-            "navigation.modeCard.error",
-            "Mode change failed",
-          )}
-          {": "}
-          {pendingError}
-        </p>
-      ) : null}
-      {options.length === 0 ? (
+      {renderable.length === 0 ? (
         <p style={hint} data-testid="vn-mode-empty-hint">
           {tr(t,
             "navigation.modeCard.awaitingAgent",
@@ -298,16 +199,6 @@ const btnLabel: CSSProperties = {
   gap: "0.375rem",
   flexWrap: "wrap",
 };
-const suggestedBadge: CSSProperties = {
-  fontSize: "0.6rem",
-  fontWeight: 700,
-  padding: "0.0625rem 0.375rem",
-  borderRadius: "0.25rem",
-  background: "var(--vn-accent-soft, rgba(37,99,235,0.18))",
-  color: "var(--vn-accent, #2563eb)",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-};
 const btnNeeds: CSSProperties = {
   fontSize: "0.7rem",
   color: "var(--vn-text-muted, #94a3b8)",
@@ -316,11 +207,6 @@ const hint: CSSProperties = {
   fontSize: "0.75rem",
   margin: 0,
   color: "var(--vn-text-muted, #94a3b8)",
-};
-const errorText: CSSProperties = {
-  fontSize: "0.75rem",
-  margin: 0,
-  color: "var(--vn-error, #ef4444)",
 };
 const pill = (color: string): CSSProperties => ({
   display: "inline-flex",

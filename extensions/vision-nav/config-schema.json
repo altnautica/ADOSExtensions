@@ -7,25 +7,13 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "Operating mode. Optical flow uses a downward camera + rangefinder. VIO modes accept a forward or downward camera (orientation chosen per the camera block). Hybrid runs both estimators in parallel from two cameras.",
+      "description": "Operating mode. optical_flow uses a downward camera plus a rangefinder; optical_flow_degraded takes its scale from the barometer / GPS ladder instead; off keeps the plugin loaded but silent.",
       "default": "off",
-      "enum": [
-        "off",
-        "optical_flow",
-        "optical_flow_degraded",
-        "vio_openvins",
-        "vio_vins_fusion",
-        "hybrid_of_plus_vio"
-      ]
+      "enum": ["off", "optical_flow", "optical_flow_degraded"]
     },
     "camera": {
       "$ref": "#/definitions/camera",
       "title": "Camera"
-    },
-    "secondary_camera": {
-      "$ref": "#/definitions/camera",
-      "title": "Secondary camera",
-      "description": "Only used by hybrid_of_plus_vio. The primary camera carries the downward optical-flow stream; the secondary carries the forward VIO stream. Both orientations must be set explicitly."
     },
     "rangefinder": {
       "type": "object",
@@ -69,7 +57,7 @@
         "type": {
           "type": "string",
           "title": "Firmware",
-          "description": "Flight controller firmware. Optical flow is supported on ArduPilot, PX4, and iNav (7.0+). VIO is supported on ArduPilot and PX4; on iNav it is experimental and disabled by the plugin at install time. Betaflight is not supported because the firmware has no position estimator.",
+          "description": "Flight controller firmware. Optical flow is supported on ArduPilot, PX4, and iNav (7.0+). Betaflight is not supported because the firmware has no position estimator.",
           "default": "ardupilot",
           "enum": ["ardupilot", "px4", "inav"]
         },

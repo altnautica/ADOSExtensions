@@ -5,8 +5,7 @@
 //! fixed-capacity ring of recent SI samples; the [`TimeAligner`] pairs
 //! a camera-frame timestamp with the closest sample (linearly
 //! interpolated between the two bracketing samples) and tracks the
-//! rolling residual drift the GCS surfaces and the VIO pre-arm gate
-//! consults.
+//! rolling residual drift the GCS surfaces.
 //!
 //! The universal IMU path is MAVLink `RAW_IMU` (#27): every FC
 //! publishes it, in milli-g acceleration and milli-rad/s gyro. The

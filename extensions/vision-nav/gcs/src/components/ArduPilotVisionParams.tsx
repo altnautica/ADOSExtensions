@@ -14,7 +14,6 @@ const GROUPS: ParamGroup[] = [
   {
     title: "Sensor drivers",
     rows: [
-      { id: "VISO_TYPE", description: "Vision odometry backend selection." },
       { id: "FLOW_TYPE", description: "Optical flow sensor backend (5 = MAVLink)." },
     ],
   },

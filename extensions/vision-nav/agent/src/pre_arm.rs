@@ -12,10 +12,6 @@
 //!   rangefinder healthy.
 //! * `optical_flow_degraded` — companion active, flow quality above
 //!   gate, any scale source healthy (rangefinder optional).
-//! * `vio_*` — companion active, estimator converged, intrinsics +
-//!   extrinsics loaded, sync offset within the red threshold, feature
-//!   count above the floor.
-//! * `hybrid_of_plus_vio` — both OF and VIO check sets.
 //!
 //! Pure: no MAVLink, no telemetry, no async. The pipeline builds the
 //! [`PreArmInputs`] snapshot and serializes the [`PreArmReport`] onto
@@ -24,13 +20,8 @@
 use rmpv::Value;
 
 use crate::config::Mode;
-use crate::estimator::EstimatorState;
 
 pub const DEFAULT_FLOW_QUALITY_GATE: i32 = 50;
-pub const DEFAULT_VIO_FEATURE_FLOOR: i32 = 20;
-/// Sync residual red threshold (ms). The gate refuses to arm above it;
-/// the yellow band (10..30 ms) passes the gate but the GCS warns.
-pub const SYNC_OFFSET_RED_MS: f32 = 30.0;
 
 /// Check severity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,14 +110,9 @@ impl PreArmReport {
 pub struct PreArmInputs {
     pub mode: Mode,
     pub companion_state: CompanionState,
-    pub estimator_state: EstimatorState,
     pub flow_quality: Option<i32>,
     pub flow_scale_source: Option<String>,
     pub rangefinder_topology: Option<String>, // companion|fc|both|None
-    pub intrinsics_loaded: bool,
-    pub extrinsics_loaded: bool,
-    pub sync_offset_ms: Option<f32>,
-    pub feature_count: Option<i32>,
 }
 
 /// Companion node state mirrored from the comp-198 heartbeat machine.
@@ -149,29 +135,23 @@ impl CompanionState {
     }
 }
 
-/// The gate. Thresholds default to the values pinned by prior research.
+/// The gate. The flow-quality gate mirrors the config's
+/// `flow_quality_min`.
 pub struct PreArmGate {
     flow_quality_gate: i32,
-    vio_feature_floor: i32,
-    sync_offset_red_ms: f32,
 }
 
 impl Default for PreArmGate {
     fn default() -> Self {
         Self {
             flow_quality_gate: DEFAULT_FLOW_QUALITY_GATE,
-            vio_feature_floor: DEFAULT_VIO_FEATURE_FLOOR,
-            sync_offset_red_ms: SYNC_OFFSET_RED_MS,
         }
     }
 }
 
 impl PreArmGate {
     pub fn with_flow_quality_gate(flow_quality_gate: i32) -> Self {
-        Self {
-            flow_quality_gate,
-            ..Self::default()
-        }
+        Self { flow_quality_gate }
     }
 
     pub fn evaluate(&self, inputs: &PreArmInputs) -> PreArmReport {
@@ -179,12 +159,6 @@ impl PreArmGate {
             Mode::Off => Vec::new(),
             Mode::OpticalFlow => self.of_checks(inputs, true),
             Mode::OpticalFlowDegraded => self.of_checks(inputs, false),
-            Mode::VioOpenvins | Mode::VioVinsFusion => self.vio_checks(inputs),
-            Mode::HybridOfPlusVio => {
-                let mut v = self.of_checks(inputs, false);
-                v.extend(self.vio_checks(inputs));
-                v
-            }
         };
         let armable = if checks.is_empty() {
             true
@@ -206,17 +180,6 @@ impl PreArmGate {
             checks.push(self.scale_source_check(inputs));
         }
         checks
-    }
-
-    fn vio_checks(&self, inputs: &PreArmInputs) -> Vec<PreArmCheck> {
-        vec![
-            self.companion_check(inputs),
-            self.estimator_converged_check(inputs),
-            self.intrinsics_check(inputs),
-            self.extrinsics_check(inputs),
-            self.sync_offset_check(inputs),
-            self.feature_count_check(inputs),
-        ]
     }
 
     fn companion_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
@@ -274,81 +237,6 @@ impl PreArmGate {
             ),
         }
     }
-
-    fn estimator_converged_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
-        match inputs.estimator_state {
-            EstimatorState::Converged => PreArmCheck::ok("estimator_converged", ""),
-            EstimatorState::Init | EstimatorState::Converging => PreArmCheck::pending(
-                "estimator_converged",
-                format!("Estimator {}.", inputs.estimator_state.as_str()),
-            ),
-            other => PreArmCheck::blocking(
-                "estimator_converged",
-                format!("Estimator state {:?}.", other.as_str()),
-            ),
-        }
-    }
-
-    fn intrinsics_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
-        if inputs.intrinsics_loaded {
-            PreArmCheck::ok("intrinsics_loaded", "")
-        } else {
-            PreArmCheck::blocking(
-                "intrinsics_loaded",
-                "Camera intrinsics not loaded. Upload a Kalibr camchain.yaml or \
-                 run the calibration wizard.",
-            )
-        }
-    }
-
-    fn extrinsics_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
-        if inputs.extrinsics_loaded {
-            PreArmCheck::ok("extrinsics_loaded", "")
-        } else {
-            PreArmCheck::blocking(
-                "extrinsics_loaded",
-                "Camera-IMU extrinsics not loaded. Both T_cam_imu and \
-                 timeshift_cam_imu are required for VIO.",
-            )
-        }
-    }
-
-    fn sync_offset_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
-        match inputs.sync_offset_ms {
-            None => PreArmCheck::pending(
-                "sync_offset",
-                "Time aligner has no measurements yet.",
-            ),
-            Some(o) if o.abs() <= self.sync_offset_red_ms => {
-                PreArmCheck::ok("sync_offset", format!("Sync residual {o:.1} ms."))
-            }
-            Some(o) => PreArmCheck::blocking(
-                "sync_offset",
-                format!(
-                    "Sync residual {o:.1} ms exceeds {:.0} ms. Re-run the \
-                     camera-IMU calibration.",
-                    self.sync_offset_red_ms
-                ),
-            ),
-        }
-    }
-
-    fn feature_count_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
-        match inputs.feature_count {
-            None => PreArmCheck::pending("feature_count", "No feature count reported yet."),
-            Some(c) if c >= self.vio_feature_floor => {
-                PreArmCheck::ok("feature_count", format!("Tracking {c} features."))
-            }
-            Some(c) => PreArmCheck::blocking(
-                "feature_count",
-                format!(
-                    "Only {c} features tracked (minimum {}). Move to a more \
-                     textured scene or improve lighting.",
-                    self.vio_feature_floor
-                ),
-            ),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -359,14 +247,9 @@ mod tests {
         PreArmInputs {
             mode,
             companion_state: CompanionState::Inactive,
-            estimator_state: EstimatorState::Off,
             flow_quality: None,
             flow_scale_source: None,
             rangefinder_topology: None,
-            intrinsics_loaded: false,
-            extrinsics_loaded: false,
-            sync_offset_ms: None,
-            feature_count: None,
         }
     }
 
@@ -409,50 +292,5 @@ mod tests {
         i.flow_scale_source = Some("baro".to_string());
         let r = PreArmGate::default().evaluate(&i);
         assert!(r.armable, "{:?}", r.checks);
-    }
-
-    #[test]
-    fn vio_blocks_until_calibration_and_convergence() {
-        let mut i = base(Mode::VioOpenvins);
-        i.companion_state = CompanionState::Active;
-        i.estimator_state = EstimatorState::Converged;
-        i.feature_count = Some(40);
-        i.sync_offset_ms = Some(5.0);
-        // intrinsics/extrinsics not loaded -> blocked.
-        let r = PreArmGate::default().evaluate(&i);
-        assert!(!r.armable);
-        // Load calibration -> armable.
-        i.intrinsics_loaded = true;
-        i.extrinsics_loaded = true;
-        let r = PreArmGate::default().evaluate(&i);
-        assert!(r.armable, "{:?}", r.checks);
-    }
-
-    #[test]
-    fn vio_blocks_on_red_sync_offset() {
-        let mut i = base(Mode::VioVinsFusion);
-        i.companion_state = CompanionState::Active;
-        i.estimator_state = EstimatorState::Converged;
-        i.intrinsics_loaded = true;
-        i.extrinsics_loaded = true;
-        i.feature_count = Some(40);
-        i.sync_offset_ms = Some(45.0); // red
-        let r = PreArmGate::default().evaluate(&i);
-        assert!(!r.armable);
-        assert!(r
-            .checks
-            .iter()
-            .any(|c| c.id == "sync_offset" && c.severity == Severity::Blocking));
-    }
-
-    #[test]
-    fn hybrid_runs_both_check_sets() {
-        let mut i = base(Mode::HybridOfPlusVio);
-        i.companion_state = CompanionState::Active;
-        let r = PreArmGate::default().evaluate(&i);
-        // The OF half contributes flow_quality + scale_source; the VIO
-        // half contributes estimator + calibration + sync + features.
-        assert!(r.checks.iter().any(|c| c.id == "flow_quality"));
-        assert!(r.checks.iter().any(|c| c.id == "intrinsics_loaded"));
     }
 }

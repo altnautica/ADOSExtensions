@@ -13,10 +13,10 @@ interface Props {
   firmware: FirmwareType;
   ctx: PluginContext;
   /**
-   * Companion process state from the agent heartbeat. The VIO and OF
-   * options are only safe to engage when the companion is "active";
-   * any other state (or undefined) keeps them disabled so a runtime
-   * source switch does not feed the EKF stale or absent data.
+   * Companion process state from the agent heartbeat. The optical-flow
+   * option is only safe to engage when the companion is "active"; any
+   * other state (or undefined) keeps it disabled so a runtime source
+   * switch does not feed the EKF stale or absent data.
    */
   companionState?: VisionNavTelemetry["companionState"];
   /**
@@ -25,17 +25,13 @@ interface Props {
    * would have to reject, triggering an innovation spike on switch.
    */
   flowQuality?: number;
-  /**
-   * Whether the agent advertises a working VIO estimator. The VIO
-   * source set is hidden entirely when this is false so the operator
-   * never sees a button that will silently fail.
-   */
-  vioSupported?: boolean;
 }
 
+// Set 2 (vision pose primary) is not offered: this plugin emits
+// OPTICAL_FLOW_RAD and DISTANCE_SENSOR only, so nothing would feed a
+// vision-pose source set.
 const ALL_OPTIONS: EkfSourceOption[] = [
   { set: 1, label: "GPS", description: "Default. GPS + baro + compass." },
-  { set: 2, label: "VIO", description: "Visual-inertial odometry primary." },
   { set: 3, label: "OF", description: "Optical flow primary." },
 ];
 
@@ -46,7 +42,6 @@ export function EkfSourceSwitcher({
   ctx,
   companionState,
   flowQuality,
-  vioSupported,
 }: Props): JSX.Element {
   const [pending, setPending] = useState<EkfSourceSet | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,19 +50,13 @@ export function EkfSourceSwitcher({
   const px4Note = firmware === "px4";
   const visionHealthy =
     companionState === "active" && (flowQuality ?? 0) >= FLOW_QUALITY_GATE;
-  const OPTIONS = ALL_OPTIONS.filter(
-    (opt) => opt.set !== 2 || vioSupported === true,
-  );
-  // GPS is the revert path; always available on ArduPilot regardless of
-  // vision health.
-  const gpsAlwaysReady = isArdu;
-  const vioReady = isArdu && visionHealthy;
-  const ofReady = isArdu && visionHealthy;
+  const OPTIONS = ALL_OPTIONS;
 
   function readyFor(opt: EkfSourceOption): boolean {
-    if (opt.set === 1) return gpsAlwaysReady;
-    if (opt.set === 2) return vioReady;
-    if (opt.set === 3) return ofReady;
+    // GPS is the revert path; always available on ArduPilot regardless
+    // of vision health. Optical flow carries the health gate.
+    if (opt.set === 1) return isArdu;
+    if (opt.set === 3) return isArdu && visionHealthy;
     return false;
   }
 
@@ -150,9 +139,9 @@ export function EkfSourceSwitcher({
         {OPTIONS.map((opt) => {
           const ready = readyFor(opt);
           const optDisabled = !ready;
-          // GPS is always available on ArduPilot; only VIO and OF carry
-          // the vision-health gate. PX4 stays fully disabled and the
-          // px4Note below explains why.
+          // GPS is always available on ArduPilot; the optical-flow set
+          // carries the vision-health gate. PX4 stays fully disabled and
+          // the px4Note below explains why.
           const gatedByHealth = isArdu && opt.set !== 1 && !visionHealthy;
           const title = gatedByHealth
             ? visionUnhealthyTooltip

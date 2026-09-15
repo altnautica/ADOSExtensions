@@ -98,16 +98,6 @@ function describeDegradation(
       "No altitude or depth source is healthy for OF scaling.",
     );
   }
-  if (
-    typeof telemetry.estimatorFeatureCount === "number" &&
-    telemetry.estimatorFeatureCount < 20
-  ) {
-    return tr(
-      t,
-      "navigation.fallback.reasonFewFeatures",
-      "VIO is tracking too few visual features.",
-    );
-  }
   return tr(
     t,
     "navigation.fallback.reasonGeneric",

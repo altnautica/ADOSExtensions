@@ -2,8 +2,8 @@
 //!
 //! The shared bus delivers frames as `nv12`, `yuv420p`, or `rgb24`
 //! (see `ados_protocol::framebus::FrameFormat`). The optical-flow
-//! tracker and the VIO bridge both want an 8-bit single-channel
-//! grayscale (luma) image. This module turns one resolved
+//! tracker wants an 8-bit single-channel grayscale (luma) image. This
+//! module turns one resolved
 //! [`Frame`](ados_sdk::vision::Frame) into a packed row-major
 //! `GrayImage` without pulling in an image library.
 //!

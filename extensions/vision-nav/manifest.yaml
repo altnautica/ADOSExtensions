@@ -1,29 +1,28 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.3.3"
-description: "GPS-denied navigation. Optical flow (downward camera) and visual-inertial odometry (forward or downward camera). Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
+version: "0.4.0"
+description: "GPS-denied navigation. Optical flow from a downward camera. Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
-  Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A camera and the IMU feed the flight controller a 30 Hz position estimate over MAVLink, so position-hold, loiter, and missions keep working unchanged.
+  Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A downward camera and the flight controller's gyro feed a 30 Hz angular-flow measurement over MAVLink, so position-hold, loiter, and missions keep working unchanged.
 
-  Six modes: optical flow with a rangefinder (fastest, low altitude on textured ground), without one (barometer height, drifts above 5 m), OpenVINS VIO (short flights), VINS-Fusion VIO (long loops with revisits), Hybrid (both, ~1.5× CPU), or Off.
+  Three modes: optical flow with a rangefinder (low altitude on textured ground), optical flow without one (barometer or GPS height for scale, drifts above 5 m), or Off.
 
-  Every 250 ms it checks itself. If features drop or drift grows it steps down — VIO → optical flow → barometer hover → land — and warns the GCS at each step.
+  Every tick it checks itself. If flow quality drops or the scale source goes unhealthy it steps down the scale ladder and warns the GCS at each step; a sustained degraded streak flips the companion node to CRITICAL.
 
-  Auto-detects ArduPilot 4.5+, PX4 1.14+, and iNav 7.0+. Global-shutter USB camera preferred for VIO; rolling-shutter or CSI fine for optical flow. VIO needs a one-time ~10 min camera-IMU calibration. Watch feature count and drift on the Vision Nav panel — drops = lost scene, growth = re-init.
+  Works with ArduPilot 4.5+, PX4 1.14+, and iNav 7.0+. Rolling-shutter USB or CSI cameras are fine. Watch flow quality and the camera-IMU sync offset on the Vision Nav panel.
 features:
   - "Optical flow with or without rangefinder (Lucas-Kanade tracker)"
-  - "Monocular VIO via OpenVINS or VINS-Fusion"
-  - "Hybrid mode: optical flow and VIO running side by side"
+  - "Rangefinder-free scale ladder (baro, GPS altitude, static fallback)"
   - "Auto-detect ArduPilot, PX4, or iNav and emit appropriate MAVLink"
   - "Per-mode pre-arm checks with degradation fallback ladder"
-  - "Live telemetry: feature count, drift, sync offset, mode state"
+  - "Live telemetry: flow quality, flow rate, scale source, sync offset, mode state"
 hardware_requirements:
   cameras: "USB UVC global-shutter or rolling-shutter, or CSI via V4L2"
   fc_firmware: "ArduPilot 4.5+, PX4 1.14+, iNav 7.0+"
   boards: ["cm4", "cm5", "rk3582", "rk3588s2", "rk3576", "rpi5", "pi-zero-2w"]
   optional:
-    - "Rangefinder (TF-Luna, Garmin LIDAR-Lite, ST VL53L1X) for optical flow modes"
+    - "Rangefinder (TF-Luna, Garmin LIDAR-Lite, ST VL53L1X) for the optical-flow mode"
 resource_impact:
   output_rate_hz: 30
   cpu_percent_peak: 80
@@ -32,23 +31,33 @@ resource_impact:
   startup_time_seconds: 5
 required_fc_parameters:
   ardupilot:
-    - param: "EKF_SOURCE_SET"
-      note: "Select vision pose source for the active EKF lane"
+    - param: "FLOW_TYPE"
+      value: "5"
+      note: "Accept OPTICAL_FLOW_RAD over MAVLink"
+    - param: "EK3_SRC_OPTIONS"
+      note: "Select the optical-flow velocity source for the active EKF lane"
   px4:
-    - param: "EKF2_AID_MASK"
-      note: "Set VISION_POS and VISION_HEADING bits"
+    - param: "EKF2_OF_CTRL"
+      note: "Enable optical-flow fusion"
   inav:
     - param: "opflow_hardware"
       value: "MAVLINK"
     - param: "nav_use_optflow_for_poshold"
       value: "ON"
 telemetry_fields:
-  - "navigation.rangefinder_type"
-  - "navigation.estimator_state"
-  - "navigation.feature_count"
-  - "navigation.drift_m"
-  - "navigation.sync_offset_ms"
   - "navigation.mode"
+  - "navigation.estimatorState"
+  - "navigation.companionState"
+  - "navigation.flowQuality"
+  - "navigation.flowRateHz"
+  - "navigation.flowDistanceM"
+  - "navigation.flowScaleSource"
+  - "navigation.rangefinderTopology"
+  - "navigation.imuSource"
+  - "navigation.imuRateHz"
+  - "navigation.cameraIntrinsicsLoaded"
+  - "navigation.cameraImuSyncOffsetMs"
+  - "navigation.preArmReport"
 documentation_url: "https://docs.altnautica.com/drone-agent/vision-nav-overview"
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/vision-nav"
@@ -70,46 +79,19 @@ agent:
   entrypoint: "bin/vision-nav"
   isolation: subprocess
   per_drone_config: true
-  # The VIO modes spawn a vendor binary; the optical-flow modes do not.
-  # contains_vendor_binary is true so the installer surfaces the
-  # vendor-attribution block at install time. When VIO modes are not
-  # selected the binary stays on disk but never executes.
-  contains_vendor_binary: true
-  vendor_attribution:
-    - name: "OpenVINS"
-      license: "GPL-3.0-only"
-      source_url: "https://github.com/rpng/open_vins"
-      upstream_version: "v2.7"
-      notice: "VIO mode vio_openvins uses the OpenVINS estimator from the Robot Perception and Navigation Group at the University of Delaware."
-    - name: "VINS-Fusion"
-      license: "GPL-3.0-only"
-      source_url: "https://github.com/HKUST-Aerial-Robotics/VINS-Fusion"
-      upstream_version: "be55a937a57436548ddfb1bd324bc1e9a9e828e0"
-      notice: "VIO mode vio_vins_fusion uses the VINS-Fusion estimator from the HKUST Aerial Robotics Group."
   permissions:
-    # The plugin no longer opens a camera: it reads normalized frames
-    # from the shared vision frame bus. sensor.camera.register /
-    # hardware.usb.uvc / hardware.camera.csi / sensor.depth.register are
-    # dropped; vision.frame.read replaces them.
+    # Every grant below has a call site in agent/src; a grant with no
+    # call site is not requested. The plugin does not open a camera: it
+    # reads normalized frames from the shared vision frame bus, so
+    # vision.frame.read replaces the camera / UVC / CSI / depth grants.
     - id: vision.frame.read
     - id: hardware.uart
     - id: hardware.i2c
     - id: telemetry.extend
     - id: event.publish
-    - id: event.subscribe
     - id: mavlink.read
     - id: mavlink.write
     - id: mavlink.component.peripheral
-    - id: mavlink.component.vio
-    - id: estimator.pose.inject
-    - id: process.spawn
-  # Vendor-binary allowlist. The plugin host's subprocess sandbox
-  # rejects any spawn whose basename is not in this list. Both
-  # binaries live under ``<install_dir>/vendor/`` and are signed
-  # together with the rest of the .adosplug archive.
-  subprocess_spawn:
-    - ados_openvins_shim
-    - ados_vins_fusion_shim
   resources:
     max_ram_mb: 512
     max_cpu_percent: 80
@@ -118,12 +100,6 @@ agent:
     - component_id: 198
       component_kind: peripheral
       sub_id: 1
-    # MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY for VIO emissions. The
-    # router claims this component only when a vio_* mode is active;
-    # heartbeat and component-info remain quiet in OF-only modes.
-    - component_id: 197
-      component_kind: vio
-      sub_id: 1
 
 gcs:
   entrypoint: "gcs/plugin.bundle.js"
@@ -131,8 +107,13 @@ gcs:
   permissions:
     - id: ui.slot.node-detail-tab
     - id: ui.slot.flight-skill
-    - id: ui.slot.notification-channel
     - id: telemetry.subscribe.navigation
+    # The calibration wizard subscribes to these two topics for substep
+    # progress and the final camchain result (gcs/src/components/
+    # CalibrationWizard.tsx). The host takes the full dotted topic as the
+    # capability string, so both are declared explicitly.
+    - id: telemetry.subscribe.vision-nav.calibration_progress
+    - id: telemetry.subscribe.vision-nav.calibration_complete
     - id: command.send
   contributes:
     tabs:
@@ -142,15 +123,11 @@ gcs:
         icon: "compass"
         order: 60
         profile: ["drone"]
-    notifications:
-      - id: vision-nav-degraded
-        title: "Vision navigation degraded"
-        severity: warning
     # A cockpit Skill that engages / disengages the estimator. Arming it feeds
-    # the flight controller a position estimate over MAVLink, so the toggle
+    # the flight controller a flow measurement over MAVLink, so the toggle
     # confirms before it engages rather than firing on a single keypress. The
     # agent reads the `active` per-drone key live and idles vision navigation
-    # (effective mode off, no pose emitted) when disengaged.
+    # (effective mode off, nothing emitted) when disengaged.
     skills:
       - id: engage
         label: "Engage"

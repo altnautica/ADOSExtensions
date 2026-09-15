@@ -62,7 +62,6 @@ function fakeCtx(locale: Record<string, string> = {}): PluginContext {
 function mkTelemetry(over: Partial<VisionNavTelemetry> = {}): VisionNavTelemetry {
   return {
     opticalFlowSupported: true,
-    vioSupported: false,
     flowQuality: 180,
     flowRateHz: 30,
     flowDistanceM: 1.25,
@@ -123,35 +122,27 @@ describe("NavigationTab", () => {
       <NavigationTab
         ctx={ctx}
         firmware="ardupilot"
-        telemetryOverride={mkTelemetry({
-          vioSupported: true,
-          flowQuality: 200,
-        })}
+        telemetryOverride={mkTelemetry({ flowQuality: 200 })}
       />,
     );
     expect(screen.getByTestId("vn-ardupilot-params")).toBeTruthy();
     expect(screen.queryByTestId("vn-px4-params")).toBeNull();
-    // Switcher enabled on ArduPilot.
-    const vio = screen.getByTestId("vn-ekf-button-vio") as HTMLButtonElement;
-    expect(vio.disabled).toBe(false);
+    // Switcher enabled on ArduPilot. Only GPS and optical flow are
+    // offered: the plugin emits no vision pose, so no vision-pose
+    // source set is advertised.
     const of = screen.getByTestId("vn-ekf-button-of") as HTMLButtonElement;
     expect(of.disabled).toBe(false);
+    expect(screen.queryByTestId("vn-ekf-button-vio")).toBeNull();
   });
 
   it("renders the PX4 params panel and disables the switcher on PX4", () => {
     const ctx = fakeCtx();
     render(
-      <NavigationTab
-        ctx={ctx}
-        firmware="px4"
-        telemetryOverride={mkTelemetry({ vioSupported: true })}
-      />,
+      <NavigationTab ctx={ctx} firmware="px4" telemetryOverride={mkTelemetry()} />,
     );
     expect(screen.getByTestId("vn-px4-params")).toBeTruthy();
     expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
     expect(screen.getByTestId("vn-ekf-px4-note")).toBeTruthy();
-    const vio = screen.getByTestId("vn-ekf-button-vio") as HTMLButtonElement;
-    expect(vio.disabled).toBe(true);
     const of = screen.getByTestId("vn-ekf-button-of") as HTMLButtonElement;
     expect(of.disabled).toBe(true);
   });
@@ -163,7 +154,6 @@ describe("NavigationTab", () => {
         ctx={ctx}
         firmware="inav"
         telemetryOverride={mkTelemetry({
-          vioSupported: false,
           flowQuality: 180,
         })}
       />,

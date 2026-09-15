@@ -116,7 +116,6 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
         ctx={props.ctx}
         companionState={telemetry.companionState}
         flowQuality={telemetry.flowQuality}
-        vioSupported={telemetry.vioSupported}
       />
       {props.firmware === "ardupilot" ? (
         <ArduPilotVisionParams />

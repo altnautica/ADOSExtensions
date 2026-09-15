@@ -94,18 +94,13 @@ function titleFor(id: string, _detail: string): string {
   return TITLES[id] ?? humanise(id);
 }
 
+// Keyed by the check ids the agent's pre-arm gate emits. An id with no
+// entry falls back to `humanise`, so a new check still renders a label.
 const TITLES: Record<string, string> = {
   companion_active: "Companion process active",
   flow_quality: "Optical flow quality",
   rangefinder: "Rangefinder healthy",
   scale_source: "Altitude scale source",
-  estimator_converged: "Estimator converged",
-  intrinsics_loaded: "Camera intrinsics loaded",
-  extrinsics_loaded: "Camera-IMU extrinsics loaded",
-  sync_offset: "Camera-IMU sync offset",
-  feature_count: "VIO feature count",
-  ekf_source: "EKF source set is vision",
-  mode_unknown: "Mode recognised",
 };
 
 function humanise(id: string): string {

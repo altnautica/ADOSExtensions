@@ -12,6 +12,8 @@ import { createRoot } from "react-dom/client";
 
 import { definePlugin } from "@altnautica/plugin-sdk";
 
+import en from "../../locales/en.json";
+
 import { NavigationTab } from "./components/NavigationTab";
 import type { FirmwareType } from "./types";
 
@@ -21,18 +23,28 @@ interface VisionNavConfig {
 
 const DEFAULT_FIRMWARE: FirmwareType = "ardupilot";
 
-const FLAT_LOCALE: Record<string, string> = {
-  "navigation.tabTitle": "Vision Nav",
-  "navigation.panel.title": "Vision Navigation",
-  "navigation.panel.subtitle": "Optical flow GPS-denied flight",
-  "navigation.sourceSet.label": "EKF Source Set",
-  "navigation.sourceSet.switchButton": "Use this set",
-  "navigation.health.flowQuality": "Flow quality",
-  "navigation.health.flowRate": "Flow rate",
-  "navigation.health.companionState": "Companion state",
-  "navigation.preArm.ready": "Ready",
-  "navigation.preArm.originBlocker": "EKF origin not set",
-};
+type LocaleTree = { [key: string]: string | LocaleTree };
+
+/**
+ * Flatten the shipped locale tree into the dotted keys the host's i18n
+ * lookup uses. `locales/en.json` is the single source for this copy —
+ * the manifest ships it and the bundle embeds the same file, so the two
+ * cannot drift.
+ */
+function flattenLocale(tree: LocaleTree, prefix: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(tree)) {
+    const path = `${prefix}${key}`;
+    if (typeof value === "string") {
+      out[path] = value;
+    } else {
+      Object.assign(out, flattenLocale(value, `${path}.`));
+    }
+  }
+  return out;
+}
+
+const FLAT_LOCALE = flattenLocale(en as LocaleTree, "navigation.");
 
 let rootEl: HTMLElement | null = null;
 let reactRoot: Root | null = null;
@@ -61,7 +73,7 @@ function renderTree(ctx: import("@altnautica/plugin-sdk").PluginContext): void {
 
 definePlugin({
   id: "com.altnautica.vision-nav",
-  version: "0.3.2",
+  version: "0.4.0",
   locale: FLAT_LOCALE,
   async mount(ctx) {
     const host = ensureRootEl();

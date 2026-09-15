@@ -1,11 +1,10 @@
 //! Per-drone configuration model + validation.
 //!
-//! Mirrors `config-schema.json` at the extension root and the prior
-//! Python validator. The host hands the plugin a config map at
-//! `on_configure`; [`VisionNavConfig::from_value`] parses and validates
-//! it. Validation rejects the same things the schema does: VIO modes on
-//! iNav, optical-flow modes with a forward/side camera, and hybrid mode
-//! without two opposed cameras.
+//! Mirrors `config-schema.json` at the extension root. The host hands
+//! the plugin a config map at `on_configure`;
+//! [`VisionNavConfig::from_value`] parses and validates it. Validation
+//! rejects the same thing the schema does: an optical-flow mode with a
+//! forward- or side-facing camera.
 
 use std::collections::BTreeMap;
 
@@ -18,9 +17,6 @@ pub enum Mode {
     Off,
     OpticalFlow,
     OpticalFlowDegraded,
-    VioOpenvins,
-    VioVinsFusion,
-    HybridOfPlusVio,
 }
 
 impl Mode {
@@ -31,9 +27,6 @@ impl Mode {
             Mode::Off => "off",
             Mode::OpticalFlow => "optical_flow",
             Mode::OpticalFlowDegraded => "optical_flow_degraded",
-            Mode::VioOpenvins => "vio_openvins",
-            Mode::VioVinsFusion => "vio_vins_fusion",
-            Mode::HybridOfPlusVio => "hybrid_of_plus_vio",
         }
     }
 
@@ -43,16 +36,8 @@ impl Mode {
             "off" => Mode::Off,
             "optical_flow" => Mode::OpticalFlow,
             "optical_flow_degraded" => Mode::OpticalFlowDegraded,
-            "vio_openvins" => Mode::VioOpenvins,
-            "vio_vins_fusion" => Mode::VioVinsFusion,
-            "hybrid_of_plus_vio" => Mode::HybridOfPlusVio,
             _ => return None,
         })
-    }
-
-    /// True for the two single-engine VIO modes (not hybrid).
-    pub fn is_vio(self) -> bool {
-        matches!(self, Mode::VioOpenvins | Mode::VioVinsFusion)
     }
 }
 
@@ -77,8 +62,8 @@ impl Orientation {
     }
 }
 
-/// Flight firmware. Optical flow runs on all three; VIO is rejected on
-/// iNav (its external-position EKF integration is not VIO-grade in 7.x).
+/// Flight firmware. Optical flow runs on all three; each one consumes
+/// `OPTICAL_FLOW_RAD` through a different parameter set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Firmware {
     Ardupilot,
@@ -216,7 +201,6 @@ pub struct VisionNavConfig {
     /// true so an existing config with no `active` key runs its mode as before.
     pub active: bool,
     pub camera: CameraConfig,
-    pub secondary_camera: Option<CameraConfig>,
     pub rangefinder: RangefinderConfig,
     pub firmware: FirmwareConfig,
     pub pre_arm: PreArmConfig,
@@ -235,6 +219,19 @@ impl VisionNavConfig {
             Mode::Off
         }
     }
+
+    /// The fail-closed configuration: no mode, not engaged. A config the
+    /// host hands over that fails validation lands here rather than on
+    /// the defaults, so a drone whose stored config names a mode this
+    /// build no longer offers emits nothing instead of silently running
+    /// a mode the operator did not select.
+    pub fn disengaged() -> Self {
+        Self {
+            mode: Mode::Off,
+            active: false,
+            ..Self::default()
+        }
+    }
 }
 
 impl Default for VisionNavConfig {
@@ -243,7 +240,6 @@ impl Default for VisionNavConfig {
             mode: Mode::OpticalFlow,
             active: true,
             camera: CameraConfig::default(),
-            secondary_camera: None,
             rangefinder: RangefinderConfig::default(),
             firmware: FirmwareConfig::default(),
             pre_arm: PreArmConfig::default(),
@@ -282,11 +278,6 @@ impl VisionNavConfig {
         if let Some(v) = map.get("camera") {
             cfg.camera = parse_camera(v)?;
         }
-        if let Some(v) = map.get("secondary_camera") {
-            if !matches!(v, Value::Nil) {
-                cfg.secondary_camera = Some(parse_camera(v)?);
-            }
-        }
         if let Some(v) = map.get("rangefinder") {
             cfg.rangefinder = parse_rangefinder(v)?;
         }
@@ -311,54 +302,6 @@ impl VisionNavConfig {
     }
 
     fn validate(&self) -> Result<(), ConfigError> {
-        // iNav rejection runs first (a fundamental capability mismatch).
-        if self.firmware.firmware == Firmware::Inav
-            && matches!(
-                self.mode,
-                Mode::VioOpenvins | Mode::VioVinsFusion | Mode::HybridOfPlusVio
-            )
-        {
-            return Err(ConfigError(
-                "VIO modes are not supported on iNav in this release. Use \
-                 mode='optical_flow' with a downward camera + rangefinder, or \
-                 cross-flash ArduPilot Copter or PX4 for VIO."
-                    .to_string(),
-            ));
-        }
-
-        // Hybrid requires two opposed cameras with distinct paths.
-        if self.mode == Mode::HybridOfPlusVio {
-            let secondary = self.secondary_camera.as_ref().ok_or_else(|| {
-                ConfigError(
-                    "hybrid_of_plus_vio requires both camera and \
-                     secondary_camera; the primary holds the downward \
-                     optical-flow stream and the secondary holds the forward \
-                     VIO stream."
-                        .to_string(),
-                )
-            })?;
-            let pair = (self.camera.orientation, secondary.orientation);
-            let opposed = matches!(
-                pair,
-                (Orientation::Downward, Orientation::Forward)
-                    | (Orientation::Forward, Orientation::Downward)
-            );
-            if !opposed {
-                return Err(ConfigError(
-                    "hybrid_of_plus_vio requires one camera with \
-                     orientation='downward' and one with orientation='forward'."
-                        .to_string(),
-                ));
-            }
-            if self.camera.device_path == secondary.device_path {
-                return Err(ConfigError(
-                    "camera and secondary_camera must point at distinct \
-                     device_path values."
-                        .to_string(),
-                ));
-            }
-        }
-
         // Optical-flow modes need a downward (or auto) camera.
         if matches!(self.mode, Mode::OpticalFlow | Mode::OpticalFlowDegraded)
             && matches!(
@@ -491,13 +434,13 @@ mod tests {
     }
 
     #[test]
-    fn vio_rejected_on_inav() {
-        let v = map(&[
-            ("mode", Value::from("vio_openvins")),
-            ("firmware", map(&[("type", Value::from("inav"))])),
-        ]);
+    fn mode_this_build_does_not_offer_is_rejected() {
+        // A stored config naming a mode an older build offered must be
+        // rejected outright, not coerced into a mode the operator did
+        // not pick.
+        let v = map(&[("mode", Value::from("estimator_from_an_older_build"))]);
         let err = VisionNavConfig::from_value(&v).unwrap_err();
-        assert!(err.0.contains("iNav"));
+        assert!(err.0.contains("unknown mode"), "{}", err.0);
     }
 
     #[test]
@@ -510,32 +453,11 @@ mod tests {
     }
 
     #[test]
-    fn hybrid_needs_two_opposed_cameras() {
-        // Missing secondary -> error.
-        let v = map(&[("mode", Value::from("hybrid_of_plus_vio"))]);
-        assert!(VisionNavConfig::from_value(&v).is_err());
-
-        // Two opposed cameras with distinct paths -> ok.
-        let v = map(&[
-            ("mode", Value::from("hybrid_of_plus_vio")),
-            (
-                "camera",
-                map(&[
-                    ("orientation", Value::from("downward")),
-                    ("device_path", Value::from("/dev/video0")),
-                ]),
-            ),
-            (
-                "secondary_camera",
-                map(&[
-                    ("orientation", Value::from("forward")),
-                    ("device_path", Value::from("/dev/video1")),
-                ]),
-            ),
-        ]);
-        let cfg = VisionNavConfig::from_value(&v).unwrap();
-        assert_eq!(cfg.mode, Mode::HybridOfPlusVio);
-        assert!(cfg.secondary_camera.is_some());
+    fn disengaged_config_emits_nothing() {
+        // The fail-closed config a rejected `on_configure` falls back to:
+        // no mode, not engaged, so the null estimator runs.
+        let cfg = VisionNavConfig::disengaged();
+        assert_eq!(cfg.effective_mode(), Mode::Off);
     }
 
     #[test]

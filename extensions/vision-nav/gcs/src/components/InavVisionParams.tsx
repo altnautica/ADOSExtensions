@@ -67,7 +67,6 @@ const NOTE_LINES: string[] = [
   "iNav 7.0 or newer is required for OPTICAL_FLOW_RAD reception over MAVLink rx.",
   "Set the FC's serial port function to MAVLINK on the UART wired to the ADOS Drone Agent.",
   "The plugin's component id is 198. iNav accepts the message from any component when opflow_hardware = MAVLINK.",
-  "VIO modes are not surfaced on iNav in this release; the plugin disables them in the mode picker.",
 ];
 
 export function InavVisionParams(): JSX.Element {
