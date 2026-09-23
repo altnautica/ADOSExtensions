@@ -160,6 +160,12 @@ export interface PluginContext {
     readSessionHealth(): Promise<PerceptionSessionHealth>;
   };
   command: {
+    /**
+     * Send a command. The host asks the operator to approve it first, so the
+     * promise waits for the operator's decision instead of the default
+     * request deadline; the host always answers, denying a prompt the
+     * operator leaves unanswered.
+     */
     send(command: string, args?: unknown): Promise<unknown>;
   };
   notifications: {
@@ -170,6 +176,11 @@ export interface PluginContext {
   };
   mission: {
     read(missionId: string): Promise<unknown>;
+    /**
+     * Replace the mission. Operator-approved like `command.send`, so it waits
+     * for the operator's decision and the upload instead of the default
+     * request deadline.
+     */
     write(update: MissionUpdate): Promise<unknown>;
   };
   config: {
@@ -219,6 +230,14 @@ export interface CreateContextOptions {
   locale?: Record<string, string>;
 }
 
+/**
+ * Request options for methods the host holds for operator approval. A human
+ * decision can take longer than any fixed deadline, and a client timeout would
+ * report failure for an action the operator then approves. The host bounds the
+ * wait itself: an unanswered prompt is denied.
+ */
+const OPERATOR_CONFIRMED = { timeoutMs: Number.POSITIVE_INFINITY };
+
 export function createPluginContext(
   opts: CreateContextOptions = {},
 ): PluginContext {
@@ -248,7 +267,12 @@ export function createPluginContext(
     },
     command: {
       send: (command, args) =>
-        client.request("command.send", "command.send", { command, args }),
+        client.request(
+          "command.send",
+          "command.send",
+          { command, args },
+          OPERATOR_CONFIRMED,
+        ),
     },
     notifications: {
       publish: (payload) =>
@@ -262,7 +286,7 @@ export function createPluginContext(
       read: (missionId) =>
         client.request("mission.read", "mission.read", { missionId }),
       write: (update) =>
-        client.request("mission.write", "mission.write", update),
+        client.request("mission.write", "mission.write", update, OPERATOR_CONFIRMED),
     },
     config: {
       onChange: (handler) => client.on("config.changed", handler),

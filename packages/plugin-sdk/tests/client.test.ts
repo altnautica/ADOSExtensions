@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
+import { createPluginContext } from "../src/api";
 import { PluginClient } from "../src/client";
 import { HostError, PROTOCOL_VERSION } from "../src/protocol";
 import { MemoryTransport } from "../src/transport";
@@ -65,6 +66,36 @@ describe("PluginClient.request", () => {
       name: "HostError",
       code: "timeout",
     });
+  });
+});
+
+describe("operator-confirmed calls", () => {
+  it("wait past the default deadline for the host's answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, client } = setup();
+      const ctx = createPluginContext({ client });
+      transport.onPluginSend = (env) => {
+        // The operator reads the prompt for 8 s, then approves.
+        setTimeout(() => {
+          transport.pushFromHost({
+            id: env.id,
+            type: "response",
+            method: env.method,
+            capability: env.capability,
+            args: { ok: true },
+            version: PROTOCOL_VERSION,
+          });
+        }, 8_000);
+      };
+      const sent = ctx.command.send("land");
+      const written = ctx.mission.write({ missionId: "m1" });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(sent).resolves.toEqual({ ok: true });
+      await expect(written).resolves.toEqual({ ok: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
