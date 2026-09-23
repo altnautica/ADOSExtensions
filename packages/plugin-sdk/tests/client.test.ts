@@ -112,3 +112,41 @@ describe("PluginClient.dispose", () => {
     await expect(promise).rejects.toBeInstanceOf(HostError);
   });
 });
+
+describe("PluginClient capability token", () => {
+  it("stamps the latest host-published token on every request", async () => {
+    const { transport, client } = setup();
+    const sent: Array<{ token?: string }> = [];
+    transport.onPluginSend = (env) => {
+      sent.push(env);
+      transport.pushFromHost({
+        id: env.id,
+        type: "response",
+        method: env.method,
+        capability: env.capability,
+        args: null,
+        version: PROTOCOL_VERSION,
+      });
+    };
+    await client.request("ping", "", {});
+    transport.pushFromHost({
+      id: "t1",
+      type: "event",
+      method: "capability.token",
+      capability: "",
+      args: { token: "tok-1" },
+      version: PROTOCOL_VERSION,
+    });
+    await client.request("ping", "", {});
+    transport.pushFromHost({
+      id: "t2",
+      type: "event",
+      method: "capability.token",
+      capability: "",
+      args: { token: "tok-2" },
+      version: PROTOCOL_VERSION,
+    });
+    await client.request("ping", "", {});
+    expect(sent.map((e) => e.token)).toEqual([undefined, "tok-1", "tok-2"]);
+  });
+});

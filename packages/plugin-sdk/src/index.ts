@@ -13,6 +13,7 @@ export {
   type RpcError,
   type EnvelopeType,
   type TelemetryTopic,
+  type BatterySample,
 } from "./protocol";
 
 export {
@@ -21,7 +22,7 @@ export {
   type Transport,
 } from "./transport";
 
-export { PluginClient } from "./client";
+export { PluginClient, CAPABILITY_TOKEN_EVENT } from "./client";
 
 export {
   createPluginContext,

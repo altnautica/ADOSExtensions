@@ -8,6 +8,9 @@ import { createWindowTransport, type Transport } from "./transport";
 
 type EventHandler<TArgs = unknown> = (args: TArgs) => void;
 
+/** Host event carrying the capability token to stamp on every request. */
+export const CAPABILITY_TOKEN_EVENT = "capability.token";
+
 /**
  * The PluginClient is the single public surface a plugin uses to
  * round-trip with the GCS host. It hides envelope assembly, capability
@@ -25,6 +28,12 @@ export class PluginClient {
   private readonly subscriptions = new Map<string, Set<EventHandler>>();
   private readonly disposers: Array<() => void> = [];
   private readonly idGen: () => string;
+  /**
+   * The latest capability token the host published on the
+   * `capability.token` event. A host that verifies tokens rejects any
+   * request without one, so every request carries the current value.
+   */
+  private token: string | null = null;
 
   constructor(opts?: { transport?: Transport; idGen?: () => string }) {
     this.transport = opts?.transport ?? createWindowTransport();
@@ -63,6 +72,7 @@ export class PluginClient {
         capability,
         args,
         version: PROTOCOL_VERSION,
+        ...(this.token !== null ? { token: this.token } : {}),
       };
       this.transport.send(env);
       const timeoutMs = options?.timeoutMs ?? 5_000;
@@ -156,6 +166,10 @@ export class PluginClient {
       return;
     }
     if (env.type === "event") {
+      if (env.method === CAPABILITY_TOKEN_EVENT) {
+        const token = (env.args as { token?: unknown } | null)?.token;
+        this.token = typeof token === "string" && token.length > 0 ? token : null;
+      }
       const set = this.subscriptions.get(env.method);
       if (!set) return;
       for (const fn of set) fn(env.args);

@@ -81,6 +81,8 @@ function fakeCtx(): {
       },
       events: {
         subscribe: () => () => undefined,
+        listen: async () => () => undefined,
+        publish: async () => undefined,
       },
       config: { onChange: () => () => undefined },
       theme: { onChange: () => () => undefined },

@@ -17,6 +17,8 @@ export interface RpcEnvelope<TArgs = unknown> {
   args: TArgs;
   version: typeof PROTOCOL_VERSION;
   error?: { code: string; message: string };
+  /** Capability token a request carries (see `capability.token`). */
+  token?: string;
 }
 
 export interface RpcError {
@@ -33,14 +35,51 @@ export class HostError extends Error {
   }
 }
 
-/** Shared topic taxonomy used to derive capability strings. */
+/**
+ * Telemetry topics the host serves. Each also has a `mavlink.`-prefixed
+ * spelling; `battery` carries a normalized {@link BatterySample} while
+ * `mavlink.battery` carries the raw adapter frame.
+ */
 export const TELEMETRY_TOPICS = [
+  "attitude",
+  "position",
   "battery",
-  "mavlink",
-  "mavlink.STATUSTEXT",
-  "mavlink.HEARTBEAT",
+  "gps",
+  "vfr",
+  "rc",
+  "sysStatus",
+  "radio",
+  "heartbeat",
+  "statustext",
+  "event",
+  "mavlink.attitude",
+  "mavlink.position",
+  "mavlink.battery",
+  "mavlink.gps",
+  "mavlink.vfr",
+  "mavlink.rc",
   "mavlink.SYS_STATUS",
-  "video.stats",
+  "mavlink.radio",
+  "mavlink.HEARTBEAT",
+  "mavlink.STATUSTEXT",
+  "mavlink.EVENT",
 ] as const;
 
 export type TelemetryTopic = (typeof TELEMETRY_TOPICS)[number];
+
+/**
+ * The frame the host delivers on the `battery` telemetry topic. Values the
+ * flight controller does not report are `null`; `cellVoltagesV` is empty when
+ * per-cell voltages are not reported.
+ */
+export interface BatterySample {
+  timestampMs: number;
+  packId: number;
+  cellVoltagesV: number[];
+  totalVoltageV: number;
+  currentA: number | null;
+  consumedAh: number | null;
+  remainingPercent: number | null;
+  temperatureC: number | null;
+  cellCount: number | null;
+}

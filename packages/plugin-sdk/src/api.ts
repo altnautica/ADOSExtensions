@@ -187,6 +187,17 @@ export interface PluginContext {
       topic: string,
       handler: (args: T) => void,
     ): () => void;
+    /**
+     * Open delivery of one GCS plugin-bus topic (another plugin's published
+     * events). Needs the `event.subscribe`
+     * grant. Resolves with a function that stops delivery on the host too.
+     */
+    listen<T = unknown>(
+      topic: string,
+      handler: (args: T) => void,
+    ): Promise<() => void>;
+    /** Publish an event on the GCS plugin bus. Needs `event.publish`. */
+    publish(topic: string, payload: unknown): Promise<unknown>;
   };
   theme: {
     onChange(
@@ -258,6 +269,24 @@ export function createPluginContext(
     },
     events: {
       subscribe: (topic, handler) => client.on(topic, handler),
+      listen: async (topic, handler) => {
+        // The host delivers bus events with the topic as the method.
+        const off = client.on(topic, handler);
+        try {
+          await client.request("events.subscribe", "event.subscribe", { topic });
+        } catch (err) {
+          off();
+          throw err;
+        }
+        return () => {
+          off();
+          void client
+            .request("events.unsubscribe", "", { topic })
+            .catch(() => {});
+        };
+      },
+      publish: (topic, payload) =>
+        client.request("events.publish", "event.publish", { topic, payload }),
     },
     theme: {
       onChange: (handler) =>
