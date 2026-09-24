@@ -13,7 +13,7 @@ use world_engine_transport::{resolve_compute, ResolvedComputeNode};
 
 use crate::credentials::CredentialStore;
 use crate::host::{config_string, Host};
-use ados_protocol::node_credential::NodeLane;
+use world_engine_protocol::node_credential::NodeLane;
 
 /// The plugin config key that pins the compute node.
 pub const PIN_KEY: &str = "offload.compute_node_addr";
@@ -115,8 +115,8 @@ mod tests {
     use super::*;
     use crate::credentials::{ATLAS_INGEST_LANE, STORE_FILE};
     use crate::testing::FakeHost;
-    use ados_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
     use serde_json::json;
+    use world_engine_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
 
     fn discovered() -> Option<ResolvedComputeNode> {
         Some(ResolvedComputeNode {

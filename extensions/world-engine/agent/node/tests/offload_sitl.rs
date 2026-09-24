@@ -15,13 +15,13 @@ use std::time::Duration;
 
 use ados_offload::OffloadMode;
 use ados_protocol::framebus::DetectionBatch;
-use ados_protocol::node_credential::NodeLane;
 use tokio::sync::{mpsc, Mutex, Notify};
 use world_engine_node::{
     build_router, offload_ws_path, offload_ws_router, pump_to_broadcaster, run_offload_session,
     Cluster, ComputeAuth, DetectionBroadcaster, Engine, JobStore, MockDetector, MockReconstructor,
     NodeCredentialStore, Scheduler, SessionProgress, SessionSpec, VecFrameStream,
 };
+use world_engine_protocol::node_credential::NodeLane;
 use world_engine_protocol::offload::{Detection, OffloadDetectionBatch};
 use world_engine_transport::{
     run_offload_orchestrator, stream_offload_detections, DetectionPublisher, NodeEndpoint,

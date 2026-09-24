@@ -21,8 +21,8 @@ use axum::{
 use reqwest::Client;
 use tokio::sync::mpsc::{error::TrySendError, Sender};
 
-use ados_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 use world_engine_protocol::atlas::AtlasEvent;
+use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
 use crate::{AtlasBearer, BearerKind, TransportError};
 

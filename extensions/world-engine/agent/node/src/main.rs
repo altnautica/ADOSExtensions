@@ -16,8 +16,10 @@
 //! authenticated them, so every request there is the owner). The TCP listener
 //! is for other nodes: each lane admits only a credential this node issued for
 //! it, and owner-only routes are refused over TCP whatever is presented, so
-//! binding a non-loopback address is safe. It still defaults to `127.0.0.1`;
-//! the installer opts a node into serving the LAN with `ADOS_COMPUTE_BIND`.
+//! binding a non-loopback address is safe. Run by the plugin host (the
+//! extension's `node` service, whose manifest declares `listen_ports: [8092]`)
+//! it binds `0.0.0.0:8092` so drones on the LAN reach it; a standalone run
+//! stays on loopback. `ADOS_COMPUTE_BIND` overrides both.
 //!
 //! Worker note: the worker claims the next job under the engine lock, then
 //! releases the lock and runs the (real, possibly minutes-long) backend
@@ -34,7 +36,8 @@
 //!   reconstructor writes artifacts here, and the artifact route serves from here
 //! - `ADOS_COMPUTE_NODE_CREDENTIALS` the store of credentials issued to drones
 //!   (default `<data>/node/node-credentials.json`)
-//! - `ADOS_COMPUTE_BIND`      bind address (default `127.0.0.1:8092`, loopback)
+//! - `ADOS_COMPUTE_BIND`      bind address (default `0.0.0.0:8092` under the
+//!   plugin host, `127.0.0.1:8092` standalone)
 //! - `ADOS_COMPUTE_PUBLIC_URL` base URL the GCS fetches artifacts from (default
 //!   derived from the bind address, substituting the node hostname for a wildcard
 //!   bind); the artifact URL is `<public_url>/artifacts/<relpath>`
@@ -348,7 +351,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let paths = StatePaths::resolve(|k| std::env::var(k).ok());
-    let bind = env_or("ADOS_COMPUTE_BIND", "127.0.0.1:8092");
+    // Under the plugin host the node serves the LAN: that is what the declared
+    // listen port is for, and the sandbox admits a bind on exactly that port.
+    let default_bind = if ctx.is_some() {
+        "0.0.0.0:8092"
+    } else {
+        "127.0.0.1:8092"
+    };
+    let bind = env_or("ADOS_COMPUTE_BIND", default_bind);
     let node_id = resolve_node_id();
     let workers: u32 = env_or("ADOS_COMPUTE_WORKERS", "1").parse().unwrap_or(1);
     let retention_ms: i64 = env_or("ADOS_COMPUTE_RETENTION_S", "86400")

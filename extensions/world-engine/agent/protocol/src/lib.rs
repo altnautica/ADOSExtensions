@@ -5,15 +5,19 @@
 //!   descriptors).
 //! - [`atlas_state`]: the `atlas` half of the `status` telemetry channel.
 //! - [`compute`]: the compute-node job, dataset and cluster types.
+//! - [`node_credential`]: the scoped credential a compute node issues a drone
+//!   or ground station, its lanes, and the installed-credential store.
 //! - [`offload`]: the perception-offload frame reference and detection batch.
 //! - [`paths`]: where the World Engine processes find each other on one node.
 //!
-//! Pure types: nothing here performs I/O, so every World Engine binary (and
-//! its tests) links this crate without pulling a runtime.
+//! No runtime: the only I/O here is the credential store's small file read
+//! and atomic write, so every World Engine binary (and its tests) links this
+//! crate without pulling an async runtime.
 
 pub mod atlas;
 pub mod atlas_state;
 pub mod compute;
+pub mod node_credential;
 pub mod offload;
 pub mod paths;
 

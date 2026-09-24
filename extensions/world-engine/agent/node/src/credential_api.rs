@@ -19,7 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use serde::Deserialize;
 
-use ados_protocol::node_credential::NodeLane;
+use world_engine_protocol::node_credential::NodeLane;
 
 use crate::auth::ComputeAuth;
 use crate::node_credentials::CredentialError;

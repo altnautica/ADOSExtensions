@@ -12,10 +12,10 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::Serialize;
 
-use ados_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 use world_engine_protocol::compute::{
     CancelResponse, ComputeHeartbeat, ComputeJobKind, Dataset, JobRecord, Output, SubmitResponse,
 };
+use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);

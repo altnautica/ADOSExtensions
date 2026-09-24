@@ -22,7 +22,7 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-use ados_protocol::node_credential::{NodeLane, NODE_CREDENTIAL_HEADER};
+use world_engine_protocol::node_credential::{NodeLane, NODE_CREDENTIAL_HEADER};
 use world_engine_transport::UnixPeer;
 
 use crate::node_credentials::NodeCredentialStore;

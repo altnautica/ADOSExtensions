@@ -14,7 +14,6 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ados_protocol::node_credential::{InstalledCredential, NodeLane, WorkstationCredentials};
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -22,6 +21,9 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
+use world_engine_protocol::node_credential::{
+    InstalledCredential, NodeLane, WorkstationCredentials,
+};
 
 use crate::api::detail;
 

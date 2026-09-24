@@ -2,7 +2,7 @@
 //!
 //! A drone reaches this node's TCP listener only with a credential the operator
 //! had this node issue (over the operator socket), scoped to the lanes a drone
-//! uses and installed on the drone (see [`ados_protocol::node_credential`]).
+//! uses and installed on the drone (see [`world_engine_protocol::node_credential`]).
 //! The lane gate in [`crate::auth`] then admits that credential for exactly
 //! those lanes.
 //!
@@ -18,8 +18,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use ados_protocol::node_credential::NodeLane;
 use ados_protocol::pairing_posture::constant_time_eq;
+use world_engine_protocol::node_credential::NodeLane;
 
 /// Default location of the issued-credential store.
 pub const DEFAULT_NODE_CREDENTIALS_PATH: &str = "/var/ados/compute/node-credentials.json";

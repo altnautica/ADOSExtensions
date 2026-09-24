@@ -14,7 +14,7 @@ use std::sync::Arc;
 use axum::Router;
 use tokio::sync::mpsc::Sender;
 
-use ados_protocol::node_credential::NodeLane;
+use world_engine_protocol::node_credential::NodeLane;
 use world_engine_transport::{atlas_event_router, world_ws_router, AtlasEvent, WorldBroadcaster};
 
 use crate::artifacts::artifact_router;
