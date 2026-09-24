@@ -30,7 +30,6 @@ contracts explicit and permission-scoped.
 pnpm install
 
 # GCS halves - one build + test pair per extension.
-pnpm build:battery-health          pnpm test:battery-health
 pnpm build:thermal-camera          pnpm test:thermal-camera
 pnpm build:mavlink-gimbal-v2       pnpm test:mavlink-gimbal-v2
 pnpm build:follow-me               pnpm test:follow-me
@@ -70,8 +69,6 @@ ships:
 
 ## Repository Map
 
-- Battery health panel:
-  `extensions/battery-health-panel/`
 - Thermal camera extension:
   `extensions/thermal-camera-flir-lepton-usb/`
 - MAVLink gimbal extension:

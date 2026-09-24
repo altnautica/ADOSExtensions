@@ -8,7 +8,7 @@ release manager can pick the pipeline that matches the situation.
 
 | Workflow                       | Trigger tag pattern                | What it does |
 |--------------------------------|------------------------------------|-------------|
-| `release.yml`                  | `battery-health-panel-v*`, `mavlink-gimbal-v2-v*`, `follow-me-v*`, `siyi-pod-v*` | Per-extension release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. The tag list is the publish allowlist. |
+| `release.yml`                  | `mavlink-gimbal-v2-v*`, `follow-me-v*`, `siyi-pod-v*` | Per-extension release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. The tag list is the publish allowlist. |
 | `vision-nav-release.yml`       | `vision-nav-v*`                    | Pipeline for vision-nav: cross-compiles the Rust agent half against the SDK revision pinned in `ADOS_AGENT_REV`, then packs with `scripts/pack-rust.sh` and signs. |
 | `rust-check.yml`               | pull request, push to main         | Builds, clippies and tests the Rust agent half against the pinned SDK revision. |
 | `typecheck.yml`                | pull request, push to main         | TypeScript typecheck across every GCS package. |

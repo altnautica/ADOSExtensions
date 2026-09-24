@@ -11,7 +11,6 @@ on:
       # needs a libuvc backend that does not exist in this tree, so no
       # configuration of it can produce a reading. It builds and tests as a
       # development preview; it is not published.
-      - "battery-health-panel-v*"
       - "mavlink-gimbal-v2-v*"
       - "follow-me-v*"
       - "siyi-pod-v*"

@@ -53,13 +53,13 @@ jobs:
       # changed workspace glob in pnpm-workspace.yaml would otherwise pass
       # green while checking less than it claims.
       #
-      # 9 = the six extensions/*/gcs halves, packages/plugin-sdk,
+      # 8 = the five extensions/*/gcs halves, packages/plugin-sdk,
       # packages/extension-ui, and the root aggregator that owns the ordered
       # `typecheck` script itself.
       - name: The gate actually checked the packages it exists for
         run: |
           set -euo pipefail
-          expected=9
+          expected=8
           found=$(pnpm -r list --depth -1 --json | python3 -c '
           import json, pathlib, sys
           n = 0

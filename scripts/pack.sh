@@ -6,7 +6,7 @@
 #   scripts/pack.sh <extension-folder-or-path>
 #
 # Examples:
-#   scripts/pack.sh battery-health-panel        # resolves to extensions/battery-health-panel
+#   scripts/pack.sh mavlink-gimbal-v2           # resolves to extensions/mavlink-gimbal-v2
 #   scripts/pack.sh ./my-plugin                 # any directory containing manifest.yaml
 #   scripts/pack.sh /abs/path/to/my-plugin      # absolute path also accepted
 #

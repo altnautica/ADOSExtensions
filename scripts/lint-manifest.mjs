@@ -32,7 +32,7 @@
  *
  * No YAML dependency: the manifest subset that matters here is flat enough to
  * scan line-wise, and adding a parser dependency to a lint script that runs
- * from six package directories is not worth it.
+ * from five package directories is not worth it.
  */
 
 import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";

@@ -29,7 +29,6 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 
 | Extension | Kind | What it adds |
 |-----------|------|--------------|
-| **battery-health-panel** | GCS panel | Cell-level battery diagnostics, predicted time to minimum voltage, and anomaly alerts |
 | **thermal-camera-flir-lepton-usb** | Agent + GCS | Development preview, not published. FLIR Lepton 3.5 radiometric driver, palettes and spot metering with a GCS overlay. The capture path needs a libuvc backend that does not exist in this repository, so it reports an explicit unavailable state instead of producing readings |
 | **mavlink-gimbal-v2** | Agent + GCS | MAVLink Gimbal v2 manager control, region-of-interest lock, and an aim-at-target visual servo with a lock-state safety gate |
 | **vision-nav** | Agent + GCS | GPS-denied navigation from downward optical flow, with a calibration wizard and a pre-arm gate |
@@ -54,7 +53,6 @@ Packages an extension author builds against:
 
 ```
 extensions/                        first-party extensions, versioned independently
-  battery-health-panel/
   follow-me/
   mavlink-gimbal-v2/
   siyi-pod/
@@ -79,20 +77,20 @@ scripts/
 ## Building one extension
 
 ```sh
-cd extensions/battery-health-panel
+cd extensions/mavlink-gimbal-v2
 pnpm install
 pnpm build
-../../scripts/pack.sh battery-health-panel
+../../scripts/pack.sh mavlink-gimbal-v2
 ```
 
-This produces `dist/com.altnautica.battery-health-panel-<version>.adosplug`. The archive layout matches the public extension spec at [docs.altnautica.com/developers/manifest](https://docs.altnautica.com/developers/manifest).
+This produces `dist/com.altnautica.mavlink-gimbal-v2-<version>.adosplug`. The archive layout matches the public extension spec at [docs.altnautica.com/developers/manifest](https://docs.altnautica.com/developers/manifest).
 
 `pack.sh` refuses to write a half-archive: if the manifest declares a GCS entrypoint the built bundle has to be in the archive, and if it declares a Python `agent.entrypoint` the module that entrypoint names has to be there too. An archive with no agent source installs cleanly and verifies, then the supervisor dies importing a module that was never packed.
 
 Check a manifest against the code it describes before you pack:
 
 ```sh
-node scripts/lint-manifest.mjs extensions/battery-health-panel/manifest.yaml
+node scripts/lint-manifest.mjs extensions/mavlink-gimbal-v2/manifest.yaml
 ```
 
 It fails on a declared permission with no call site, a declared UI slot with no implementation, and a version that disagrees across `manifest.yaml`, the two `package.json` files and the `definePlugin({ version })` literal the host registers.
