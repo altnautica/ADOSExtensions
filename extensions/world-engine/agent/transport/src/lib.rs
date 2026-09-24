@@ -29,7 +29,8 @@
 //!
 //! The drone-side compute client lives here too, so the light drone binary
 //! reaches a node without linking the node's reconstruction stack:
-//! [`ComputeClient`] (the job API), [`mdns`] (advertise + resolve), and the
+//! [`ComputeClient`] (the job API), [`mdns`] (the compute-node service type
+//! and the pick over a host browse), and the
 //! perception-offload orchestrator with its safety-gated return bridge.
 
 mod bearer;
@@ -38,8 +39,8 @@ mod error;
 mod ladder;
 mod lan_http;
 mod loopback;
-/// mDNS advertise (the compute node) + resolve (a drone-side caller browsing for
-/// a `profile=workstation` node).
+/// The compute node's job-API service type and TXT record, and the pick of a
+/// node from the host's `mdns.browse` answer.
 pub mod mdns;
 mod offload_bridge;
 mod offload_client;
@@ -54,7 +55,9 @@ pub use error::TransportError;
 pub use ladder::BearerLadder;
 pub use lan_http::{atlas_event_router, LanHttpBearer};
 pub use loopback::LoopbackBearer;
-pub use mdns::{advertise_compute, resolve_compute, ComputeAdvert, ResolvedComputeNode};
+pub use mdns::{
+    compute_advert_txt, pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE, DEVICE_ID_TXT,
+};
 pub use offload_bridge::{DetectionPublisher, OffloadReturnBridge};
 pub use offload_client::stream_offload_detections;
 pub use offload_orchestrator::{

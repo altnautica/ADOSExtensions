@@ -2,8 +2,8 @@
 //!
 //! An NPU-less drone runs its detection on a workstation instead of on board.
 //! Each tick, when the node facts (`node.info`) and plugin config
-//! `offload.enabled` call for offload, the camera is up, and a
-//! `profile=workstation` node is reachable on the LAN, this loop starts and
+//! `offload.enabled` call for offload, the camera is publishing its main
+//! stream, and a compute node is reachable on the LAN, this loop starts and
 //! supervises the offload orchestrator: the drone streams its RTSP camera to the
 //! node, the node runs the detector, and detections return onto the drone's own
 //! `vision.detection` bus (transparent to every consumer). While a session is
@@ -25,7 +25,7 @@
 //! prefers a workstation that issued one. The RTSP URL handed to the node is the
 //! drone's LAN egress IP (never `localhost`: the node pulls the feed).
 
-use std::net::{IpAddr, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -125,13 +125,29 @@ fn wants_offload(mode: OffloadMode, info: Option<&NodeInfo>) -> bool {
 
 /// The drone's egress IP toward `host:port`: the source address a connection to
 /// the node would use, i.e. the address the node reaches the RTSP feed on. A
-/// UDP "connect" picks the source IP without sending a packet. `None` when the
-/// address does not resolve or no route exists.
-fn local_ip_towards(host: &str, port: u16) -> Option<IpAddr> {
-    let addr = format!("{host}:{port}").to_socket_addrs().ok()?.next()?;
-    let sock = UdpSocket::bind(("0.0.0.0", 0)).ok()?;
-    sock.connect(addr).ok()?;
-    sock.local_addr().ok().map(|a| a.ip())
+/// UDP "connect" picks the source IP without sending a packet.
+///
+/// The socket is never explicitly bound. The plugin unit carries
+/// `SocketBindDeny=any`, and systemd's bind filter matches every port under
+/// `any`, the ephemeral port 0 included, so a `bind("0.0.0.0:0")` here fails
+/// with EPERM and no session can ever start. The kernel's implicit bind on
+/// `connect()` is not a `bind()` call, so it passes the filter.
+fn local_ip_towards(host: &str, port: u16) -> Result<IpAddr, String> {
+    use socket2::{Domain, Socket, Type};
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("{host} does not resolve: {e}"))?
+        .next()
+        .ok_or_else(|| format!("{host} resolves to no address"))?;
+    let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, None)
+        .map_err(|e| format!("socket: {e}"))?;
+    sock.connect(&addr.into())
+        .map_err(|e| format!("no route to {addr}: {e}"))?;
+    sock.local_addr()
+        .map_err(|e| format!("source address: {e}"))?
+        .as_socket()
+        .map(|a| a.ip())
+        .ok_or_else(|| "source address is not an IP address".to_string())
 }
 
 /// Everything the reconciler needs.
@@ -247,7 +263,13 @@ impl Reconciler {
         let node =
             compute_node::resolve(self.host.as_ref(), &self.credentials, &OFFLOAD_STREAM_LANE)
                 .await?;
-        let local_ip = local_ip_towards(&node.host, node.port)?;
+        let local_ip = match local_ip_towards(&node.host, node.port) {
+            Ok(ip) => ip,
+            Err(e) => {
+                tracing::warn!(node = %node.addr(), error = %e, "offload reconciler: no egress address toward the compute node");
+                return None;
+            }
+        };
         // The credential THIS node issued, or the sole one for a pinned address.
         let credential = node.credential(&self.credentials, &OFFLOAD_STREAM_LANE);
         if credential.is_none() {
@@ -325,9 +347,9 @@ mod tests {
         // No packet is sent; the call only picks the source address.
         assert_eq!(
             local_ip_towards("127.0.0.1", 8092),
-            Some(IpAddr::from([127, 0, 0, 1]))
+            Ok(IpAddr::from([127, 0, 0, 1]))
         );
-        // An unresolvable host yields None (never a fabricated reach).
-        assert!(local_ip_towards("not a host", 80).is_none());
+        // An unresolvable host is an error (never a fabricated reach).
+        assert!(local_ip_towards("not a host", 80).is_err());
     }
 }

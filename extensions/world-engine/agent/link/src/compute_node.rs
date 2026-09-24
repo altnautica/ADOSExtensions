@@ -2,14 +2,15 @@
 //!
 //! A pinned address (plugin config `offload.compute_node_addr`, `host:port` or a
 //! bare host) wins over mDNS, for segmented networks where multicast does not
-//! reach the node. Otherwise the node is a `profile=workstation` advert,
-//! preferring one that issued this drone a credential. The Atlas forwarder and
-//! the offload reconciler share this rule.
+//! reach the node. Otherwise the node is a compute-node job-API advert
+//! ([`COMPUTE_SERVICE`]) found through the host's `mdns.browse`, preferring one
+//! that issued this drone a credential. The Atlas forwarder, the offload
+//! reconciler and the ground-station relay share this rule.
 
 use std::future::Future;
 use std::time::Duration;
 
-use world_engine_transport::{resolve_compute, ResolvedComputeNode};
+use world_engine_transport::{pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE};
 
 use crate::credentials::CredentialStore;
 use crate::host::{config_string, Host};
@@ -19,7 +20,7 @@ use world_engine_protocol::node_credential::NodeLane;
 pub const PIN_KEY: &str = "offload.compute_node_addr";
 /// The compute node's default job-API port (used when a pinned addr omits one).
 pub const DEFAULT_JOB_API_PORT: u16 = 8092;
-/// One mDNS browse's timeout.
+/// One mDNS browse's window.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A compute node to reach.
@@ -105,9 +106,28 @@ pub async fn resolve(
     lane: &NodeLane,
 ) -> Option<ComputeNode> {
     resolve_with(host, || async {
-        resolve_compute(RESOLVE_TIMEOUT, &stores.issuers(lane)).await
+        discover(host, &stores.issuers(lane), RESOLVE_TIMEOUT).await
     })
     .await
+}
+
+/// A compute node on the LAN: one browse of [`COMPUTE_SERVICE`] through the
+/// host, lasting `window`, preferring a node in `preferred`. `None` when no
+/// node answered, or when the host could not browse (a missing
+/// `network.outbound` grant, or a host that predates `mdns.browse`), which is
+/// logged because it leaves discovery dead until it is fixed.
+pub async fn discover(
+    host: &dyn Host,
+    preferred: &[String],
+    window: Duration,
+) -> Option<ResolvedComputeNode> {
+    match host.mdns_browse(COMPUTE_SERVICE, window).await {
+        Ok(services) => pick_compute_node(&services, preferred),
+        Err(e) => {
+            tracing::warn!(error = %e, service = COMPUTE_SERVICE, "compute node browse failed");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -160,6 +180,33 @@ mod tests {
         assert_eq!(node.base_url(), "http://192.0.2.9:8092");
         assert_eq!(node.device_id.as_deref(), Some("ws-mdns"));
         assert_eq!(resolve_with(host.as_ref(), || async { None }).await, None);
+    }
+
+    #[tokio::test]
+    async fn without_a_pin_the_node_comes_from_the_hosts_browse() {
+        let host = FakeHost::new();
+        let stores = CredentialStore { path: None };
+        // The host cannot browse: nothing resolves, and nothing is guessed.
+        assert_eq!(
+            resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE).await,
+            None
+        );
+
+        host.mdns.lock().insert(
+            COMPUTE_SERVICE.to_string(),
+            vec![ados_protocol::plugin_mdns::DiscoveredService {
+                fullname: format!("ws.{COMPUTE_SERVICE}.local."),
+                hostname: "ws.local".into(),
+                port: 8092,
+                addresses: vec!["192.0.2.9".into()],
+                txt: world_engine_transport::compute_advert_txt("ws-mdns"),
+            }],
+        );
+        let node = resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE)
+            .await
+            .unwrap();
+        assert_eq!(node.base_url(), "http://192.0.2.9:8092");
+        assert_eq!(node.device_id.as_deref(), Some("ws-mdns"));
     }
 
     #[test]

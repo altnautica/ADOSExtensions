@@ -10,7 +10,9 @@
 //! config (`serving.*`, `atlas.live_reconstruct`), publishes its compute status
 //! on the `status` telemetry channel, and mirrors its reconstruct jobs into the
 //! `jobs` cloud records. Without them (a standalone dev run) it runs on
-//! defaults and makes no host call.
+//! defaults and makes no host call. A lost host session (a plugin-host
+//! restart) ends the process with an error, so its unit's `Restart=` brings it
+//! back with a fresh socket and token.
 //!
 //! Reach: the operator reaches the node only through `http.sock` (ados-control
 //! authenticated them, so every request there is the owner). The TCP listener
@@ -315,7 +317,8 @@ fn env_u64(key: &str) -> Option<u64> {
 /// `ADOS_PLUGIN_TOKEN`). `Ok(None)` is a standalone dev run: no host, defaults
 /// everywhere. A host that is named but refuses the connection is an error, so
 /// the service fails loudly instead of silently running unmanaged.
-async fn connect_host() -> Result<Option<PluginContext>, ados_sdk::RunnerError> {
+async fn connect_host(
+) -> Result<Option<(PluginContext, Arc<PluginIpcClient>)>, ados_sdk::RunnerError> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
     let Ok(args) = RunnerArgs::parse(&argv, env) else {
@@ -331,20 +334,23 @@ async fn connect_host() -> Result<Option<PluginContext>, ados_sdk::RunnerError> 
             tracing::warn!(dir, error = %e, "could not create plugin data dir");
         }
     }
-    Ok(Some(PluginContext::new(
-        ipc,
+    let ctx = PluginContext::new(
+        ipc.clone(),
         env!("CARGO_PKG_VERSION"),
         args.agent_id,
         args.data_dir,
         BTreeMap::new(),
-    )))
+    );
+    Ok(Some((ctx, ipc)))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
-    let ctx = connect_host().await?;
+    let host = connect_host().await?;
+    let host_ipc = host.as_ref().map(|(_, ipc)| ipc.clone());
+    let ctx = host.map(|(ctx, _)| ctx);
     match &ctx {
         Some(c) => tracing::info!(plugin_id = %c.plugin_id, "connected to the plugin host"),
         None => tracing::info!("no plugin host (standalone run): host calls skipped"),
@@ -540,17 +546,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(&bind).await?;
     tracing::info!(bind = %bind, workers, "compute job API listening (node credentials per lane)");
-    // Advertise on mDNS so the GCS Add-a-Node card auto-discovers this node for
-    // LAN pairing. Best-effort: a None means no auto-discovery, manual
-    // add-by-IP still works. Held for the process lifetime (unregisters on exit).
+    // Advertise the job API on the LAN so a drone finds this node without a
+    // pinned address. The host publishes it (the sandbox refuses the node a
+    // responder of its own) and withdraws it when this connection ends. The GCS
+    // finds the node through the agent's own `_ados._tcp` record, not this one.
+    // A standalone run serves loopback only, so it advertises nothing.
     let job_port = bind
         .rsplit(':')
         .next()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(8092);
-    let _mdns_advert = world_engine_transport::advertise_compute(&node_id, job_port);
-    axum::serve(listener, router).await?;
+    if let Some(ctx) = ctx.clone() {
+        let node_id = node_id.clone();
+        tokio::spawn(async move { advertise_job_api(ctx, node_id, job_port).await });
+    }
+    let serve = async { axum::serve(listener, router).await };
+    match host_ipc {
+        // Nothing reconnects a lost host session, so stop and let the unit
+        // restart this service against the restarted host.
+        Some(ipc) => tokio::select! {
+            served = serve => served?,
+            () = ipc.session_lost() => {
+                let lost = ados_sdk::RunnerError::SessionLost;
+                tracing::error!(error = %lost, "world-engine-node stopping");
+                return Err(lost.into());
+            }
+        },
+        None => serve.await?,
+    }
     Ok(())
+}
+
+/// How long the job-API advert waits before asking the host again.
+const ADVERT_RETRY: Duration = Duration::from_secs(5);
+
+/// Publish the job API as [`world_engine_transport::COMPUTE_SERVICE`] through
+/// the host, retrying on a fixed cadence until it is published: a node whose
+/// hostname is not set yet, or whose host responder is not up, gets its advert
+/// the moment that clears, with no restart. A repeated failure is logged once
+/// per distinct reason.
+async fn advertise_job_api(ctx: PluginContext, node_id: String, port: u16) {
+    let txt = world_engine_transport::compute_advert_txt(&node_id);
+    let mut last_error: Option<String> = None;
+    loop {
+        match ctx
+            .mdns
+            .advertise(world_engine_transport::COMPUTE_SERVICE, port, &txt)
+            .await
+        {
+            Ok(advert) => {
+                tracing::info!(
+                    record = %advert.fullname,
+                    host = %advert.hostname,
+                    port,
+                    "job API advertised on mDNS"
+                );
+                return;
+            }
+            Err(e) => {
+                let reason = e.to_string();
+                if last_error.as_deref() != Some(reason.as_str()) {
+                    tracing::warn!(error = %reason, "job API mDNS advert failed; retrying");
+                }
+                last_error = Some(reason);
+            }
+        }
+        tokio::time::sleep(ADVERT_RETRY).await;
+    }
 }
 
 /// Bind the plugin's `http.sock` and serve `router` on it for the process

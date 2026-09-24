@@ -1,7 +1,8 @@
 # World Engine transport: the Atlas stream lane (LAN HTTP, WFB relay and
 # loopback bearers behind a failover ladder, the compute-side world-model
 # WebSocket fan-out) and the drone-side client of a compute node (job API,
-# mDNS, the perception-offload orchestrator and its safety-gated return bridge).
+# compute-node discovery over the host's mDNS, the perception-offload
+# orchestrator and its safety-gated return bridge).
 [package]
 name = "world-engine-transport"
 version = "1.0.0"
@@ -17,8 +18,8 @@ path = "src/lib.rs"
 
 [dependencies]
 world-engine-protocol = { path = "../protocol" }
-# Node-credential header, WebSocket-ticket subprotocol, mDNS hostname, the
-# vision detection-bus types, and the rustls crypto-provider install the
+# Node-credential header, WebSocket-ticket subprotocol, the mDNS browse types,
+# the vision detection-bus types, and the rustls crypto-provider install the
 # reqwest client builder needs.
 ados-protocol = { workspace = true, features = ["tls"] }
 # The offload safety gates (freshness + lock state) the return bridge drives.
@@ -39,7 +40,6 @@ tower = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
 tokio-tungstenite = { workspace = true }
-mdns-sd = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

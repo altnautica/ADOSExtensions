@@ -4,8 +4,8 @@
 //! board with a paired workstation node — see `ados_offload::pick_tier`), this
 //! orchestrator wires the whole lane in one call:
 //!
-//! 1. **reach** the compute node at the base URL the caller resolved (mDNS
-//!    `profile=workstation`, a pinned address, or the test seam), presenting
+//! 1. **reach** the compute node at the base URL the caller resolved (the
+//!    node's job-API mDNS advert, a pinned address, or the test seam), presenting
 //!    the credential that node issued this drone;
 //! 2. **submit** a streaming perception-offload session job to the node
 //!    ([`ComputeClient::submit_job`]) naming the drone's live RTSP feed — the node

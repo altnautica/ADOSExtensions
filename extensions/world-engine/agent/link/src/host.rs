@@ -5,9 +5,11 @@
 //! the loops and the HTTP routes are exercised without a host.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use ados_protocol::framebus::DetectionBatch;
 use ados_protocol::node_info::NodeInfo;
+use ados_protocol::plugin_mdns::DiscoveredService;
 use ados_sdk::{ClientError, OffloadAdvertisement, PluginContext};
 use rmpv::Value;
 
@@ -44,6 +46,14 @@ pub trait Host: Send + Sync + 'static {
     /// `node.info` (cap `node.info.read`): the board, ground-station role and
     /// camera facts.
     async fn node_info(&self) -> Result<NodeInfo, ClientError>;
+    /// `mdns.browse` (cap `network.outbound`): every instance of
+    /// `service_type` on the LAN answering within `window`. The host runs the
+    /// browse; the sandbox refuses the link a responder of its own.
+    async fn mdns_browse(
+        &self,
+        service_type: &str,
+        window: Duration,
+    ) -> Result<Vec<DiscoveredService>, ClientError>;
 }
 
 #[async_trait::async_trait]
@@ -92,6 +102,14 @@ impl Host for PluginContext {
 
     async fn node_info(&self) -> Result<NodeInfo, ClientError> {
         self.node.info().await
+    }
+
+    async fn mdns_browse(
+        &self,
+        service_type: &str,
+        window: Duration,
+    ) -> Result<Vec<DiscoveredService>, ClientError> {
+        self.mdns.browse(service_type, window).await
     }
 }
 

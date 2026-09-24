@@ -6,9 +6,9 @@
 //! the bus and forwards every event over the bearer ladder, direct LAN first,
 //! then the WFB relay for the field, then the plugin's cloud stream.
 //!
-//! The compute node is the pinned `offload.compute_node_addr` when set, else an
-//! mDNS `profile=workstation` advert preferring one that issued this drone a
-//! credential (see [`crate::compute_node`]); its job-API base URL backs the
+//! The compute node is the pinned `offload.compute_node_addr` when set, else a
+//! compute node's job-API advert found over mDNS, preferring one that issued
+//! this drone a credential (see [`crate::compute_node`]); its job-API base URL backs the
 //! direct-LAN bearer, which presents the credential that node issued.
 //! When the LAN bearer stops carrying, the loop re-resolves and rebuilds the
 //! ladder; while no LAN bearer is present it periodically re-browses so a node
@@ -170,13 +170,30 @@ impl Forwarder {
                 break;
             }
             let atlas_enabled = config_bool(self.host.as_ref(), "atlas.enabled", false).await;
-            let camera_ready = atlas_enabled
-                && node_info(self.host.as_ref())
-                    .await
-                    .is_some_and(|i| i.camera.ready);
-            let enabled = atlas_enabled && camera_ready;
+            // Camera readiness is read only while Atlas is on, so it is `None`
+            // (not read) rather than a `false` nobody measured.
+            let camera_ready = if atlas_enabled {
+                Some(
+                    node_info(self.host.as_ref())
+                        .await
+                        .is_some_and(|i| i.camera.ready),
+                )
+            } else {
+                None
+            };
+            let enabled = camera_ready == Some(true);
             if enabled != was_enabled {
-                tracing::info!(atlas_enabled, camera_ready, "atlas forwarder gate changed");
+                match camera_ready {
+                    Some(camera_ready) => tracing::info!(
+                        atlas_enabled,
+                        camera_ready,
+                        "atlas forwarder gate changed"
+                    ),
+                    None => tracing::info!(
+                        atlas_enabled,
+                        "atlas forwarder gate changed (camera readiness is not read while Atlas is disabled)"
+                    ),
+                }
                 was_enabled = enabled;
             }
             if !enabled {

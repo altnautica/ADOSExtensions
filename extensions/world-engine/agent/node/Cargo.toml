@@ -1,6 +1,7 @@
 # World Engine compute node (workstation / compute profiles): the job store,
 # scheduler and reconstruction pipeline, the Atlas ingest and world-model
-# fan-out, the perception-offload serving side, node credentials, and mDNS.
+# fan-out, the perception-offload serving side, node credentials, and its
+# job-API mDNS advert (published through the host).
 [package]
 name = "world-engine-node"
 version = "1.0.0"
@@ -22,8 +23,8 @@ path = "src/main.rs"
 
 [dependencies]
 world-engine-protocol = { path = "../protocol" }
-# The Atlas event receiver, the world-model WebSocket fan-out, mDNS advertise,
-# and the compute client the offload tests drive.
+# The Atlas event receiver, the world-model WebSocket fan-out, the compute-node
+# service type and TXT record, and the compute client the offload tests drive.
 world-engine-transport = { path = "../transport" }
 # The plugin host connection (plugin config, telemetry.extend) when the node
 # runs as the extension's `node` service.
@@ -48,7 +49,6 @@ tower = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
-mdns-sd = { workspace = true }
 # Rerun logging SDK, pinned to =0.33.1 to match the GCS web-viewer
 # (@rerun-io/web-viewer@0.33.1) exactly: the .rrd encoding carries a version the
 # viewer checks. Write-only feature set: `sdk` gives `RecordingStream` and the

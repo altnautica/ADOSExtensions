@@ -24,8 +24,9 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use world_engine_transport::{resolve_compute, AtlasBearer, AtlasEvent, LanHttpBearer};
+use world_engine_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
 
+use crate::compute_node;
 use crate::credentials::{CredentialStore, ATLAS_INGEST_LANE};
 use crate::forward::now_ms;
 use crate::host::{config_bool, config_string, node_info, Host};
@@ -38,7 +39,7 @@ const GATE_POLL: Duration = Duration::from_secs(5);
 const SNAPSHOT_INTERVAL: Duration = Duration::from_secs(2);
 /// A snapshot older than this is served as stale.
 pub const SNAPSHOT_FRESH: Duration = Duration::from_secs(10);
-/// One mDNS browse's timeout, and the wait between browses.
+/// One mDNS browse's window, and the wait between browses.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOLVE_RETRY: Duration = Duration::from_secs(10);
 /// Received payloads buffered between the host callback and the relay loop.
@@ -259,7 +260,9 @@ impl Relay {
             Some(url) => (url, None),
             None => {
                 let issuers = self.credentials.issuers(&ATLAS_INGEST_LANE);
-                let Some(node) = resolve_compute(RESOLVE_TIMEOUT, &issuers).await else {
+                let Some(node) =
+                    compute_node::discover(self.host.as_ref(), &issuers, RESOLVE_TIMEOUT).await
+                else {
                     tracing::debug!("atlas relay: no compute node on mDNS yet");
                     return None;
                 };

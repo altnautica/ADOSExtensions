@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use ados_protocol::framebus::DetectionBatch;
 use ados_protocol::node_info::{BoardInfo, CameraInfo, GroundStationInfo, NodeInfo};
+use ados_protocol::plugin_mdns::DiscoveredService;
 use ados_sdk::{ClientError, OffloadAdvertisement};
 use parking_lot::Mutex;
 use rmpv::Value;
@@ -26,6 +27,11 @@ pub struct FakeHost {
     pub aux_callback: Mutex<Option<AuxCallback>>,
     /// `None` answers `node.info` with an error.
     pub node_info: Mutex<Option<NodeInfo>>,
+    /// The instances an `mdns.browse` answers with, by service type; a type
+    /// with no entry answers with an error.
+    pub mdns: Mutex<HashMap<String, Vec<DiscoveredService>>>,
+    /// Every service type browsed, in order.
+    pub mdns_browsed: Mutex<Vec<String>>,
     changed: Notify,
 }
 
@@ -44,6 +50,8 @@ impl FakeHost {
             aux_sent: Mutex::default(),
             aux_callback: Mutex::default(),
             node_info: Mutex::default(),
+            mdns: Mutex::default(),
+            mdns_browsed: Mutex::default(),
             changed: Notify::new(),
         })
     }
@@ -199,6 +207,19 @@ impl Host for FakeHost {
         self.node_info
             .lock()
             .clone()
+            .ok_or_else(|| ClientError::Rpc("not_available".into()))
+    }
+
+    async fn mdns_browse(
+        &self,
+        service_type: &str,
+        _window: Duration,
+    ) -> Result<Vec<DiscoveredService>, ClientError> {
+        self.mdns_browsed.lock().push(service_type.to_string());
+        self.mdns
+            .lock()
+            .get(service_type)
+            .cloned()
             .ok_or_else(|| ClientError::Rpc("not_available".into()))
     }
 }

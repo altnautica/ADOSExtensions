@@ -1,137 +1,32 @@
-//! mDNS advertisement for the compute node.
+//! Compute-node discovery on the local network.
 //!
-//! The Python `ados-discovery` service (which also advertises `_ados._tcp` on
-//! `:8080`) is installed on every profile but is OnDemand — it starts only when
-//! a cloud pairing code is generated, not at boot. So at boot a compute node has
-//! no advert and would not appear in the GCS Add-a-Node card. This always-on
-//! Rust advert (the `mdns-sd` daemon, held by the compute daemon for its
-//! lifetime) fills that gap: the node advertises `_ados._tcp` with
-//! `profile=workstation` in the TXT from boot, so it auto-appears for LAN pairing
-//! like a drone/ground-station, no pairing code required first.
+//! The compute node advertises its job API as [`COMPUTE_SERVICE`] on its
+//! declared listen port, with its node id in the [`DEVICE_ID_TXT`] TXT key, and
+//! a drone or ground station browses for it. Neither end runs an mDNS
+//! responder of its own: every plugin unit carries `SocketBindDeny=any`, which
+//! refuses even the responder's first ephemeral bind, so both go through the
+//! agent's host methods (`ctx.mdns.advertise` / `ctx.mdns.browse`). The host
+//! publishes under the system hostname, the one name avahi answers for, and
+//! withdraws the record when the node's connection ends.
 //!
-//! The advert points at the control front's pairing port (`:8080`, where the
-//! node serves `/api/pairing/*`); the job-API port (`:8092`) rides the `jobApi`
-//! TXT key for a consumer that wants it directly. If `ados-discovery` is later
-//! started for a pairing code, both publish an `_ados._tcp` record for the same
-//! host — a brief benign duplicate (both point at the same `:8080` pairing
-//! front). Discovery is best-effort: if mDNS is unavailable the daemon logs and
-//! degrades, and manual Add-a-Node by IP always works.
+//! The GCS finds a compute node the way it finds any node: through the agent's
+//! own always-on `_ados._tcp` pairing record. This service type is only the
+//! job API a drone lane dials.
 
-use std::time::Duration;
+use std::collections::BTreeMap;
+use std::net::Ipv4Addr;
 
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
+use ados_protocol::plugin_mdns::DiscoveredService;
 
-/// The pairing service type the GCS browses for Add-a-Node discovery.
-const PAIRING_SERVICE: &str = "_ados._tcp.local.";
-/// The control front's pairing port — the node serves `/api/pairing/*` here.
-const PAIRING_PORT: u16 = 8080;
-/// The TXT `profile` value a compute node advertises (the post-rename profile).
-/// A resolver filters on this so it never targets a drone / ground-station node.
-const WORKSTATION_PROFILE: &str = "workstation";
+/// The DNS-SD service type a compute node's job API is advertised under.
+pub const COMPUTE_SERVICE: &str = "_ados-compute._tcp";
+/// The TXT key carrying the node's id: the id it names in every credential it
+/// issues, so a drone picks the credential that node issued it.
+pub const DEVICE_ID_TXT: &str = "deviceId";
 
-/// An active `_ados._tcp` advertisement for this compute node. Dropping it
-/// unregisters the record and shuts the mDNS daemon down (mirrors the Python
-/// `zc.unregister_service(info); zc.close()` teardown).
-pub struct ComputeAdvert {
-    daemon: ServiceDaemon,
-    fullname: String,
-}
-
-impl ComputeAdvert {
-    /// Explicitly unregister + shut down (also runs on `Drop`).
-    pub fn shutdown(&self) {
-        let _ = self.daemon.unregister(&self.fullname);
-        let _ = self.daemon.shutdown();
-    }
-}
-
-impl Drop for ComputeAdvert {
-    fn drop(&mut self) {
-        let _ = self.daemon.unregister(&self.fullname);
-        let _ = self.daemon.shutdown();
-    }
-}
-
-/// The instance name + TXT records for this node's advert. Pure, so the wire
-/// shape is unit-tested without standing up an mDNS daemon. The instance name
-/// carries the node id so two compute nodes never collide on the same hostname.
-fn advert_fields(node_id: &str, job_api_port: u16) -> (String, Vec<(String, String)>) {
-    let short: String = node_id.chars().take(12).collect();
-    let instance = format!("ados-compute-{short}");
-    let txt = vec![
-        ("profile".to_string(), "workstation".to_string()),
-        ("path".to_string(), "/api/pairing".to_string()),
-        ("jobApi".to_string(), job_api_port.to_string()),
-        ("deviceId".to_string(), node_id.to_string()),
-    ];
-    (instance, txt)
-}
-
-/// The SRV target for this node's advert: the resolvable `.local` name, or
-/// `None` when this host has no hostname another machine could dial.
-///
-/// One rule, shared with every other surface that hands out a reach
-/// ([`ados_protocol::reach`]) — a name is advertised only when it resolves,
-/// and `localhost` yields no reach rather than `localhost.local`. Public so
-/// the daemon derives an artifact URL host that matches the mDNS target this
-/// advert uses.
-pub fn advert_hostname() -> Option<String> {
-    ados_protocol::reach::mdns_hostname()
-}
-
-/// Advertise this compute node on `_ados._tcp` so the GCS Add-a-Node card
-/// discovers it for LAN pairing. Returns `None` when mDNS is unavailable or
-/// when this host has no resolvable hostname to name as the SRV target; the
-/// caller treats either as "no auto-discovery", not a fatal error.
-/// Advertising a name that resolves nowhere is worse than advertising nothing
-/// — the GCS stores it as the node's reach and then cannot dial it.
-pub fn advertise_compute(node_id: &str, job_api_port: u16) -> Option<ComputeAdvert> {
-    let daemon = match ServiceDaemon::new() {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::warn!(error = %e, "compute_mdns_daemon_failed");
-            return None;
-        }
-    };
-    let Some(hostname) = advert_hostname() else {
-        tracing::warn!("compute_mdns_skipped_no_resolvable_hostname");
-        let _ = daemon.shutdown();
-        return None;
-    };
-    let server = format!("{hostname}.");
-    let (instance, txt) = advert_fields(node_id, job_api_port);
-    let txt_refs: Vec<(&str, &str)> = txt.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
-
-    // Empty address + `enable_addr_auto` => advertise on every interface's IP,
-    // matching the Python discovery's all-interface answer.
-    let info = match ServiceInfo::new(
-        PAIRING_SERVICE,
-        &instance,
-        &server,
-        "",
-        PAIRING_PORT,
-        &txt_refs[..],
-    ) {
-        Ok(i) => i.enable_addr_auto(),
-        Err(e) => {
-            tracing::warn!(error = %e, "compute_mdns_service_info_failed");
-            let _ = daemon.shutdown();
-            return None;
-        }
-    };
-    let fullname = info.get_fullname().to_string();
-    if let Err(e) = daemon.register(info) {
-        tracing::warn!(error = %e, "compute_mdns_register_failed");
-        let _ = daemon.shutdown();
-        return None;
-    }
-    tracing::info!(
-        service = PAIRING_SERVICE,
-        port = PAIRING_PORT,
-        instance = %fullname,
-        "compute_mdns_published"
-    );
-    Some(ComputeAdvert { daemon, fullname })
+/// The TXT record a compute node advertises its job API with.
+pub fn compute_advert_txt(node_id: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([(DEVICE_ID_TXT.to_string(), node_id.to_string())])
 }
 
 /// A resolved compute node: where to reach its job API, and who it is.
@@ -139,151 +34,168 @@ pub fn advertise_compute(node_id: &str, job_api_port: u16) -> Option<ComputeAdve
 pub struct ResolvedComputeNode {
     /// The host to dial (a concrete IPv4 when advertised, else the `.local` name).
     pub host: String,
-    /// The job-API port (the `jobApi` TXT value, not the SRV pairing port).
+    /// The job-API port (the advertised SRV port).
     pub job_api_port: u16,
-    /// The node's device id (the `deviceId` TXT), empty when the advert omits it.
+    /// The node's id (the `deviceId` TXT), empty when the advert omits it.
     pub device_id: String,
 }
 
-/// Browse `_ados._tcp` for up to `timeout` and resolve a **compute node** — a
-/// service whose TXT carries `profile=workstation` — returning where to reach
-/// its job API (`http://host:job_api_port`) plus its `device_id` (so a caller
-/// can attribute the stream to the node and pick the credential it issued).
-///
-/// A node whose id is in `preferred` (the workstations that issued this drone a
-/// credential) wins the moment it answers. Otherwise the first workstation seen
-/// is returned when the window closes, so with nothing preferred the first
-/// answer returns at once and with a preferred node absent the browse costs the
-/// full window.
-///
-/// The job-API port rides the `jobApi` TXT key, NOT the SRV port: the SRV port
-/// is the `:8080` pairing front (where `/api/pairing/*` lives), while the job
-/// API serves on its own port. The device id rides the `deviceId` TXT key. An
-/// IPv4 address is preferred for the host (a reqwest client dials it directly,
-/// with no second mDNS hostname lookup); the advertised hostname is the fallback.
-/// Returns `None` on timeout with no workstation seen, or when mDNS is
-/// unavailable — the caller treats that as "no compute node on the LAN yet" and
-/// retries.
-///
-/// Mirrors `ados_groundlink::mdns::resolve_receiver` (same `mdns-sd` browse +
-/// `ServiceResolved` loop + bounded `tokio::time::timeout`); the difference is
-/// the accept predicate — a TXT `profile` match here vs a mesh-subnet match
-/// there — and that the returned port comes from a TXT key, not the SRV record.
-pub async fn resolve_compute(
-    timeout: Duration,
+/// The compute node to use from one browse of [`COMPUTE_SERVICE`]: the first
+/// answering node whose id is in `preferred` (the workstations that issued
+/// this drone a credential), else the first node that answered.
+pub fn pick_compute_node(
+    services: &[DiscoveredService],
     preferred: &[String],
 ) -> Option<ResolvedComputeNode> {
-    let daemon = ServiceDaemon::new().ok()?;
-    let rx = match daemon.browse(PAIRING_SERVICE) {
-        Ok(rx) => rx,
-        Err(e) => {
-            tracing::debug!(error = %e, "compute_mdns_browse_failed");
-            let _ = daemon.shutdown();
-            return None;
-        }
-    };
-
-    let mut first: Option<ResolvedComputeNode> = None;
-    let _ = tokio::time::timeout(timeout, async {
-        while let Ok(event) = rx.recv_async().await {
-            let ServiceEvent::ServiceResolved(info) = event else {
-                continue;
-            };
-            let Some(node) = compute_node_of(&info) else {
-                continue;
-            };
-            if preferred.contains(&node.device_id) {
-                first = Some(node);
-                return;
-            }
-            if first.is_none() {
-                first = Some(node);
-                if preferred.is_empty() {
-                    return;
-                }
-            }
-        }
-    })
-    .await;
-
-    let _ = daemon.shutdown();
-    first
+    let nodes: Vec<ResolvedComputeNode> = services.iter().filter_map(compute_node_of).collect();
+    let preferred_node = nodes
+        .iter()
+        .position(|n| !n.device_id.is_empty() && preferred.contains(&n.device_id));
+    let pick = preferred_node.unwrap_or(0);
+    nodes.into_iter().nth(pick)
 }
 
-/// The compute node a resolved advert describes, or `None` when it is not a
-/// workstation or carries no usable job-API port or host.
-fn compute_node_of(info: &mdns_sd::ServiceInfo) -> Option<ResolvedComputeNode> {
-    // Only a compute node — skip a drone / ground-station advert that shares
-    // `_ados._tcp` on the same LAN.
-    if info.get_property_val_str("profile") != Some(WORKSTATION_PROFILE) {
+/// The compute node one resolved instance describes, or `None` when it carries
+/// no usable port or host. An IPv4 address is preferred (the HTTP client dials
+/// it directly, with no second mDNS lookup); the advertised hostname is the
+/// fallback.
+///
+/// A node answers with every interface's address, and the first one is not
+/// necessarily the LAN a drone shares with it: a workstation on a tailnet also
+/// answers with its `100.64.0.0/10` address, and a drone off that overlay
+/// cannot dial it. A private LAN address (RFC 1918) is taken first, then any
+/// other routable one; a shared-overlay, link-local or loopback address only
+/// when nothing else was offered.
+fn compute_node_of(service: &DiscoveredService) -> Option<ResolvedComputeNode> {
+    if service.port == 0 {
         return None;
     }
-    // The job API rides the `jobApi` TXT key (the SRV port is the pairing
-    // front). A missing / zero / unparseable port is skipped.
-    let port = info
-        .get_property_val_str("jobApi")
-        .and_then(|p| p.parse::<u16>().ok())
-        .filter(|p| *p != 0)?;
-    // The node's own device id (attribution). Empty when unadvertised.
-    let device_id = info
-        .get_property_val_str("deviceId")
-        .unwrap_or_default()
-        .to_string();
-    // Prefer a concrete IPv4 (dial it directly); else the hostname.
-    let host = match info.get_addresses_v4().into_iter().next() {
-        Some(v4) => v4.to_string(),
-        None => info.get_hostname().trim_end_matches('.').to_string(),
-    };
-    (!host.is_empty()).then_some(ResolvedComputeNode {
+    let host = service
+        .addresses
+        .iter()
+        .filter_map(|a| a.parse::<Ipv4Addr>().ok())
+        .min_by_key(lan_reach_rank)
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|| service.hostname.trim_end_matches('.').to_string());
+    (!host.is_empty()).then(|| ResolvedComputeNode {
         host,
-        job_api_port: port,
-        device_id,
+        job_api_port: service.port,
+        device_id: service.txt.get(DEVICE_ID_TXT).cloned().unwrap_or_default(),
     })
+}
+
+/// How likely a drone on the node's LAN is to reach `ip`: 0 for a private LAN
+/// address, 1 for another routable one, 2 for the shared-overlay range
+/// (`100.64.0.0/10`), link-local and loopback.
+fn lan_reach_rank(ip: &Ipv4Addr) -> u8 {
+    let [a, b, ..] = ip.octets();
+    let shared_overlay = a == 100 && (b & 0xc0) == 64;
+    if ip.is_private() {
+        0
+    } else if shared_overlay || ip.is_link_local() || ip.is_loopback() {
+        2
+    } else {
+        1
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn advert_fields_carry_the_workstation_profile_and_ports() {
-        let (instance, txt) = advert_fields("node-abcdef0123456789", 8092);
-        // The instance carries a node-id prefix (first 12 chars) for uniqueness.
-        assert_eq!(instance, "ados-compute-node-abcdef0");
-        let get = |k: &str| {
-            txt.iter()
-                .find(|(key, _)| key == k)
-                .map(|(_, v)| v.as_str())
-        };
-        assert_eq!(get("profile"), Some("workstation"));
-        assert_eq!(get("path"), Some("/api/pairing"));
-        assert_eq!(get("jobApi"), Some("8092"));
-        assert_eq!(get("deviceId"), Some("node-abcdef0123456789"));
+    fn service(
+        id: Option<&str>,
+        addresses: &[&str],
+        hostname: &str,
+        port: u16,
+    ) -> DiscoveredService {
+        DiscoveredService {
+            fullname: format!("n-{}.{COMPUTE_SERVICE}.local.", id.unwrap_or("x")),
+            hostname: hostname.to_string(),
+            port,
+            addresses: addresses.iter().map(|a| a.to_string()).collect(),
+            txt: id.map(compute_advert_txt).unwrap_or_default(),
+        }
     }
 
-    #[tokio::test]
-    async fn resolve_compute_returns_none_when_no_workstation_answers() {
-        // No compute node advertises in the unit-test environment, so a short
-        // browse window resolves nothing (and if mDNS is unavailable in the
-        // sandbox the daemon fails to start, which also yields `None`). The
-        // function must return — not hang — within the timeout.
-        let got = tokio::time::timeout(
-            Duration::from_secs(5),
-            resolve_compute(Duration::from_millis(300), &[]),
-        )
-        .await
-        .expect("resolve_compute must honour its own timeout and not hang");
-        match got {
-            None => {}
-            // Defensive against a stray real workstation on the dev LAN: a
-            // resolved node must at least carry a usable (non-zero) job-API port.
-            Some(node) => {
-                assert!(!node.host.is_empty(), "a resolved node carries a host");
-                assert_ne!(
-                    node.job_api_port, 0,
-                    "a resolved node carries a non-zero job-API port"
-                );
-            }
-        }
+    #[test]
+    fn the_advert_carries_the_node_id_the_credentials_name() {
+        let txt = compute_advert_txt("compute-8270beb76258");
+        assert_eq!(
+            txt.get("deviceId").map(String::as_str),
+            Some("compute-8270beb76258")
+        );
+    }
+
+    #[test]
+    fn a_node_that_issued_this_drone_a_credential_wins() {
+        let services = [
+            service(Some("ws-a"), &["192.0.2.10"], "a.local", 8092),
+            service(Some("ws-b"), &["192.0.2.11"], "b.local", 8092),
+        ];
+        let pick = pick_compute_node(&services, &["ws-b".to_string()]).unwrap();
+        assert_eq!(
+            (pick.host.as_str(), pick.device_id.as_str()),
+            ("192.0.2.11", "ws-b")
+        );
+        // Nothing preferred answers: the first node that did.
+        let pick = pick_compute_node(&services, &["ws-z".to_string()]).unwrap();
+        assert_eq!(pick.device_id, "ws-a");
+        assert_eq!(pick_compute_node(&[], &[]), None);
+    }
+
+    #[test]
+    fn an_ipv4_address_is_dialled_before_the_hostname() {
+        let v6_first = service(Some("ws"), &["fe80::1", "192.0.2.10"], "ws.local", 8092);
+        assert_eq!(
+            pick_compute_node(&[v6_first], &[]).unwrap().host,
+            "192.0.2.10"
+        );
+        let no_v4 = service(Some("ws"), &["fe80::1"], "ws.local.", 9000);
+        let node = pick_compute_node(&[no_v4], &[]).unwrap();
+        assert_eq!((node.host.as_str(), node.job_api_port), ("ws.local", 9000));
+        // No port, or nowhere to dial: not a node.
+        assert_eq!(
+            pick_compute_node(&[service(Some("ws"), &["192.0.2.10"], "", 0)], &[]),
+            None
+        );
+        assert_eq!(
+            pick_compute_node(&[service(Some("ws"), &[], "", 8092)], &[]),
+            None
+        );
+    }
+
+    /// A workstation answers with every interface's address, sorted. The one
+    /// a drone on its LAN can dial wins over an overlay or link-local one that
+    /// happens to sort first.
+    #[test]
+    fn the_private_lan_address_wins_over_overlay_and_link_local_ones() {
+        let ws = service(
+            Some("ws"),
+            &["100.64.0.1", "169.254.3.4", "192.168.1.50", "fd7a::1"],
+            "ws.local",
+            8092,
+        );
+        assert_eq!(
+            pick_compute_node(&[ws], &[]).unwrap().host,
+            "192.168.1.50"
+        );
+        // With no private address, a routable one beats the overlay.
+        let public = service(
+            Some("ws"),
+            &["100.64.0.1", "203.0.113.7"],
+            "ws.local",
+            8092,
+        );
+        assert_eq!(
+            pick_compute_node(&[public], &[]).unwrap().host,
+            "203.0.113.7"
+        );
+        // An overlay address alone is still used rather than nothing.
+        let overlay = service(Some("ws"), &["100.64.0.1"], "ws.local", 8092);
+        assert_eq!(
+            pick_compute_node(&[overlay], &[]).unwrap().host,
+            "100.64.0.1"
+        );
     }
 }
