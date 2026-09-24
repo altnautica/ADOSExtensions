@@ -30,12 +30,27 @@ export interface InlineNodeSummary {
 }
 
 /**
+ * The plugin's own HTTP server on one node, through the agent passthrough
+ * (`/api/plugins/{id}/x/<path>`). Authenticated by the host.
+ */
+export interface InlineAgentApi {
+  /** A request; `path` may carry a query string. */
+  fetch(path: string, init?: RequestInit): Promise<Response>;
+  /**
+   * A WebSocket to the same server. Rejects with
+   * `websocket_unavailable_over_https_proxy` when Mission Control is served
+   * over HTTPS (the node is plain HTTP on the local network).
+   */
+  websocket(path: string): Promise<WebSocket>;
+}
+
+/**
  * What the host hands an inline module. Calls through `ctx` pass the same
  * capability checks as an iframe plugin's; a refusal rejects with an error
  * whose `code` names it (`refused`, `permission_denied`, `timeout`, ...).
  * Host capabilities that are unavailable here reject with an error whose
  * `code` is one of `websocket_unavailable_over_https_proxy`,
- * `no_node_agent`, `unknown_node`, `asset_unavailable`.
+ * `no_node_agent`, `node_unreachable`, `unknown_node`, `asset_unavailable`.
  */
 export interface InlineHostApi {
   /** The plugin SDK context, served in-memory by the host. */
@@ -43,29 +58,31 @@ export interface InlineHostApi {
   plugin: { id: string; version: string; panelId: string; signerId: string };
   /** The node the module is mounted for, or null on a fleet-level slot. */
   node: { deviceId: string | null; profile: NodeProfile | null };
-  agent: {
-    /**
-     * A request to the plugin's own HTTP server on the mounted node, through
-     * the agent passthrough (`/api/plugins/{id}/x/<path>`). `path` may carry
-     * a query string. Authenticated by the host.
-     */
-    fetch(path: string, init?: RequestInit): Promise<Response>;
-    /**
-     * A WebSocket to the same server. Rejects with
-     * `websocket_unavailable_over_https_proxy` when Mission Control is served
-     * over HTTPS (the node is plain HTTP on the local network).
-     */
-    websocket(path: string): Promise<WebSocket>;
-  };
+  /** The plugin's server on the mounted node (`no_node_agent` when there is
+   * no reach to it). */
+  agent: InlineAgentApi;
   /**
    * An object URL for a file under the plugin's `gcs/` directory (`path`
    * relative to it), typed by extension. Revoked when the module unmounts.
    */
   assetUrl(path: string): Promise<string>;
+  /**
+   * The same file's bytes as a Blob typed by extension, with the same path
+   * rules as `assetUrl`. Use this to read an asset's contents: Mission
+   * Control's content policy does not let a page fetch a `blob:` URL.
+   * Rejects with `asset_unavailable` once the module has unmounted.
+   */
+  readAsset(path: string): Promise<Blob>;
   /** The plugin's own cloud records (same as `ctx.records`). */
   records: PluginRecordsApi;
   nodes: {
     list(): InlineNodeSummary[];
+    /**
+     * The plugin's server on another node (a device id from `list()`), over
+     * that node's LAN address or its ground station's relay. Its calls reject
+     * with `node_unreachable` while this browser has no reach to the node.
+     */
+    agent(deviceId: string): InlineAgentApi;
     /** This plugin's config on another node, through that node's agent. */
     pluginConfig(deviceId: string): {
       get(): Promise<Record<string, unknown>>;
