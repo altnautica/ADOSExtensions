@@ -133,6 +133,53 @@ export interface PerceptionSessionHealth {
   boundNode: string | null;
 }
 
+/** One record in the plugin's own cloud namespace. */
+export interface PluginRecord {
+  collection: string;
+  key: string;
+  /** Node the record is about, or null for an account-level record. */
+  deviceId: string | null;
+  data: unknown;
+  /** Epoch milliseconds of the last write. */
+  updatedAt: number;
+  /** Which half of the plugin wrote it last. */
+  writtenBy: "gcs" | "agent";
+}
+
+/** Which records `PluginRecordsApi.list` returns. */
+export interface PluginRecordListOptions {
+  /** 1-64 of `[a-z0-9_.-]`. */
+  collection: string;
+  /** Only records about this node. */
+  deviceId?: string;
+  /** Page size, 1-100 (default 50). */
+  limit?: number;
+}
+
+/**
+ * The plugin's own cloud records, stored under the signed-in operator's
+ * account and namespaced to this plugin by the host. Needs the
+ * `cloud.records` grant. A record body is at most 64 KiB of JSON and a plugin
+ * holds at most 5000 records. A refusal rejects with a `HostError` whose code
+ * is `refused` and whose message is one of `unavailable` (signed out or
+ * offline), `invalid_args`, `too_large`, `limit_reached`, `not_permitted`,
+ * `failed`.
+ */
+export interface PluginRecordsApi {
+  /** A page of one collection, in key order. */
+  list(opts: PluginRecordListOptions): Promise<PluginRecord[]>;
+  get(collection: string, key: string): Promise<PluginRecord | null>;
+  /** Insert or replace the record at `(collection, key)`. */
+  put(
+    collection: string,
+    key: string,
+    data: unknown,
+    opts?: { deviceId?: string },
+  ): Promise<void>;
+  /** Delete one record; deleting a missing key succeeds. */
+  remove(collection: string, key: string): Promise<void>;
+}
+
 export interface PluginContext {
   client: PluginClient;
   telemetry: {
@@ -214,6 +261,8 @@ export interface PluginContext {
     /** Publish an event on the GCS plugin bus. Needs `event.publish`. */
     publish(topic: string, payload: unknown): Promise<unknown>;
   };
+  /** The plugin's own cloud records. Needs `cloud.records`. */
+  records: PluginRecordsApi;
   theme: {
     onChange(
       handler: (vars: Record<string, string>) => void,
@@ -264,6 +313,17 @@ async function unlessRefused<T>(pending: Promise<T>): Promise<T> {
         : "the host refused the request",
     );
   }
+  return result;
+}
+
+/** Unwrap a `{ ok: true, result }` answer, rejecting a refusal. */
+async function hostResult<T>(pending: Promise<unknown>): Promise<T> {
+  const answer = await unlessRefused(pending);
+  if (typeof answer !== "object" || answer === null || !("result" in answer)) {
+    throw new HostError("refused", "the host answered without a result");
+  }
+  // The host owns the result shape for each method; the SDK types it per call.
+  const result = answer.result as T;
   return result;
 }
 
@@ -357,6 +417,29 @@ export function createPluginContext(
       },
       publish: (topic, payload) =>
         client.request("events.publish", "event.publish", { topic, payload }),
+    },
+    records: {
+      list: (opts) =>
+        hostResult<PluginRecord[]>(client.request("records.list", "cloud.records", opts)),
+      get: (collection, key) =>
+        hostResult<PluginRecord | null>(
+          client.request("records.get", "cloud.records", { collection, key }),
+        ),
+      put: async (collection, key, data, opts) => {
+        await unlessRefused(
+          client.request("records.put", "cloud.records", {
+            collection,
+            key,
+            data,
+            ...(opts?.deviceId !== undefined ? { deviceId: opts.deviceId } : {}),
+          }),
+        );
+      },
+      remove: async (collection, key) => {
+        await unlessRefused(
+          client.request("records.remove", "cloud.records", { collection, key }),
+        );
+      },
     },
     theme: {
       onChange: (handler) =>

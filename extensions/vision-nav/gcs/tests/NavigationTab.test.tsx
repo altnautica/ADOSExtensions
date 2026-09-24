@@ -49,6 +49,12 @@ function fakeCtx(locale: Record<string, string> = {}): PluginContext {
       listen: async () => () => undefined,
       publish: async () => undefined,
     },
+    records: {
+      list: async () => [],
+      get: async () => null,
+      put: async () => undefined,
+      remove: async () => undefined,
+    },
     config: {
       onChange: () => () => undefined,
     },

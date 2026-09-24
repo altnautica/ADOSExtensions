@@ -38,6 +38,9 @@ export {
   type PerceptionDetection,
   type PerceptionDetectionBatch,
   type PerceptionSessionHealth,
+  type PluginRecord,
+  type PluginRecordListOptions,
+  type PluginRecordsApi,
 } from "./api";
 
 export {

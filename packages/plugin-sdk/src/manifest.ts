@@ -118,15 +118,11 @@ export interface PluginParameterContribution {
 
 /** The node profiles a tab can be offered on.
  *
- * One vocabulary with the rest of the stack: the agent's Pydantic
+ * One vocabulary with the rest of the stack: the agent's
  * `agent.target_profiles`, the GCS `PluginTargetProfile`, and the Convex
- * `gcsContributes[].profile` validator all say `workstation`. The SDK used to
- * say `compute`, so a developer following these types wrote
- * `profile: ["compute"]` and the install write was rejected by the Convex
- * validator (or, if used on the agent half, by the strict Pydantic literal) —
- * the tab silently never matched any node.
+ * `gcsContributes[].profile` validator all accept exactly these four.
  */
-export type NodeProfile = "drone" | "ground-station" | "workstation";
+export type NodeProfile = "drone" | "ground-station" | "workstation" | "compute";
 
 /**
  * One `gcs.contributes.tabs[]` entry: a detail tab the plugin mounts on a

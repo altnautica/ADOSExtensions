@@ -14,6 +14,14 @@
     "./harness": {
       "types": "./dist/harness.d.ts",
       "default": "./dist/harness.js"
+    },
+    "./inline": {
+      "types": "./dist/inline.d.ts",
+      "default": "./dist/inline.js"
+    },
+    "./esbuild": {
+      "types": "./dist/esbuild.d.ts",
+      "default": "./dist/esbuild.js"
     }
   },
   "files": [

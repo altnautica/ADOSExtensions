@@ -150,6 +150,39 @@ describe("host refusals", () => {
       result: { set: true },
     });
   });
+
+  it("unwrap a records result and reject a records refusal with its reason", async () => {
+    const { transport, client } = setup();
+    const ctx = createPluginContext({ client });
+    const sent: RpcEnvelope[] = [];
+    const record = {
+      collection: "jobs",
+      key: "j1",
+      deviceId: null,
+      data: { n: 1 },
+      updatedAt: 1,
+      writtenBy: "gcs",
+    };
+    answering(transport, (env) => {
+      sent.push(env);
+      if (env.method === "records.put") return { ok: false, error: "limit_reached" };
+      return { ok: true, result: env.method === "records.list" ? [record] : null };
+    });
+
+    await expect(ctx.records.list({ collection: "jobs", limit: 5 })).resolves.toEqual([record]);
+    await expect(ctx.records.get("jobs", "missing")).resolves.toBeNull();
+    await expect(ctx.records.remove("jobs", "j1")).resolves.toBeUndefined();
+    await expect(ctx.records.put("jobs", "j2", { n: 2 })).rejects.toMatchObject({
+      code: "refused",
+      message: "limit_reached",
+    });
+    expect(sent.map((env) => [env.method, env.capability])).toEqual([
+      ["records.list", "cloud.records"],
+      ["records.get", "cloud.records"],
+      ["records.remove", "cloud.records"],
+      ["records.put", "cloud.records"],
+    ]);
+  });
 });
 
 describe("telemetry subscriptions", () => {

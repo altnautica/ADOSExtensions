@@ -41,6 +41,25 @@ await ctx.telemetry.subscribe<BatterySample>("battery", (sample) => {
 The capability id is derived from the topic: `telemetry.subscribe.<topic>`.
 The plugin must declare matching `permissions` in its manifest.
 
+## Cloud records
+
+A plugin with the `cloud.records` permission keeps small JSON records in
+the cloud under the signed-in operator's account, in a namespace only it
+can reach:
+
+```ts
+await ctx.records.put("jobs", job.id, job, { deviceId });
+const recent = await ctx.records.list({ collection: "jobs", limit: 20 });
+const one = await ctx.records.get("jobs", job.id);
+await ctx.records.remove("jobs", job.id);
+```
+
+Collections are 1-64 of `[a-z0-9_.-]`, keys up to 256 characters, a record
+body at most 64 KiB of JSON, and a plugin at most 5000 records. `list`
+returns records in key order. A refusal rejects with a `HostError` whose
+code is `refused` and whose message names the reason (`unavailable` when
+the operator is signed out).
+
 ## The `contributes` model
 
 A plugin declares what it adds to the GCS in its manifest's
