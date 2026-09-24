@@ -27,6 +27,12 @@ export interface InlineNodeSummary {
   profile: NodeProfile;
   /** Whether this browser can reach the node's agent right now. */
   reachable: boolean;
+  /**
+   * Host of the node's paired LAN agent address, with no scheme or port (an
+   * IPv6 literal keeps its brackets), e.g. `192.168.1.20` or `ws-1.local`.
+   * Null when the node is reachable only through a relay or the cloud.
+   */
+  lanHost: string | null;
 }
 
 /**
