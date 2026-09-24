@@ -1,0 +1,264 @@
+# world-engine-release
+#
+# Fires on a `world-engine-v*` tag push. The World Engine ships its binaries
+# and the Rerun viewer wasm as install-time payloads (manifest
+# `agent.payloads`), not inside the .adosplug, so a node fetches only the files
+# for its own arch and profile.
+#
+#   binaries  one leg per arch: build the release binaries against the agent
+#             SDK pinned in ADOS_AGENT_REV and hand them to the release job.
+#   release   build and test the GCS module, write each payload's source,
+#             sha256 and size into the staged manifest, pack the small archive
+#             (manifest, GCS module + css, locales, agent/python helpers,
+#             config-schema.json), sign it with the first-party key, then
+#             attach the payloads and the signed archive to the GitHub Release
+#             in one step, so a published archive never points at a missing
+#             payload.
+#
+# The asset table (names, archive paths, arch and profile gates) is
+# scripts/world-engine-payloads.tsv; scripts/pack-world-engine-local.sh packs
+# the same way on a Mac for bench testing.
+
+name: world-engine-release
+
+on:
+  push:
+    tags:
+      - "world-engine-v*"
+
+permissions:
+  contents: read
+
+env:
+  # The agent SDK crates are workspace path deps on a sibling ADOSDroneAgent
+  # checkout, pinned by the committed ADOS_AGENT_REV so re-running a tag builds
+  # against the same SDK commit.
+  ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
+
+jobs:
+  binaries:
+    name: Binaries (${{ matrix.arch_os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # Static musl binaries run on every supported board regardless of its
+          # glibc. The node links rerun and bundled SQLite and the transport
+          # links ring, so the musl legs need a C cross-compiler: zig through
+          # cargo-zigbuild, as in rust-check.yml.
+          - runner: ubuntu-24.04-arm
+            arch_os: aarch64-linux
+            target: aarch64-unknown-linux-musl
+            zig: true
+            crates: world-engine-link world-engine-capture world-engine-node
+            node_features: ""
+          - runner: ubuntu-24.04
+            arch_os: x86_64-linux
+            target: x86_64-unknown-linux-musl
+            zig: true
+            crates: world-engine-link world-engine-node
+            node_features: ""
+          # CoreML runs offload inference on the Apple GPU. ONNX Runtime is
+          # loaded dynamically at start, so it is a host prerequisite, not a
+          # payload.
+          - runner: macos-14
+            arch_os: aarch64-macos
+            target: aarch64-apple-darwin
+            zig: false
+            crates: world-engine-link world-engine-node
+            node_features: coreml
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the agent SDK at the pinned revision
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
+          git -C "${dest}" checkout "$(cat ADOS_AGENT_REV)"
+          echo "agent SDK pinned at ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install zig
+        if: matrix.zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        if: matrix.zig
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: world-engine-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: world-engine-release-${{ matrix.target }}-
+
+      - name: Build release binaries
+        env:
+          TARGET: ${{ matrix.target }}
+          CRATES: ${{ matrix.crates }}
+          NODE_FEATURES: ${{ matrix.node_features }}
+          USE_ZIG: ${{ matrix.zig }}
+        run: |
+          set -euo pipefail
+          build=(cargo build)
+          if [ "${USE_ZIG}" = "true" ]; then
+            build=(cargo zigbuild)
+          fi
+          for crate in ${CRATES}; do
+            features=()
+            if [ "${crate}" = "world-engine-node" ] && [ -n "${NODE_FEATURES}" ]; then
+              features=(--features "${NODE_FEATURES}")
+            fi
+            "${build[@]}" --release --target "${TARGET}" -p "${crate}" ${features[@]+"${features[@]}"}
+          done
+
+      - name: Stage payloads
+        env:
+          TARGET: ${{ matrix.target }}
+          CRATES: ${{ matrix.crates }}
+          ARCH_OS: ${{ matrix.arch_os }}
+        run: |
+          set -euo pipefail
+          mkdir -p payloads
+          for crate in ${CRATES}; do
+            cp "target/${TARGET}/release/${crate}" "payloads/${crate}-${ARCH_OS}"
+            file "payloads/${crate}-${ARCH_OS}"
+          done
+
+      - name: Hand the binaries to the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: payload-${{ matrix.arch_os }}
+          path: payloads/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      EXT_DIR: extensions/world-engine
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check the tag matches the manifest version
+        run: |
+          set -euo pipefail
+          # Tag form: world-engine-v<semver>. The payload URLs name the tag and
+          # the archive names the manifest version, so the two must agree.
+          tag_version="${GITHUB_REF_NAME##*-v}"
+          manifest_version="$(grep -E '^version:' "${EXT_DIR}/manifest.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
+          if [ "${tag_version}" != "${manifest_version}" ]; then
+            echo "ERROR: tag ${GITHUB_REF_NAME} does not match manifest version ${manifest_version}" >&2
+            exit 1
+          fi
+          archive="${EXT_DIR}/dist/com.altnautica.world-engine-${manifest_version}.adosplug"
+          echo "ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile=false
+          pip install cryptography
+
+      - name: Build the GCS module
+        run: pnpm build:world-engine
+
+      - name: Run GCS tests
+        run: pnpm test:world-engine
+
+      - name: Collect the binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: payload-*
+          path: payloads
+          merge-multiple: true
+
+      - name: Write the payload list
+        run: |
+          set -euo pipefail
+          cp "${EXT_DIR}/gcs/assets/re_viewer_bg.wasm" payloads/re_viewer_bg.wasm
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          awk -v base="${base}" '
+            /^[[:space:]]*(#|$)/ { next }
+            { printf "%s\t%s\t%s\t%s\t%s/%s\n", $1, $2, $3, $4, base, $1 }
+          ' scripts/world-engine-payloads.tsv > payloads/payloads.tsv
+          cat payloads/payloads.tsv
+
+      - name: Pack archive
+        # Covers every arch in agent.binaries; refuses to pack when any
+        # binaries path lacks a payload row or a listed asset is missing.
+        run: ./scripts/pack-rust.sh world-engine --payload-manifest payloads/payloads.tsv
+
+      - name: Sign archive
+        env:
+          # Same first-party key as release.yml so a single public half
+          # (/etc/ados/plugin-keys/altnautica-2026-A.pem) verifies every plugin.
+          ADOS_SIGNING_KEY: ${{ secrets.ALTNAUTICA_PLUGIN_KEY_A }}
+          ADOS_SIGNING_KEY_INLINE: "1"
+          ADOS_SIGNING_KEY_ID: altnautica-2026-A
+        run: ./scripts/sign.sh "${ARCHIVE}"
+
+      - name: Assert signer id is first-party
+        run: |
+          # Allowlist mirrors FIRST_PARTY_SIGNERS in the agent. A misconfigured
+          # key id fails here rather than at install as an unknown signer.
+          signer=$(unzip -p "${SIGNED}" SIGNATURE | head -n1)
+          case "${signer}" in
+            altnautica-2026-A|altnautica-2026-B)
+              echo "OK: signer ${signer}"
+              ;;
+            *)
+              echo "ERROR: signer '${signer}' is not in the first-party allowlist" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Emit SHA-256 checksum
+        run: |
+          digest=$(shasum -a 256 "${SIGNED}" | awk '{print $1}')
+          printf '%s  %s\n' "${digest}" "$(basename "${SIGNED}")" > "${SIGNED}.sha256"
+          cat "${SIGNED}.sha256"
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            payloads/world-engine-*
+            payloads/re_viewer_bg.wasm
+            ${{ env.SIGNED }}
+            ${{ env.SIGNED }}.sha256
+            extensions/world-engine/CHANGELOG.md

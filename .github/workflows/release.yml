@@ -11,6 +11,11 @@ on:
       # needs a libuvc backend that does not exist in this tree, so no
       # configuration of it can produce a reading. It builds and tests as a
       # development preview; it is not published.
+      #
+      # vision-nav-v* and world-engine-v* publish through their own workflows
+      # (vision-nav-release.yml, world-engine-release.yml), whose tag triggers
+      # are their allowlist entries. Listing them here as well would publish
+      # a second, pack.sh-built archive for the same tag.
       - "mavlink-gimbal-v2-v*"
       - "follow-me-v*"
       - "siyi-pod-v*"

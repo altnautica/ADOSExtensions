@@ -1,0 +1,191 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "World Engine",
+  "description": "Configuration for the ADOS World Engine extension. Keys are flat and dotted: atlas.* is read on a drone (world-model capture), offload.* on a drone (perception offload), serving.* on a workstation or compute node (offload serving), and relay.* on a ground station (radio relay of the capture stream).",
+  "properties": {
+    "atlas.enabled": {
+      "type": "boolean",
+      "title": "World-model capture",
+      "description": "Capture pose-tagged keyframes on this drone and stream them to a compute node.",
+      "default": false
+    },
+    "atlas.capture_profile": {
+      "type": "string",
+      "title": "Capture profile",
+      "description": "The flight pattern the keyframe selection is tuned for.",
+      "enum": ["orbit", "lawnmower", "freeform", "inspection"],
+      "default": "freeform"
+    },
+    "atlas.pose_tier": {
+      "type": "string",
+      "title": "Pose source",
+      "description": "auto resolves to the flight-controller pose; local forces the flight-controller pose; offload uses the compute node's SLAM pose; hybrid takes whichever arrived most recently.",
+      "enum": ["auto", "local", "offload", "hybrid"],
+      "default": "auto"
+    },
+    "atlas.reconstruct_steps": {
+      "type": "integer",
+      "title": "Reconstruction detail",
+      "description": "Default splat training steps used when a reconstruction is submitted.",
+      "minimum": 1000,
+      "maximum": 200000,
+      "default": 30000
+    },
+    "atlas.hfov_deg": {
+      "type": "number",
+      "title": "Horizontal field of view (degrees)",
+      "description": "Used to derive a pinhole model for a camera with no calibrated intrinsics.",
+      "minimum": 1,
+      "maximum": 179,
+      "default": 70
+    },
+    "atlas.cameras": {
+      "type": "array",
+      "title": "Cameras",
+      "description": "The capture rig, one camera up to an all-sides set, by vision-engine camera id. Capture stays idle until at least one camera is enabled.",
+      "default": [],
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "title": "Camera id", "minLength": 1 },
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "enum": ["primary", "aux", "down", "left", "right", "back", "up"],
+            "default": "primary"
+          },
+          "enabled": { "type": "boolean", "title": "Captured", "default": true },
+          "reconstruct": { "type": "boolean", "title": "Feeds the reconstruction", "default": true }
+        },
+        "required": ["id"],
+        "additionalProperties": false
+      }
+    },
+    "atlas.live_reconstruct": {
+      "type": "boolean",
+      "title": "Live reconstruction",
+      "description": "On a compute node, rebuild the world model incrementally while keyframes arrive instead of only after the capture session is bagged.",
+      "default": false
+    },
+    "atlas.pose_prior": {
+      "type": "object",
+      "title": "Pose uncertainty",
+      "description": "The pose prior each keyframe carries into the reconstruction. Set position_sigma_m outright for an RTK rig; otherwise it is the reported DOP times gnss_uere_m.",
+      "properties": {
+        "position_sigma_m": { "type": ["number", "null"], "exclusiveMinimum": 0, "default": null },
+        "gnss_uere_m": { "type": "number", "exclusiveMinimum": 0, "default": 2.5 },
+        "orientation_sigma_rad": { "type": "number", "exclusiveMinimum": 0, "default": 0.02 },
+        "slam_position_sigma_m": { "type": "number", "exclusiveMinimum": 0, "default": 0.25 },
+        "slam_orientation_sigma_rad": { "type": "number", "exclusiveMinimum": 0, "default": 0.01 },
+        "clock_offset_sigma_ns": {
+          "type": "integer",
+          "description": "One-sigma uncertainty of the node clock in ns; negative means unmeasured.",
+          "default": -1
+        }
+      },
+      "additionalProperties": false,
+      "default": {}
+    },
+    "atlas.pose_max_age_ms": {
+      "type": "integer",
+      "title": "Pose age budget (ms)",
+      "description": "A frame is only keyframed with a pose younger than this.",
+      "minimum": 0,
+      "default": 500
+    },
+    "atlas.pose_publish_interval_ms": {
+      "type": "integer",
+      "title": "Pose publish interval (ms)",
+      "description": "Minimum interval between published world poses.",
+      "minimum": 0,
+      "default": 100
+    },
+    "atlas.selection.min_translation_m": {
+      "type": "number",
+      "title": "Keyframe distance (m)",
+      "description": "Minimum travel between keyframes of one camera.",
+      "minimum": 0,
+      "default": 0.5
+    },
+    "atlas.selection.min_rotation_rad": {
+      "type": "number",
+      "title": "Keyframe rotation (rad)",
+      "description": "Minimum rotation between keyframes of one camera (0.26 rad is about 15 degrees).",
+      "minimum": 0,
+      "default": 0.26
+    },
+    "atlas.selection.max_interval_ms": {
+      "type": "integer",
+      "title": "Keyframe interval (ms)",
+      "description": "A keyframe is taken at least this often while moving slowly.",
+      "minimum": 0,
+      "default": 2000
+    },
+    "atlas.selection.max_keyframes": {
+      "type": "integer",
+      "title": "Keyframe cap",
+      "description": "Session-wide cap on selected keyframes; 0 is unlimited.",
+      "minimum": 0,
+      "default": 0
+    },
+    "atlas.intrinsics": {
+      "type": "object",
+      "title": "Calibrated intrinsics",
+      "description": "Per-camera calibrated pinhole, keyed by camera id. A camera absent here uses a pinhole derived from the frame size and the field of view.",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "fx": { "type": "number" },
+          "fy": { "type": "number" },
+          "cx": { "type": "number" },
+          "cy": { "type": "number" },
+          "distortion_model": { "type": ["string", "null"], "default": null },
+          "distortion_params": { "type": "array", "items": { "type": "number" }, "default": [] }
+        },
+        "required": ["fx", "fy", "cx", "cy"],
+        "additionalProperties": false
+      }
+    },
+    "offload.enabled": {
+      "type": "string",
+      "title": "Perception offload",
+      "description": "auto offloads detection when the drone has no accelerator and a compute node is reachable on the LAN; on forces offload; off never offloads.",
+      "enum": ["auto", "on", "off"],
+      "default": "auto"
+    },
+    "offload.compute_node_addr": {
+      "type": ["string", "null"],
+      "title": "Compute node address",
+      "description": "Pin a compute node as host:port. Empty discovers one on the LAN.",
+      "default": null
+    },
+    "serving.enabled": {
+      "type": "string",
+      "title": "Serve perception offload",
+      "description": "auto accepts and serves LAN offload sessions; on forces serving; off never serves.",
+      "enum": ["auto", "on", "off"],
+      "default": "auto"
+    },
+    "serving.detector_model": {
+      "type": ["string", "null"],
+      "title": "Served detector model",
+      "description": "Model id of the detector served to drones. Empty uses the node's default.",
+      "default": null
+    },
+    "relay.enabled": {
+      "type": "boolean",
+      "title": "Relay the capture stream",
+      "description": "On a ground station, re-emit capture events received over the radio link onto the LAN for the compute node.",
+      "default": false
+    },
+    "relay.compute_base_url": {
+      "type": ["string", "null"],
+      "title": "Compute node URL",
+      "description": "The compute node the relay re-posts to (http://host:8092). Empty discovers one on the LAN.",
+      "default": null
+    }
+  },
+  "additionalProperties": false
+}

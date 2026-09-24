@@ -1,0 +1,185 @@
+/**
+ * @module use-drone-world-model
+ * @description Local-first source for a drone's reconstructed world model.
+ * Resolves the paired compute / workstation node the drone reconstructs on,
+ * polls its job API (`use-compute-jobs`), and resolves the newest completed
+ * reconstruction for a session — correlated by `session_id`, the key the
+ * compute job and the drone's capture state share.
+ *
+ * The World Model (post-flight) and Live World (in-flight) pages render this
+ * artifact LOCAL-FIRST and fall back to the cloud job records only when no
+ * compute node is paired or its job API is unreachable.
+ *
+ * The reconstructor node is not drone-scoped (a session id is `atlas-<ms>`, not
+ * derived from the capturing drone), so the active session is the correlation
+ * key: the Live World page passes the drone's reported `live.sessionId`; the
+ * post-flight page passes the operator's selected session, or null to resolve
+ * the newest completed reconstruction on the node (its session selector
+ * disambiguates when more than one drone reconstructed there).
+ */
+
+import { useEffect, useMemo, useState } from "react";
+
+import { viewerForKind, type AtlasViewer } from "../components/atlas/viewer-types";
+import type { ComputeAgentClient } from "../lib/agent/compute-client";
+import type { ArtifactSource } from "../lib/net/artifact-source";
+import { isComputeProfile } from "../lib/nodes/workstation-provisioning";
+import { useComputeJobs } from "./use-compute-jobs";
+import { usePairedNodes } from "./use-paired-nodes";
+
+/** A completed reconstruction session on the compute node (a selector entry). */
+export interface WorldModelSession {
+  /** The capturing session id (the correlation key). */
+  sessionId: string;
+  /** The newest completed reconstruct job for this session. */
+  jobId: string;
+  /** When that job was created (epoch ms). */
+  createdMs: number;
+}
+
+/** The local-first path's status for the requested session. */
+export type WorldModelStatus =
+  /** No compute node is paired. The caller falls back to the cloud records. */
+  | "inactive"
+  /** A compute node is paired but its job API is unreachable. The caller falls
+   * back to the cloud records. */
+  | "unreachable"
+  /** The compute node is reachable but has no completed reconstruction for the
+   * requested session yet. The caller shows a "building…" state. */
+  | "building"
+  /** A completed reconstruction is resolved (`artifact` + `viewerHint` set). */
+  | "ready";
+
+export interface DroneWorldModel {
+  /** Whether a workstation / compute node is paired at all (independent of
+   * reachability). Drives the "pair a compute node" guidance vs the generic
+   * empty state. */
+  hasComputeNode: boolean;
+  status: WorldModelStatus;
+  /** The resolved artifact when `status === "ready"`, else null. Null in the
+   * ready state too when the output is a placeholder with nothing to read
+   * (`backend === "mock"`), so the honesty badge still shows. */
+  artifact: ArtifactSource | null;
+  /** Viewer derived from the artifact kind when ready, else null. */
+  viewerHint: AtlasViewer | null;
+  /** The concrete reconstruction backend of the resolved artifact (`"mock"` =
+   * placeholder, else the real backend name), or null when none is resolved.
+   * Drives the reconstruction-honesty badge. */
+  backend: string | null;
+  /** Completed reconstruction sessions on the node, newest-first (selector). */
+  sessions: WorldModelSession[];
+  /** The device id of the resolved reconstructor node, or null when none is
+   * paired. */
+  computeNodeDeviceId: string | null;
+  /** A client for the resolved reconstructor node (for on-demand submits like
+   * "Reconstruct now"), or null when none is paired. Reuses the job-poll
+   * client so there is no second poll loop. */
+  computeClient: ComputeAgentClient | null;
+}
+
+export interface DroneWorldModelParams {
+  /** The session to resolve — the active `live.sessionId` on the Live World
+   * page, or a selected session on the post-flight page. Null resolves the
+   * newest completed reconstruction on the node. */
+  sessionId: string | null;
+  /** The compute node the drone reports it reconstructs on (the capture
+   * state's `computeNodeId`), used to pinpoint the node among several paired
+   * compute nodes. Optional; falls back to the first reachable one. */
+  computeNodeId?: string | null;
+}
+
+/** Resolve a drone's world model local-first from the paired compute node. */
+export function useDroneWorldModel({ sessionId, computeNodeId }: DroneWorldModelParams): DroneWorldModel {
+  const nodes = usePairedNodes();
+  const computeNodes = useMemo(() => nodes.filter((n) => isComputeProfile(n.profile)), [nodes]);
+
+  // Prefer the node the drone reports as its reconstructor; else the first
+  // reachable compute node; else the first paired one (reads as unreachable).
+  const targetNodeId = useMemo<string | null>(() => {
+    const reported = computeNodeId
+      ? computeNodes.find((n) => n.deviceId === computeNodeId)
+      : undefined;
+    return (reported ?? computeNodes.find((n) => n.reachable) ?? computeNodes[0])?.deviceId ?? null;
+  }, [computeNodes, computeNodeId]);
+
+  const { jobs, unreachable, client } = useComputeJobs(targetNodeId);
+
+  // Completed reconstruct jobs that carry a session, newest-first. Offload jobs
+  // (no session, not a world model) and in-flight jobs are excluded.
+  const completed = useMemo(
+    () =>
+      jobs
+        .filter((j) => j.state === "completed" && j.kind === "reconstruct" && Boolean(j.sessionId))
+        .sort((a, b) => b.updatedMs - a.updatedMs),
+    [jobs],
+  );
+
+  const sessions = useMemo<WorldModelSession[]>(() => {
+    const seen = new Set<string>();
+    const out: WorldModelSession[] = [];
+    for (const j of completed) {
+      const sid = j.sessionId;
+      if (!sid || seen.has(sid)) continue;
+      seen.add(sid);
+      out.push({ sessionId: sid, jobId: j.id, createdMs: j.createdMs });
+    }
+    return out;
+  }, [completed]);
+
+  // The newest completed reconstruction for the requested session, or the
+  // newest overall when the session is unknown (the post-flight default).
+  const targetJobId = useMemo<string | null>(() => {
+    const match = sessionId ? completed.find((j) => j.sessionId === sessionId) : completed[0];
+    return match?.id ?? null;
+  }, [completed, sessionId]);
+
+  // The target job's first output, tagged by job id so a session switch never
+  // surfaces the previous job's artifact.
+  const [art, setArt] = useState<{
+    jobId: string;
+    source: ArtifactSource | null;
+    viewer: AtlasViewer;
+    backend: string | null;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!client || !targetJobId) return;
+    let cancelled = false;
+    void client.getOutputs(targetJobId).then((outs) => {
+      if (cancelled) return;
+      const first = (outs ?? [])[0];
+      setArt(
+        first
+          ? {
+              jobId: targetJobId,
+              source: first.source,
+              viewer: viewerForKind(first.kind),
+              backend: first.backend,
+            }
+          : null,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, targetJobId]);
+
+  const resolved = art && art.jobId === targetJobId ? art : null;
+
+  let status: WorldModelStatus;
+  if (!client) status = "inactive";
+  else if (resolved) status = "ready";
+  else if (unreachable) status = "unreachable";
+  else status = "building";
+
+  return {
+    hasComputeNode: computeNodes.length > 0,
+    status,
+    artifact: resolved?.source ?? null,
+    viewerHint: resolved?.viewer ?? null,
+    backend: resolved?.backend ?? null,
+    sessions,
+    computeNodeDeviceId: targetNodeId,
+    computeClient: client,
+  };
+}

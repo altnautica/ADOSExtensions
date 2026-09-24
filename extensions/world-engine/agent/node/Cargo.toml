@@ -1,0 +1,80 @@
+# World Engine compute node (workstation / compute profiles): the job store,
+# scheduler and reconstruction pipeline, the Atlas ingest and world-model
+# fan-out, the perception-offload serving side, node credentials, and mDNS.
+[package]
+name = "world-engine-node"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "World Engine compute node: reconstruction jobs, world-model streaming, and perception offload serving for drones on the LAN."
+
+[lib]
+name = "world_engine_node"
+path = "src/lib.rs"
+
+# Declared as the `node` service in manifest.yaml
+# (`bin:world-engine-node com.altnautica.world-engine`).
+[[bin]]
+name = "world-engine-node"
+path = "src/main.rs"
+
+[dependencies]
+world-engine-protocol = { path = "../protocol" }
+# The Atlas event receiver, the world-model WebSocket fan-out, mDNS advertise,
+# and the compute client the offload tests drive.
+world-engine-transport = { path = "../transport" }
+# The plugin host connection (plugin config, telemetry.extend) when the node
+# runs as the extension's `node` service.
+ados-sdk = { workspace = true }
+# Node-credential header and lane type, rustls provider install.
+ados-protocol = { workspace = true, features = ["tls"] }
+ados-offload = { workspace = true }
+rusqlite = { version = "0.31", features = ["bundled"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmpv = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+tower = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+mdns-sd = { workspace = true }
+# Rerun logging SDK, pinned to =0.33.1 to match the GCS web-viewer
+# (@rerun-io/web-viewer@0.33.1) exactly: the .rrd encoding carries a version the
+# viewer checks. Write-only feature set: `sdk` gives `RecordingStream` and the
+# archetypes, with the viewer, analytics, importers and gRPC server dropped.
+rerun = { version = "=0.33.1", default-features = false, features = ["sdk"] }
+tower-http = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+# Total/unified-memory read for the macOS host-GPU block.
+sysinfo = { version = "0.38", default-features = false, features = ["system", "disk"] }
+# The real perception-offload detector: ados-vision's ONNX backend (the same
+# YOLO decode a drone runs on its NPU). Optional so a CPU-only build needs no
+# ONNX Runtime; `coreml` adds the Apple-GPU execution provider.
+ados-vision = { workspace = true, optional = true }
+
+[features]
+default = []
+# Build the real ONNX detector hosted on ados-vision's backend.
+onnx = ["dep:ados-vision", "ados-vision/onnx"]
+# Register the CoreML execution provider so ONNX inference runs on the Apple GPU
+# (macOS workstation). Implies `onnx`.
+coreml = ["onnx", "ados-vision/coreml"]
+
+[dev-dependencies]
+tower = { workspace = true, features = ["util"] }
+tempfile = { workspace = true }
+axum = { workspace = true }
+# The offload gate implements the transport's detection-publisher trait.
+async-trait = { workspace = true }

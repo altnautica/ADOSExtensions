@@ -1,0 +1,35 @@
+/* Utilities only, every class under the `we:` prefix (`we:flex`,
+   `we:hover:bg-bg-tertiary`). No preflight: the host page already carries its
+   own reset, and a second one would restyle the host. */
+@import "tailwindcss/theme" prefix(we);
+@import "tailwindcss/utilities" prefix(we);
+
+@source "./";
+
+/* Colours follow the host's live theme variables, so every Mission Control
+   theme restyles the extension without a rebuild. */
+@theme {
+  --color-bg-primary: var(--alt-bg-primary);
+  --color-bg-secondary: var(--alt-bg-secondary);
+  --color-bg-tertiary: var(--alt-bg-tertiary);
+  --color-text-primary: var(--alt-text-primary);
+  --color-text-secondary: var(--alt-text-secondary);
+  --color-text-tertiary: var(--alt-text-tertiary);
+  --color-accent-primary: var(--alt-accent-primary);
+  --color-accent-primary-hover: var(--alt-accent-primary-hover);
+  --color-accent-secondary: var(--alt-accent-secondary);
+  --color-accent-foreground: var(--alt-accent-foreground);
+  --color-border-default: var(--alt-border-default);
+  --color-border-strong: var(--alt-border-strong);
+  --color-status-success: var(--alt-status-success);
+  --color-status-warning: var(--alt-status-warning);
+  --color-status-error: var(--alt-status-error);
+  --color-status-serious: color-mix(in oklab, var(--alt-status-warning) 60%, var(--alt-status-error) 40%);
+  --color-media: #000000;
+  --color-scrim: #000000;
+  --color-on-media: #ffffff;
+  --color-on-status: var(--alt-on-status);
+  --font-display: "Space Grotesk", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}

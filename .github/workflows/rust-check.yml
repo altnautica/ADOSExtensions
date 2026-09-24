@@ -1,6 +1,6 @@
 # Builds, lints, and tests the Rust extension crates against the current agent
 # SDK. The SDK (ados-sdk / ados-protocol) is consumed via a workspace path dep
-# to the sibling ADOSDroneAgent checkout, so this job clones that repo first and
+# to the sibling ADOSDroneAgent checkout, so each job clones that repo first and
 # catches SDK drift early — before a release tag tries to build the same crate.
 name: rust-check
 
@@ -9,6 +9,7 @@ on:
     branches: [main]
     paths:
       - "extensions/vision-nav/agent/**"
+      - "extensions/world-engine/agent/**"
       - "Cargo.toml"
       - "ADOS_AGENT_REV"
       - "Cargo.lock"
@@ -16,6 +17,7 @@ on:
   pull_request:
     paths:
       - "extensions/vision-nav/agent/**"
+      - "extensions/world-engine/agent/**"
       - "Cargo.toml"
       - "ADOS_AGENT_REV"
       - "Cargo.lock"
@@ -48,3 +50,57 @@ jobs:
 
       - name: Check the release target compiles
         run: cargo check -p vision-nav --target aarch64-unknown-linux-musl
+
+  # The five World Engine crates. The node links rerun and bundled SQLite, and
+  # the transport links rustls/ring, so the musl cross-check needs a C
+  # cross-compiler: zig via cargo-zigbuild, the same toolchain the release
+  # workflow builds the shipped binaries with.
+  world-engine-crates:
+    runs-on: ubuntu-24.04-arm
+    env:
+      WE_CRATES: >-
+        -p world-engine-protocol
+        -p world-engine-transport
+        -p world-engine-capture
+        -p world-engine-node
+        -p world-engine-link
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the agent SDK (sibling path for the workspace path dep)
+        run: |
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none \
+            https://github.com/altnautica/ADOSDroneAgent "${dest}"
+          git -C "${dest}" checkout "$(cat ADOS_AGENT_REV)"
+          echo "agent SDK from ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+
+      - name: Install Rust toolchain (musl target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+          components: clippy
+
+      - name: Install zig and cargo-zigbuild
+        run: |
+          pip install ziglang
+          cargo install --locked cargo-zigbuild
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: arm64-world-engine-${{ hashFiles('Cargo.lock') }}
+          restore-keys: arm64-world-engine-
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy ${WE_CRATES} --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test ${WE_CRATES}
+
+      - name: Check the release target compiles
+        run: cargo zigbuild ${WE_CRATES} --target aarch64-unknown-linux-musl

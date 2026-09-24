@@ -36,6 +36,7 @@ PACK_RSYNC_EXCLUDES=(
   --exclude '*.egg-info'
   --exclude 'esbuild.config.*'
   --exclude '/gcs/src'
+  --exclude '/gcs/build.mjs'
   --exclude '/gcs/package.json'
   --exclude '/gcs/tsconfig.json'
   --exclude '/gcs/vitest.config.ts'

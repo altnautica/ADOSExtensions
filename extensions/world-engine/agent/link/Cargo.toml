@@ -1,0 +1,48 @@
+# World Engine link: the extension's main process on every profile. On a drone
+# it forwards the capture stream over the bearer ladder, republishes the
+# shared world-model topics, publishes the `status` telemetry, runs the
+# perception-offload reconciler, and serves the Atlas control API on the
+# plugin's HTTP socket. On a ground station it relays the radio aux lane onto
+# the LAN. On a workstation / compute node the `node` service serves HTTP and
+# state, and the link stays up as the plugin's main process.
+[package]
+name = "world-engine-link"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "World Engine link: drone forwarder, offload reconciler, ground-station relay, and the Atlas control API."
+
+[lib]
+name = "world_engine_link"
+path = "src/lib.rs"
+
+# The manifest entrypoint (`agent.entrypoint: bin:world-engine-link`).
+[[bin]]
+name = "world-engine-link"
+path = "src/main.rs"
+
+[dependencies]
+world-engine-protocol = { path = "../protocol" }
+world-engine-transport = { path = "../transport" }
+ados-sdk = { workspace = true }
+# Node-credential store, the capture-bus framing, the aux channel ids, the
+# cloud-publish limits, and the vision detection-bus types.
+ados-protocol = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmpv = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+axum = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }
+tower = { workspace = true, features = ["util"] }

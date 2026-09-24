@@ -1,0 +1,114 @@
+name: world-engine-deep
+
+# The World Engine node's real-model perception-offload test
+# (`extensions/world-engine/agent/node/tests/onnx_offload.rs`) runs a real ONNX
+# detector against real pixels. It is `#[ignore]`d and feature-gated on `onnx`,
+# so the push-path `rust-check` compiles nothing of it; this workflow is the
+# only place it executes.
+#
+# Kept out of the push path deliberately: downloading a model on every push
+# buys nothing, and a slow gate on the hot path is a gate people route around.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model_url:
+        description: "Override the COCO YOLOv8n ONNX URL for this run"
+        required: false
+        type: string
+  schedule:
+    # Weekly, Monday 03:41 UTC.
+    - cron: "41 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  real-model:
+    name: Real-model offload test
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the agent SDK (sibling path for the workspace path dep)
+        run: |
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none \
+            https://github.com/altnautica/ADOSDroneAgent "${dest}"
+          git -C "${dest}" checkout "$(cat ADOS_AGENT_REV)"
+          echo "agent SDK from ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: arm64-world-engine-deep-${{ hashFiles('Cargo.lock') }}
+          restore-keys: arm64-world-engine-deep-
+
+      - name: Fetch the COCO model when a source is configured
+        id: model
+        env:
+          # A repository variable, not a secret: it is a URL to a public model.
+          MODEL_URL: ${{ inputs.model_url || vars.ADOS_TEST_COCO_ONNX_URL }}
+          PERSON_RGB_URL: ${{ vars.ADOS_TEST_PERSON_RGB_URL }}
+        run: |
+          set -uo pipefail
+          if [ -z "${MODEL_URL:-}" ]; then
+            {
+              echo "### Real-model offload test: NOT RUN"
+              echo
+              echo "\`ADOS_TEST_COCO_ONNX_URL\` is not set on this repository, so the"
+              echo "COCO ONNX model cannot be fetched and"
+              echo "\`world-engine-node/tests/onnx_offload.rs\` did not execute."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "configured=no" >> "$GITHUB_OUTPUT"
+            echo "NOTICE: ADOS_TEST_COCO_ONNX_URL is unset; the real-model test did not run."
+            exit 0
+          fi
+
+          mkdir -p "$RUNNER_TEMP/models"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/models/coco.onnx" "$MODEL_URL"
+          # A truncated download or an HTML error page fails inside the test
+          # with an opaque parse error. ONNX is protobuf and always larger.
+          size="$(wc -c < "$RUNNER_TEMP/models/coco.onnx")"
+          if [ "$size" -lt 1000000 ]; then
+            echo "FAIL: downloaded model is $size bytes, too small to be a YOLOv8n export."
+            exit 1
+          fi
+          echo "model=$RUNNER_TEMP/models/coco.onnx" >> "$GITHUB_OUTPUT"
+
+          if [ -n "${PERSON_RGB_URL:-}" ]; then
+            curl -fsSL --retry 3 -o "$RUNNER_TEMP/models/person.rgb" "$PERSON_RGB_URL"
+            echo "person=$RUNNER_TEMP/models/person.rgb" >> "$GITHUB_OUTPUT"
+          fi
+          echo "configured=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Run the model-gated offload test
+        if: steps.model.outputs.configured == 'yes'
+        env:
+          ADOS_TEST_COCO_ONNX: ${{ steps.model.outputs.model }}
+          ADOS_TEST_PERSON_RGB: ${{ steps.model.outputs.person }}
+        run: |
+          set -uo pipefail
+          # ADOS_TEST_RTSP is left unset on purpose: offload_live_rtsp needs a
+          # live camera, which a hosted runner does not have.
+          cargo test --features onnx -p world-engine-node --test onnx_offload -- --ignored --nocapture
+
+      - name: Record the outcome
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ "${{ steps.model.outputs.configured }}" = "yes" ]; then
+            echo "### Real-model offload test: RAN" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo
+            echo "Never runnable on a hosted runner, by design:"
+            echo "- \`world-engine-node/tests/offload_live_rtsp.rs\` — needs a live RTSP camera"
+          } >> "$GITHUB_STEP_SUMMARY"

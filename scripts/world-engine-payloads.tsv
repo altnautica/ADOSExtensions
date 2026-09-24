@@ -1,0 +1,20 @@
+# World Engine release payloads: the files a node fetches at install instead
+# of finding them in the .adosplug archive. One row per release asset:
+#
+#   <asset-name> <path-in-archive> <arch_os|-> <profiles|->
+#
+# The asset name is the GitHub release asset (and the file name the release
+# workflow and scripts/pack-world-engine-local.sh stage it under). Both append
+# a fifth column, the download URL, then hand the list to
+# `scripts/pack-rust.sh --payload-manifest`. Every `agent.binaries` path in
+# extensions/world-engine/manifest.yaml needs a row here.
+world-engine-link-aarch64-linux     bin/aarch64-linux/world-engine-link     aarch64-linux  -
+world-engine-link-x86_64-linux      bin/x86_64-linux/world-engine-link      x86_64-linux   -
+world-engine-link-aarch64-macos     bin/aarch64-macos/world-engine-link     aarch64-macos  -
+world-engine-capture-aarch64-linux  bin/aarch64-linux/world-engine-capture  aarch64-linux  drone
+world-engine-node-aarch64-linux     bin/aarch64-linux/world-engine-node     aarch64-linux  workstation,compute
+world-engine-node-x86_64-linux      bin/x86_64-linux/world-engine-node      x86_64-linux   workstation,compute
+world-engine-node-aarch64-macos     bin/aarch64-macos/world-engine-node     aarch64-macos  workstation,compute
+# The Rerun web viewer's wasm, served to the GCS half as a plugin asset. Every
+# profile serves the GCS module, so every node fetches it.
+re_viewer_bg.wasm                   gcs/assets/re_viewer_bg.wasm            -              -

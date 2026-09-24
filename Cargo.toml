@@ -19,11 +19,21 @@
 resolver = "2"
 members = [
   "extensions/vision-nav/agent",
+  "extensions/world-engine/agent/protocol",
+  "extensions/world-engine/agent/transport",
+  "extensions/world-engine/agent/capture",
+  "extensions/world-engine/agent/node",
+  "extensions/world-engine/agent/link",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
+# Minimum supported Rust. The World Engine node pins `rerun = "=0.33.1"` (the
+# .rrd encoding the GCS web viewer reads), and rerun plus the `fixed` crate it
+# pulls in need 1.93. Declared so an older toolchain fails with a readable
+# "needs a newer toolchain" instead of a raw compile error.
+rust-version = "1.93"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/altnautica/ADOSExtensions"
 
@@ -58,6 +68,42 @@ ados-sdk = { path = "../ADOSDroneAgent/crates/ados-sdk" }
 # vision extension names ados-protocol directly for them. It is the same crate
 # the SDK pulls in transitively, resolved here to the same sibling checkout.
 ados-protocol = { path = "../ADOSDroneAgent/crates/ados-protocol" }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal"] }
-rmpv = "1.3"
+# The perception-offload safety gates (tier picker, freshness and lock-state),
+# from the same sibling checkout.
+ados-offload = { path = "../ADOSDroneAgent/crates/ados-offload" }
+# The ONNX detector backend a compute node hosts for perception offload.
+# Optional in the node crate, behind its `onnx` / `coreml` features.
+ados-vision = { path = "../ADOSDroneAgent/crates/ados-vision", default-features = false }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "net", "io-util", "sync", "time", "process", "fs"] }
+rmpv = { version = "1.3", features = ["with-serde"] }
 async-trait = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rmp-serde = "1.3"
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+parking_lot = "0.12"
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["server", "server-auto", "tokio"] }
+bytes = "1"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false }
+tokio-tungstenite = "0.24"
+mdns-sd = "0.13"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+tempfile = "3"
+
+# Identical to the agent's release profile, so a World Engine binary is built
+# the way the agent binaries it runs beside are built.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+panic = "abort"
