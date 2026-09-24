@@ -11,6 +11,14 @@ type EventHandler<TArgs = unknown> = (args: TArgs) => void;
 /** Host event carrying the capability token to stamp on every request. */
 export const CAPABILITY_TOKEN_EVENT = "capability.token";
 
+/** One in-flight request awaiting the host's response. */
+interface PendingRequest {
+  resolve: (value: unknown) => void;
+  reject: (err: HostError) => void;
+  /** Cancels the request deadline once the request settles. */
+  cancelDeadline: () => void;
+}
+
 /**
  * The PluginClient is the single public surface a plugin uses to
  * round-trip with the GCS host. It hides envelope assembly, capability
@@ -18,13 +26,7 @@ export const CAPABILITY_TOKEN_EVENT = "capability.token";
  */
 export class PluginClient {
   private readonly transport: Transport;
-  private readonly pending = new Map<
-    string,
-    {
-      resolve: (value: unknown) => void;
-      reject: (err: HostError) => void;
-    }
-  >();
+  private readonly pending = new Map<string, PendingRequest>();
   private readonly subscriptions = new Map<string, Set<EventHandler>>();
   private readonly disposers: Array<() => void> = [];
   private readonly idGen: () => string;
@@ -46,6 +48,7 @@ export class PluginClient {
     for (const d of this.disposers) d();
     this.disposers.length = 0;
     for (const [, pending] of this.pending) {
+      pending.cancelDeadline();
       pending.reject(new HostError("disposed", "client disposed"));
     }
     this.pending.clear();
@@ -61,10 +64,12 @@ export class PluginClient {
   ): Promise<TResult> {
     const id = this.idGen();
     return new Promise<TResult>((resolve, reject) => {
-      this.pending.set(id, {
+      const slot: PendingRequest = {
         resolve: resolve as (value: unknown) => void,
         reject,
-      });
+        cancelDeadline: () => {},
+      };
+      this.pending.set(id, slot);
       const env: RpcEnvelope<TArgs> = {
         id,
         type: "request",
@@ -77,9 +82,8 @@ export class PluginClient {
       this.transport.send(env);
       const timeoutMs = options?.timeoutMs ?? 5_000;
       if (timeoutMs > 0 && timeoutMs !== Number.POSITIVE_INFINITY) {
-        setTimeout(() => {
-          const slot = this.pending.get(id);
-          if (!slot) return;
+        const timer = setTimeout(() => {
+          if (this.pending.get(id) !== slot) return;
           this.pending.delete(id);
           slot.reject(
             new HostError(
@@ -88,6 +92,7 @@ export class PluginClient {
             ),
           );
         }, timeoutMs);
+        slot.cancelDeadline = () => clearTimeout(timer);
       }
     });
   }
@@ -111,19 +116,26 @@ export class PluginClient {
     };
   }
 
-  /** Convenience for the most common subscription pattern. */
+  /**
+   * Subscribe to one telemetry topic. Resolves once the host accepted the
+   * subscription, with a function that drops the handler and, when it was the
+   * last handler for the topic on this client, stops the host's stream too.
+   * A refused subscription leaves no handler behind.
+   */
   async subscribeTelemetry<TArgs = unknown>(
     topic: TelemetryTopic | string,
     handler: EventHandler<TArgs>,
   ): Promise<() => void> {
     const eventMethod = `telemetry.${topic}`;
-    const off = this.on(eventMethod, handler);
-    await this.request(
-      "telemetry.subscribe",
-      `telemetry.subscribe.${topic}`,
-      { topic },
-    );
-    return off;
+    return this.openStream(eventMethod, handler, {
+      open: () =>
+        this.request(
+          "telemetry.subscribe",
+          `telemetry.subscribe.${topic}`,
+          { topic },
+        ),
+      close: () => this.request("telemetry.unsubscribe", "", { topic }),
+    });
   }
 
   /**
@@ -131,25 +143,45 @@ export class PluginClient {
    * {@link subscribeTelemetry}: it registers a local handler for the
    * pushed `perception.detections` event, then sends one
    * `perception.subscribe` request to open the stream. The returned
-   * function tears the subscription down locally AND sends a
-   * `perception.unsubscribe` request so the host can stop streaming.
-   *
-   * The unsubscribe request is best-effort — it is fire-and-forget and
-   * swallows host errors (e.g. a disposed client) so unmount paths never
-   * throw.
+   * function tears the subscription down locally AND, for the last local
+   * handler, sends a `perception.unsubscribe` request so the host stops
+   * streaming.
    */
   async subscribePerception<TBatch = unknown>(
     handler: EventHandler<TBatch>,
   ): Promise<() => void> {
-    const off = this.on("perception.detections", handler);
-    await this.request("perception.subscribe", "perception.subscribe", {});
-    return () => {
+    return this.openStream("perception.detections", handler, {
+      open: () =>
+        this.request("perception.subscribe", "perception.subscribe", {}),
+      close: () =>
+        this.request("perception.unsubscribe", "perception.subscribe", {}),
+    });
+  }
+
+  /**
+   * Register `handler` for a host-pushed stream, then open the stream on the
+   * host. The close request is best-effort (fire-and-forget, host errors
+   * swallowed) so unmount paths never throw.
+   */
+  private async openStream<TArgs>(
+    eventMethod: string,
+    handler: EventHandler<TArgs>,
+    stream: { open: () => Promise<unknown>; close: () => Promise<unknown> },
+  ): Promise<() => void> {
+    const off = this.on(eventMethod, handler);
+    try {
+      await stream.open();
+    } catch (err) {
       off();
-      void this.request(
-        "perception.unsubscribe",
-        "perception.subscribe",
-        {},
-      ).catch(() => {});
+      throw err;
+    }
+    let closed = false;
+    return () => {
+      if (closed) return;
+      closed = true;
+      off();
+      if (this.subscriptions.has(eventMethod)) return;
+      void stream.close().catch(() => {});
     };
   }
 
@@ -158,6 +190,7 @@ export class PluginClient {
       const slot = this.pending.get(env.id);
       if (!slot) return;
       this.pending.delete(env.id);
+      slot.cancelDeadline();
       if (env.error) {
         slot.reject(new HostError(env.error.code, env.error.message));
       } else {

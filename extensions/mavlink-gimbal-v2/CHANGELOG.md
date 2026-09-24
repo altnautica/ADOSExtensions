@@ -4,6 +4,22 @@ All notable changes to the MAVLink Gimbal v2 Controller extension.
 
 ## 1.4.0
 
+- The Gimbal tab shows the gimbal's live attitude. The agent half subscribes to
+  the gimbal's `GIMBAL_DEVICE_ATTITUDE_STATUS`, decodes the wire frame the host
+  delivers, updates the driver state and publishes the `gimbal` telemetry
+  channel the tab subscribes to (at most 5 Hz). Nothing published that channel
+  before, so the readout never left its empty state; `telemetry.extend` is now
+  declared.
+- The agent half executes the tab's point and ROI commands from per-drone config
+  keys (`point`, `roi`, `roi_clear`), once each, and drops a malformed value
+  instead of sending it.
+- The tab sends its point and ROI actions as `plugin.config.write` on those
+  keys. It used to send raw `mavlink.command_int`, which the host refuses, so
+  no slider or ROI action ever reached the gimbal. A slider now sends once, on
+  release, instead of on every drag step. The roll slider is gone: the Gimbal
+  Manager point command has no roll axis, so it moved nothing.
+- Dropped the agent `event.subscribe` permission (no call site) and the README
+  rows for capabilities the manifest no longer declares.
 - Gimbal rate commands are clamped to the `max_rate_dps` ceiling the driver
   advertises in its capabilities, so an out-of-range aim gain or camera field of
   view in the per-drone config cannot reach the gimbal as an arbitrarily large

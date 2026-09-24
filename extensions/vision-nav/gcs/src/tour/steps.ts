@@ -21,7 +21,7 @@ export interface TourStep {
 }
 
 /**
- * The six-step first-run tour. The order matches how an operator
+ * The five-step first-run tour. The order matches how an operator
  * works through the tab on a new drone.
  */
 export const TOUR_STEPS: TourStep[] = [
@@ -29,11 +29,11 @@ export const TOUR_STEPS: TourStep[] = [
     id: "mode-card",
     targetTestId: "vn-mode-card",
     titleKey: "navigation.tour.modeTitle",
-    titleFallback: "Pick a mode",
+    titleFallback: "Navigation mode",
     bodyKey: "navigation.tour.modeBody",
     bodyFallback:
-      "This is where you pick the estimator. The card filters the list " +
-      "against what the agent can actually run.",
+      "The modes the agent can run, with the active one marked. Set " +
+      "the mode in the plugin's per-drone settings.",
   },
   {
     id: "sensors-card",
@@ -42,10 +42,9 @@ export const TOUR_STEPS: TourStep[] = [
     titleFallback: "Sensor health",
     bodyKey: "navigation.tour.sensorsBody",
     bodyFallback:
-      "Camera, IMU, and rangefinder health at a glance. The " +
-      "Calibrate button on the camera row opens a guided wizard " +
-      "that captures frames, fits the camera-IMU timeshift, and " +
-      "applies the result.",
+      "Camera, IMU, and rangefinder health at a glance. The camera " +
+      "row shows whether the agent loaded a camera calibration " +
+      "(camchain.yaml in the plugin's data directory).",
   },
   {
     id: "estimator-card",
@@ -76,16 +75,6 @@ export const TOUR_STEPS: TourStep[] = [
     bodyFallback:
       "Mode-aware arm-readiness. Every check must be green before " +
       "the drone is armable in this mode.",
-  },
-  {
-    id: "ekf-switcher",
-    targetTestId: "vn-ekf-switcher",
-    titleKey: "navigation.tour.ekfTitle",
-    titleFallback: "EKF source switch",
-    bodyKey: "navigation.tour.ekfBody",
-    bodyFallback:
-      "Runtime EKF source switch on ArduPilot. The escape hatch " +
-      "back to GPS if vision goes degraded mid-flight.",
   },
 ];
 

@@ -17,8 +17,6 @@ import {
 
 interface ConfigShape {
   limits?: Partial<AxisLimits>;
-  vehicleSystemId?: number;
-  vehicleComponentId?: number;
 }
 
 let panel: PanelHandle | null = null;
@@ -26,7 +24,7 @@ let rootEl: HTMLElement | null = null;
 
 definePlugin({
   id: "com.altnautica.mavlink-gimbal-v2",
-  version: "1.3.0",
+  version: "1.4.0",
   async mount(ctx) {
     rootEl = document.getElementById("gimbal-root");
     if (!rootEl) {
@@ -45,11 +43,7 @@ definePlugin({
       const merged: AxisLimits = { ...DEFAULT_LIMITS, ...(next.limits ?? {}) };
       if (rootEl) {
         panel?.destroy();
-        panel = mountPanel(ctx, rootEl, {
-          limits: merged,
-          vehicleSystemId: next.vehicleSystemId,
-          vehicleComponentId: next.vehicleComponentId,
-        });
+        panel = mountPanel(ctx, rootEl, { limits: merged });
       }
     });
   },

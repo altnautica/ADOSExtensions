@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 import { createPluginContext } from "../src/api";
 import { PluginClient } from "../src/client";
-import { HostError, PROTOCOL_VERSION } from "../src/protocol";
+import { HostError, PROTOCOL_VERSION, type RpcEnvelope } from "../src/protocol";
 import { MemoryTransport } from "../src/transport";
 
 function setup() {
@@ -96,6 +96,118 @@ describe("operator-confirmed calls", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("host refusals", () => {
+  function answering(
+    transport: MemoryTransport,
+    result: (env: RpcEnvelope) => unknown,
+  ): void {
+    transport.onPluginSend = (env) => {
+      queueMicrotask(() =>
+        transport.pushFromHost({
+          id: env.id,
+          type: "response",
+          method: env.method,
+          capability: env.capability,
+          args: result(env),
+          version: PROTOCOL_VERSION,
+        }),
+      );
+    };
+  }
+
+  it("reject every operator action the host answers with ok:false", async () => {
+    const { transport, client } = setup();
+    const ctx = createPluginContext({ client });
+    answering(transport, () => ({ ok: false, error: "operator denied" }));
+    const calls: Array<Promise<unknown>> = [
+      ctx.command.send("land"),
+      ctx.mission.write({ missionId: "m1" }),
+      ctx.recording.mark({ label: "x" }),
+      ctx.notifications.publish({
+        channelId: "c",
+        severity: "info",
+        title: "t",
+      }),
+    ];
+    for (const call of calls) {
+      await expect(call).rejects.toMatchObject({
+        name: "HostError",
+        code: "refused",
+        message: "operator denied",
+      });
+    }
+  });
+
+  it("resolve an accepted action with the host's result", async () => {
+    const { transport, client } = setup();
+    const ctx = createPluginContext({ client });
+    answering(transport, () => ({ ok: true, result: { set: true } }));
+    await expect(ctx.command.send("plugin.config.write")).resolves.toEqual({
+      ok: true,
+      result: { set: true },
+    });
+  });
+});
+
+describe("telemetry subscriptions", () => {
+  it("release the host stream when the last handler unsubscribes", async () => {
+    const { transport, client } = setup();
+    const sent: RpcEnvelope[] = [];
+    transport.onPluginSend = (env) => {
+      sent.push(env);
+      queueMicrotask(() =>
+        transport.pushFromHost({
+          id: env.id,
+          type: "response",
+          method: env.method,
+          capability: env.capability,
+          args: { ok: true },
+          version: PROTOCOL_VERSION,
+        }),
+      );
+    };
+    const offA = await client.subscribeTelemetry("battery", () => {});
+    const offB = await client.subscribeTelemetry("battery", () => {});
+    offA();
+    expect(sent.map((e) => e.method)).not.toContain("telemetry.unsubscribe");
+    offB();
+    offB();
+    const releases = sent.filter((e) => e.method === "telemetry.unsubscribe");
+    expect(releases).toHaveLength(1);
+    expect(releases[0].args).toEqual({ topic: "battery" });
+  });
+
+  it("leave no handler behind when the host refuses the subscription", async () => {
+    const { transport, client } = setup();
+    transport.onPluginSend = (env) => {
+      queueMicrotask(() =>
+        transport.pushFromHost({
+          id: env.id,
+          type: "response",
+          method: env.method,
+          capability: env.capability,
+          args: undefined,
+          error: { code: "permission_denied", message: "no grant" },
+          version: PROTOCOL_VERSION,
+        }),
+      );
+    };
+    const seen: unknown[] = [];
+    await expect(
+      client.subscribeTelemetry("battery", (s) => seen.push(s)),
+    ).rejects.toMatchObject({ code: "permission_denied" });
+    transport.pushFromHost({
+      id: "e1",
+      type: "event",
+      method: "telemetry.battery",
+      capability: "telemetry.subscribe.battery",
+      args: { x: 1 },
+      version: PROTOCOL_VERSION,
+    });
+    expect(seen).toEqual([]);
   });
 });
 

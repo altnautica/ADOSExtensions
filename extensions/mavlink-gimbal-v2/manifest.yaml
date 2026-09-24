@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.3.0"
+version: "1.4.0"
 description: "MAVLink Gimbal v2 control: manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 description_long: |
   Drives a MAVLink gimbal-manager (component 154). Beyond manual pitch/yaw
@@ -50,8 +50,8 @@ agent:
     - id: mavlink.write
     - id: mavlink.component.gimbal
     - id: vision.detection.subscribe
+    - id: telemetry.extend
     - id: event.publish
-    - id: event.subscribe
     - id: mcp.expose
   resources:
     max_ram_mb: 64

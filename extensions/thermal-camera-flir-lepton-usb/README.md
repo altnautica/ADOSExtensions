@@ -73,7 +73,7 @@ scripts/pack.sh thermal-camera-flir-lepton-usb
 ## Permissions
 
 Agent: `hardware.usb.uvc`, `video.source.set`, `telemetry.extend`,
-`event.publish`, `mavlink.component.camera`.
+`event.publish`.
 
 GCS: `ui.slot.video-overlay`, `ui.slot.settings-section`,
 `ui.slot.flight-skill`, `telemetry.subscribe.thermal`,

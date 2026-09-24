@@ -35,6 +35,7 @@ from altnautica_siyi_pod.mavlink_bridge import (
     COMP_CAMERA,
     COMP_GIMBAL,
     SiyiMavlinkBridge,
+    decode_fields,
 )
 from altnautica_siyi_pod.pod import PodUnsupported, SiyiPod
 from altnautica_siyi_pod.session import SiyiSession
@@ -65,13 +66,15 @@ _STATE_KEYS = (
 # it needs. A Skill for a control the negotiated model lacks publishes a
 # disabled state so the cockpit Skill Bar greys it out, instead of offering a
 # silent no-op; a supported Skill publishes idle. Photo is a base camera
-# feature every model has, so it has no capability gate.
+# feature every model has, so it has no capability gate. Center and nadir both
+# gate on the gimbal and share one topic, as zoom in and out do: the agent keeps
+# a small fixed number of state topics per plugin, and this set plus the state
+# topic, the record toggle and the telemetry channel fills it exactly.
 _SKILL_TOPIC_CAP: dict[str, str | None] = {
     "siyi.pod.palette": "thermal",
     "siyi.pod.laser": "laser",
     "siyi.pod.zoom": "zoom",
-    "siyi.pod.center": "gimbal",
-    "siyi.pod.nadir": "gimbal",
+    "siyi.pod.gimbal": "gimbal",
     "siyi.pod.photo": None,
 }
 
@@ -407,21 +410,21 @@ class SiyiPodPlugin:
         }
 
     # -- FC pose ----------------------------------------------------------
-    def _on_attitude(self, msg: dict[str, Any]) -> None:
-        import math
+    def _on_attitude(self, delivery: dict[str, Any]) -> None:
+        msg = decode_fields(delivery)
+        if msg is None:
+            return
+        self._pose.yaw_deg = math.degrees(float(msg["yaw"]))
 
-        self._pose.yaw_deg = math.degrees(float(msg.get("yaw", 0.0)))
-
-    def _on_global_position(self, msg: dict[str, Any]) -> None:
-        lat = msg.get("lat")
-        lon = msg.get("lon")
-        rel = msg.get("relative_alt")
-        if lat is not None:
-            self._pose.lat_deg = float(lat) / 1e7
-        if lon is not None:
-            self._pose.lon_deg = float(lon) / 1e7
-        if rel is not None:
-            self._pose.rel_alt_m = float(rel) / 1000.0
+    def _on_global_position(self, delivery: dict[str, Any]) -> None:
+        # lat/lon are 1e7 integer degrees; relative_alt is millimetres. The
+        # pose is ready for geolocation only once a position actually decoded.
+        msg = decode_fields(delivery)
+        if msg is None:
+            return
+        self._pose.lat_deg = float(msg["lat"]) / 1e7
+        self._pose.lon_deg = float(msg["lon"]) / 1e7
+        self._pose.rel_alt_m = float(msg["relative_alt"]) / 1000.0
         self._pose.ready = True
 
     # -- control loop -----------------------------------------------------
@@ -533,9 +536,9 @@ class SiyiPodPlugin:
 
     async def _measure_laser(self) -> float:
         """Fire the rangefinder, mirror the range to the flight controller, and
-        (when a vehicle pose is available) resolve + publish the geolocated
-        target. Returns the measured slant range. Shared by the laser-fire
-        one-shot and the laser/geolocate tools."""
+        (when a vehicle pose is available) resolve the geolocated target the
+        geolocate tool returns. Returns the measured slant range. Shared by the
+        laser-fire one-shot and the laser/geolocate tools."""
         pod = self._pod
         assert pod is not None
         range_m = await pod.read_laser_range()
@@ -561,11 +564,6 @@ class SiyiPodPlugin:
                 "slant_range_m": target.slant_range_m,
                 "bearing_deg": target.bearing_deg,
             }
-            await self._safe(
-                self._ctx.events.publish(
-                    "siyi.pod.laser_target", self._last_laser_target
-                )
-            )
         return range_m
 
 

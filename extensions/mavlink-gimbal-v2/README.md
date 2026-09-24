@@ -36,21 +36,17 @@ signed-eligible `.adosplug` archive under `dist/`.
 
 | Permission | Use |
 |------------|-----|
-| `agent.mavlink.read` | Decode GCS and FC commands. |
+| `agent.mavlink.read` | Read the gimbal's attitude report. |
 | `agent.mavlink.write` | Emit gimbal manager and device messages. |
 | `agent.mavlink.component.gimbal` | Register `MAV_COMP_ID_GIMBAL` (154). |
 | `agent.event.publish` | Publish attitude and health events. |
-| `agent.event.subscribe` | Read vehicle, attitude, position, command events. |
-| `agent.telemetry.extend` | Add gimbal pitch/yaw/roll to telemetry. |
+| `agent.telemetry.extend` | Publish gimbal pitch/yaw/roll on the `gimbal` channel. |
 | `gcs.ui.slot.fc-tab` | Mount the control panel. |
 | `gcs.ui.slot.video-overlay` | Mount the reticle. |
-| `gcs.ui.slot.mission-template` | Add the orbit template. |
 | `gcs.ui.slot.notification` | Surface health alerts. |
 | `gcs.ui.slot.settings-section` | Settings UI under Settings -> Plugins. |
 | `gcs.telemetry.subscribe.gimbal` | Read gimbal telemetry. |
-| `gcs.telemetry.subscribe.mavlink` | Read related MAVLink messages. |
-| `gcs.mission.read` and `gcs.mission.write` | Generate orbit missions. |
-| `gcs.command.send` | Send gimbal commands to the agent. |
+| `gcs.command.send` | Write the point / ROI commands the agent executes. |
 
 Risk band: medium. `command.send` and `mavlink.write` trigger the host's
 "high" badge on `command.send`. No vehicle command, no host file system,

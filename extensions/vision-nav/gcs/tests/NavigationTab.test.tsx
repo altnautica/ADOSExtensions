@@ -129,24 +129,31 @@ describe("NavigationTab", () => {
     );
     expect(screen.getByTestId("vn-ardupilot-params")).toBeTruthy();
     expect(screen.queryByTestId("vn-px4-params")).toBeNull();
-    // Switcher enabled on ArduPilot. Only GPS and optical flow are
-    // offered: the plugin emits no vision pose, so no vision-pose
-    // source set is advertised.
-    const of = screen.getByTestId("vn-ekf-button-of") as HTMLButtonElement;
-    expect(of.disabled).toBe(false);
-    expect(screen.queryByTestId("vn-ekf-button-vio")).toBeNull();
   });
 
-  it("renders the PX4 params panel and disables the switcher on PX4", () => {
+  it("renders the PX4 params panel when firmware is px4", () => {
     const ctx = fakeCtx();
     render(
       <NavigationTab ctx={ctx} firmware="px4" telemetryOverride={mkTelemetry()} />,
     );
     expect(screen.getByTestId("vn-px4-params")).toBeTruthy();
     expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
-    expect(screen.getByTestId("vn-ekf-px4-note")).toBeTruthy();
-    const of = screen.getByTestId("vn-ekf-button-of") as HTMLButtonElement;
-    expect(of.disabled).toBe(true);
+  });
+
+  it("offers no control that sends a request the plugin cannot serve", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({ cameraIntrinsicsLoaded: false })}
+      />,
+    );
+    const sensors = screen.getByTestId("vn-sensors-card");
+    expect(sensors.querySelectorAll("button")).toHaveLength(0);
+    expect(screen.getByTestId("vn-sensors-camera").textContent).toContain(
+      "Not calibrated",
+    );
   });
 
   it("renders the iNav params panel when firmware is inav", () => {

@@ -10,16 +10,15 @@ with the closest IMU sample, runs the selected estimator, and emits the
 `OPTICAL_FLOW_RAD` (and, when the rangefinder is companion-wired,
 `DISTANCE_SENSOR`) messages that ArduPilot, PX4, and iNav fuse into
 their estimators. The GCS half mounts a node-detail tab with the mode
-picker, sensors card, estimator card, telemetry charts, pre-arm status,
-EKF source-set switcher, and a fallback banner that fires when the
-estimator goes degraded or fails.
+list, sensors card, estimator card, telemetry charts, pre-arm status,
+and a fallback banner that fires when the estimator goes degraded or
+fails.
 
-The one-time, offline camera-IMU **calibration wizard stays Python**
-(`agent/calibration-helper/`): it is an infrequent OpenCV-bound flow
-(AprilTag detection, intrinsics solve, timeshift fit) that runs far off
-the 30 Hz emit path. It produces a Kalibr-style `camchain.yaml`; the
-Rust agent reads the camera-IMU timeshift out of that file at start-up
-and uses it to align frames with IMU samples.
+Camera calibration is a Kalibr-style `camchain.yaml` in the plugin's
+data directory, produced offline with Kalibr. The Rust agent reads the
+camera-IMU timeshift out of that file at start-up and uses it to align
+frames with IMU samples; `agent/calibration-helper/` validates a file
+before it goes onto a vehicle.
 
 ## Modes
 
@@ -153,16 +152,15 @@ aarch64 musl target and stages it at the manifest entrypoint):
 
 The node-detail tab hosts:
 
-- Mode picker (the modes the agent advertises as runnable)
-- Sensors card (camera + IMU + rangefinder rows with sync-offset
-  pill and Calibrate CTA)
+- Mode list (the modes the agent advertises as runnable, active one
+  marked; the mode is set in the per-drone settings)
+- Sensors card (camera + IMU + rangefinder rows with the calibration
+  and sync-offset pills)
 - Estimator card (engine + state + flow quality + sync offset)
 - Telemetry charts (inline-SVG sparklines for flow quality and sync
   offset)
 - Flow health card (live OF metrics)
 - Pre-arm status (mode-aware check rows)
-- EKF source-set switcher (GPS and optical-flow source sets; ArduPilot
-  only, gated on companion health and flow quality)
 - Fallback banner (fires when the estimator is degraded or failed
   with reason plus suggested next action)
 
@@ -181,7 +179,7 @@ Agent:
 GCS:
 
 - `ui.slot.node-detail-tab`, `ui.slot.flight-skill`
-- `telemetry.subscribe.navigation`, `command.send`
+- `telemetry.subscribe.navigation`
 
 Risk band: high. The plugin writes MAVLink and feeds a velocity source
 the flight controller's estimator fuses for position hold, so a bad

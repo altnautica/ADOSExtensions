@@ -45,4 +45,4 @@ __all__ = [
     "y16_from_kelvin",
 ]
 
-__version__ = "1.3.0"
+__version__ = "1.3.1"

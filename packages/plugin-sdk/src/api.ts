@@ -1,4 +1,5 @@
 import { PluginClient } from "./client";
+import { HostError } from "./protocol";
 
 /**
  * High-level shorthand wrappers grouped by domain so plugin code reads
@@ -164,14 +165,17 @@ export interface PluginContext {
      * Send a command. The host asks the operator to approve it first, so the
      * promise waits for the operator's decision instead of the default
      * request deadline; the host always answers, denying a prompt the
-     * operator leaves unanswered.
+     * operator leaves unanswered. A denial or a command the host does not
+     * allow rejects with a `HostError` whose code is `refused`.
      */
     send(command: string, args?: unknown): Promise<unknown>;
   };
   notifications: {
+    /** Rejects with code `refused` when the host drops it (rate limit). */
     publish(payload: NotificationPayload): Promise<unknown>;
   };
   recording: {
+    /** Rejects with code `refused` when nothing is recording. */
     mark(payload: RecordingMark): Promise<unknown>;
   };
   mission: {
@@ -179,7 +183,7 @@ export interface PluginContext {
     /**
      * Replace the mission. Operator-approved like `command.send`, so it waits
      * for the operator's decision and the upload instead of the default
-     * request deadline.
+     * request deadline, and rejects with code `refused` when it is denied.
      */
     write(update: MissionUpdate): Promise<unknown>;
   };
@@ -238,6 +242,31 @@ export interface CreateContextOptions {
  */
 const OPERATOR_CONFIRMED = { timeoutMs: Number.POSITIVE_INFINITY };
 
+/**
+ * The host answers a refused action (operator denial, a command outside its
+ * allowlist, a rate limit, nothing recording) with the result
+ * `{ ok: false, error }` rather than an RPC error. Reject with that reason so a
+ * caller never reads a refusal as done; any other result passes through.
+ */
+async function unlessRefused<T>(pending: Promise<T>): Promise<T> {
+  const result = await pending;
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    "ok" in result &&
+    result.ok === false
+  ) {
+    const reason = "error" in result ? result.error : undefined;
+    throw new HostError(
+      "refused",
+      typeof reason === "string" && reason.length > 0
+        ? reason
+        : "the host refused the request",
+    );
+  }
+  return result;
+}
+
 export function createPluginContext(
   opts: CreateContextOptions = {},
 ): PluginContext {
@@ -267,26 +296,43 @@ export function createPluginContext(
     },
     command: {
       send: (command, args) =>
-        client.request(
-          "command.send",
-          "command.send",
-          { command, args },
-          OPERATOR_CONFIRMED,
+        unlessRefused(
+          client.request(
+            "command.send",
+            "command.send",
+            { command, args },
+            OPERATOR_CONFIRMED,
+          ),
         ),
     },
     notifications: {
       publish: (payload) =>
-        client.request("notification.publish", "ui.slot.notification-channel", payload),
+        unlessRefused(
+          client.request(
+            "notification.publish",
+            "ui.slot.notification-channel",
+            payload,
+          ),
+        ),
     },
     recording: {
       mark: (payload) =>
-        client.request("recording.mark", "recording.write", payload),
+        unlessRefused(
+          client.request("recording.mark", "recording.write", payload),
+        ),
     },
     mission: {
       read: (missionId) =>
         client.request("mission.read", "mission.read", { missionId }),
       write: (update) =>
-        client.request("mission.write", "mission.write", update, OPERATOR_CONFIRMED),
+        unlessRefused(
+          client.request(
+            "mission.write",
+            "mission.write",
+            update,
+            OPERATOR_CONFIRMED,
+          ),
+        ),
     },
     config: {
       onChange: (handler) => client.on("config.changed", handler),

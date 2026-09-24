@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.thermal-flir-lepton-usb
 name: "ADOS Thermal Camera FLIR Lepton USB UVC"
-version: "1.3.0"
+version: "1.3.1"
 description: "FLIR Lepton 3.5 radiometric thermal driver, palettes and spot-meter overlay for a PureThermal 2 USB UVC dongle. Capture requires a UVC backend supplied by the agent; without one the extension reports the camera as unavailable."
 description_long: |
   Driver and cockpit surfaces for a FLIR Lepton 3.5 on a PureThermal 2 USB UVC
@@ -64,16 +64,10 @@ agent:
     - id: telemetry.extend
     # event.publish: plugin.py publishes each Skill's declared state topic.
     - id: event.publish
-    # mavlink.component.camera: backed by the mavlink_components block below.
-    - id: mavlink.component.camera
   resources:
     max_ram_mb: 192
     max_cpu_percent: 35
     max_pids: 16
-  mavlink_components:
-    - component_id: 100
-      component_kind: camera
-      sub_id: 1
 
 gcs:
   entrypoint: "gcs/plugin.bundle.js"

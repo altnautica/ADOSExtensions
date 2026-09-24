@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.4.0"
+version: "0.4.1"
 description: "GPS-denied navigation. Optical flow from a downward camera. Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A downward camera and the flight controller's gyro feed a 30 Hz angular-flow measurement over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -108,13 +108,6 @@ gcs:
     - id: ui.slot.node-detail-tab
     - id: ui.slot.flight-skill
     - id: telemetry.subscribe.navigation
-    # The calibration wizard subscribes to these two topics for substep
-    # progress and the final camchain result (gcs/src/components/
-    # CalibrationWizard.tsx). The host takes the full dotted topic as the
-    # capability string, so both are declared explicitly.
-    - id: telemetry.subscribe.vision-nav.calibration_progress
-    - id: telemetry.subscribe.vision-nav.calibration_complete
-    - id: command.send
   contributes:
     tabs:
       - id: vision-nav-tab

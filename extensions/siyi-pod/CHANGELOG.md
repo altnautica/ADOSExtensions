@@ -2,6 +2,21 @@
 
 ## 0.5.0
 
+- The flight-controller pose used for laser geolocation is now read. The host
+  delivers each subscribed MAVLink message as its raw wire frame, and the
+  attitude and position handlers read decoded field names from that delivery,
+  so the vehicle yaw stayed 0 and the position never arrived while the pose
+  was still marked ready: geolocation resolved the subject from an unset
+  vehicle position. Each delivery is now decoded, and the pose is ready only
+  once a position has decoded.
+- The Center and Nadir Skills share one read-back topic (`siyi.pod.gimbal`), and
+  the `siyi.pod.laser_target` event, which nothing consumed, is no longer
+  published; the geolocate tool still returns the target. The agent keeps a
+  fixed number of state topics per plugin and drops the least recently updated,
+  so two Skill read-backs were being evicted shortly after the pod came up.
+- The description no longer promises a map marker for the geolocated subject
+  or on-pod tracking on the detection bus; neither exists.
+- Every version site agrees, including the agent package's `__version__`.
 - The plugin sends nothing to a pod that has not identified itself. Until the
   hardware-id query is answered every control raises rather than transmitting,
   no stream leg is advertised, and the read-back reports the unidentified

@@ -46,6 +46,16 @@ export function mountPanel(
 ): PanelHandle {
   const container = el("div", { class: "siyi-panel" });
   root.appendChild(container);
+  // A refused or failed command (operator denial, no agent link) is shown
+  // here instead of vanishing; it outlives the per-update re-render.
+  const status = el("div", { class: "siyi-warn", "data-testid": "siyi-command-status" });
+  root.appendChild(status);
+  const run = (pending: Promise<unknown>): void => {
+    status.textContent = "";
+    pending.catch((err: unknown) => {
+      status.textContent = err instanceof Error ? err.message : String(err);
+    });
+  };
 
   const render = (state: PodState | null): void => {
     container.textContent = "";
@@ -74,12 +84,12 @@ export function mountPanel(
         modeSel.appendChild(opt);
       }
       modeSel.addEventListener("change", () =>
-        void cmd.setGimbalMode(ctx, modeSel.value),
+        run(cmd.setGimbalMode(ctx, modeSel.value)),
       );
       container.appendChild(
         section(t("settings.gimbal"), [
           modeSel,
-          button("Center", () => void cmd.recenter(ctx)),
+          button("Center", () => run(cmd.recenter(ctx))),
         ]),
       );
     }
@@ -98,14 +108,14 @@ export function mountPanel(
         class: "siyi-range",
       }) as HTMLInputElement;
       zoom.addEventListener("change", () =>
-        void cmd.setZoom(ctx, Number(zoom.value)),
+        run(cmd.setZoom(ctx, Number(zoom.value))),
       );
       cameraRow.push(zoom);
     }
-    cameraRow.push(button("Photo", () => void cmd.takePhoto(ctx)));
+    cameraRow.push(button("Photo", () => run(cmd.takePhoto(ctx))));
     cameraRow.push(
       button(state?.recording ? "Stop rec" : "Record", () =>
-        void cmd.toggleRecord(ctx),
+        run(cmd.toggleRecord(ctx)),
       ),
     );
     container.appendChild(section(t("settings.optics"), cameraRow));
@@ -120,13 +130,13 @@ export function mountPanel(
         class: "siyi-num",
       }) as HTMLInputElement;
       palette.addEventListener("change", () =>
-        void cmd.setPalette(ctx, Number(palette.value)),
+        run(cmd.setPalette(ctx, Number(palette.value))),
       );
       container.appendChild(
         section(t("settings.thermal"), [
           palette,
-          button("High gain", () => void cmd.setGain(ctx, true)),
-          button("Low gain", () => void cmd.setGain(ctx, false)),
+          button("High gain", () => run(cmd.setGain(ctx, true))),
+          button("Low gain", () => run(cmd.setGain(ctx, false))),
         ]),
       );
     }
@@ -139,7 +149,7 @@ export function mountPanel(
           : "—";
       container.appendChild(
         section(t("settings.laser"), [
-          button("Range", () => void cmd.fireLaser(ctx)),
+          button("Range", () => run(cmd.fireLaser(ctx))),
           el("span", { class: "siyi-dim" }, [` ${readout}`]),
         ]),
       );
@@ -153,6 +163,7 @@ export function mountPanel(
     destroy() {
       unsub();
       container.remove();
+      status.remove();
     },
   };
 }

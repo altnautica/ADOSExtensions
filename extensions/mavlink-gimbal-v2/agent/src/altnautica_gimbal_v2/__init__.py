@@ -6,7 +6,7 @@ point. The driver talks the open MAVLink Gimbal Manager Protocol v2.
 
 from __future__ import annotations
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 
 from altnautica_gimbal_v2.mavlink_driver import MavlinkGimbalDriver
 from altnautica_gimbal_v2.plugin import GimbalV2Plugin

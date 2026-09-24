@@ -4,10 +4,6 @@
     "title": "Vision Navigation",
     "subtitle": "Optical flow GPS-denied flight"
   },
-  "sourceSet": {
-    "label": "EKF Source Set",
-    "switchButton": "Use this set"
-  },
   "health": {
     "flowQuality": "Flow quality",
     "flowRate": "Flow rate",

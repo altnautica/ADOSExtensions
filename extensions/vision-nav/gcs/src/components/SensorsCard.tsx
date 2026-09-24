@@ -1,9 +1,8 @@
-import { useState, type CSSProperties } from "react";
+import type { CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
 import type { VisionNavTelemetry } from "../types";
-import { CalibrationWizard } from "./CalibrationWizard";
 
 // The plugin SDK's i18n.t() returns the key itself when no host
 // translation is available. ``tr`` substitutes a literal fallback so
@@ -23,58 +22,20 @@ interface Props {
  * Three-row sensor health card: camera, IMU, rangefinder. Each row
  * shows the source identity, the live rate / value, and a colour
  * indicator (green / yellow / red / muted) that the operator reads
- * at a glance. The Calibrate CTA on the camera row opens the guided
- * calibration wizard.
+ * at a glance. The card is read-only: the camera calibration is the
+ * Kalibr `camchain.yaml` the agent reads from the plugin's data
+ * directory at start-up, and the IMU is the flight controller's own.
  */
 export function SensorsCard({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;
-  const [wizardOpen, setWizardOpen] = useState(false);
-  const [biasState, setBiasState] = useState<"idle" | "running" | "error">(
-    "idle",
-  );
-
-  async function handleBiasRecalibrate(): Promise<void> {
-    setBiasState("running");
-    try {
-      await ctx.client.request(
-        "vision-nav.recalibrate_imu_biases",
-        "vehicle.command",
-        { type: "recalibrate_imu_biases" },
-      );
-      // The agent does the averaging on its own poll thread; the
-      // next heartbeat shows the new bias. Reset to idle after a
-      // short delay so the operator sees the action took effect.
-      window.setTimeout(() => setBiasState("idle"), 3000);
-    } catch {
-      setBiasState("error");
-      window.setTimeout(() => setBiasState("idle"), 5000);
-    }
-  }
-
   return (
     <section style={card} data-testid="vn-sensors-card">
       <h3 style={heading}>{tr(t, "navigation.sensorsCard.title", "Sensors")}</h3>
       <div style={rows}>
-        <CameraRow
-          telemetry={telemetry}
-          t={t}
-          onCalibrate={() => setWizardOpen(true)}
-        />
-        <ImuRow
-          telemetry={telemetry}
-          t={t}
-          biasState={biasState}
-          onRecalibrate={handleBiasRecalibrate}
-        />
+        <CameraRow telemetry={telemetry} t={t} />
+        <ImuRow telemetry={telemetry} t={t} />
         <RangefinderRow telemetry={telemetry} t={t} />
       </div>
-      {wizardOpen ? (
-        <CalibrationWizard
-          ctx={ctx}
-          telemetry={telemetry}
-          onClose={() => setWizardOpen(false)}
-        />
-      ) : null}
     </section>
   );
 }
@@ -84,15 +45,7 @@ interface RowProps {
   t: PluginContext["i18n"]["t"];
 }
 
-interface CameraRowProps extends RowProps {
-  onCalibrate: () => void;
-}
-
-function CameraRow({
-  telemetry,
-  t,
-  onCalibrate,
-}: CameraRowProps): JSX.Element {
+function CameraRow({ telemetry, t }: RowProps): JSX.Element {
   const device = telemetry.recommendedCameraId ?? "—";
   const loaded = telemetry.cameraIntrinsicsLoaded === true;
   const tone: Tone = loaded
@@ -108,48 +61,26 @@ function CameraRow({
         label={tr(t, "navigation.sensorsCard.camera", "Camera")}
         sublabel={device}
       />
-      <div style={rowRight}>
+      <div
+        style={rowRight}
+        title={tr(
+          t,
+          "navigation.sensorsCard.calibrationHint",
+          "The agent reads a Kalibr camchain.yaml (cam0 block) from the " +
+            "plugin's data directory at start-up.",
+        )}
+      >
         <Pill tone={tone} />
-        <button
-          type="button"
-          style={cta(!loaded)}
-          title={tr(t,
-            "navigation.sensorsCard.calibrateHint",
-            "Open the guided calibration wizard. " +
-              "Captures frames + IMU motion, solves intrinsics + timeshift, applies the result.",
-          )}
-          data-testid="vn-camera-calibrate-cta"
-          onClick={onCalibrate}
-        >
-          {loaded
-            ? tr(t, "navigation.sensorsCard.recalibrate", "Recalibrate")
-            : tr(t, "navigation.sensorsCard.calibrate", "Calibrate")}
-        </button>
       </div>
     </div>
   );
 }
 
-interface ImuRowProps extends RowProps {
-  biasState: "idle" | "running" | "error";
-  onRecalibrate: () => Promise<void>;
-}
-
-function ImuRow({
-  telemetry,
-  t,
-  biasState,
-  onRecalibrate,
-}: ImuRowProps): JSX.Element {
+function ImuRow({ telemetry, t }: RowProps): JSX.Element {
   const source = telemetry.imuSource ?? "—";
   const rate = telemetry.imuRateHz;
   const offset = telemetry.cameraImuSyncOffsetMs;
   const syncTone = syncOffsetTone(offset, t);
-  // Bias recalibration is only meaningful on direct-bus IMU sources
-  // (BMI088 over I2C today; future DroneCAN). The MAVLink path uses
-  // the FC's own calibration tooling.
-  const isDirectSource =
-    typeof source === "string" && source.startsWith("direct-");
   return (
     <div style={rowContainer} data-testid="vn-sensors-imu">
       <RowLabel
@@ -164,36 +95,6 @@ function ImuRow({
           }
         />
         <Pill tone={syncTone} />
-        {isDirectSource ? (
-          <button
-            type="button"
-            style={cta(biasState === "idle")}
-            onClick={() => {
-              void onRecalibrate();
-            }}
-            disabled={biasState === "running"}
-            data-testid="vn-imu-recalibrate-cta"
-            title={tr(
-              t,
-              "navigation.sensorsCard.recalibrateBiasHint",
-              "Place the drone level and still, then tap to recompute the gyro and accel biases.",
-            )}
-          >
-            {biasState === "running"
-              ? tr(
-                  t,
-                  "navigation.sensorsCard.recalibrating",
-                  "Recalibrating...",
-                )
-              : biasState === "error"
-                ? tr(t, "navigation.sensorsCard.retry", "Retry")
-                : tr(
-                    t,
-                    "navigation.sensorsCard.recalibrate",
-                    "Recalibrate",
-                  )}
-          </button>
-        ) : null}
       </div>
     </div>
   );
@@ -361,20 +262,6 @@ const rowRight: CSSProperties = {
   alignItems: "center",
   gap: "0.625rem",
 };
-const cta = (highlight: boolean): CSSProperties => ({
-  padding: "0.25rem 0.5rem",
-  background: highlight
-    ? "var(--vn-accent, #2563eb)"
-    : "var(--vn-surface-2, rgba(255,255,255,0.06))",
-  color: "var(--vn-text, #e5e7eb)",
-  border: highlight
-    ? "1px solid var(--vn-accent, #2563eb)"
-    : "1px solid var(--vn-border, rgba(255,255,255,0.08))",
-  borderRadius: "0.25rem",
-  fontSize: "0.7rem",
-  fontWeight: 600,
-  cursor: "pointer",
-});
 const metric: CSSProperties = {
   display: "flex",
   flexDirection: "column",
@@ -408,8 +295,3 @@ const dot = (color: string): CSSProperties => ({
   background: color,
   display: "inline-block",
 });
-const errorText: CSSProperties = {
-  fontSize: "0.75rem",
-  margin: 0,
-  color: "var(--vn-error, #ef4444)",
-};

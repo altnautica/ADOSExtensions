@@ -40,7 +40,7 @@ dev = [
 
 [[package]]
 name = "altnautica-follow-me"
-version = "0.2.7"
+version = "0.2.9"
 source = { editable = "extensions/follow-me/agent" }
 dependencies = [
     { name = "pymavlink" },
@@ -62,7 +62,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "altnautica-mavlink-gimbal-v2"
-version = "1.3.0"
+version = "1.4.0"
 source = { editable = "extensions/mavlink-gimbal-v2/agent" }
 dependencies = [
     { name = "pymavlink" },
@@ -84,7 +84,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "altnautica-siyi-pod"
-version = "0.4.0"
+version = "0.5.0"
 source = { editable = "extensions/siyi-pod/agent" }
 dependencies = [
     { name = "pymavlink" },
@@ -106,7 +106,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "altnautica-thermal-camera-flir-lepton"
-version = "1.3.0"
+version = "1.3.1"
 source = { editable = "extensions/thermal-camera-flir-lepton-usb/agent" }
 
 [package.optional-dependencies]

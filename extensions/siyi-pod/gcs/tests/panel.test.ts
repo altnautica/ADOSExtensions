@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   createPluginHarness,
@@ -116,6 +116,26 @@ describe("console capability gating", () => {
     expect(labels).not.toContain("Range");
     // Zoom is supported, so its slider is still rendered.
     expect(root.querySelectorAll("input[type=range]").length).toBeGreaterThan(0);
+
+    handle.destroy();
+    root.remove();
+    await harness.teardown();
+  });
+});
+
+describe("console commands", () => {
+  it("shows why the host refused a command instead of dropping it", async () => {
+    const harness = await withHarness();
+    const { root, handle } = mount(harness, ZT30);
+    harness.failNext("command.send", "refused", "operator denied");
+
+    const photo = Array.from(root.querySelectorAll("button")).find(
+      (b) => b.textContent === "Photo",
+    );
+    photo?.click();
+
+    const status = root.querySelector('[data-testid="siyi-command-status"]');
+    await vi.waitFor(() => expect(status?.textContent).toBe("operator denied"));
 
     handle.destroy();
     root.remove();

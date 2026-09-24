@@ -12,6 +12,10 @@ module builds the frames the pod mirrors upward:
 
 Frames are real MAVLink v2 built with pymavlink (provided by the host venv) and
 sent through ``ctx.mavlink.send`` under a component the plugin has registered.
+
+Inbound, ``ctx.mavlink.subscribe`` delivers ``{msg_name, frame,
+timestamp_ms}`` with ``frame`` the raw wire bytes; :func:`decode_fields` turns
+one delivery into the message's fields.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ from __future__ import annotations
 import logging
 import math
 import time
+from collections.abc import Mapping
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -29,6 +35,36 @@ COMP_CAMERA = 100
 # DISTANCE_SENSOR type + orientation enums.
 _MAV_DISTANCE_SENSOR_LASER = 3
 _MAV_SENSOR_ROTATION_PITCH_270 = 25  # facing straight down (nadir default)
+
+# Decoder for inbound deliveries, built on first use. It holds no signing key,
+# so a signed frame decodes without a signature check (the router already
+# verified the link).
+_decoder: Any = None
+
+
+def decode_fields(delivery: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The fields of the message in one ``ctx.mavlink.subscribe`` delivery.
+
+    ``None`` when the frame is missing, does not decode (truncated, bad CRC,
+    unknown id), or is not the message the delivery names, so a handler never
+    acts on a frame it could not read.
+    """
+    global _decoder
+    frame = delivery.get("frame")
+    if not isinstance(frame, (bytes, bytearray)) or not frame:
+        return None
+    if _decoder is None:
+        from pymavlink.dialects.v20 import common as mavlink2
+
+        _decoder = mavlink2.MAVLink(None)
+    try:
+        msg = _decoder.decode(bytearray(frame))
+    except Exception:  # noqa: BLE001 - pymavlink raises MAVError and struct errors
+        return None
+    name = delivery.get("msg_name")
+    if msg is None or (isinstance(name, str) and msg.get_type() != name):
+        return None
+    return msg.to_dict()
 
 
 def euler_to_quaternion(

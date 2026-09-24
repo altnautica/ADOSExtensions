@@ -2,6 +2,12 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.3.1
+
+- Dropped the `mavlink.component.camera` permission and the component-100
+  reservation block: the plugin never registers a MAVLink component or sends
+  MAVLink, so the install dialog listed a role it does not take.
+
 ## 1.3.0
 
 - The extension now requires a real UVC backend. `ThermalUsbPlugin` no longer

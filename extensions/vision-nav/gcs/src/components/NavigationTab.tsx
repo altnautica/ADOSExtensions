@@ -8,7 +8,6 @@ import type { FirmwareType, VisionNavTelemetry } from "../types";
 import { ArduPilotVisionParams } from "./ArduPilotVisionParams";
 import { BetaflightUnsupported } from "./BetaflightUnsupported";
 import { CompanionStatusPill } from "./CompanionStatusPill";
-import { EkfSourceSwitcher } from "./EkfSourceSwitcher";
 import { EstimatorCard } from "./EstimatorCard";
 import { FallbackBanner } from "./FallbackBanner";
 import { FlowHealthCard } from "./FlowHealthCard";
@@ -111,12 +110,6 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
       <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
       <FlowHealthCard telemetry={telemetry} />
       <PreArmStatus telemetry={telemetry} />
-      <EkfSourceSwitcher
-        firmware={props.firmware}
-        ctx={props.ctx}
-        companionState={telemetry.companionState}
-        flowQuality={telemetry.flowQuality}
-      />
       {props.firmware === "ardupilot" ? (
         <ArduPilotVisionParams />
       ) : props.firmware === "px4" ? (

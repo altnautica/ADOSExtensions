@@ -97,11 +97,3 @@ export interface PreArmReport {
 }
 
 export type FirmwareType = "ardupilot" | "px4" | "betaflight" | "inav";
-
-export type EkfSourceSet = 1 | 2 | 3;
-
-export interface EkfSourceOption {
-  set: EkfSourceSet;
-  label: string;
-  description: string;
-}

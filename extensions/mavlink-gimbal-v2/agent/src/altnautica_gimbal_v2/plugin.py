@@ -32,6 +32,7 @@ from typing import Any
 from ados.sdk.cameras import CAMERA_SELECTOR_AUTO
 from ados.sdk.tracking import LOCK_LOCKED, EffectiveLock, LockedTargetTracker
 
+from altnautica_gimbal_v2 import attitude as gimbal_attitude
 from altnautica_gimbal_v2.aim import AimConfig, GimbalAimController
 from altnautica_gimbal_v2.ctx_router import ONBOARD_COMPUTER_COMP_ID, _CtxRouter
 from altnautica_gimbal_v2.mavlink_driver import MavlinkGimbalDriver
@@ -50,6 +51,25 @@ _CONTROL_HZ = 5.0
 # the matching command on the rising edge and resets the key so a re-press
 # fires again (the Skill Bar has no nonce; it writes the flag true each press).
 _ACTION_KEYS = ("recenter", "nadir")
+
+# Panel command keys. The Gimbal tab writes ``point`` ({pitch_deg, yaw_deg}),
+# ``roi`` ({lat_deg, lon_deg, alt_m}) or ``roi_clear`` (true); the control loop
+# executes each once and resets it, like the one-shot Skills.
+_POINT_KEY = "point"
+_ROI_KEY = "roi"
+_ROI_CLEAR_KEY = "roi_clear"
+
+# The ``gimbal`` telemetry channel is republished at most this often. The
+# gimbal reports its attitude far faster, and every publish is a host write.
+_TELEMETRY_MIN_INTERVAL_S = 0.2
+
+
+def _finite_numbers(*values: Any) -> bool:
+    """True when every value is a real, finite number (bools excluded)."""
+    return all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+        for v in values
+    )
 
 
 class GimbalV2Plugin:
@@ -78,6 +98,8 @@ class GimbalV2Plugin:
         # designated target, coast briefly, stop on uncertain/lost, never
         # silently re-lock. Identical gate to Follow-Me, one implementation.
         self._tracker = LockedTargetTracker()
+        # Monotonic time of the last ``gimbal`` telemetry publish.
+        self._last_telemetry_at: float | None = None
 
     # -- lifecycle ----------------------------------------------------
 
@@ -157,6 +179,11 @@ class GimbalV2Plugin:
             self._nadir_pitch = -90.0
 
         await ctx.mavlink.register_component(target_component, "gimbal")
+        # The gimbal's own attitude report drives the driver state and the
+        # ``gimbal`` telemetry channel the Gimbal tab renders.
+        await ctx.mavlink.subscribe(
+            gimbal_attitude.ATTITUDE_STATUS_MSG, self._on_attitude_status
+        )
         # Take the clamp limits from the driver's capabilities so the
         # controller model and the driver agree on the axis bounds.
         caps = self._driver.capabilities(self._session)
@@ -453,6 +480,72 @@ class GimbalV2Plugin:
                 continue
             await self._fire_action(key)
             await self._reset_key(key)
+        await self._run_panel_commands(ctx)
+
+    async def _run_panel_commands(self, ctx: Any) -> None:
+        """Execute the Gimbal tab's point / ROI commands once each and reset
+        them. A value that is not the documented shape is dropped (reset) with
+        a warning rather than sent."""
+        point = await ctx.config_kv.get(_POINT_KEY, None)
+        if isinstance(point, dict):
+            pitch, yaw = point.get("pitch_deg"), point.get("yaw_deg")
+            if _finite_numbers(pitch, yaw):
+                await self._point_at(float(pitch), float(yaw))
+            else:
+                log.warning("gimbal point command is malformed: %r", point)
+            await self._reset_key(_POINT_KEY)
+        roi = await ctx.config_kv.get(_ROI_KEY, None)
+        if isinstance(roi, dict):
+            lat, lon, alt = roi.get("lat_deg"), roi.get("lon_deg"), roi.get("alt_m")
+            driver, session = self._driver, self._session
+            if not _finite_numbers(lat, lon, alt) or abs(lat) > 90 or abs(lon) > 180:
+                log.warning("gimbal ROI command is malformed: %r", roi)
+            elif driver is not None and session is not None:
+                try:
+                    await driver.set_roi_location(session, float(lat), float(lon), float(alt))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("gimbal ROI lock failed: %s", exc)
+            await self._reset_key(_ROI_KEY)
+        if bool(await ctx.config_kv.get(_ROI_CLEAR_KEY, False)):
+            driver, session = self._driver, self._session
+            if driver is not None and session is not None:
+                try:
+                    await driver.clear_roi(session)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("gimbal ROI release failed: %s", exc)
+            await self._reset_key(_ROI_CLEAR_KEY)
+
+    # -- attitude read-back --------------------------------------------
+
+    async def _on_attitude_status(self, delivery: dict[str, Any]) -> None:
+        """Feed the gimbal's attitude report into the driver state and publish
+        the ``gimbal`` telemetry channel, rate-limited."""
+        fields = gimbal_attitude.decode_fields(delivery)
+        att = gimbal_attitude.attitude_from_status(fields) if fields else None
+        driver, session, ctx = self._driver, self._session, self._ctx
+        if att is None or driver is None or session is None or ctx is None:
+            return
+        driver.on_attitude_status(
+            session,
+            att.pitch_deg,
+            att.yaw_deg,
+            att.roll_deg,
+            att.pitch_rate_dps,
+            att.yaw_rate_dps,
+            att.roll_rate_dps,
+        )
+        now = time.monotonic()
+        last = self._last_telemetry_at
+        if last is not None and now - last < _TELEMETRY_MIN_INTERVAL_S:
+            return
+        self._last_telemetry_at = now
+        payload = gimbal_attitude.telemetry_payload(
+            att, driver.get_state(session).mode, int(time.time() * 1000)
+        )
+        try:
+            await ctx.telemetry.extend("gimbal", payload)
+        except Exception:  # noqa: BLE001
+            log.debug("gimbal telemetry extend failed", exc_info=True)
 
     async def _fire_action(self, key: str) -> None:
         if key == "recenter":

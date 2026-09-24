@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.siyi-pod
 name: "ADOS SIYI Optical Pod"
-version: "0.4.0"
+version: "0.5.0"
 description: "Native driver for the SIYI optical-pod line (A2 mini, A8 mini, ZR10, ZR30, ZT6, ZT30) with per-model capability negotiation: gimbal, zoom, focus, photo/record, thermal palette and gain, and a laser rangefinder with subject geolocation."
 description_long: |
   Speaks the SIYI Gimbal Camera External SDK over UDP, TCP, or a TTL serial port
@@ -13,7 +13,7 @@ description_long: |
   negotiation is retried on a fixed interval with no attempt cap, so a pod that
   is unpowered at boot comes online without a restart. The laser range plus the
   gimbal angles and the flight controller pose resolve a subject latitude and
-  longitude that drops a marker on the map. Gimbal attitude and the laser range
+  longitude, which the geolocate tool reports. Gimbal attitude and the laser range
   are mirrored up to the flight controller as standard MAVLink so the built-in
   gimbal panel lights up too.
 features:
@@ -21,7 +21,7 @@ features:
   - "Gimbal aim, rate, recenter, and lock/follow/FPV modes"
   - "Optical and absolute zoom, autofocus (zoom models)"
   - "Thermal palette and gain (thermal models)"
-  - "Laser rangefinder with subject geolocation on the map (laser models)"
+  - "Laser rangefinder with subject geolocation (laser models)"
   - "Sends nothing to a pod that has not identified itself"
 hardware_requirements:
   cameras: "A SIYI optical pod (A2 mini, A8 mini, ZR10, ZR30, ZT6, or ZT30) on the pod network (192.168.144.x) or a TTL serial port"
@@ -205,7 +205,7 @@ gcs:
         arm_requirement: any
         default_binding: { key: "c" }
         activation: { via: config, config_key: center }
-        state: { via: event, topic: "siyi.pod.center" }
+        state: { via: event, topic: "siyi.pod.gimbal" }
       - id: nadir
         label: "skill.nadir"
         icon: "arrow-down-to-line"
@@ -215,7 +215,7 @@ gcs:
         arm_requirement: any
         default_binding: { key: "v" }
         activation: { via: config, config_key: nadir }
-        state: { via: event, topic: "siyi.pod.nadir" }
+        state: { via: event, topic: "siyi.pod.gimbal" }
       - id: zoom-in
         label: "skill.zoomIn"
         icon: "zoom-in"

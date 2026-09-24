@@ -1,7 +1,7 @@
 /**
  * Gimbal control panel.
  *
- * Renders pitch / yaw / roll sliders, an ROI form, and a state
+ * Renders pitch / yaw sliders, an ROI form, and a state
  * readout. The panel keeps a tiny in-memory store for the latest
  * `GimbalState`; it never owns business logic for the gimbal itself.
  * Command emission goes through `commands.ts`, which routes to the
@@ -29,7 +29,7 @@ export interface PanelHandle {
   /** Read the latest live state. */
   getState(): GimbalState | null;
   /** Programmatically trigger a slider change for tests. */
-  setSlider(axis: "pitch" | "yaw" | "roll", value: number): void;
+  setSlider(axis: "pitch" | "yaw", value: number): void;
   /** Programmatically submit the ROI form for tests. */
   submitRoi(target: RoiTarget): Promise<void>;
   /** Programmatically click the release-ROI button for tests. */
@@ -43,10 +43,6 @@ export function mountPanel(
   opts: PanelOptions = {},
 ): PanelHandle {
   const limits: AxisLimits = opts.limits ?? DEFAULT_LIMITS;
-  const targets = {
-    targetSystem: opts.vehicleSystemId,
-    targetComponent: opts.vehicleComponentId,
-  };
   let state: GimbalState | null = null;
 
   const dom = render(rootEl, limits);
@@ -65,38 +61,34 @@ export function mountPanel(
     }
   }
 
-  async function onSliderChange(
-    axis: "pitch" | "yaw" | "roll",
-    value: number,
-  ): Promise<void> {
+  function showSlider(axis: "pitch" | "yaw", value: number): void {
     if (axis === "pitch") dom.pitchValue.textContent = formatDeg(value);
     if (axis === "yaw") dom.yawValue.textContent = formatDeg(value);
-    if (axis === "roll") dom.rollValue.textContent = formatDeg(value);
-    const pitchDeg =
-      axis === "pitch" ? value : numberValue(dom.pitch);
+  }
+
+  // Dragging only moves the label; the command goes once, on release, so a
+  // drag is one gimbal move rather than a write per pixel.
+  async function commitSlider(axis: "pitch" | "yaw", value: number): Promise<void> {
+    showSlider(axis, value);
+    const pitchDeg = axis === "pitch" ? value : numberValue(dom.pitch);
     const yawDeg = axis === "yaw" ? value : numberValue(dom.yaw);
     try {
-      await sendPitchYaw(ctx, { pitchDeg, yawDeg, ...targets });
+      await sendPitchYaw(ctx, { pitchDeg, yawDeg });
+      dom.pointStatus.textContent = "";
     } catch {
-      // Host may deny per-action consent. The slider visual stays at
-      // the operator-set value; the next telemetry tick will reset it
-      // if the agent did not move.
+      dom.pointStatus.textContent = "Point denied by host";
     }
   }
 
-  dom.pitch.addEventListener("input", (e) =>
-    void onSliderChange("pitch", numberValue(e.currentTarget as HTMLInputElement)),
-  );
-  dom.yaw.addEventListener("input", (e) =>
-    void onSliderChange("yaw", numberValue(e.currentTarget as HTMLInputElement)),
-  );
-  dom.roll.addEventListener("input", (e) =>
-    void onSliderChange("roll", numberValue(e.currentTarget as HTMLInputElement)),
-  );
+  for (const axis of ["pitch", "yaw"] as const) {
+    const input = axis === "pitch" ? dom.pitch : dom.yaw;
+    input.addEventListener("input", () => showSlider(axis, numberValue(input)));
+    input.addEventListener("change", () => void commitSlider(axis, numberValue(input)));
+  }
 
   async function submitRoi(target: RoiTarget): Promise<void> {
     try {
-      await sendRoiLocation(ctx, target, targets);
+      await sendRoiLocation(ctx, target);
       dom.roiStatus.textContent = `Locked on ${target.latDeg}, ${target.lonDeg}, ${target.altM} m`;
     } catch {
       dom.roiStatus.textContent = "ROI lock denied by host";
@@ -105,7 +97,7 @@ export function mountPanel(
 
   async function releaseRoi(): Promise<void> {
     try {
-      await sendRoiNone(ctx, targets);
+      await sendRoiNone(ctx);
       dom.roiStatus.textContent = "ROI released";
     } catch {
       dom.roiStatus.textContent = "Release denied by host";
@@ -132,10 +124,9 @@ export function mountPanel(
       return state;
     },
     setSlider(axis, value) {
-      const el =
-        axis === "pitch" ? dom.pitch : axis === "yaw" ? dom.yaw : dom.roll;
+      const el = axis === "pitch" ? dom.pitch : dom.yaw;
       el.value = String(value);
-      void onSliderChange(axis, value);
+      void commitSlider(axis, value);
     },
     submitRoi,
     releaseRoi,
@@ -148,10 +139,9 @@ export function mountPanel(
 interface DomRefs {
   pitch: HTMLInputElement;
   yaw: HTMLInputElement;
-  roll: HTMLInputElement;
   pitchValue: HTMLElement;
   yawValue: HTMLElement;
-  rollValue: HTMLElement;
+  pointStatus: HTMLElement;
   roiForm: HTMLFormElement;
   roiLat: HTMLInputElement;
   roiLon: HTMLInputElement;
@@ -194,13 +184,12 @@ function render(rootEl: HTMLElement, limits: AxisLimits): DomRefs {
     0,
   );
   const yaw = slider("agm-yaw", limits.yawMinDeg, limits.yawMaxDeg, 0);
-  const roll = slider("agm-roll", limits.rollMinDeg, limits.rollMaxDeg, 0);
   const pitchValue = el("span", "agm-slider-value", "0 deg");
   const yawValue = el("span", "agm-slider-value", "0 deg");
-  const rollValue = el("span", "agm-slider-value", "0 deg");
   manual.appendChild(sliderRow("Pitch", pitch, pitchValue));
   manual.appendChild(sliderRow("Yaw", yaw, yawValue));
-  manual.appendChild(sliderRow("Roll", roll, rollValue));
+  const pointStatus = el("p", "agm-roi-status", "");
+  manual.appendChild(pointStatus);
   rootEl.appendChild(manual);
 
   const roiSection = el("section", "agm-roi");
@@ -231,10 +220,9 @@ function render(rootEl: HTMLElement, limits: AxisLimits): DomRefs {
   return {
     pitch,
     yaw,
-    roll,
     pitchValue,
     yawValue,
-    rollValue,
+    pointStatus,
     roiForm,
     roiLat,
     roiLon,

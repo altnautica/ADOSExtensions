@@ -4,16 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "altnautica-vision-nav-calib"
-version = "0.3.2"
-description = "Offline camera-IMU calibration wizard for the ADOS Vision Navigation plugin. AprilTag detection, monocular pinhole intrinsics solve, and golden-section camera-IMU timeshift fit. Out of the runtime hot path: this helper runs once to produce a Kalibr-style camchain.yaml that the Rust agent half reads at start-up."
+version = "0.4.1"
+description = "Loaders and validators for the Kalibr camchain.yaml the ADOS Vision Navigation agent reads at start-up."
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
 requires-python = ">=3.10"
 authors = [{ name = "Altnautica" }]
 keywords = ["ados", "calibration", "kalibr", "intrinsics", "timeshift"]
 dependencies = [
-  "opencv-contrib-python-headless>=4.9",
-  "numpy>=1.24",
+  "pydantic>=2",
   "pyyaml>=6.0",
 ]
 

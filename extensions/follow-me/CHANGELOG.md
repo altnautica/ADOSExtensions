@@ -4,6 +4,27 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.9]
+
+### Fixed
+
+- The follow loop now reads the flight controller's MAVLink messages. The
+  host delivers each subscribed message as its raw wire frame, and the
+  handlers read decoded field names from that delivery, so on a real vehicle
+  the arm state, the flight mode, the attitude, the position and the gimbal
+  angles were never read: the follow gate always saw a disarmed vehicle and
+  never commanded. Each delivery is now decoded, and a frame that does not
+  decode is ignored.
+- Only the autopilot's heartbeat sets the arm state and flight mode. Once the
+  heartbeats decode, a ground station's or a gimbal's heartbeat would otherwise
+  read as a disarmed vehicle.
+
+### Removed
+
+- The agent `event.subscribe` permission, which nothing in the agent half used.
+- The in-code manifest mirror, which nothing read and which had drifted from
+  `manifest.yaml`. Every version site now agrees.
+
 ## [0.2.8]
 
 - Declares the MAVLink component the plugin transmits as (191) under

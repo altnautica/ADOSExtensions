@@ -32,12 +32,6 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any
 
-from ados.plugins.manifest import (
-    AgentBlock,
-    Compatibility,
-    MavlinkComponent,
-    PluginManifest,
-)
 from ados.sdk.cameras import CAMERA_SELECTOR_AUTO
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 from ados.sdk.vision import BoundingBox, DetectionBatch
@@ -120,6 +114,10 @@ _CONFIG_REFRESH_S = 1.0
 
 # HEARTBEAT decode. MAV_MODE_FLAG_SAFETY_ARMED is bit 7 of base_mode.
 _BASE_MODE_ARMED = 0x80
+# MAV_AUTOPILOT_INVALID: the heartbeat of a component that is not a flight
+# controller (a GCS, a gimbal, a companion). Only the autopilot's heartbeat
+# says whether the vehicle is armed and in a guided mode.
+_AP_INVALID = 8
 # MAV_AUTOPILOT ids we can decode a guided/offboard mode for.
 _AP_ARDUPILOTMEGA = 3
 _AP_PX4 = 12
@@ -170,47 +168,6 @@ def _is_guided_mode(autopilot: int, custom_mode: int) -> bool:
     if autopilot == _AP_ARDUPILOTMEGA:
         return custom_mode in (_ARDUCOPTER_GUIDED, _ARDUCOPTER_GUIDED_NOGPS)
     return False
-
-
-def get_manifest() -> PluginManifest:
-    """In-code manifest mirror (the packed archive ships manifest.yaml)."""
-    return PluginManifest(
-        schema_version=3,
-        id=PLUGIN_ID,
-        version="0.2.7",
-        name="ADOS Follow-Me",
-        description=(
-            "Locks onto an operator-designated subject and flies a "
-            "fixed-distance standoff follow from the companion."
-        ),
-        author="Altnautica",
-        license="GPL-3.0-or-later",
-        risk="high",
-        compatibility=Compatibility(ados_version=">=0.99.180"),
-        agent=AgentBlock(
-            entrypoint="follow_me:FollowMePlugin",
-            isolation="subprocess",
-            permissions=[
-                "vision.detection.subscribe",
-                "mavlink.read",
-                "mavlink.write",
-                "flight.guided_setpoint",
-                "event.publish",
-                "event.subscribe",
-                "mcp.expose",
-            ],
-            mavlink_components=[
-                MavlinkComponent(
-                    component_id=mavlink_frames.ONBOARD_COMPUTER_COMP_ID,
-                    component_kind="generic",
-                    sub_id=0,
-                )
-            ],
-        ),
-    )
-
-
-manifest = get_manifest()
 
 
 class _Pose:
@@ -482,47 +439,49 @@ class FollowMePlugin:
 
     # -- MAVLink pose handlers ---------------------------------------
 
-    def _on_heartbeat(self, msg: dict[str, Any]) -> None:
+    def _on_heartbeat(self, delivery: dict[str, Any]) -> None:
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None or int(msg.get("autopilot", _AP_INVALID)) == _AP_INVALID:
+            return
         base_mode = int(msg.get("base_mode", 0) or 0)
         custom_mode = int(msg.get("custom_mode", 0) or 0)
-        autopilot = int(msg.get("autopilot", 0) or 0)
+        autopilot = int(msg["autopilot"])
         self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
         self._fc.guided = _is_guided_mode(autopilot, custom_mode)
         self._fc.heartbeat.mark(_monotonic())
 
-    def _on_mount_orientation(self, msg: dict[str, Any]) -> None:
+    def _on_mount_orientation(self, delivery: dict[str, Any]) -> None:
         # MOUNT_ORIENTATION carries degrees: pitch negative = down, yaw
         # relative to the vehicle heading (positive to the right). The
         # projection wants pitch positive = down, so negate it; the yaw
         # convention already matches.
-        pitch = msg.get("pitch")
-        yaw = msg.get("yaw")
-        if pitch is None or yaw is None:
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None:
             return
-        self._gimbal.pitch_deg = -float(pitch)
-        self._gimbal.yaw_deg = float(yaw)
+        self._gimbal.pitch_deg = -float(msg["pitch"])
+        self._gimbal.yaw_deg = float(msg["yaw"])
         self._gimbal.report.mark(_monotonic())
 
-    def _on_attitude(self, msg: dict[str, Any]) -> None:
-        self._pose.roll = float(msg.get("roll", 0.0))
-        self._pose.pitch = float(msg.get("pitch", 0.0))
-        self._pose.yaw = float(msg.get("yaw", 0.0))
+    def _on_attitude(self, delivery: dict[str, Any]) -> None:
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None:
+            return
+        self._pose.roll = float(msg["roll"])
+        self._pose.pitch = float(msg["pitch"])
+        self._pose.yaw = float(msg["yaw"])
         # Marked separately from position: ATTITUDE and GLOBAL_POSITION_INT
         # are different messages at different rates and either can stall on
         # its own.
         self._pose.attitude.mark(_monotonic())
 
-    def _on_global_position(self, msg: dict[str, Any]) -> None:
+    def _on_global_position(self, delivery: dict[str, Any]) -> None:
         # lat/lon are 1e7 integer degrees; relative_alt is millimetres.
-        lat = msg.get("lat")
-        lon = msg.get("lon")
-        rel = msg.get("relative_alt")
-        if lat is not None:
-            self._pose.lat_deg = float(lat) / 1e7
-        if lon is not None:
-            self._pose.lon_deg = float(lon) / 1e7
-        if rel is not None:
-            self._pose.rel_alt_m = float(rel) / 1000.0
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None:
+            return
+        self._pose.lat_deg = float(msg["lat"]) / 1e7
+        self._pose.lon_deg = float(msg["lon"]) / 1e7
+        self._pose.rel_alt_m = float(msg["relative_alt"]) / 1000.0
         self._pose.position.mark(_monotonic())
 
     # -- detections --------------------------------------------------
@@ -858,4 +817,4 @@ class FollowMePlugin:
         await self._ctx.events.publish(FOLLOW_STATE_TOPIC, new.to_dict())
 
 
-__all__ = ["FollowMePlugin", "get_manifest", "manifest", "PLUGIN_ID"]
+__all__ = ["FollowMePlugin", "PLUGIN_ID"]

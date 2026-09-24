@@ -1,22 +1,18 @@
-# Vision Navigation calibration helper (Python)
+# Vision Navigation calibration loaders (Python)
 
-This is the one-time, offline camera-IMU calibration wizard for the
-Vision Navigation plugin. It is **not** part of the runtime hot path.
-The plugin's agent half is a Rust binary (`../src/`); the only thing it
-needs from calibration is a Kalibr-style `camchain.yaml` on disk, which
-this helper produces.
+The plugin's agent half is a Rust binary (`../src/`). The only thing it needs
+from a camera calibration is a Kalibr-style `camchain.yaml` in the plugin's data
+directory, which it reads at start-up. Produce that file with Kalibr
+(`kalibr_calibrate_imu_camera`) for the camera and IMU on the vehicle, then copy
+it to `camchain.yaml` in the plugin's data directory. The Vision Nav tab shows
+whether the agent loaded it.
 
-Why it stays Python: the wizard is a heavyweight, infrequent,
-OpenCV-bound flow (AprilGrid t36h11 detection with `cv2.aruco`,
-monocular pinhole + radial-tangential intrinsics via
-`cv2.calibrateCamera`, and a golden-section search for the joint
-camera-IMU timeshift over the recorded IMU motion trace). It runs once
-per camera mount, far off the 30 Hz pose-emit path, so there is no
-reliability or latency reason to port the OpenCV pipeline to Rust.
+This package validates such a file before it goes onto a vehicle. It is not part
+of the runtime and is not shipped in the plugin archive.
 
-## What it produces
+## What the agent reads
 
-A `camchain.yaml` with the `cam0` block the Rust agent reads:
+The `cam0` block (a bare block without the `cam0:` wrapper is accepted too):
 
 - `camera_model: pinhole`
 - `intrinsics: [fx, fy, cx, cy]`
@@ -26,23 +22,21 @@ A `camchain.yaml` with the `cam0` block the Rust agent reads:
 - `T_cam_imu` (4x4 SE(3))
 - `timeshift_cam_imu` (seconds, Kalibr convention `t_imu = t_cam + ts`)
 
-The Rust agent loads this file at start-up; VIO modes feed it to the
-vendor estimator and the time aligner.
+The agent uses `timeshift_cam_imu` to pair each frame with the gyro sample taken
+at the same instant.
 
 ## Modules
 
-- `altnautica_vision_nav_calib.intrinsics` — Kalibr `cam0` intrinsics
-  loader/validator.
-- `altnautica_vision_nav_calib.extrinsics` — `T_cam_imu` + timeshift
-  loader/validator.
-- `altnautica_vision_nav_calib.runner` — the wizard coroutine: decodes
-  the captured frame bundle, runs detection + the intrinsics solve +
-  the timeshift fit, and emits substep progress through injected hooks.
+- `altnautica_vision_nav_calib.intrinsics`: `cam0` intrinsics loader and
+  validator.
+- `altnautica_vision_nav_calib.extrinsics`: `T_cam_imu` and timeshift loader
+  and validator.
 
-## Run
+## Use
 
 ```sh
 cd calibration-helper
 python -m pip install -e .
-python -m pytest -q   # if dev extras installed
+python -c "from altnautica_vision_nav_calib import load_intrinsics, load_extrinsics; \
+print(load_intrinsics('camchain.yaml')); print(load_extrinsics('camchain.yaml'))"
 ```

@@ -12,12 +12,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
 
 import { mountPanel, type PanelHandle } from "../src/panel";
-import {
-  MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
-  MAV_CMD_DO_SET_ROI_LOCATION,
-  MAV_CMD_DO_SET_ROI_NONE,
-  type GimbalState,
-} from "../src/types";
+import type { GimbalState } from "../src/types";
 
 let rootEl: HTMLElement;
 
@@ -34,7 +29,7 @@ afterEach(() => {
 
 interface OuterArgs {
   command: string;
-  args: { command: number; param1: number; param2: number; param5?: number };
+  args: { key: string; value: unknown };
 }
 
 async function makeHarness(): Promise<{
@@ -77,56 +72,59 @@ describe("mountPanel", () => {
     await teardown();
   });
 
-  it("emits MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW when the pitch slider changes", async () => {
+  it("writes the point key once when a slider is released", async () => {
     const { ctx, calls, teardown } = await makeHarness();
     const panel = mountPanel(ctx, rootEl);
     panel.setSlider("pitch", -30);
-    // Allow the async send to flush.
     await new Promise((r) => setTimeout(r, 0));
-    const last = calls[calls.length - 1];
-    expect(last).toBeDefined();
-    const outer = last!.args as OuterArgs;
-    expect(outer.args.command).toBe(MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW);
-    expect(outer.args.param1).toBe(-30);
+    const outer = calls[calls.length - 1]!.args as OuterArgs;
+    expect(outer.command).toBe("plugin.config.write");
+    expect(outer.args).toEqual({ key: "point", value: { pitch_deg: -30, yaw_deg: 0 } });
     panel.destroy();
     await teardown();
   });
 
-  it("emits MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW when the yaw slider changes", async () => {
+  it("sends nothing while a slider is dragged, and one write on release", async () => {
     const { ctx, calls, teardown } = await makeHarness();
     const panel = mountPanel(ctx, rootEl);
-    panel.setSlider("yaw", 45);
+    const yaw = rootEl.querySelector<HTMLInputElement>(".agm-yaw")!;
+    const before = calls.length;
+    for (const v of ["10", "20", "45"]) {
+      yaw.value = v;
+      yaw.dispatchEvent(new Event("input"));
+    }
     await new Promise((r) => setTimeout(r, 0));
-    const last = calls[calls.length - 1];
-    expect(last).toBeDefined();
-    const outer = last!.args as OuterArgs;
-    expect(outer.args.command).toBe(MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW);
-    expect(outer.args.param2).toBe(45);
+    expect(calls.length).toBe(before);
+    expect(rootEl.textContent ?? "").toContain("Yaw45.0 deg");
+    yaw.dispatchEvent(new Event("change"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calls.length).toBe(before + 1);
+    const outer = calls[calls.length - 1]!.args as OuterArgs;
+    expect(outer.args).toEqual({ key: "point", value: { pitch_deg: 0, yaw_deg: 45 } });
     panel.destroy();
     await teardown();
   });
 
-  it("submitRoi emits MAV_CMD_DO_SET_ROI_LOCATION with scaled lat and lon", async () => {
+  it("submitRoi writes the roi key with the target location", async () => {
     const { ctx, calls, teardown } = await makeHarness();
     const panel: PanelHandle = mountPanel(ctx, rootEl);
     await panel.submitRoi({ latDeg: 12.971, lonDeg: 77.594, altM: 50 });
-    const last = calls[calls.length - 1];
-    expect(last).toBeDefined();
-    const outer = last!.args as OuterArgs;
-    expect(outer.args.command).toBe(MAV_CMD_DO_SET_ROI_LOCATION);
-    expect(outer.args.param5).toBe(129710000);
+    const outer = calls[calls.length - 1]!.args as OuterArgs;
+    expect(outer.command).toBe("plugin.config.write");
+    expect(outer.args).toEqual({
+      key: "roi",
+      value: { lat_deg: 12.971, lon_deg: 77.594, alt_m: 50 },
+    });
     panel.destroy();
     await teardown();
   });
 
-  it("releaseRoi emits MAV_CMD_DO_SET_ROI_NONE", async () => {
+  it("releaseRoi writes the roi_clear key", async () => {
     const { ctx, calls, teardown } = await makeHarness();
     const panel: PanelHandle = mountPanel(ctx, rootEl);
     await panel.releaseRoi();
-    const last = calls[calls.length - 1];
-    expect(last).toBeDefined();
-    const outer = last!.args as OuterArgs;
-    expect(outer.args.command).toBe(MAV_CMD_DO_SET_ROI_NONE);
+    const outer = calls[calls.length - 1]!.args as OuterArgs;
+    expect(outer.args).toEqual({ key: "roi_clear", value: true });
     panel.destroy();
     await teardown();
   });

@@ -6,9 +6,9 @@ into the plugin's config directory. The schemas accept v1 monocular
 pinhole only; stereo and fisheye intrinsics models are deferred.
 
 The two loader entry points are :func:`load_intrinsics` and
-:func:`load_extrinsics`. Both raise :class:`CalibrationError` with an
-operator-readable message on any validation failure so the GCS can
-surface it inline in the calibration wizard.
+:func:`load_extrinsics`. Both raise an operator-readable error on any
+validation failure, so a file can be checked before it is copied onto a
+vehicle.
 """
 
 from __future__ import annotations

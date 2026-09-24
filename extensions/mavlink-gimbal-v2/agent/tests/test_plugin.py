@@ -11,12 +11,16 @@ an inactive aim flag, produces NO command.
 from __future__ import annotations
 
 import asyncio
+import math
 
 import pytest
 from pymavlink.dialects.v20 import common as mavlink2
 
 from ados.sdk.vision import BoundingBox, Detection, DetectionBatch
-from altnautica_gimbal_v2.mavlink_messages import MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
+from altnautica_gimbal_v2.mavlink_messages import (
+    MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW,
+    MAV_CMD_DO_SET_ROI_LOCATION,
+)
 from altnautica_gimbal_v2.plugin import GimbalV2Plugin
 
 
@@ -24,6 +28,7 @@ class FakeMavlink:
     def __init__(self) -> None:
         self.sent: list[tuple[bytes, int | None]] = []
         self.registered: list[tuple[int, str]] = []
+        self.subscriptions: dict = {}
 
     async def send(self, msg_bytes: bytes, component_id: int | None = None) -> dict:
         self.sent.append((bytes(msg_bytes), component_id))
@@ -31,6 +36,18 @@ class FakeMavlink:
 
     async def register_component(self, comp_id: int, kind: str) -> dict:
         self.registered.append((comp_id, kind))
+        return {}
+
+    async def subscribe(self, msg_name: str, callback) -> None:
+        self.subscriptions[msg_name] = callback
+
+
+class FakeTelemetry:
+    def __init__(self) -> None:
+        self.extended: list[tuple[str, dict]] = []
+
+    async def extend(self, channel: str, payload: dict) -> dict:
+        self.extended.append((channel, payload))
         return {}
 
 
@@ -83,6 +100,7 @@ class FakeCtx:
         self.vision = FakeVision()
         self.config_kv = FakeConfigKv(live=live, static=static)
         self.events = FakeEvents()
+        self.telemetry = FakeTelemetry()
         if with_tools:
             self.tools = FakeTools()
 
@@ -333,5 +351,79 @@ async def test_tools_absent_when_ctx_has_no_tools() -> None:
     await plugin.on_start(ctx)
     try:
         assert not hasattr(ctx, "tools")
+    finally:
+        await plugin.on_stop(ctx)
+
+
+def _attitude_delivery(pitch_deg: float, yaw_deg: float) -> dict:
+    """A GIMBAL_DEVICE_ATTITUDE_STATUS exactly as the host delivers it: the raw
+    wire frame, from the gimbal component."""
+    half_p, half_y = math.radians(pitch_deg) / 2, math.radians(yaw_deg) / 2
+    q = [
+        math.cos(half_p) * math.cos(half_y),
+        -math.sin(half_p) * math.sin(half_y),
+        math.sin(half_p) * math.cos(half_y),
+        math.cos(half_p) * math.sin(half_y),
+    ]
+    msg = mavlink2.MAVLink_gimbal_device_attitude_status_message(
+        1, 1, 0, 0, q, 0.0, 0.0, 0.0, 0, 0.0, 0.0, 0
+    )
+    frame = msg.pack(mavlink2.MAVLink(None, srcSystem=1, srcComponent=154))
+    return {"msg_name": msg.get_type(), "frame": bytes(frame), "timestamp_ms": 0}
+
+
+@pytest.mark.asyncio
+async def test_gimbal_attitude_reaches_the_gimbal_telemetry_channel() -> None:
+    ctx = FakeCtx(live={"aim": False})
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        callback = ctx.mavlink.subscriptions["GIMBAL_DEVICE_ATTITUDE_STATUS"]
+        await callback(_attitude_delivery(-30.0, 20.0))
+
+        channel, state = ctx.telemetry.extended[-1]
+        assert channel == "gimbal"
+        assert state["pitchDeg"] == pytest.approx(-30.0, abs=1e-3)
+        assert state["yawDeg"] == pytest.approx(20.0, abs=1e-3)
+        assert state["rollDeg"] == pytest.approx(0.0, abs=1e-3)
+
+        # A frame that does not decode publishes nothing.
+        broken = _attitude_delivery(10.0, 0.0)
+        broken["frame"] = broken["frame"][:-2]
+        count = len(ctx.telemetry.extended)
+        plugin._last_telemetry_at = None
+        await callback(broken)
+        assert len(ctx.telemetry.extended) == count
+    finally:
+        await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_panel_point_and_roi_commands_run_once() -> None:
+    ctx = FakeCtx(
+        live={
+            "aim": False,
+            "point": {"pitch_deg": -20.0, "yaw_deg": 15.0},
+            "roi": {"lat_deg": 47.39, "lon_deg": 8.54, "alt_m": 10.0},
+        }
+    )
+    plugin = GimbalV2Plugin()
+    await plugin.on_start(ctx)
+    try:
+        await _settle()
+        ctx.mavlink.sent.clear()
+
+        await plugin.poll_control_once()
+        await _settle()
+
+        commands = [_decode(frame).command for frame, _ in ctx.mavlink.sent]
+        assert commands == [MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW, MAV_CMD_DO_SET_ROI_LOCATION]
+        assert await ctx.config_kv.get("point", None) is False
+        assert await ctx.config_kv.get("roi", None) is False
+
+        ctx.mavlink.sent.clear()
+        await plugin.poll_control_once()
+        await _settle()
+        assert ctx.mavlink.sent == []
     finally:
         await plugin.on_stop(ctx)

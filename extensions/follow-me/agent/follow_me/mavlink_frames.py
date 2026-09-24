@@ -1,4 +1,4 @@
-"""MAVLink v2 frame builders for the follow loop.
+"""MAVLink v2 frame builders and the subscription decoder for the follow loop.
 
 The agent's MAVLink router accepts a fully-packed v2 frame on
 ``ctx.mavlink.send`` and re-stamps the link-level sequence and (when
@@ -18,11 +18,17 @@ Two messages are produced:
 The companion sends under the autopilot's own system id with the
 peripheral component id so the autopilot accepts the guided setpoint as
 an onboard command.
+
+Inbound, ``ctx.mavlink.subscribe`` delivers ``{msg_name, frame,
+timestamp_ms}`` with ``frame`` the raw wire bytes; :func:`decode_fields`
+turns one delivery into the message's fields.
 """
 
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
 from pymavlink.dialects.v20 import common as mavlink2
 
@@ -65,6 +71,31 @@ def _mav(system_id: int, component_id: int) -> mavlink2.MAVLink:
     so the encoder's own sequence stays at the message default.
     """
     return mavlink2.MAVLink(None, srcSystem=system_id, srcComponent=component_id)
+
+
+# Decoder for inbound deliveries. It holds no signing key, so a signed frame
+# decodes without a signature check (the router already verified the link).
+_DECODER = mavlink2.MAVLink(None)
+
+
+def decode_fields(delivery: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The fields of the message in one ``ctx.mavlink.subscribe`` delivery.
+
+    ``None`` when the frame is missing, does not decode (truncated, bad CRC,
+    unknown id), or is not the message the delivery names, so a handler never
+    acts on a frame it could not read.
+    """
+    frame = delivery.get("frame")
+    if not isinstance(frame, (bytes, bytearray)) or not frame:
+        return None
+    try:
+        msg = _DECODER.decode(bytearray(frame))
+    except Exception:  # noqa: BLE001 - pymavlink raises MAVError and struct errors
+        return None
+    name = delivery.get("msg_name")
+    if msg is None or (isinstance(name, str) and msg.get_type() != name):
+        return None
+    return msg.to_dict()
 
 
 def build_position_setpoint(

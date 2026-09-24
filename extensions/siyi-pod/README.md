@@ -38,10 +38,9 @@ model, and exposes only the controls it supports.
 - Optical and absolute zoom and autofocus on zoom models.
 - Thermal palette, gain, and spot temperature on thermal models.
 - Laser rangefinder with subject geolocation: the measured slant range plus the
-  gimbal angles and the aircraft pose resolve a subject latitude/longitude, which
-  drops a marker on the map and can be mirrored to the flight controller.
-- On-pod AI tracking republished onto the shared detection bus, so cockpit
-  click-to-track and follow behaviours work with no on-board accelerator.
+  gimbal angles and the aircraft pose resolve a subject latitude/longitude,
+  which the geolocate tool reports; the range is mirrored to the flight
+  controller.
 
 ## Install
 

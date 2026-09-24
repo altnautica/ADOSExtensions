@@ -2,6 +2,32 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.4.1]
+
+### Removed
+
+- **The in-app calibration wizard and the IMU bias Recalibrate button.** Both
+  sent requests (`vision-nav.start_calibration`, `vision-nav.upload_calibration`,
+  `vision-nav.recalibrate_imu_biases`) that the ground station refuses as
+  unknown methods and that the agent half never implemented, so the wizard's
+  final step always failed. The camera row now reports whether the agent loaded
+  a calibration: a Kalibr `camchain.yaml` in the plugin's data directory, read
+  at start-up. The two calibration telemetry grants go with the wizard.
+- **The EKF source-set switcher.** The ground station does not let a plugin send
+  `MAV_CMD_SET_EKF_SOURCE_SET`, so every switch was refused, and the card then
+  showed the new source set as active while the flight controller stayed on the
+  old one. Switch source sets with the flight controller's own RC option or the
+  ground station's flight-controller tools.
+- The calibration helper's wizard runner, whose only caller was the in-app
+  wizard. The helper is now the `camchain.yaml` loaders and validators, with the
+  dependencies they actually import.
+
+### Changed
+
+- The tour no longer describes a mode picker, a calibration wizard or the
+  source-set switcher.
+- The agent half builds against the current agent SDK revision.
+
 ## [0.4.0]
 
 ### Removed

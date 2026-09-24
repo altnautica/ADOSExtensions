@@ -5,6 +5,30 @@ from __future__ import annotations
 from altnautica_siyi_pod.capability_profile import HW_A2_MINI, HW_ZT30
 from altnautica_siyi_pod.plugin import SiyiPodPlugin
 from altnautica_siyi_pod.transport import MockTransport
+from pymavlink.dialects.v20 import common as mavlink2
+
+
+# The host delivers each subscribed message as {msg_name, frame, timestamp_ms}
+# with ``frame`` the raw wire bytes; these build exactly that from real packed
+# frames, so the handlers are exercised through the decoder they run on.
+_FC = mavlink2.MAVLink(None, srcSystem=1, srcComponent=1)
+
+
+def _delivery(msg):
+    return {"msg_name": msg.get_type(), "frame": bytes(msg.pack(_FC)), "timestamp_ms": 0}
+
+
+def _attitude(*, yaw):
+    return _delivery(mavlink2.MAVLink_attitude_message(0, 0.0, 0.0, yaw, 0.0, 0.0, 0.0))
+
+
+def _global_position(lat_deg, lon_deg, rel_alt_m):
+    return _delivery(
+        mavlink2.MAVLink_global_position_int_message(
+            0, int(round(lat_deg * 1e7)), int(round(lon_deg * 1e7)), 0,
+            int(round(rel_alt_m * 1000)), 0, 0, 0, 0,
+        )
+    )
 
 
 class _ConfigKV:
@@ -192,16 +216,14 @@ async def test_laser_fire_publishes_a_geolocated_target():
     plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
     await plugin.on_start(ctx)
     # Feed a valid FC pose so geolocation runs.
-    plugin._on_global_position(
-        {"lat": int(12.9716 * 1e7), "lon": int(77.5946 * 1e7), "relative_alt": 50000}
-    )
-    plugin._on_attitude({"yaw": 0.0})
+    plugin._on_global_position(_global_position(12.9716, 77.5946, 50.0))
+    plugin._on_attitude(_attitude(yaw=0.0))
 
     ctx.config_kv.set("laser_fire_nonce", 1)
     await plugin.apply_config_once()
 
     topics = [t for t, _ in ctx.events.published]
-    assert "siyi.pod.laser_target" in topics
+    assert plugin._last_laser_target is not None
     assert plugin.state.laser_range_m == 42.0
     await plugin.on_stop(ctx)
 
@@ -296,15 +318,13 @@ async def test_skill_laser_fire_measures_range():
     ctx = _Ctx()
     plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
     await plugin.on_start(ctx)
-    plugin._on_global_position(
-        {"lat": int(12.9716 * 1e7), "lon": int(77.5946 * 1e7), "relative_alt": 50000}
-    )
-    plugin._on_attitude({"yaw": 0.0})
+    plugin._on_global_position(_global_position(12.9716, 77.5946, 50.0))
+    plugin._on_attitude(_attitude(yaw=0.0))
 
     ctx.config_kv.set("laser_fire", True)
     await plugin.apply_config_once()
     assert plugin.state.laser_range_m == 42.0
-    assert "siyi.pod.laser_target" in [t for t, _ in ctx.events.published]
+    assert plugin._last_laser_target is not None
     await plugin.on_stop(ctx)
 
 
@@ -365,8 +385,7 @@ async def test_a2_mini_publishes_disabled_skill_states():
         "siyi.pod.zoom",
         "siyi.pod.palette",
         "siyi.pod.laser",
-        "siyi.pod.center",
-        "siyi.pod.nadir",
+        "siyi.pod.gimbal",
     ):
         assert events[topic]["state"] == "disabled", (topic, events.get(topic))
         assert events[topic].get("reason")
@@ -386,8 +405,7 @@ async def test_zt30_publishes_enabled_skill_states():
         "siyi.pod.zoom",
         "siyi.pod.palette",
         "siyi.pod.laser",
-        "siyi.pod.center",
-        "siyi.pod.nadir",
+        "siyi.pod.gimbal",
         "siyi.pod.photo",
         "siyi.pod.record",
     ):
@@ -432,10 +450,8 @@ async def test_mcp_tools_registered_and_callable():
     assert lr == {"ok": True, "range_m": 42.0}
 
     # geolocate_target needs a vehicle pose; feed one, then it returns a fix.
-    plugin._on_global_position(
-        {"lat": int(12.9716 * 1e7), "lon": int(77.5946 * 1e7), "relative_alt": 50000}
-    )
-    plugin._on_attitude({"yaw": 0.0})
+    plugin._on_global_position(_global_position(12.9716, 77.5946, 50.0))
+    plugin._on_attitude(_attitude(yaw=0.0))
     geo = await ctx.tools.handlers["geolocate_target"]({})
     assert geo["ok"] is True
     assert "lat_deg" in geo and "lon_deg" in geo
@@ -502,4 +518,23 @@ async def test_stale_nonce_does_not_refire_when_the_pod_comes_online():
     ctx.config_kv.set("photo_nonce", 10)
     await plugin.apply_config_once()
     assert transport.photos_taken == 1
+    await plugin.on_stop(ctx)
+
+
+async def test_a_position_that_does_not_decode_leaves_geolocation_off():
+    # A GLOBAL_POSITION_INT delivery the decoder cannot read must not mark the
+    # vehicle pose ready: geolocating from an unset pose would put the subject
+    # marker somewhere the vehicle never was.
+    ctx = _Ctx()
+    plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
+    await plugin.on_start(ctx)
+    broken = _global_position(12.9716, 77.5946, 50.0)
+    broken["frame"] = broken["frame"][:-4]
+    plugin._on_global_position(broken)
+    plugin._on_attitude(_attitude(yaw=0.0))
+
+    ctx.config_kv.set("laser_fire_nonce", 1)
+    await plugin.apply_config_once()
+
+    assert plugin._last_laser_target is None
     await plugin.on_stop(ctx)

@@ -20,6 +20,7 @@ import time
 from typing import Any
 
 import pytest
+from pymavlink.dialects.v20 import common as mavlink2
 
 from ados.sdk.tracking import EffectiveLock
 from ados.sdk.vision import BoundingBox, Detection, DetectionBatch
@@ -147,16 +148,54 @@ class _Ctx:
         self.log = _Log()
 
 
+# The host delivers each subscribed message as {msg_name, frame, timestamp_ms}
+# with ``frame`` the raw wire bytes; these build exactly that from real packed
+# frames, so the handlers are exercised through the decoder they run on.
+_FC = mavlink2.MAVLink(None, srcSystem=1, srcComponent=1)
+
+
+def _delivery(msg: Any) -> dict[str, Any]:
+    return {
+        "msg_name": msg.get_type(),
+        "frame": bytes(msg.pack(_FC)),
+        "timestamp_ms": 0,
+    }
+
+
+def _attitude(roll: float, pitch: float, yaw: float) -> dict[str, Any]:
+    return _delivery(mavlink2.MAVLink_attitude_message(0, roll, pitch, yaw, 0.0, 0.0, 0.0))
+
+
+def _global_position(lat_deg: float, lon_deg: float, rel_alt_m: float) -> dict[str, Any]:
+    return _delivery(
+        mavlink2.MAVLink_global_position_int_message(
+            0,
+            int(round(lat_deg * 1e7)),
+            int(round(lon_deg * 1e7)),
+            0,
+            int(round(rel_alt_m * 1000)),
+            0,
+            0,
+            0,
+            0,
+        )
+    )
+
+
+def _heartbeat(*, base_mode: int, custom_mode: int, autopilot: int) -> dict[str, Any]:
+    return _delivery(
+        mavlink2.MAVLink_heartbeat_message(2, autopilot, base_mode, custom_mode, 4, 3)
+    )
+
+
+def _mount_orientation(pitch_deg: float, yaw_deg: float) -> dict[str, Any]:
+    return _delivery(mavlink2.MAVLink_mount_orientation_message(0, 0.0, pitch_deg, yaw_deg, 0.0))
+
+
 def _level_pose(plugin: follow_me.FollowMePlugin) -> None:
     """Give the plugin a usable, level vehicle pose at altitude."""
-    plugin._on_attitude({"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
-    plugin._on_global_position(
-        {
-            "lat": int(round(12.0 * 1e7)),
-            "lon": int(round(77.0 * 1e7)),
-            "relative_alt": 20_000,  # 20 m in millimetres
-        }
-    )
+    plugin._on_attitude(_attitude(0.0, 0.0, 0.0))
+    plugin._on_global_position(_global_position(12.0, 77.0, 20.0))
 
 
 def _arm_guided(
@@ -168,11 +207,7 @@ def _arm_guided(
     """Feed a HEARTBEAT that reports the FC armed and in a guided mode, the
     precondition for the loop to actually command."""
     plugin._on_heartbeat(
-        {
-            "base_mode": 0x81,  # MAV_MODE_FLAG_SAFETY_ARMED | CUSTOM_MODE
-            "custom_mode": custom_mode,
-            "autopilot": autopilot,
-        }
+        _heartbeat(base_mode=0x81, custom_mode=custom_mode, autopilot=autopilot)
     )
 
 
@@ -479,9 +514,7 @@ async def test_guided_but_disarmed_holds_without_commanding() -> None:
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
     # Guided mode selected, but the disarmed bit is clear in base_mode.
-    plugin._on_heartbeat(
-        {"base_mode": 0x01, "custom_mode": 4, "autopilot": 3}
-    )
+    plugin._on_heartbeat(_heartbeat(base_mode=0x01, custom_mode=4, autopilot=3))
 
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
@@ -621,7 +654,7 @@ async def test_reported_gimbal_attitude_feeds_the_projection(
     _arm_guided(plugin)
     # MOUNT_ORIENTATION reports the gimbal pitched 40 deg down (negative = down)
     # and yawed 15 deg to the right of the nose.
-    plugin._on_mount_orientation({"pitch": -40.0, "yaw": 15.0})
+    plugin._on_mount_orientation(_mount_orientation(-40.0, 15.0))
 
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
@@ -711,7 +744,7 @@ async def test_coasting_holds_the_last_setpoint_without_recomputing(
     # Tick again with NO new detection (the tracker holds the same frozen bbox
     # within the coast window) and a CHANGED vehicle attitude. The loop must
     # hold: re-send the same setpoint, never re-project the stale bbox.
-    plugin._on_attitude({"roll": 0.0, "pitch": 0.0, "yaw": 1.0})
+    plugin._on_attitude(_attitude(0.0, 0.0, 1.0))
     captured = _spy_projection(monkeypatch)
     await plugin._tick()
 
@@ -794,13 +827,7 @@ async def test_a_stalled_attitude_alone_stops_commanding(
 
     clock.advance(1.0)
     # Position keeps arriving; attitude does not.
-    plugin._on_global_position(
-        {
-            "lat": int(round(12.0 * 1e7)),
-            "lon": int(round(77.0 * 1e7)),
-            "relative_alt": 20_000,
-        }
-    )
+    plugin._on_global_position(_global_position(12.0, 77.0, 20.0))
     _arm_guided(plugin)
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
 
@@ -826,7 +853,7 @@ async def test_a_stalled_position_alone_stops_commanding(
     _arm_guided(plugin)
 
     clock.advance(1.0)
-    plugin._on_attitude({"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
+    plugin._on_attitude(_attitude(0.0, 0.0, 0.0))
     _arm_guided(plugin)
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
 
@@ -915,7 +942,7 @@ async def test_a_stale_heartbeat_is_reported_apart_from_a_disarmed_one(
     plugin = _make_plugin(ctx)
     clock = _install_clock(monkeypatch)
     _level_pose(plugin)
-    plugin._on_heartbeat({"base_mode": 0x01, "custom_mode": 4, "autopilot": 3})
+    plugin._on_heartbeat(_heartbeat(base_mode=0x01, custom_mode=4, autopilot=3))
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
 
     await plugin._tick()
@@ -955,7 +982,7 @@ async def test_a_stalled_gimbal_report_falls_back_to_the_commanded_angle(
     clock = _install_clock(monkeypatch)
     _level_pose(plugin)
     _arm_guided(plugin)
-    plugin._on_mount_orientation({"pitch": -40.0, "yaw": 15.0})
+    plugin._on_mount_orientation(_mount_orientation(-40.0, 15.0))
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
 
     await plugin._tick()
@@ -1175,3 +1202,37 @@ def test_tools_registered_when_ctx_exposes_them() -> None:
     plugin = _make_plugin(ctx)
     plugin._register_tools(ctx)
     assert set(ctx.tools.handlers) == {"follow_status", "stop_follow"}
+
+
+def test_mavlink_handlers_read_the_delivered_wire_frame() -> None:
+    # The host delivers raw frames, not decoded fields: every pose handler has
+    # to decode what it is given.
+    plugin = _make_plugin(_Ctx())
+    plugin._on_attitude(_attitude(0.1, -0.2, 1.5))
+    plugin._on_global_position(_global_position(12.5, 77.25, 18.0))
+    plugin._on_mount_orientation(_mount_orientation(-30.0, 10.0))
+    plugin._on_heartbeat(_heartbeat(base_mode=0x81, custom_mode=4, autopilot=3))
+    assert plugin._pose.yaw == pytest.approx(1.5)
+    assert plugin._pose.lat_deg == pytest.approx(12.5)
+    assert plugin._pose.lon_deg == pytest.approx(77.25)
+    assert plugin._pose.rel_alt_m == pytest.approx(18.0)
+    assert plugin._gimbal.pitch_deg == pytest.approx(30.0)
+    assert plugin._fc.armed and plugin._fc.guided
+
+
+def test_a_non_autopilot_heartbeat_does_not_change_the_arm_state() -> None:
+    plugin = _make_plugin(_Ctx())
+    plugin._on_heartbeat(_heartbeat(base_mode=0x81, custom_mode=4, autopilot=3))
+    # A ground station or gimbal heartbeat (MAV_AUTOPILOT_INVALID) says nothing
+    # about the vehicle; it must not read as disarmed.
+    plugin._on_heartbeat(_heartbeat(base_mode=0, custom_mode=0, autopilot=8))
+    assert plugin._fc.armed and plugin._fc.guided
+
+
+def test_an_undecodable_frame_is_ignored() -> None:
+    plugin = _make_plugin(_Ctx())
+    plugin._on_attitude(_attitude(0.0, 0.0, 0.4))
+    truncated = _attitude(0.0, 0.0, 2.0)
+    truncated["frame"] = truncated["frame"][:-3]
+    plugin._on_attitude(truncated)
+    assert plugin._pose.yaw == pytest.approx(0.4)

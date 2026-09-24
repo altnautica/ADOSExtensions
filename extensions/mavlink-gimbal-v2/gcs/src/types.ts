@@ -36,8 +36,6 @@ export interface AxisLimits {
 }
 
 export interface PanelOptions {
-  vehicleSystemId?: number;
-  vehicleComponentId?: number;
   limits?: AxisLimits;
 }
 
@@ -49,11 +47,3 @@ export const DEFAULT_LIMITS: AxisLimits = {
   rollMinDeg: -45,
   rollMaxDeg: 45,
 };
-
-export const DEFAULT_TARGET_SYSTEM_ID = 1;
-export const DEFAULT_TARGET_COMPONENT_ID = 154;
-
-export const MAV_CMD_DO_SET_ROI_LOCATION = 195;
-export const MAV_CMD_DO_SET_ROI_NONE = 197;
-export const MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW = 1000;
-export const MAV_CMD_DO_GIMBAL_MANAGER_CONFIGURE = 1001;
