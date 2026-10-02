@@ -2,6 +2,24 @@
 
 All notable changes to the World Engine extension.
 
+## [1.0.1]
+
+### Changed
+
+- **Perception offload holds its own advertise grant.** The drone's offload
+  link advertisement now needs `vision.offload.advertise`, so the manifest
+  requests it; without it the drone refuses the advertisement and reports no
+  offload tier. Requires agent 0.102.0 or newer.
+- **Offloaded detections arrive bound to the extension.** The agent files the
+  returned batches under `com.altnautica.world-engine/offload` and drops their
+  remote track ids, because the extension does not hold track designation.
+- **Install-time payloads come from GitHub releases only.** The local bench
+  pack (`scripts/pack-world-engine-local.sh`) and `scripts/pack-rust.sh` now
+  match the agent's download allowlist, which no longer admits S3 or
+  `localhost` sources.
+- The agent half reads its data directory from the launch values the host
+  delivers as a credential, not from the process environment.
+
 ## [1.0.0]
 
 First release. World-model capture, reconstruction and perception offload

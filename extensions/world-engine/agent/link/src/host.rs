@@ -41,7 +41,7 @@ pub trait Host: Send + Sync + 'static {
     async fn aux_subscribe(&self, callback: AuxCallback) -> Result<(), ClientError>;
     /// `vision.publish_detection` (cap `vision.detection.publish`).
     async fn publish_detection(&self, batch: &DetectionBatch) -> Result<Value, ClientError>;
-    /// `offload.advertise` (cap `vision.detection.publish`).
+    /// `offload.advertise` (cap `vision.offload.advertise`).
     async fn advertise_offload(&self, advert: &OffloadAdvertisement) -> Result<Value, ClientError>;
     /// `node.info` (cap `node.info.read`): the board, ground-station role and
     /// camera facts.

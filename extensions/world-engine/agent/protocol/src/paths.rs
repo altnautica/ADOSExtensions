@@ -16,8 +16,6 @@ use crate::PLUGIN_ID;
 
 /// The env var the host sets to the plugin's HTTP socket path.
 pub const HTTP_SOCKET_ENV: &str = "ADOS_PLUGIN_HTTP_SOCKET";
-/// The env var the host sets to the plugin's persistent data directory.
-pub const DATA_DIR_ENV: &str = "ADOS_PLUGIN_DATA_DIR";
 /// The agent run-dir override, honoured when the HTTP socket env is absent.
 pub const RUN_DIR_ENV: &str = "ADOS_RUN_DIR";
 
@@ -62,15 +60,6 @@ pub fn http_socket_from(env: impl Fn(&str) -> Option<String>) -> PathBuf {
 /// The HTTP socket path from the process environment.
 pub fn http_socket() -> PathBuf {
     http_socket_from(|k| std::env::var(k).ok())
-}
-
-/// The plugin's persistent data directory from the process environment, or
-/// `None` when the host did not set one.
-pub fn data_dir() -> Option<PathBuf> {
-    std::env::var(DATA_DIR_ENV)
-        .ok()
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
 }
 
 #[cfg(test)]

@@ -231,8 +231,6 @@ HOST_SUFFIXES = (
     "github.com",
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
-    ".amazonaws.com",
-    "localhost",
 )
 PROFILES = {"drone", "ground-station", "ground_station", "workstation", "compute"}
 ARCH_OS = re.compile(r"^[a-z0-9_]+-[a-z0-9_]+$")
@@ -247,7 +245,7 @@ def host_allowed(host: str) -> bool:
         if suffix.startswith("."):
             if host.endswith(suffix):
                 return True
-        elif host == suffix or (suffix != "localhost" and host.endswith("." + suffix)):
+        elif host == suffix or host.endswith("." + suffix):
             return True
     return False
 

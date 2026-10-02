@@ -221,7 +221,7 @@ impl VisionNavPlugin {
             // timeshift the aligner needs to pair a frame with the gyro
             // sample that was taken at the same instant.
             let mut intrinsics_loaded = false;
-            if let Some(timeshift) = load_calibration_timeshift() {
+            if let Some(timeshift) = load_calibration_timeshift(ctx.data_dir.as_deref()) {
                 aligner.set_timeshift(timeshift);
                 intrinsics_loaded = true;
             }
@@ -562,15 +562,19 @@ fn i2c_bus(device: Option<&str>) -> u32 {
 /// Load the camera-IMU timeshift from the persisted camchain.yaml, or
 /// `None` when no calibration is on disk. The calibration wizard
 /// (Python helper) produces this file; the Rust agent only reads it.
-fn load_calibration_timeshift() -> Option<f64> {
-    let text = std::fs::read_to_string(calibration_path()).ok()?;
+fn load_calibration_timeshift(data_dir: Option<&std::path::Path>) -> Option<f64> {
+    let text = std::fs::read_to_string(calibration_path(data_dir)).ok()?;
     camchain::timeshift(&text)
 }
 
-fn calibration_path() -> std::path::PathBuf {
-    let data_dir = std::env::var("ADOS_PLUGIN_DATA_DIR")
-        .unwrap_or_else(|_| "/var/ados/plugins/com.altnautica.vision-nav/data".to_string());
-    std::path::PathBuf::from(data_dir).join("camchain.yaml")
+/// The calibration file in the plugin's data dir, which the host delivers
+/// with the launch values (`ctx.data_dir`).
+fn calibration_path(data_dir: Option<&std::path::Path>) -> std::path::PathBuf {
+    data_dir
+        .unwrap_or(std::path::Path::new(
+            "/var/ados/plugins/com.altnautica.vision-nav/data",
+        ))
+        .join("camchain.yaml")
 }
 
 /// Kalibr `cam0` camchain.yaml parsing (the subset the agent needs).

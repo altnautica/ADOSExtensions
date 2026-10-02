@@ -5,8 +5,9 @@
 //! and, for the operator, on the plugin's `http.sock`.
 //!
 //! Host connection: the plugin host starts it as
-//! `world-engine-node com.altnautica.world-engine` with `ADOS_PLUGIN_SOCKET` +
-//! `ADOS_PLUGIN_TOKEN` set; it then connects to the host and uses the plugin
+//! `world-engine-node com.altnautica.world-engine` with its launch values
+//! (socket, token, data dir) in the unit's token credential; it then connects
+//! to the host and uses the plugin
 //! config (`serving.*`, `atlas.live_reconstruct`), publishes its compute status
 //! on the `status` telemetry channel, and mirrors its reconstruct jobs into the
 //! `jobs` cloud records. Without them (a standalone dev run) it runs on
@@ -30,8 +31,8 @@
 //! during the run wins (`Scheduler::finalize` refuses to overwrite a job that
 //! is no longer `Running`).
 //!
-//! Environment (every default under `<ADOS_PLUGIN_DATA_DIR>/node/` applies when
-//! the host set a data dir; the `/var/ados/compute` defaults otherwise):
+//! Environment (every default under `<plugin data dir>/node/` applies when
+//! the host gave a data dir; the `/var/ados/compute` defaults otherwise):
 //! - `ADOS_COMPUTE_DB`        job store path (default `<data>/node/jobs.db`)
 //! - `ADOS_COMPUTE_WORK`      dataset + artifact work root (default
 //!   `<data>/node/work`); the persister writes keyframe datasets here, the
@@ -232,12 +233,12 @@ struct StatePaths {
 
 impl StatePaths {
     /// Each path is its `ADOS_COMPUTE_*` override when set; else under
-    /// `<ADOS_PLUGIN_DATA_DIR>/node/` when the host set a data dir; else the
+    /// `<data_dir>/node/` when the host gave a data dir; else the
     /// `/var/ados/compute` default. Pure (the env lookup is injected).
-    fn resolve(env: impl Fn(&str) -> Option<String>) -> Self {
-        let data = env(world_engine_protocol::paths::DATA_DIR_ENV)
+    fn resolve(data_dir: Option<&str>, env: impl Fn(&str) -> Option<String>) -> Self {
+        let data = data_dir
             .filter(|d| !d.trim().is_empty())
-            .map(|d| Path::new(&d).join("node"));
+            .map(|d| Path::new(d).join("node"));
         let under = |leaf: &str, fallback: &str| match &data {
             Some(dir) => dir.join(leaf),
             None => PathBuf::from(fallback),
@@ -312,16 +313,23 @@ fn env_u64(key: &str) -> Option<u64> {
     std::env::var(key).ok().and_then(|v| v.trim().parse().ok())
 }
 
-/// Connect to the plugin host when the node was started as the extension's
-/// service (the plugin id in argv[1] plus `ADOS_PLUGIN_SOCKET` and
-/// `ADOS_PLUGIN_TOKEN`). `Ok(None)` is a standalone dev run: no host, defaults
-/// everywhere. A host that is named but refuses the connection is an error, so
-/// the service fails loudly instead of silently running unmanaged.
-async fn connect_host(
-) -> Result<Option<(PluginContext, Arc<PluginIpcClient>)>, ados_sdk::RunnerError> {
+/// The launch values the plugin host handed this process (the plugin id in
+/// argv[1], the rest from its token credential), or `None` for a standalone dev
+/// run with no plugin id.
+fn launch_args() -> Option<RunnerArgs> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
-    let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-    let Ok(args) = RunnerArgs::parse(&argv, env) else {
+    RunnerArgs::parse(&argv, |k| std::env::var(k).ok()).ok()
+}
+
+/// Connect to the plugin host when the node was started as the extension's
+/// service (a socket and a token among its launch values). `Ok(None)` is a
+/// standalone dev run: no host, defaults everywhere. A host that is named but
+/// refuses the connection is an error, so the service fails loudly instead of
+/// silently running unmanaged.
+async fn connect_host(
+    args: Option<RunnerArgs>,
+) -> Result<Option<(PluginContext, Arc<PluginIpcClient>)>, ados_sdk::RunnerError> {
+    let Some(args) = args else {
         return Ok(None);
     };
     let (Some(socket), Some(token)) = (args.socket_path.clone(), args.token.clone()) else {
@@ -348,7 +356,9 @@ async fn connect_host(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
 
-    let host = connect_host().await?;
+    let launch = launch_args();
+    let data_dir = launch.as_ref().and_then(|a| a.data_dir.clone());
+    let host = connect_host(launch).await?;
     let host_ipc = host.as_ref().map(|(_, ipc)| ipc.clone());
     let ctx = host.map(|(ctx, _)| ctx);
     match &ctx {
@@ -356,7 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => tracing::info!("no plugin host (standalone run): host calls skipped"),
     }
 
-    let paths = StatePaths::resolve(|k| std::env::var(k).ok());
+    let paths = StatePaths::resolve(data_dir.as_deref(), |k| std::env::var(k).ok());
     // Under the plugin host the node serves the LAN: that is what the declared
     // listen port is for, and the sandbox admits a bind on exactly that port.
     let default_bind = if ctx.is_some() {
@@ -1205,8 +1215,7 @@ mod tests {
 
     #[test]
     fn state_paths_default_under_the_plugin_data_dir_and_keep_the_env_overrides() {
-        let with_data = |k: &str| (k == "ADOS_PLUGIN_DATA_DIR").then(|| "/data/we".to_string());
-        let p = StatePaths::resolve(with_data);
+        let p = StatePaths::resolve(Some("/data/we"), |_| None);
         assert_eq!(p.db, "/data/we/node/jobs.db");
         assert_eq!(p.work_root, PathBuf::from("/data/we/node/work"));
         assert_eq!(
@@ -1216,12 +1225,11 @@ mod tests {
 
         // An explicit override wins over the data dir.
         let overridden = |k: &str| match k {
-            "ADOS_PLUGIN_DATA_DIR" => Some("/data/we".to_string()),
             "ADOS_COMPUTE_DB" => Some(":memory:".to_string()),
             "ADOS_COMPUTE_WORK" => Some("/scratch/work".to_string()),
             _ => None,
         };
-        let p = StatePaths::resolve(overridden);
+        let p = StatePaths::resolve(Some("/data/we"), overridden);
         assert_eq!(p.db, ":memory:");
         assert_eq!(p.work_root, PathBuf::from("/scratch/work"));
         assert_eq!(
@@ -1230,7 +1238,7 @@ mod tests {
         );
 
         // No host data dir: the standalone defaults.
-        let p = StatePaths::resolve(|_| None);
+        let p = StatePaths::resolve(None, |_| None);
         assert_eq!(p.db, "/var/ados/compute/jobs.db");
         assert_eq!(p.work_root, PathBuf::from("/var/ados/compute/work"));
     }

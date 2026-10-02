@@ -9,7 +9,8 @@
 #
 # Example:
 #   ADOS_SIGNING_KEY=~/keys/bench.pem \
-#     scripts/pack-world-engine-local.sh /tmp/we-bench https://bench.example.com/we
+#     scripts/pack-world-engine-local.sh /tmp/we-bench \
+#       https://github.com/example/we-bench/releases/download/bench-1
 #
 # What it does:
 #   1. Builds the aarch64-macos binaries this Mac can produce natively:
@@ -24,15 +25,18 @@
 #      aarch64-macos` and signs with scripts/sign.sh. The unsigned and signed
 #      archives land in <out-dir>.
 #
-# Serve <out-dir> at <payload-base-url> and install the signed archive on a Mac
-# node. The archive covers aarch64-macos only: a Linux node refuses it with
+# Upload <out-dir>'s payloads as assets of the release <payload-base-url> names
+# and install the signed archive on a Mac node. The archive covers
+# aarch64-macos only: a Linux node refuses it with
 # `incompatible: no binary for <arch-os>`.
 #
 # The payload URL must satisfy the host, which refuses anything else at
 # install: an https:// URL on its download allowlist (github.com and the GitHub
-# asset hosts, *.amazonaws.com, the convex hosts, or `localhost`), served with
-# a certificate that chains to a public root (the host trusts the bundled
-# webpki roots only). pack-rust.sh rejects a non-https URL up front.
+# asset hosts, or the convex hosts), served with a certificate that chains to a
+# public root (the host trusts the bundled webpki roots only). A self-hosted or
+# `localhost` server is refused, so bench payloads go on a GitHub release (a
+# pre-release is fine; a draft's assets are not public). pack-rust.sh rejects
+# a non-https or off-allowlist URL up front.
 #
 # Signing: ADOS_SIGNING_KEY is passed straight through to scripts/sign.sh (a
 # key file path, or base64 key material with ADOS_SIGNING_KEY_INLINE=1); this

@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.world-engine
 name: "ADOS World Engine"
-version: "1.0.0"
+version: "1.0.1"
 description: "3D world model from drone flights, reconstructed on a LAN compute node, plus perception offload for drones without an NPU."
 description_long: |
   A drone captures pose-tagged keyframes from one camera up to an all-sides rig and streams them to a compute node on the same network (a workstation or a dedicated compute box). The node reconstructs a Gaussian splat, point cloud, mesh and occupancy grid, and serves them to Mission Control as a live world model you can orbit, measure and replay.
@@ -28,7 +28,7 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.100.0"
+  ados_version: ">=0.102.0"
   gcs_version: ">=0.58.0"
   supported_boards: ["*"]
 
@@ -67,40 +67,40 @@ agent:
   # workflow writes the real source, sha256 and size_bytes.
   payloads:
     - path: bin/aarch64-linux/world-engine-link
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-link-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-link-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
     - path: bin/x86_64-linux/world-engine-link
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-link-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-link-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
     - path: bin/aarch64-macos/world-engine-link
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-link-aarch64-macos"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-link-aarch64-macos"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-macos
     - path: bin/aarch64-linux/world-engine-capture
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-capture-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-capture-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone]
     - path: bin/aarch64-linux/world-engine-node
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-node-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-node-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [workstation, compute]
     - path: bin/x86_64-linux/world-engine-node
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-node-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-node-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [workstation, compute]
     - path: bin/aarch64-macos/world-engine-node
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/world-engine-node-aarch64-macos"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-node-aarch64-macos"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-macos
@@ -108,7 +108,7 @@ agent:
     # The Rerun web viewer's wasm, served to the GCS half as a plugin asset.
     # Every profile serves the GCS module, so every profile fetches it.
     - path: gcs/assets/re_viewer_bg.wasm
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.0/re_viewer_bg.wasm"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/re_viewer_bg.wasm"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
   declared_capabilities:
@@ -127,6 +127,7 @@ agent:
     - id: node.info.read
     - id: vision.frame.read
     - id: vision.detection.publish
+    - id: vision.offload.advertise
     - id: radio.aux_stream
     - id: network.outbound
     - id: network.listen

@@ -5,7 +5,7 @@
 # orchestrator and its safety-gated return bridge).
 [package]
 name = "world-engine-transport"
-version = "1.0.0"
+version = "1.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

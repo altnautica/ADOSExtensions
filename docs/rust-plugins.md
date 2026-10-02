@@ -65,8 +65,10 @@ shift when the agent repository moves.
 
 The binary implements the `Plugin` lifecycle trait and calls `run_plugin` from
 `main`. Every lifecycle hook has a default no-op, so a plugin overrides only the
-hooks it needs. The runner reads `--socket` (with the `ADOS_PLUGIN_SOCKET` env
-fallback) plus the capability token and agent id, connects, builds a
+hooks it needs. The runner reads `--socket`, `--token` and `--agent-id`; any it
+is not given come from the unit's token credential
+(`$CREDENTIALS_DIRECTORY/ados-plugin-token`, `KEY=VALUE` lines), together with
+the plugin data dir that becomes `ctx.data_dir`. It then connects, builds a
 `PluginContext`, and drives `on_install` through `on_disable` until the unit
 stops.
 
@@ -89,9 +91,11 @@ agent:
 `runtime: rust` tells the host to exec the binary directly instead of running
 the shared Python runner. `entrypoint` is the path of the binary inside the
 installed plugin tree. The host execs
-`<install_dir>/<id>/<entrypoint> --socket <per-plugin-socket>` and delivers the
-capability token and agent id through the unit environment, so the binary never
-sees secrets on its command line.
+`<install_dir>/<id>/<entrypoint> <id> --socket <per-plugin-socket>` and
+delivers the capability token, agent id and data dir in a systemd
+credential (`LoadCredential=`) readable only by the plugin's own user, so the
+binary never sees the token on its command line or in its environment. Read
+the data dir from `ctx.data_dir`, not from an environment variable.
 
 `agent.permissions` lists the capabilities the binary calls. An empty list is
 valid for a plugin that makes no IPC calls. A vision plugin, for example, lists

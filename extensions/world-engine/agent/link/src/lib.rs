@@ -131,7 +131,7 @@ impl LinkPlugin {
         shutdown: watch::Receiver<bool>,
     ) -> std::io::Result<()> {
         let host: Arc<dyn Host> = Arc::new(ctx.clone());
-        let credentials = CredentialStore::new(data_dir(ctx).as_deref());
+        let credentials = CredentialStore::new(ctx.data_dir.as_deref());
         let bus_socket = paths::ipc_dir().join(ATLAS_BUS_SOCKET);
         let forward = Arc::new(Mutex::new(ForwardStatus::default()));
         let capture = Arc::new(CaptureState::default());
@@ -185,7 +185,7 @@ impl LinkPlugin {
         shutdown: watch::Receiver<bool>,
     ) -> std::io::Result<()> {
         let host: Arc<dyn Host> = Arc::new(ctx.clone());
-        let credentials = CredentialStore::new(data_dir(ctx).as_deref());
+        let credentials = CredentialStore::new(ctx.data_dir.as_deref());
         let snapshot = relay::SharedSnapshot::default();
         let router = api::ground_router(snapshot.clone(), credentials.clone());
         self.tasks.push(serve_http(router, shutdown.clone())?);
@@ -199,11 +199,6 @@ impl LinkPlugin {
         ));
         Ok(())
     }
-}
-
-/// The plugin data dir the host gave this unit.
-fn data_dir(ctx: &PluginContext) -> Option<std::path::PathBuf> {
-    ctx.data_dir.clone().or_else(paths::data_dir)
 }
 
 #[async_trait::async_trait]
