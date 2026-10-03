@@ -19,7 +19,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "ados-config"
-version = "0.102.1"
+version = "0.102.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -29,14 +29,14 @@ dependencies = [
 
 [[package]]
 name = "ados-offload"
-version = "0.102.1"
+version = "0.102.2"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ados-protocol"
-version = "0.102.1"
+version = "0.102.2"
 dependencies = [
  "base64",
  "bytes",
@@ -62,7 +62,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sdk"
-version = "0.102.1"
+version = "0.102.2"
 dependencies = [
  "ados-protocol",
  "async-trait",
@@ -78,7 +78,7 @@ dependencies = [
 
 [[package]]
 name = "ados-vision"
-version = "0.102.1"
+version = "0.102.2"
 dependencies = [
  "ados-config",
  "ados-protocol",
