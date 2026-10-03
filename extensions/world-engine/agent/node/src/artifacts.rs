@@ -455,10 +455,10 @@ mod tests {
             derive_public_base("0.0.0.0:8092", None, None),
             "http://127.0.0.1:8092"
         );
-        // A dotted hostname is used as-is (no double .local).
+        // A dotted hostname is named by its first label, as mDNS publishes it.
         assert_eq!(
             derive_public_base("[::]:8092", None, Some("node.lan")),
-            "http://node.lan:8092"
+            "http://node.local:8092"
         );
     }
 
