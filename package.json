@@ -2,6 +2,7 @@
   "name": "ados-extensions",
   "private": true,
   "license": "GPL-3.0-or-later",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "typecheck": "pnpm --filter @altnautica/plugin-sdk build && pnpm -r typecheck",
     "build:thermal-camera": "pnpm --filter ./extensions/thermal-camera-flir-lepton-usb/gcs build",
