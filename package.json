@@ -18,6 +18,9 @@
     "build:world-engine": "pnpm --filter @altnautica/plugin-sdk build && pnpm --filter ./extensions/world-engine/gcs build",
     "test:world-engine": "pnpm --filter ./extensions/world-engine/gcs test"
   },
+  "devDependencies": {
+    "yaml": "^2.9.0"
+  },
   "engines": {
     "pnpm": ">=9"
   }

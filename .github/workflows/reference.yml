@@ -1,0 +1,49 @@
+name: reference
+
+# docs/reference/extensions.json feeds the generated extension catalog in the
+# public docs. This job fails when the committed file no longer matches the
+# manifests and release workflows.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  reference:
+    name: extensions.json is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # A check that cannot fail proves nothing: change one manifest version,
+      # require exit 1, then restore it.
+      - name: Self-test, planted drift is detected
+        run: |
+          set -uo pipefail
+          cp extensions/follow-me/manifest.yaml /tmp/manifest.yaml
+          sed -i 's/^version: .*/version: "0.0.0-selftest"/' extensions/follow-me/manifest.yaml
+          node scripts/emit-reference.mjs --check
+          status=$?
+          cp /tmp/manifest.yaml extensions/follow-me/manifest.yaml
+          if [ "$status" -ne 1 ]; then
+            echo "planted drift was not detected (exit $status)"
+            exit 1
+          fi
+
+      - name: Check
+        run: node scripts/emit-reference.mjs --check

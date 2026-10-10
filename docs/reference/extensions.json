@@ -1,0 +1,209 @@
+{
+  "schema": 1,
+  "extensions": [
+    {
+      "id": "com.altnautica.follow-me",
+      "name": "ADOS Follow-Me",
+      "version": "0.2.10",
+      "description": "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab.",
+      "category": null,
+      "supported_boards": [
+        "cm4",
+        "cm5",
+        "rock-5c-lite",
+        "rk3588s2",
+        "rk3576",
+        "rpi5",
+        "cubie-a7s",
+        "cubie-a7z"
+      ],
+      "permissions": [
+        "event.publish",
+        "flight.guided_setpoint",
+        "mavlink.read",
+        "mavlink.write",
+        "mcp.expose",
+        "ui.slot.flight-skill",
+        "ui.slot.node-detail-tab",
+        "vision.detection.subscribe"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-follow-me",
+      "published": true
+    },
+    {
+      "id": "com.altnautica.mavlink-gimbal-v2",
+      "name": "ADOS MAVLink Gimbal v2 Controller",
+      "version": "1.4.1",
+      "description": "MAVLink Gimbal v2 control: manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection.",
+      "category": null,
+      "supported_boards": [
+        "*"
+      ],
+      "permissions": [
+        "command.send",
+        "event.publish",
+        "mavlink.component.gimbal",
+        "mavlink.read",
+        "mavlink.write",
+        "mcp.expose",
+        "telemetry.extend",
+        "telemetry.subscribe.gimbal",
+        "ui.slot.flight-skill",
+        "ui.slot.node-detail-tab",
+        "ui.slot.settings-section",
+        "vision.detection.subscribe"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-mavlink-gimbal-v2-controller",
+      "published": true
+    },
+    {
+      "id": "com.altnautica.siyi-pod",
+      "name": "ADOS SIYI Optical Pod",
+      "version": "0.5.1",
+      "description": "Native driver for the SIYI optical-pod line (A2 mini, A8 mini, ZR10, ZR30, ZT6, ZT30) with per-model capability negotiation: gimbal, zoom, focus, photo/record, thermal palette and gain, and a laser rangefinder with subject geolocation.",
+      "category": null,
+      "supported_boards": [
+        "cm4",
+        "cm5",
+        "rock-5c-lite",
+        "rk3588s2",
+        "rk3576",
+        "rpi5",
+        "generic-x86_64"
+      ],
+      "permissions": [
+        "command.send",
+        "event.publish",
+        "hardware.uart",
+        "mavlink.component.camera",
+        "mavlink.component.gimbal",
+        "mavlink.read",
+        "mavlink.write",
+        "mcp.expose",
+        "network.outbound",
+        "telemetry.extend",
+        "telemetry.subscribe.siyi",
+        "ui.slot.cockpit-panel",
+        "ui.slot.flight-skill",
+        "ui.slot.node-detail-tab",
+        "ui.slot.settings-section",
+        "ui.slot.video-overlay",
+        "video.source.set"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-siyi-optical-pod",
+      "published": true
+    },
+    {
+      "id": "com.altnautica.thermal-flir-lepton-usb",
+      "name": "ADOS Thermal Camera FLIR Lepton USB UVC",
+      "version": "1.3.3",
+      "description": "FLIR Lepton 3.5 radiometric thermal driver, palettes and spot-meter overlay for a PureThermal 2 USB UVC dongle. Capture requires a UVC backend supplied by the agent; without one the extension reports the camera as unavailable.",
+      "category": null,
+      "supported_boards": [
+        "cm4",
+        "cm5",
+        "rock-5c-lite",
+        "rk3576",
+        "rk3566",
+        "generic-x86_64"
+      ],
+      "permissions": [
+        "event.publish",
+        "hardware.usb.uvc",
+        "telemetry.extend",
+        "telemetry.subscribe.camera.thermal.frame",
+        "telemetry.subscribe.thermal",
+        "ui.slot.flight-skill",
+        "ui.slot.settings-section",
+        "ui.slot.video-overlay",
+        "video.source.set"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-thermal-camera-flir-lepton-usb-uvc",
+      "published": false
+    },
+    {
+      "id": "com.altnautica.vision-nav",
+      "name": "ADOS Vision Navigation",
+      "version": "0.5.0",
+      "description": "GPS-denied navigation. Optical flow from a downward camera. Supports ArduPilot, PX4, and iNav 7.0+ on USB UVC or CSI cameras.",
+      "category": null,
+      "supported_boards": [
+        "cm4",
+        "cm5",
+        "rock-5c-lite",
+        "rk3588s2",
+        "rk3576",
+        "rpi5"
+      ],
+      "permissions": [
+        "event.publish",
+        "hardware.uart",
+        "mavlink.component.peripheral",
+        "mavlink.read",
+        "mavlink.write",
+        "telemetry.extend",
+        "telemetry.subscribe.navigation",
+        "ui.slot.flight-skill",
+        "ui.slot.node-detail-tab",
+        "vision.frame.read"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/vision-nav-overview",
+      "published": true
+    },
+    {
+      "id": "com.altnautica.world-engine",
+      "name": "ADOS World Engine",
+      "version": "1.0.1",
+      "description": "3D world model from drone flights, reconstructed on a LAN compute node, plus perception offload for drones without an NPU.",
+      "category": null,
+      "supported_boards": [
+        "*"
+      ],
+      "permissions": [
+        "cloud.publish",
+        "cloud.records",
+        "event.publish",
+        "hardware.gpu",
+        "network.listen",
+        "network.outbound",
+        "node.info.read",
+        "perception.read",
+        "radio.aux_stream",
+        "telemetry.extend",
+        "telemetry.read",
+        "telemetry.subscribe.status",
+        "ui.slot.node-agent-page",
+        "ui.slot.node-surface",
+        "vision.detection.publish",
+        "vision.frame.read",
+        "vision.offload.advertise"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions/world-engine",
+      "published": true
+    }
+  ]
+}
