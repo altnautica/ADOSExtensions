@@ -12,7 +12,9 @@ use ados_protocol::mavlink::ardupilotmega::{
 use ados_protocol::mavlink::MavMessage;
 use ados_sdk::context::PluginContext;
 use rmpv::Value;
+use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+use tokio::time::Interval;
 
 use super::subscriptions::FcTarget;
 use crate::clock_align::ClockAlign;
@@ -93,16 +95,28 @@ pub struct HealthInputs {
     pub emit_errors: Arc<AtomicU64>,
     pub fc_params: Arc<Mutex<BTreeSet<String>>>,
     pub engaged: bool,
+    /// Signalled on a companion transition (frames lost, frames back) so the
+    /// GCS sees it at once instead of up to a tick later.
+    pub publish_now: Arc<Notify>,
 }
 
-/// Publish the `navigation` block and the engage state at 1 Hz.
+/// Wait for the next health publish: the 1 Hz tick or an early request.
+pub async fn next_publish(interval: &mut Interval, publish_now: &Notify) {
+    tokio::select! {
+        _ = interval.tick() => {}
+        _ = publish_now.notified() => {}
+    }
+}
+
+/// Publish the `navigation` block and the engage state at 1 Hz, and at once
+/// on a companion transition.
 pub fn spawn_health(ctx: &PluginContext, inputs: HealthInputs) -> JoinHandle<()> {
     let ctx = ctx.clone();
     tokio::spawn(async move {
         let engage_state = if inputs.engaged { "active" } else { "idle" };
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
-            interval.tick().await;
+            next_publish(&mut interval, &inputs.publish_now).await;
             let fc_params: Vec<String> = inputs
                 .fc_params
                 .lock()

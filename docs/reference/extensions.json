@@ -154,7 +154,7 @@
       "permissions": [
         "event.publish",
         "hardware.uart",
-        "mavlink.component.peripheral",
+        "mavlink.component.vio",
         "mavlink.read",
         "mavlink.write",
         "telemetry.extend",

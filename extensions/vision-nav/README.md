@@ -181,7 +181,8 @@ Agent:
 - `hardware.uart` (the companion-wired TF-Luna)
 - `telemetry.extend`, `event.publish`
 - `mavlink.read`, `mavlink.write`
-- `mavlink.component.peripheral`
+- `mavlink.component.vio` (the host reserves component 198 for kind
+  `vio`)
 
 GCS:
 
@@ -216,7 +217,7 @@ and restarts itself when any of them changes.
 
 ## MAVLink components
 
-- Component 198, `sub_id` 1: peripheral. Emits `OPTICAL_FLOW` or
+- Component 198, `sub_id` 1: kind `vio`. Emits `OPTICAL_FLOW` or
   `OPTICAL_FLOW_RAD` (by firmware), the `MAV_CMD_SET_MESSAGE_INTERVAL`
   stream requests,
   `DISTANCE_SENSOR` (when relaying a companion-wired rangefinder),

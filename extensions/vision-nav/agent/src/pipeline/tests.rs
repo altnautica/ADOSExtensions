@@ -90,6 +90,28 @@ fn frame_stale_threshold_matches_degraded_grace() {
     assert_eq!(FRAME_STALE_NS, 2_000_000_000);
 }
 
+#[tokio::test]
+async fn a_publish_request_wakes_the_health_task_before_the_tick() {
+    let mut interval = tokio::time::interval(Duration::from_secs(10));
+    let now = Notify::new();
+    // The first tick of an interval completes at once.
+    ticks::next_publish(&mut interval, &now).await;
+    now.notify_one();
+    tokio::time::timeout(
+        Duration::from_millis(500),
+        ticks::next_publish(&mut interval, &now),
+    )
+    .await
+    .expect("a publish request must not wait for the 10 s tick");
+    // Without a request the next wake is the tick.
+    assert!(tokio::time::timeout(
+        Duration::from_millis(200),
+        ticks::next_publish(&mut interval, &now),
+    )
+    .await
+    .is_err());
+}
+
 #[test]
 fn default_config_builds_the_null_estimator() {
     let ladder = Arc::new(ScaleLadder::new(false));

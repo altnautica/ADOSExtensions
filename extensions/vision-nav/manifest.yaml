@@ -94,14 +94,14 @@ agent:
     - id: event.publish
     - id: mavlink.read
     - id: mavlink.write
-    - id: mavlink.component.peripheral
+    - id: mavlink.component.vio
   resources:
     max_ram_mb: 512
     max_cpu_percent: 80
     max_pids: 24
   mavlink_components:
     - component_id: 198
-      component_kind: peripheral
+      component_kind: vio
       sub_id: 1
 
 gcs:

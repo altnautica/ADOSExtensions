@@ -5,7 +5,8 @@
 //! 1. merges the static config with the live per-drone keys
 //!    ([`crate::live_config`]) and starts the config watcher, which
 //!    restarts the process when that config changes,
-//! 2. registers MAVLink component 198 (peripheral),
+//! 2. registers MAVLink component 198 (kind `vio`, the kind the host
+//!    reserves 197 and 198 for),
 //! 3. subscribes to the FC streams the modes consume
 //!    ([`subscriptions`]),
 //! 4. starts the TIMESYNC, companion-HEARTBEAT, health and stream-rate
@@ -35,7 +36,7 @@ use ados_sdk::context::PluginContext;
 use ados_sdk::{ClientError, Plugin};
 use async_trait::async_trait;
 use rmpv::Value;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use crate::clock_align::ClockAlign;
 use crate::config::{Mode, Topology, VisionNavConfig};
@@ -102,7 +103,7 @@ impl Plugin for VisionNavPlugin {
 
         if let Err(e) = ctx
             .mavlink
-            .register_component(COMPONENT_OF as i64, "peripheral")
+            .register_component(COMPONENT_OF as i64, "vio")
             .await
         {
             eprintln!("vision-nav: register component {COMPONENT_OF} failed: {e}");
@@ -143,6 +144,7 @@ impl Plugin for VisionNavPlugin {
         self.health.lock().expect("health lock").degraded_reasons = denied;
 
         let companion = Arc::new(AtomicI64::new(CompanionState::Inactive as i64));
+        let publish_now = Arc::new(Notify::new());
         self.tasks.push(ticks::spawn_timesync(
             ctx,
             sinks.clock.clone(),
@@ -165,6 +167,7 @@ impl Plugin for VisionNavPlugin {
                 emit_errors,
                 fc_params: sinks.fc_params.clone(),
                 engaged: cfg.effective_mode() != Mode::Off,
+                publish_now: publish_now.clone(),
             },
         ));
 
@@ -176,6 +179,7 @@ impl Plugin for VisionNavPlugin {
             router,
             companion,
             health: self.health.clone(),
+            publish_now,
         };
         self.tasks.push(tokio::spawn(worker.run(rx)));
         subscribe_frames(ctx, tx).await?;
@@ -227,6 +231,8 @@ struct Worker {
     router: Arc<ComponentRouter>,
     companion: Arc<AtomicI64>,
     health: Arc<Mutex<HealthSnapshot>>,
+    /// Asks the health task to publish now, on a companion transition.
+    publish_now: Arc<Notify>,
 }
 
 impl Worker {
@@ -238,6 +244,7 @@ impl Worker {
             router,
             companion,
             health,
+            publish_now,
         } = self;
         let gate = PreArmGate::with_flow_quality_gate(cfg.flow_quality_min);
         let mut aligner = TimeAligner::new(0.0, 60);
@@ -252,6 +259,9 @@ impl Worker {
         let mut prev_gray: Option<GrayImage> = None;
         let mut prev_ts_ns: Option<i64> = None;
         let mut degraded_streak_start: Option<i64> = None;
+        // Set while frames are missing; the first output after the gap
+        // publishes the recovery at once.
+        let mut frames_lost = false;
         let stale = Duration::from_nanos(FRAME_STALE_NS as u64);
 
         loop {
@@ -261,6 +271,10 @@ impl Worker {
                 Err(_) => {
                     if cfg.effective_mode() != Mode::Off {
                         mark_frames_stale(&health, &gate, &cfg, &companion);
+                        if !frames_lost {
+                            publish_now.notify_one();
+                        }
+                        frames_lost = true;
                     }
                     // Never difference the first frame after a gap.
                     prev_gray = None;
@@ -328,6 +342,10 @@ impl Worker {
                     reading_m: reading.map(|r| r.distance_m),
                 },
             );
+            if frames_lost && output.is_some() {
+                frames_lost = false;
+                publish_now.notify_one();
+            }
 
             prev_gray = Some(pair.gray);
             prev_ts_ns = Some(ts_ns);

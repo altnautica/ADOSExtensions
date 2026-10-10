@@ -31,6 +31,17 @@ All notable changes to the Vision Navigation extension.
 - Health `flowQuality` clears when a tick has no sample instead of repeating
   the last value.
 - Each outbound frame carries an incrementing sequence number.
+- **Component 198 registers with kind `vio`.** The agent host reserves
+  components 197 and 198 for kind `vio`, so the `peripheral` registration was
+  refused and no flow frame reached the flight controller. The manifest now
+  requests `mavlink.component.vio` instead of `mavlink.component.peripheral`
+  and declares `component_kind: vio`.
+- Losing or regaining camera frames publishes the health block at once
+  instead of on the next 1 s tick, so the estimator `failed` state shows about
+  2 s after the last frame.
+- Health `imuRateHz` is the inverse of the smoothed sample interval. It
+  averaged the per-pair rate before, so `RAW_IMU` frames arriving in bursts
+  read as tens of kHz.
 
 ### Added
 

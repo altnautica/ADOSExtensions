@@ -46,7 +46,12 @@ struct Inner {
     buffer: VecDeque<ImuSample>,
     capacity: usize,
     last_seen_ns: Option<i64>,
-    last_rate_hz: Option<f32>,
+    /// Smoothed inter-sample interval in seconds. The rate is its inverse:
+    /// samples reach the plugin in bursts (several frames per host read), so
+    /// averaging the per-pair instantaneous rate `1/dt` lets the near-zero
+    /// gaps inside a burst dominate and reports tens of kHz for a 100 Hz
+    /// stream.
+    mean_dt_s: Option<f32>,
 }
 
 impl Default for ImuBuffer {
@@ -63,7 +68,7 @@ impl ImuBuffer {
                 buffer: VecDeque::with_capacity(capacity),
                 capacity,
                 last_seen_ns: None,
-                last_rate_hz: None,
+                mean_dt_s: None,
             }),
         }
     }
@@ -94,15 +99,14 @@ impl ImuBuffer {
     }
 
     /// Append a pre-converted SI sample (used by tests and any future
-    /// direct-bus source) and refresh the rate EMA.
+    /// direct-bus source) and refresh the interval EMA.
     pub fn record(&self, sample: ImuSample) {
         let mut g = self.inner.lock().expect("imu buffer lock");
         if let Some(last) = g.last_seen_ns {
-            let dt_s = ((sample.ts_ns - last) as f32 / 1e9).max(1e-6);
-            let inst = 1.0 / dt_s;
-            g.last_rate_hz = Some(match g.last_rate_hz {
-                None => inst,
-                Some(prev) => 0.9 * prev + 0.1 * inst,
+            let dt_s = ((sample.ts_ns - last) as f32 / 1e9).max(0.0);
+            g.mean_dt_s = Some(match g.mean_dt_s {
+                None => dt_s,
+                Some(prev) => 0.9 * prev + 0.1 * dt_s,
             });
         }
         g.last_seen_ns = Some(sample.ts_ns);
@@ -140,9 +144,11 @@ impl ImuBuffer {
         aligner.lookup_in(frame_ts_ns, g.buffer.iter().copied())
     }
 
-    /// Smoothed sample rate in Hz, or `None` until two samples land.
+    /// Smoothed sample rate in Hz, or `None` until two samples land a
+    /// measurable interval apart.
     pub fn rate_hz(&self) -> Option<f32> {
-        self.inner.lock().expect("imu buffer lock").last_rate_hz
+        let mean = self.inner.lock().expect("imu buffer lock").mean_dt_s?;
+        (mean > 0.0).then(|| 1.0 / mean)
     }
 }
 
@@ -322,6 +328,30 @@ mod tests {
         buf.record(sample(5_000_000, 0.0)); // 5 ms -> 200 Hz
         let rate = buf.rate_hz().unwrap();
         assert!((rate - 200.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn rate_holds_under_bursty_delivery() {
+        // 100 Hz delivered as bursts of five samples 1 µs apart every 50 ms:
+        // the mean interval is still 10 ms.
+        let buf = ImuBuffer::default();
+        let mut ts = 0i64;
+        for _ in 0..40 {
+            for i in 0..5 {
+                buf.record(sample(ts + i * 1_000, 0.0));
+            }
+            ts += 50_000_000;
+        }
+        let rate = buf.rate_hz().unwrap();
+        assert!((60.0..160.0).contains(&rate), "rate {rate}");
+    }
+
+    #[test]
+    fn rate_is_unknown_while_samples_share_one_instant() {
+        let buf = ImuBuffer::default();
+        buf.record(sample(7, 0.0));
+        buf.record(sample(7, 0.0));
+        assert!(buf.rate_hz().is_none());
     }
 
     #[test]
