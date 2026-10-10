@@ -121,10 +121,20 @@ _AP_INVALID = 8
 # MAV_AUTOPILOT ids we can decode a guided/offboard mode for.
 _AP_ARDUPILOTMEGA = 3
 _AP_PX4 = 12
-# ArduPilot Copter custom_mode values that accept companion position
-# setpoints: GUIDED and GUIDED_NOGPS.
-_ARDUCOPTER_GUIDED = 4
-_ARDUCOPTER_GUIDED_NOGPS = 20
+# ArduPilot custom_mode numbers are per vehicle firmware, so the guided
+# check picks the table from the heartbeat's MAV_TYPE. Copter: GUIDED (4)
+# and GUIDED_NOGPS (20). Plane (incl. QuadPlane): GUIDED (15); Plane's 4 is
+# ACRO and 20 is QLAND. Rover/boat: GUIDED (15).
+_ARDUCOPTER_GUIDED_MODES = frozenset({4, 20})
+_ARDUPLANE_GUIDED_MODES = frozenset({15})
+_ARDUROVER_GUIDED_MODES = frozenset({15})
+# MAV_TYPE groups. Multirotor/heli: quadrotor, coaxial, helicopter,
+# hexarotor, octorotor, tricopter, dodecarotor, decarotor.
+_MAV_TYPES_COPTER = frozenset({2, 3, 4, 13, 14, 15, 29, 35})
+# Fixed wing and the VTOL types ArduPlane reports for a QuadPlane.
+_MAV_TYPES_PLANE = frozenset({1, 19, 20, 21, 22, 23, 24, 25})
+# Ground rover and surface boat.
+_MAV_TYPES_ROVER = frozenset({10, 11})
 # PX4 packs the main mode into bits 16-23 of custom_mode; OFFBOARD is 6.
 _PX4_MAIN_MODE_OFFBOARD = 6
 
@@ -155,18 +165,24 @@ def _monotonic() -> float:
     return time.monotonic()
 
 
-def _is_guided_mode(autopilot: int, custom_mode: int) -> bool:
-    """Whether ``custom_mode`` is a guided/offboard mode for ``autopilot``.
+def _is_guided_mode(autopilot: int, custom_mode: int, mav_type: int) -> bool:
+    """Whether ``custom_mode`` is a guided/offboard mode for this vehicle.
 
-    Firmware-aware: ArduPilot Copter GUIDED / GUIDED_NOGPS, PX4 OFFBOARD. An
-    autopilot we do not decode returns False so the follow loop reports
-    ``fc_guided`` honestly rather than claiming to command an FC that would
-    ignore the setpoints.
+    Firmware- and vehicle-aware: ArduPilot picks the Copter, Plane or Rover
+    mode table from ``mav_type``; PX4 decodes OFFBOARD from its main mode.
+    An autopilot or vehicle class we do not decode returns False so the
+    follow loop reports ``fc_guided`` honestly rather than claiming to
+    command an FC that would ignore the setpoints.
     """
     if autopilot == _AP_PX4:
         return ((custom_mode >> 16) & 0xFF) == _PX4_MAIN_MODE_OFFBOARD
     if autopilot == _AP_ARDUPILOTMEGA:
-        return custom_mode in (_ARDUCOPTER_GUIDED, _ARDUCOPTER_GUIDED_NOGPS)
+        if mav_type in _MAV_TYPES_COPTER:
+            return custom_mode in _ARDUCOPTER_GUIDED_MODES
+        if mav_type in _MAV_TYPES_PLANE:
+            return custom_mode in _ARDUPLANE_GUIDED_MODES
+        if mav_type in _MAV_TYPES_ROVER:
+            return custom_mode in _ARDUROVER_GUIDED_MODES
     return False
 
 
@@ -446,8 +462,9 @@ class FollowMePlugin:
         base_mode = int(msg.get("base_mode", 0) or 0)
         custom_mode = int(msg.get("custom_mode", 0) or 0)
         autopilot = int(msg["autopilot"])
+        mav_type = int(msg.get("type", 0) or 0)
         self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
-        self._fc.guided = _is_guided_mode(autopilot, custom_mode)
+        self._fc.guided = _is_guided_mode(autopilot, custom_mode, mav_type)
         self._fc.heartbeat.mark(_monotonic())
 
     def _on_mount_orientation(self, delivery: dict[str, Any]) -> None:

@@ -182,9 +182,13 @@ def _global_position(lat_deg: float, lon_deg: float, rel_alt_m: float) -> dict[s
     )
 
 
-def _heartbeat(*, base_mode: int, custom_mode: int, autopilot: int) -> dict[str, Any]:
+def _heartbeat(
+    *, base_mode: int, custom_mode: int, autopilot: int, mav_type: int = 2
+) -> dict[str, Any]:
     return _delivery(
-        mavlink2.MAVLink_heartbeat_message(2, autopilot, base_mode, custom_mode, 4, 3)
+        mavlink2.MAVLink_heartbeat_message(
+            mav_type, autopilot, base_mode, custom_mode, 4, 3
+        )
     )
 
 
@@ -1236,3 +1240,32 @@ def test_an_undecodable_frame_is_ignored() -> None:
     truncated["frame"] = truncated["frame"][:-3]
     plugin._on_attitude(truncated)
     assert plugin._pose.yaw == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize(
+    ("mav_type", "custom_mode", "guided"),
+    [
+        (2, 4, True),  # Copter GUIDED
+        (2, 20, True),  # Copter GUIDED_NOGPS
+        (2, 15, False),  # Copter AUTOROTATE, not guided
+        (1, 15, True),  # Plane GUIDED
+        (20, 15, True),  # QuadPlane (VTOL quadrotor) GUIDED
+        (1, 4, False),  # Plane ACRO
+        (1, 20, False),  # Plane QLAND
+        (20, 20, False),  # QuadPlane QLAND
+        (10, 15, True),  # Rover GUIDED
+        (10, 4, False),  # Rover HOLD
+        (12, 4, False),  # Submarine: no table decoded
+        (0, 4, False),  # MAV_TYPE_GENERIC: unknown vehicle
+    ],
+)
+def test_guided_mode_is_read_from_the_vehicle_mode_table(
+    mav_type: int, custom_mode: int, guided: bool
+) -> None:
+    plugin = _make_plugin(_Ctx())
+    plugin._on_heartbeat(
+        _heartbeat(
+            base_mode=0x81, custom_mode=custom_mode, autopilot=3, mav_type=mav_type
+        )
+    )
+    assert plugin._fc.guided is guided

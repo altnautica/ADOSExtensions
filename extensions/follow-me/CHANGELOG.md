@@ -12,6 +12,12 @@ uses independent semantic versioning per extension.
   `cm5`, `rock-5c-lite`, `rk3588s2`, `rk3576`, `rpi5`, `cubie-a7s`,
   `cubie-a7z`), so the install gate matches probed boards.
 - The documentation link points at the extensions catalog entry.
+- The guided-mode check reads the vehicle class from the autopilot's
+  heartbeat and uses that vehicle's ArduPilot mode numbers. On a plane it
+  previously used Copter numbers, so ACRO and QLAND read as guided and
+  GUIDED did not. Plane and QuadPlane GUIDED, Rover GUIDED and Copter
+  GUIDED/GUIDED_NOGPS are recognised; an unrecognised vehicle never reads
+  as guided.
 
 ## [0.2.9]
 
