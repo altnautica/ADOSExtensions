@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.4.0"
+version: "1.4.1"
 description: "MAVLink Gimbal v2 control: manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 description_long: |
   Drives a MAVLink gimbal-manager (component 154). Beyond manual pitch/yaw
@@ -127,7 +127,7 @@ gcs:
         designate: true
         config_key: aim
         config_value: true
-        default_key: "g"
+        default_key: "j"
     # Cockpit Skills. `aim` and `rate-mode` are toggles (config flag + a state
     # read-back event); `recenter` and `nadir` are one-shot commands the agent
     # fires on the rising edge and then clears.
@@ -149,7 +149,7 @@ gcs:
         toggle: false
         confirm: false
         arm_requirement: any
-        default_binding: { key: "c" }
+        default_binding: { key: "shift+c" }
         activation: { via: config, config_key: recenter }
         state: { via: event, topic: "sensor.gimbal.recenter" }
       - id: nadir
@@ -159,7 +159,7 @@ gcs:
         toggle: false
         confirm: false
         arm_requirement: any
-        default_binding: { key: "v" }
+        default_binding: { key: "shift+v" }
         activation: { via: config, config_key: nadir }
         state: { via: event, topic: "sensor.gimbal.nadir" }
       - id: rate-mode
@@ -169,7 +169,7 @@ gcs:
         toggle: true
         confirm: false
         arm_requirement: any
-        default_binding: { key: "shift+r" }
+        default_binding: { key: "shift+g" }
         activation: { via: config, config_key: rate_mode }
         state: { via: event, topic: "sensor.gimbal.rate_mode" }
     # The camera whose detections the aim servo follows. A registry picker: the

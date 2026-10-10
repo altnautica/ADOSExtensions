@@ -41,7 +41,7 @@ let spot: SpotMeterState = {
 
 definePlugin({
   id: "com.altnautica.thermal-flir-lepton-usb",
-  version: "1.3.1",
+  version: "1.3.2",
   async mount(ctx) {
     mountDom();
     renderActionRail();

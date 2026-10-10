@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.thermal-flir-lepton-usb
 name: "ADOS Thermal Camera FLIR Lepton USB UVC"
-version: "1.3.1"
+version: "1.3.2"
 description: "FLIR Lepton 3.5 radiometric thermal driver, palettes and spot-meter overlay for a PureThermal 2 USB UVC dongle. Capture requires a UVC backend supplied by the agent; without one the extension reports the camera as unavailable."
 description_long: |
   Driver and cockpit surfaces for a FLIR Lepton 3.5 on a PureThermal 2 USB UVC
@@ -101,7 +101,7 @@ gcs:
         toggle: false
         confirm: false
         arm_requirement: any
-        default_binding: { key: "p" }
+        default_binding: { key: "shift+o" }
         activation: { via: config, config_key: palette_cycle }
         state: { via: event, topic: "camera.thermal.palette" }
       - id: ffc
@@ -111,7 +111,7 @@ gcs:
         toggle: false
         confirm: false
         arm_requirement: any
-        default_binding: { key: "shift+f" }
+        default_binding: { key: "shift+i" }
         activation: { via: config, config_key: ffc }
         state: { via: event, topic: "camera.thermal.ffc" }
     # Native settings the agent reads live each control tick.

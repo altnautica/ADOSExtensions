@@ -2,6 +2,13 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.4.1
+
+- Default Skill keys no longer collide with other cockpit bindings: Recenter
+  `shift+c` (was `c`), Nadir `shift+v` (was `v`), Rate mode `shift+g` (was
+  `shift+r`, the Return-to-home chord), and the "Aim at this target" action
+  `j` (was `g`, the Aim Skill key).
+
 ## 1.4.0
 
 - The Gimbal tab shows the gimbal's live attitude. The agent half subscribes to

@@ -9,7 +9,7 @@ attitude plus the laser range up to the flight controller over MAVLink.
 
 from __future__ import annotations
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 PLUGIN_ID = "com.altnautica.siyi-pod"
 

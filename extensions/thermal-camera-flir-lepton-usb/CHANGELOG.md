@@ -2,6 +2,12 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.3.2
+
+- Default Skill keys no longer collide with cockpit bindings: Cycle palette
+  `shift+o` (was `p`, the picture-in-picture toggle) and FFC `shift+i` (was
+  `shift+f`, the Follow-Me Skill key).
+
 ## 1.3.1
 
 - Dropped the `mavlink.component.camera` permission and the component-100

@@ -24,7 +24,7 @@ let rootEl: HTMLElement | null = null;
 
 definePlugin({
   id: "com.altnautica.mavlink-gimbal-v2",
-  version: "1.4.0",
+  version: "1.4.1",
   async mount(ctx) {
     rootEl = document.getElementById("gimbal-root");
     if (!rootEl) {

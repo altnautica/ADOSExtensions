@@ -9,12 +9,13 @@ requires-python = ">=3.11"
 members = [
   "extensions/*/agent",
 ]
-# vision-nav's agent half is a Rust crate, not a python package, so the
-# members glob has to skip it: uv treats a matched directory without a
-# pyproject.toml as a hard workspace error and every `uv run` in the repo
-# fails, not just that extension's.
+# The vision-nav and world-engine agent halves are Rust crates, not python
+# packages, so the members glob has to skip them: uv treats a matched
+# directory without a pyproject.toml as a hard workspace error and every
+# `uv run` in the repo fails, not just that extension's.
 exclude = [
   "extensions/vision-nav/agent",
+  "extensions/world-engine/agent",
 ]
 
 [dependency-groups]

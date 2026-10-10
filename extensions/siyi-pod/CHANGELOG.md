@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+
+- The Cycle palette Skill's default key is `o` (was `p`, which the cockpit
+  reserves for the picture-in-picture toggle, so the Skill was left unbound).
+
 ## 0.5.0
 
 - The flight-controller pose used for laser geolocation is now read. The host
