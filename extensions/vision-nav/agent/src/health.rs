@@ -35,15 +35,6 @@ fn companion_to_estimator_state(state: CompanionState) -> &'static str {
     }
 }
 
-/// The auto-detect summary surfaced verbatim on the heartbeat.
-#[derive(Debug, Clone, Default)]
-pub struct AutodetectSummary {
-    pub suggested_mode: Option<String>,
-    pub suggested_mode_reason: Option<String>,
-    pub detected_camera_count: Option<i32>,
-    pub detected_rangefinder_driver: Option<String>,
-}
-
 /// The mutable snapshot the pipeline refreshes each tick. `to_value`
 /// serializes the `navigation` block (all keys camelCase).
 #[derive(Debug, Clone, Default)]
@@ -63,7 +54,15 @@ pub struct HealthSnapshot {
     pub camera_imu_sync_offset_ms: Option<f32>,
     pub camera_intrinsics_loaded: bool,
     pub pre_arm_report: Option<Value>,
-    pub autodetect: AutodetectSummary,
+    /// MAVLink sends that failed since start.
+    pub emit_errors: u64,
+    /// Why the companion rangefinder cannot read, when it cannot.
+    pub rangefinder_error: Option<String>,
+    /// Inputs the plugin could not wire, e.g.
+    /// `mavlink_subscribe_denied:RAW_IMU`.
+    pub degraded_reasons: Vec<String>,
+    /// Watched flight-controller parameters the FC has reported.
+    pub fc_params: Vec<String>,
 }
 
 impl HealthSnapshot {
@@ -79,8 +78,14 @@ impl HealthSnapshot {
 
         let mut entries: Vec<(Value, Value)> = vec![
             (k("opticalFlowSupported"), Value::Boolean(true)),
-            (k("rangefinderTopology"), opt_str(&self.rangefinder_topology)),
-            (k("recommendedCameraId"), opt_str(&self.recommended_camera_id)),
+            (
+                k("rangefinderTopology"),
+                opt_str(&self.rangefinder_topology),
+            ),
+            (
+                k("recommendedCameraId"),
+                opt_str(&self.recommended_camera_id),
+            ),
             (k("flowQuality"), opt_i32(self.flow_quality)),
             (k("flowRateHz"), opt_f32(self.flow_rate_hz)),
             (k("flowDistanceM"), opt_f32(self.flow_distance_m)),
@@ -88,28 +93,28 @@ impl HealthSnapshot {
             (k("mode"), opt_str(&self.mode)),
             (
                 k("availableEstimators"),
-                Value::Array(self.available_estimators.iter().map(|s| Value::from(s.as_str())).collect()),
+                str_array(&self.available_estimators),
             ),
             (k("estimatorState"), Value::from(estimator_state)),
             (k("flowScaleSource"), opt_str(&self.flow_scale_source)),
             (k("imuSource"), opt_str(&self.imu_source)),
             (k("imuRateHz"), opt_f32(self.imu_rate_hz)),
-            (k("cameraImuSyncOffsetMs"), opt_f32(self.camera_imu_sync_offset_ms)),
-            (k("cameraIntrinsicsLoaded"), Value::Boolean(self.camera_intrinsics_loaded)),
+            (
+                k("cameraImuSyncOffsetMs"),
+                opt_f32(self.camera_imu_sync_offset_ms),
+            ),
+            (
+                k("cameraIntrinsicsLoaded"),
+                Value::Boolean(self.camera_intrinsics_loaded),
+            ),
             (
                 k("preArmReport"),
                 self.pre_arm_report.clone().unwrap_or(Value::Nil),
             ),
-            (k("suggestedMode"), opt_str(&self.autodetect.suggested_mode)),
-            (
-                k("suggestedModeReason"),
-                opt_str(&self.autodetect.suggested_mode_reason),
-            ),
-            (k("detectedCameraCount"), opt_i32(self.autodetect.detected_camera_count)),
-            (
-                k("detectedRangefinderDriver"),
-                opt_str(&self.autodetect.detected_rangefinder_driver),
-            ),
+            (k("emitErrors"), Value::from(self.emit_errors)),
+            (k("rangefinderError"), opt_str(&self.rangefinder_error)),
+            (k("degradedReasons"), str_array(&self.degraded_reasons)),
+            (k("fcParams"), str_array(&self.fc_params)),
         ];
         // Keep insertion order stable for tests.
         entries.shrink_to_fit();
@@ -125,6 +130,9 @@ fn opt_str(s: &Option<String>) -> Value {
         Some(v) => Value::from(v.as_str()),
         None => Value::Nil,
     }
+}
+fn str_array(v: &[String]) -> Value {
+    Value::Array(v.iter().map(|s| Value::from(s.as_str())).collect())
 }
 fn opt_i32(v: Option<i32>) -> Value {
     match v {
@@ -145,7 +153,10 @@ mod tests {
 
     fn field<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
         match v {
-            Value::Map(e) => e.iter().find(|(k, _)| k.as_str() == Some(key)).map(|(_, val)| val),
+            Value::Map(e) => e
+                .iter()
+                .find(|(k, _)| k.as_str() == Some(key))
+                .map(|(_, val)| val),
             _ => None,
         }
     }
@@ -162,11 +173,20 @@ mod tests {
         let v = snap.to_value();
         assert_eq!(field(&v, "mode").unwrap().as_str(), Some("optical_flow"));
         assert_eq!(field(&v, "flowQuality").unwrap().as_i64(), Some(120));
-        assert_eq!(field(&v, "companionState").unwrap().as_str(), Some("active"));
+        assert_eq!(
+            field(&v, "companionState").unwrap().as_str(),
+            Some("active")
+        );
         // Active companion maps the GCS estimator state to converged.
-        assert_eq!(field(&v, "estimatorState").unwrap().as_str(), Some("converged"));
+        assert_eq!(
+            field(&v, "estimatorState").unwrap().as_str(),
+            Some("converged")
+        );
         // The block advertises optical flow and nothing else.
-        assert_eq!(field(&v, "opticalFlowSupported").unwrap().as_bool(), Some(true));
+        assert_eq!(
+            field(&v, "opticalFlowSupported").unwrap().as_bool(),
+            Some(true)
+        );
     }
 
     #[test]
@@ -175,6 +195,10 @@ mod tests {
         let v = snap.to_value();
         assert!(matches!(field(&v, "flowDistanceM"), Some(Value::Nil)));
         assert!(matches!(field(&v, "imuSource"), Some(Value::Nil)));
+        assert!(matches!(field(&v, "flowQuality"), Some(Value::Nil)));
+        assert!(matches!(field(&v, "rangefinderError"), Some(Value::Nil)));
+        assert_eq!(field(&v, "emitErrors").unwrap().as_u64(), Some(0));
+        assert!(field(&v, "suggestedMode").is_none());
     }
 
     #[test]

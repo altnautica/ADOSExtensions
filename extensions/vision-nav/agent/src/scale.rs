@@ -1,20 +1,21 @@
 //! Rangefinder-free altitude ladder.
 //!
 //! `optical_flow_degraded` runs the same flow tracker but pulls scale
-//! from a four-rung ladder instead of a dedicated rangefinder. The
+//! from a ladder instead of a dedicated rangefinder. The
 //! pipeline feeds the ladder decoded MAVLink fields
 //! (`GLOBAL_POSITION_INT.relative_alt`, `VFR_HUD.alt`,
 //! `GPS_RAW_INT.{alt,fix_type,eph}`); each [`pick`](ScaleLadder::pick)
 //! walks the rungs and returns the first healthy one, falling back to a
 //! static value so the estimator can always emit at the lowest quality
-//! rather than refuse to feed the EKF.
+//! rather than refuse to feed the EKF. The GPS rung runs only in outdoor
+//! mode (the `outdoor` config key); its height is relative to the first
+//! 3D-fix sample, never AMSL.
 //!
 //! Per-rung quality multipliers (the EKF auto-de-weights degraded
 //! rungs): relative_alt 0.7, raw baro 0.6, GPS 0.4, static 0.2.
 //! Distance is clamped to `[0.3, 50.0]` m so a glitch reading does not
 //! produce a runaway scale.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 pub const STALE_THRESHOLD_NS: i64 = 2_000_000_000;
@@ -29,6 +30,8 @@ pub const QM_STATIC: f32 = 0.2;
 
 pub const GPS_FIX_TYPE_3D: i32 = 3;
 pub const GPS_EPH_MAX_CM: i32 = 200;
+/// Ceiling on the GPS rung's height above the first fix, metres.
+pub const GPS_MAX_HEIGHT_M: f32 = 50.0;
 
 /// Which rung produced a scale value. The GCS sensors card surfaces it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,7 +63,7 @@ pub struct ScalePick {
 /// The MAVLink-derived ladder. `now_ns` is injected into `pick` so the
 /// staleness gates are deterministic in tests.
 pub struct ScaleLadder {
-    outdoor: AtomicBool,
+    outdoor: bool,
     static_fallback_m: f32,
     inner: Mutex<Inner>,
 }
@@ -71,21 +74,17 @@ struct Inner {
     vfr_alt: Option<(f32, i64)>,
     gps_alt: Option<(f32, i64)>,
     takeoff_alt: Option<f32>,
+    gps_ref_alt: Option<f32>,
     gps_meta: Option<(i32, i32)>, // (fix_type, eph_cm)
 }
 
 impl ScaleLadder {
     pub fn new(outdoor: bool) -> Self {
         Self {
-            outdoor: AtomicBool::new(outdoor),
+            outdoor,
             static_fallback_m: DEFAULT_STATIC_FALLBACK_M,
             inner: Mutex::new(Inner::default()),
         }
-    }
-
-    /// GCS toggle: enables / disables the GPS rung at runtime.
-    pub fn set_outdoor(&self, value: bool) {
-        self.outdoor.store(value, Ordering::Relaxed);
     }
 
     /// `GLOBAL_POSITION_INT.relative_alt` in millimetres.
@@ -109,16 +108,22 @@ impl ScaleLadder {
         g.vfr_alt = Some((metres, now_ns));
     }
 
-    /// `GPS_RAW_INT.{alt(mm), fix_type, eph(cm)}`.
+    /// `GPS_RAW_INT.{alt(mm), fix_type, eph(cm)}`. The first sample
+    /// with a good 3D fix becomes the reference; later samples report
+    /// their height above it, clamped to `[0, GPS_MAX_HEIGHT_M]`. Until a
+    /// reference exists no GPS height is recorded.
     pub fn on_gps_raw(&self, alt_mm: i64, fix_type: i32, eph_cm: i32, now_ns: i64) {
         let alt_m = alt_mm as f32 / 1000.0;
+        let good = fix_type >= GPS_FIX_TYPE_3D && eph_cm <= GPS_EPH_MAX_CM;
         let mut g = self.inner.lock().expect("ladder lock");
-        let metres = match g.takeoff_alt {
-            Some(t) => alt_m - t,
-            None => alt_m,
-        };
-        g.gps_alt = Some((metres, now_ns));
         g.gps_meta = Some((fix_type, eph_cm));
+        if g.gps_ref_alt.is_none() && good {
+            g.gps_ref_alt = Some(alt_m);
+        }
+        if let Some(reference) = g.gps_ref_alt {
+            let height = (alt_m - reference).clamp(0.0, GPS_MAX_HEIGHT_M);
+            g.gps_alt = Some((height, now_ns));
+        }
     }
 
     /// Walk the ladder at `now_ns`; return the first healthy rung or
@@ -147,7 +152,7 @@ impl ScaleLadder {
             }
         }
         // Rung 3: GPS alt, gated on outdoor flag + 3D fix + HDOP.
-        if self.outdoor.load(Ordering::Relaxed) {
+        if self.outdoor {
             if let (Some((v, t)), Some((fix, eph))) = (g.gps_alt, g.gps_meta) {
                 if now_ns - t <= STALE_THRESHOLD_NS
                     && fix >= GPS_FIX_TYPE_3D
@@ -212,6 +217,24 @@ mod tests {
         let p = outdoor.pick(0);
         assert_eq!(p.source, ScaleRung::Gps);
         assert_eq!(p.quality_multiplier, QM_GPS);
+    }
+
+    #[test]
+    fn gps_rung_relative_to_first_fix() {
+        let l = ScaleLadder::new(true);
+        // A 2D fix sets no reference and records no height.
+        l.on_gps_raw(150_000, 2, 100, 0);
+        assert_eq!(l.pick(0).source, ScaleRung::Static);
+        // First good 3D fix at 152 m AMSL is the reference.
+        l.on_gps_raw(152_000, 3, 100, 0);
+        // 4 m above it reports 4 m, not the AMSL altitude.
+        l.on_gps_raw(156_000, 3, 100, 0);
+        let p = l.pick(0);
+        assert_eq!(p.source, ScaleRung::Gps);
+        assert!((p.distance_m - 4.0).abs() < 1e-3, "{}", p.distance_m);
+        // Far above the reference clamps to the ceiling.
+        l.on_gps_raw(400_000, 3, 100, 0);
+        assert!((l.pick(0).distance_m - GPS_MAX_HEIGHT_M).abs() < 1e-3);
     }
 
     #[test]

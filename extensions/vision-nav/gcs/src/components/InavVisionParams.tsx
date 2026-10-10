@@ -17,7 +17,7 @@ const GROUPS: ParamGroup[] = [
       {
         id: "opflow_hardware",
         description:
-          "Optical flow driver. Set to MAVLINK to consume the plugin's OPTICAL_FLOW_RAD messages over the FC's MAVLink rx UART.",
+          "Optical flow driver. Set to MAVLINK to consume the plugin's OPTICAL_FLOW messages over the FC's MAVLink rx UART.",
       },
       {
         id: "opflow_scale",
@@ -64,7 +64,7 @@ const GROUPS: ParamGroup[] = [
 ];
 
 const NOTE_LINES: string[] = [
-  "iNav 7.0 or newer is required for OPTICAL_FLOW_RAD reception over MAVLink rx.",
+  "iNav 7.0 or newer is required for OPTICAL_FLOW reception over MAVLink rx.",
   "Set the FC's serial port function to MAVLINK on the UART wired to the ADOS Drone Agent.",
   "The plugin's component id is 198. iNav accepts the message from any component when opflow_hardware = MAVLINK.",
 ];

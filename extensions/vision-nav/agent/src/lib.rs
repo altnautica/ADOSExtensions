@@ -13,6 +13,8 @@
 //!
 //! - [`config`] — per-drone config model + validation (mirrors
 //!   `config-schema.json`).
+//! - [`live_config`] — the live per-drone keys and the restart-on-change
+//!   watcher.
 //! - [`framing`] — luma extraction from the shared bus frame formats.
 //! - [`flow`] — Lucas-Kanade pyramidal optical-flow tracker.
 //! - [`estimator`] — the [`estimator::Estimator`] contract +
@@ -20,11 +22,12 @@
 //! - [`estimators`] — the three modes (off, optical_flow,
 //!   optical_flow_degraded) + the registry.
 //! - [`scale`] — the rangefinder-free altitude ladder.
-//! - [`rangefinder`] — UART/I2C rangefinder drivers + the FC relay.
+//! - [`rangefinder`] — the TF-Luna UART reader + the FC relay.
 //! - [`imu`] — IMU source (MAVLink RAW_IMU) + frame/IMU time aligner.
 //! - [`clock_align`] — TIMESYNC clock alignment to FC time.
-//! - [`mavlink_emit`] — OPTICAL_FLOW_RAD / DISTANCE_SENSOR / TIMESYNC /
-//!   HEARTBEAT builders + the component router.
+//! - [`mavlink_emit`] — OPTICAL_FLOW / OPTICAL_FLOW_RAD /
+//!   DISTANCE_SENSOR / TIMESYNC / HEARTBEAT / stream-interval builders +
+//!   the firmware-aware component router.
 //! - [`pre_arm`] — the mode-aware pre-arm gate.
 //! - [`health`] — the `navigation` heartbeat snapshot.
 //! - [`pipeline`] — the per-frame runtime loop that ties it together.
@@ -37,6 +40,7 @@ pub mod flow;
 pub mod framing;
 pub mod health;
 pub mod imu;
+pub mod live_config;
 pub mod mavlink_emit;
 pub mod pipeline;
 pub mod pre_arm;

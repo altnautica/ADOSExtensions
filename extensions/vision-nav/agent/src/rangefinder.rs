@@ -1,22 +1,23 @@
 //! Rangefinder drivers.
 //!
-//! A rangefinder gives the optical-flow modes a metric scale. Four
+//! A rangefinder gives the optical-flow modes a metric scale. Two
 //! sources are supported:
 //!
 //! * `fc_relay` — the flight controller already publishes
 //!   `DISTANCE_SENSOR`; the plugin relays the latest reading. This is
 //!   the default topology and the universal path (no extra wiring).
-//! * `tfluna_uart` — Benewake TF-Luna over UART. The 9-byte frame
-//!   parser is pure and fully ported.
-//! * `garmin_lidarlite_i2c` / `vl53l1x_i2c` — I2C sensors. The register
-//!   protocol needs raw `/dev/i2c-*` ioctls (the plugin SDK does not
-//!   yet expose an I2C facade), so these are documented stubs that fail
-//!   safe by returning no reading; see [`I2cRangefinder`]. The
-//!   `fc_relay` path covers I2C sensors wired to the FC instead.
+//! * `tfluna_uart` — Benewake TF-Luna on a companion serial port. A
+//!   blocking reader task owns the port (raw 8N1 at the configured
+//!   baud) and fills a latest-reading cell; the frame worker only reads
+//!   the cell, so it never blocks on the TTY.
 //!
-//! The pipeline reads [`Rangefinder::read`] per frame.
+//! An I2C rangefinder is wired to the flight controller and read through
+//! `fc_relay`. The pipeline reads [`Rangefinder::read`] per frame.
 
-use std::sync::Mutex;
+use std::io::Read;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 /// One distance measurement.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -34,6 +35,11 @@ pub trait Rangefinder: Send {
     fn min_range_m(&self) -> f32;
     fn max_range_m(&self) -> f32;
     fn name(&self) -> &'static str;
+    /// Why the source cannot produce readings (for example the serial
+    /// port does not open), or `None` when it is healthy.
+    fn error(&self) -> Option<String> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -121,10 +127,18 @@ impl Rangefinder for RelayDistanceSensor {
         self.read_shared()
     }
     fn min_range_m(&self) -> f32 {
-        self.inner.lock().expect("relay lock").last_min_m.unwrap_or(RELAY_FALLBACK_MIN_M)
+        self.inner
+            .lock()
+            .expect("relay lock")
+            .last_min_m
+            .unwrap_or(RELAY_FALLBACK_MIN_M)
     }
     fn max_range_m(&self) -> f32 {
-        self.inner.lock().expect("relay lock").last_max_m.unwrap_or(RELAY_FALLBACK_MAX_M)
+        self.inner
+            .lock()
+            .expect("relay lock")
+            .last_max_m
+            .unwrap_or(RELAY_FALLBACK_MAX_M)
     }
     fn name(&self) -> &'static str {
         "fc_relay"
@@ -183,79 +197,135 @@ pub fn find_tfluna_frame(buffer: &[u8]) -> (Option<[u8; TFLUNA_FRAME_LEN]>, Vec<
     (None, buffer[tail_start..].to_vec())
 }
 
-/// TF-Luna over a UART device. The frame parser above is the tested
-/// core; the live driver opens the serial node and drains it per read.
+/// Retry interval for a TF-Luna port that is absent or failed.
+pub const TFLUNA_RETRY: Duration = Duration::from_secs(2);
+const TFLUNA_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const TFLUNA_STALE_AFTER: Duration = Duration::from_millis(200);
+
+/// The latest TF-Luna reading: distance (m), quality (0..100), and when
+/// it arrived.
+pub type TfLunaCell = Arc<Mutex<Option<(f32, i32, Instant)>>>;
+
+/// TF-Luna over a serial port. [`TfLunaUart::spawn`] starts the reader
+/// on a blocking task; dropping the handle stops it.
 pub struct TfLunaUart {
-    device: String,
-    baud: u32,
-    file: Option<std::fs::File>,
-    buffer: Vec<u8>,
+    cell: TfLunaCell,
+    error: Arc<Mutex<Option<String>>>,
+    attempts: Arc<AtomicU64>,
+    stop: Arc<AtomicBool>,
 }
 
 impl TfLunaUart {
-    pub fn new(device: impl Into<String>, baud: u32) -> Self {
-        Self {
-            device: device.into(),
-            baud,
-            file: None,
-            buffer: Vec::new(),
-        }
+    /// Start the reader for `device` at `baud`. Opening is retried every
+    /// [`TFLUNA_RETRY`] with no cap; a failure is reported by
+    /// [`Rangefinder::error`] until the port opens.
+    pub fn spawn(device: impl Into<String>, baud: u32) -> Self {
+        let device = device.into();
+        let me = Self {
+            cell: Arc::new(Mutex::new(None)),
+            error: Arc::new(Mutex::new(None)),
+            attempts: Arc::new(AtomicU64::new(0)),
+            stop: Arc::new(AtomicBool::new(false)),
+        };
+        let (cell, error, attempts, stop) = (
+            me.cell.clone(),
+            me.error.clone(),
+            me.attempts.clone(),
+            me.stop.clone(),
+        );
+        tokio::task::spawn_blocking(move || {
+            while !stop.load(Ordering::Relaxed) {
+                attempts.fetch_add(1, Ordering::Relaxed);
+                let opened = serialport::new(device.as_str(), baud)
+                    .data_bits(serialport::DataBits::Eight)
+                    .parity(serialport::Parity::None)
+                    .stop_bits(serialport::StopBits::One)
+                    .flow_control(serialport::FlowControl::None)
+                    .timeout(TFLUNA_READ_TIMEOUT)
+                    .open();
+                let why = match opened {
+                    Ok(mut port) => {
+                        eprintln!("vision-nav: tfluna opened {device} at {baud} baud 8N1");
+                        *error.lock().expect("tfluna error lock") = None;
+                        let e = read_tfluna_stream(&mut port, &cell, &stop);
+                        format!("tfluna {device} read failed: {e}")
+                    }
+                    Err(e) => format!("tfluna {device} open failed: {e}"),
+                };
+                if stop.load(Ordering::Relaxed) {
+                    return;
+                }
+                let mut slot = error.lock().expect("tfluna error lock");
+                if slot.as_deref() != Some(why.as_str()) {
+                    eprintln!(
+                        "vision-nav: {why}; retrying every {}s",
+                        TFLUNA_RETRY.as_secs()
+                    );
+                }
+                *slot = Some(why);
+                drop(slot);
+                std::thread::sleep(TFLUNA_RETRY);
+            }
+        });
+        me
     }
 
-    /// Open the serial node. The serial line discipline (baud,
-    /// 8N1, raw) is left to the system default `stty`/agent provisioning
-    /// for the device; the TF-Luna ships 115200 8N1 out of the box,
-    /// which is the common bench config. Returns whether the node
-    /// opened.
-    pub fn open(&mut self) -> bool {
-        match std::fs::OpenOptions::new().read(true).open(&self.device) {
-            Ok(f) => {
-                eprintln!(
-                    "vision-nav: tfluna opened {} (expecting {} baud 8N1)",
-                    self.device, self.baud
-                );
-                self.file = Some(f);
-                true
+    /// How many times the reader has tried to open the port.
+    pub fn open_attempts(&self) -> u64 {
+        self.attempts.load(Ordering::Relaxed)
+    }
+}
+
+impl Drop for TfLunaUart {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Drain `port` into `cell` until a read fails (a read timeout is not a
+/// failure) or `stop` is set. Returns the error that ended the stream.
+pub fn read_tfluna_stream<R: Read + ?Sized>(
+    port: &mut R,
+    cell: &TfLunaCell,
+    stop: &AtomicBool,
+) -> std::io::Error {
+    let mut buffer: Vec<u8> = Vec::with_capacity(64);
+    let mut chunk = [0u8; 64];
+    loop {
+        if stop.load(Ordering::Relaxed) {
+            return std::io::Error::new(std::io::ErrorKind::Interrupted, "stopped");
+        }
+        match port.read(&mut chunk) {
+            Ok(0) => std::thread::sleep(TFLUNA_READ_TIMEOUT),
+            Ok(n) => {
+                buffer.extend_from_slice(&chunk[..n]);
+                loop {
+                    let (frame, remaining) = find_tfluna_frame(&buffer);
+                    buffer = remaining;
+                    let Some(f) = frame else { break };
+                    if let Some((d, q, _sig)) = parse_tfluna_frame(&f) {
+                        *cell.lock().expect("tfluna cell lock") = Some((d, q, Instant::now()));
+                    }
+                }
             }
-            Err(e) => {
-                eprintln!("vision-nav: tfluna open {} failed: {e}", self.device);
-                false
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => {}
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return e,
         }
     }
 }
 
 impl Rangefinder for TfLunaUart {
     fn read(&mut self) -> Option<RangeReading> {
-        use std::io::Read;
-        let file = self.file.as_mut()?;
-        let mut chunk = [0u8; 64];
-        if let Ok(n) = file.read(&mut chunk) {
-            self.buffer.extend_from_slice(&chunk[..n]);
-            // Bound the buffer.
-            if self.buffer.len() > 256 {
-                let drop = self.buffer.len() - 256;
-                self.buffer.drain(0..drop);
-            }
+        let (distance_m, quality, at) = (*self.cell.lock().expect("tfluna cell lock"))?;
+        if at.elapsed() > TFLUNA_STALE_AFTER {
+            return None;
         }
-        let mut latest: Option<(f32, i32, i32)> = None;
-        loop {
-            let (frame, remaining) = find_tfluna_frame(&self.buffer);
-            self.buffer = remaining;
-            match frame {
-                Some(f) => {
-                    if let Some(parsed) = parse_tfluna_frame(&f) {
-                        latest = Some(parsed);
-                    }
-                }
-                None => break,
-            }
-        }
-        let (distance_m, quality, _sig) = latest?;
+        let age_ns = at.elapsed().as_nanos() as i64;
         Some(RangeReading {
             distance_m,
             quality,
-            timestamp_monotonic_ns: crate::mavlink_emit::monotonic_ns(),
+            timestamp_monotonic_ns: crate::mavlink_emit::monotonic_ns() - age_ns,
         })
     }
     fn min_range_m(&self) -> f32 {
@@ -267,63 +337,8 @@ impl Rangefinder for TfLunaUart {
     fn name(&self) -> &'static str {
         "tfluna_uart"
     }
-    // baud is captured for future termios configuration once the
-    // hardware.uart facade exposes line-discipline control.
-}
-
-// ---------------------------------------------------------------------------
-// I2C rangefinders (documented stubs — fail safe)
-// ---------------------------------------------------------------------------
-
-/// Garmin LIDAR-Lite / ST VL53L1X over I2C.
-///
-/// TODO: Rust-native I2C register access. The Garmin LIDAR-Lite and the
-/// VL53L1X both need raw `/dev/i2c-*` register reads (SMBus ioctls); the
-/// plugin SDK does not yet expose an I2C facade, and the prior Python
-/// drivers leaned on `smbus2` / the upstream `VL53L1X` library. Until an
-/// I2C facade lands, an I2C-wired rangefinder should be wired to the FC
-/// instead and consumed through the `fc_relay` topology, which is fully
-/// supported. This stub fails safe: [`read`](Rangefinder::read) always
-/// returns `None`, so the OF estimator falls back to the
-/// `optical_flow_degraded` scale ladder rather than feeding a wrong
-/// distance into the EKF.
-pub struct I2cRangefinder {
-    name: &'static str,
-    min_m: f32,
-    max_m: f32,
-}
-
-impl I2cRangefinder {
-    pub fn garmin_lidarlite(_bus: u32) -> Self {
-        Self {
-            name: "garmin_lidarlite_i2c",
-            min_m: 0.05,
-            max_m: 40.0,
-        }
-    }
-    pub fn vl53l1x(_bus: u32) -> Self {
-        Self {
-            name: "vl53l1x_i2c",
-            min_m: 0.04,
-            max_m: 4.0,
-        }
-    }
-}
-
-impl Rangefinder for I2cRangefinder {
-    fn read(&mut self) -> Option<RangeReading> {
-        // Fail safe: no reading until the I2C facade lands. Never a
-        // fabricated distance into the EKF.
-        None
-    }
-    fn min_range_m(&self) -> f32 {
-        self.min_m
-    }
-    fn max_range_m(&self) -> f32 {
-        self.max_m
-    }
-    fn name(&self) -> &'static str {
-        self.name
+    fn error(&self) -> Option<String> {
+        self.error.lock().expect("tfluna error lock").clone()
     }
 }
 
@@ -388,17 +403,72 @@ mod tests {
     #[test]
     fn relay_fresh_reading_passes() {
         let relay = RelayDistanceSensor::new();
-        relay.on_distance(150, Some(20), Some(800), 10, crate::mavlink_emit::monotonic_ns());
+        relay.on_distance(
+            150,
+            Some(20),
+            Some(800),
+            10,
+            crate::mavlink_emit::monotonic_ns(),
+        );
         let mut r = relay;
         let reading = r.read().unwrap();
         assert!((reading.distance_m - 1.5).abs() < 1e-4);
         assert_eq!(reading.quality, 90);
     }
 
+    /// A reader that yields a few chunks and then fails.
+    struct Scripted(Vec<Vec<u8>>);
+    impl Read for Scripted {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gone"));
+            }
+            let chunk = self.0.remove(0);
+            buf[..chunk.len()].copy_from_slice(&chunk);
+            Ok(chunk.len())
+        }
+    }
+
     #[test]
-    fn i2c_stub_fails_safe() {
-        let mut g = I2cRangefinder::garmin_lidarlite(1);
-        assert!(g.read().is_none());
-        assert_eq!(g.name(), "garmin_lidarlite_i2c");
+    fn tfluna_stream_fills_the_cell_across_split_reads() {
+        let packet = tfluna_packet(250, 8000);
+        let mut port = Scripted(vec![packet[..4].to_vec(), packet[4..].to_vec()]);
+        let cell: TfLunaCell = Arc::new(Mutex::new(None));
+        let err = read_tfluna_stream(&mut port, &cell, &AtomicBool::new(false));
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+        let (d, _q, _at) = cell.lock().unwrap().unwrap();
+        assert!((d - 2.5).abs() < 1e-4);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn tfluna_reader_pty() {
+        use std::io::Write;
+        let (mut master, mut slave) = serialport::TTYPort::pair().expect("pty pair");
+        let cell: TfLunaCell = Arc::new(Mutex::new(None));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (c, s) = (cell.clone(), stop.clone());
+        let reader = std::thread::spawn(move || {
+            serialport::SerialPort::set_timeout(&mut slave, TFLUNA_READ_TIMEOUT).unwrap();
+            read_tfluna_stream(&mut slave, &c, &s)
+        });
+        master.write_all(&tfluna_packet(180, 9000)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while cell.lock().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        stop.store(true, Ordering::Relaxed);
+        reader.join().unwrap();
+        let (d, _q, _at) = cell.lock().unwrap().expect("reading over the pty");
+        assert!((d - 1.8).abs() < 1e-4);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn tfluna_absent_retries() {
+        let mut rf = TfLunaUart::spawn("/dev/ttyUSB99-absent", 115_200);
+        tokio::time::sleep(TFLUNA_RETRY + Duration::from_millis(500)).await;
+        assert!(rf.open_attempts() >= 2, "attempts {}", rf.open_attempts());
+        assert!(rf.error().unwrap().contains("open failed"));
+        assert!(rf.read().is_none());
     }
 }

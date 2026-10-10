@@ -17,7 +17,7 @@ export type EstimatorState =
   | "degraded"
   | "failed";
 
-export type ScaleSource = "rangefinder" | "baro" | "gps" | "vision";
+export type ScaleSource = "rangefinder" | "baro" | "gps" | "vision" | "static";
 
 export type ImuSourceId =
   | "mavlink-raw-imu"
@@ -67,19 +67,16 @@ export interface VisionNavTelemetry {
   /** Aggregate pre-arm report from the gate. The GCS pre-arm card
    * renders each check with its severity and detail string. */
   preArmReport?: PreArmReport;
-  /** Mode the agent's auto-detect pass recommends for the host's
-   * current hardware. The GCS ModeCard renders this as the default
-   * selection when the operator has not picked one explicitly. */
-  suggestedMode?: string;
-  /** One-line explanation of why the suggestion was picked. Surfaced
-   * on the ModeCard tooltip. */
-  suggestedModeReason?: string;
-  /** Number of cameras the auto-detect pass found on the host. */
-  detectedCameraCount?: number;
-  /** Driver name of the rangefinder the auto-detect pass selected,
-   * or ``null`` when none was detected and the plugin fell back to
-   * FC relay or the baro/GPS scale ladder. */
-  detectedRangefinderDriver?: string | null;
+  /** MAVLink sends that failed since the plugin started. */
+  emitErrors?: number;
+  /** Why the companion rangefinder cannot read, or ``null``. */
+  rangefinderError?: string | null;
+  /** Inputs the plugin could not wire, e.g.
+   * ``mavlink_subscribe_denied:RAW_IMU``. */
+  degradedReasons?: string[];
+  /** Watched flight-controller parameters the FC has reported
+   * (``EKF2_OF_CTRL``, ``EKF2_AID_MASK``). */
+  fcParams?: string[];
 }
 
 export type PreArmCheckSeverity = "ok" | "pending" | "blocking";

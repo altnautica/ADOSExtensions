@@ -5,6 +5,7 @@ import { PluginClient, type PluginContext } from "@altnautica/plugin-sdk";
 import { MemoryTransport } from "@altnautica/plugin-sdk";
 
 import { NavigationTab } from "../src/components/NavigationTab";
+import { firmwareFromConfig } from "../src/firmware";
 import type { VisionNavTelemetry } from "../src/types";
 
 function fakeCtx(locale: Record<string, string> = {}): PluginContext {
@@ -196,5 +197,87 @@ describe("NavigationTab", () => {
     expect(screen.queryByTestId("vn-inav-params")).toBeNull();
     expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
     expect(screen.queryByTestId("vn-px4-params")).toBeNull();
+  });
+
+  it("shows the static-scale banner with the source-set suggestion", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({
+          estimatorState: "degraded",
+          flowScaleSource: "static",
+          flowQuality: 120,
+        })}
+      />,
+    );
+    const banner = screen.getByTestId("vn-fallback-banner-degraded");
+    expect(banner.textContent).toContain(
+      "No live altitude source; the flow scale is a fixed 1.5 m estimate.",
+    );
+    expect(banner.textContent).toContain(
+      "Land, or switch the flight controller back to GPS with your RC source-set switch.",
+    );
+    expect(banner.textContent).not.toContain("Switch to GPS mode");
+  });
+
+  it("describes the degraded mode's baro / GPS (outdoor) ladder", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({
+          availableEstimators: ["off", "optical_flow", "optical_flow_degraded"],
+        })}
+      />,
+    );
+    expect(screen.getByTestId("vn-mode-optical_flow_degraded").title).toContain(
+      "baro / GPS (outdoor) ladder",
+    );
+  });
+
+  it("px4 params render the EKF2 rows the flight controller reports", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="px4"
+        telemetryOverride={mkTelemetry({ fcParams: ["EKF2_OF_CTRL"] })}
+      />,
+    );
+    const card = screen.getByTestId("vn-px4-params");
+    expect(card.textContent).toContain("EKF2_OF_CTRL");
+    expect(card.textContent).not.toContain("EKF2_AID_MASK");
+    expect(card.textContent).toContain("SENS_FLOW_MAXR");
+    cleanup();
+
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="px4"
+        telemetryOverride={mkTelemetry({ fcParams: ["EKF2_AID_MASK"] })}
+      />,
+    );
+    const legacy = screen.getByTestId("vn-px4-params");
+    expect(legacy.textContent).toContain("EKF2_AID_MASK");
+    expect(legacy.textContent).not.toContain("EKF2_OF_CTRL");
+  });
+
+  it("firmware.type px4 renders Px4VisionParams", () => {
+    const firmware = firmwareFromConfig({ firmware: { type: "px4" } });
+    expect(firmware).toBe("px4");
+    expect(firmwareFromConfig({ firmware: { type: "betafly" } })).toBeNull();
+    expect(firmwareFromConfig({})).toBeNull();
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware={firmware ?? "ardupilot"}
+        telemetryOverride={mkTelemetry()}
+      />,
+    );
+    expect(screen.getByTestId("vn-px4-params")).toBeTruthy();
+    expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
   });
 });

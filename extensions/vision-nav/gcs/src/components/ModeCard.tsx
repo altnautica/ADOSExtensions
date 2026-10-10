@@ -50,7 +50,8 @@ const ALL_MODES: ModeOption[] = [
     label: "Optical Flow",
     description:
       "Downward camera plus a rangefinder. Lucas-Kanade tracker " +
-      "feeds OPTICAL_FLOW_RAD to the EKF. The default GPS-denied path.",
+      "feeds the EKF (OPTICAL_FLOW on ArduPilot and iNav, " +
+      "OPTICAL_FLOW_RAD on PX4). The default GPS-denied path.",
     needs: "Downward USB or CSI camera and a rangefinder.",
   },
   {
@@ -58,7 +59,7 @@ const ALL_MODES: ModeOption[] = [
     label: "Optical Flow (degraded)",
     description:
       "Same tracker as Optical Flow, but the scale comes from the " +
-      "baro / GPS ladder instead of a rangefinder. Reduced accuracy; " +
+      "baro / GPS (outdoor) ladder instead of a rangefinder. Reduced accuracy; " +
       "the GCS marks the estimator state as degraded.",
     needs: "Downward camera. No rangefinder required.",
   },

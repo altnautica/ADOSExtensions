@@ -113,7 +113,7 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
       {props.firmware === "ardupilot" ? (
         <ArduPilotVisionParams />
       ) : props.firmware === "px4" ? (
-        <Px4VisionParams />
+        <Px4VisionParams fcParams={telemetry.fcParams} />
       ) : props.firmware === "inav" ? (
         <InavVisionParams />
       ) : props.firmware === "betaflight" ? (

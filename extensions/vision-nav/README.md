@@ -7,9 +7,11 @@ rangefinder, optical flow without one, and off.
 The agent half is a compiled **Rust** binary. It does not open a
 camera: it subscribes to the shared vision frame bus, pairs each frame
 with the closest IMU sample, runs the selected estimator, and emits the
-`OPTICAL_FLOW_RAD` (and, when the rangefinder is companion-wired,
-`DISTANCE_SENSOR`) messages that ArduPilot, PX4, and iNav fuse into
-their estimators. The GCS half mounts a node-detail tab with the mode
+flow message for the configured firmware (`OPTICAL_FLOW` for ArduPilot
+and iNav, `OPTICAL_FLOW_RAD` for PX4; plus `DISTANCE_SENSOR` when the
+rangefinder is companion-wired) that the flight controller fuses into
+its estimator. It asks the flight controller for `RAW_IMU` at 100 Hz
+and `DISTANCE_SENSOR` at 20 Hz. The GCS half mounts a node-detail tab with the mode
 list, sensors card, estimator card, telemetry charts, pre-arm status,
 and a fallback banner that fires when the estimator goes degraded or
 fails.
@@ -29,10 +31,12 @@ before it goes onto a vehicle.
 | `optical_flow_degraded` | Lucas-Kanade | downward | gyro | optional | comp 198 |
 
 `optical_flow_degraded` is the rangefinder-free path. Scale comes
-from a four-rung ladder (baro from `GLOBAL_POSITION_INT.relative_alt`,
-raw baro from `VFR_HUD.alt`, GPS altitude when outdoors with a
-healthy 3D fix, or a 1.5 m static fallback) with per-rung quality
-multipliers so the EKF auto-de-weights degraded scale sources.
+from a ladder: baro from `GLOBAL_POSITION_INT.relative_alt`, raw baro
+from `VFR_HUD.alt`, then (only with `outdoor: true`) GPS height above
+the first good 3D fix, then a 1.5 m static fallback. Each rung carries
+a quality multiplier so the EKF de-weights degraded scale sources. The
+static rung blocks the pre-arm scale check; the pre-arm gate is
+advisory and does not stop the flight controller from arming.
 
 Public docs (full mode breakdown, per-mode pre-arm matrix, fallback
 ladder, calibration walkthrough, troubleshooting decision trees,
@@ -48,9 +52,10 @@ architecture reference) live at:
 
 - ArduPilot Copter, Plane, Rover 4.5 and newer
 - PX4 1.14 and newer
+- iNav 7.0 and newer
 
-The plugin auto-detects the active firmware and tunes its MAVLink
-output accordingly.
+The firmware is selected in the plugin config (`firmware.type`); it
+picks the flow message the plugin emits.
 
 ## Supported cameras
 
@@ -63,11 +68,13 @@ output accordingly.
 
 When a rangefinder is wired, the OF modes consume:
 
-- TF-Luna over UART
-- Garmin LIDAR-Lite v3 / v4 over I2C
-- ST VL53L1X over I2C
+- TF-Luna over a companion serial port (raw 8N1 at the configured baud)
 - `fc_relay`: the FC owns the rangefinder and the plugin reads its
-  `DISTANCE_SENSOR` stream
+  `DISTANCE_SENSOR` stream. An I2C rangefinder is wired to the FC and
+  read this way.
+
+The `optical_flow` pre-arm check needs a fresh reading inside the
+sensor's min-max range, not just a configured topology.
 
 ## Calibration
 
@@ -171,7 +178,7 @@ Agent:
 - `vision.frame.read` (reads normalized frames from the shared vision
   frame bus; the plugin does not open a camera, so the camera / UVC /
   CSI / depth permissions are not requested)
-- `hardware.uart`, `hardware.i2c` (companion-wired rangefinders)
+- `hardware.uart` (the companion-wired TF-Luna)
 - `telemetry.extend`, `event.publish`
 - `mavlink.read`, `mavlink.write`
 - `mavlink.component.peripheral`
@@ -191,19 +198,27 @@ navigation is required.
 See `config-schema.json` for the per-drone configuration form. Key
 fields:
 
-- `mode`: one of `off`, `optical_flow`, `optical_flow_degraded`.
-- `camera`: device path, bus type (`uvc` or `csi`), resolution, and
-  frame rate.
-- `rangefinder`: topology (`companion`, `fc`, `none`), driver,
-  optional device node, optional baud.
-- `firmware`: `ardupilot`, `px4`, or `inav`, plus the EKF source-set
-  index (ArduPilot only).
-- `pre_arm`: optional auto-set of the EKF origin so the firmware
-  arms before GPS lock.
+- `mode`: one of `off` (default), `optical_flow`,
+  `optical_flow_degraded`.
+- `active`: written by the Engage Skill; `false` idles vision
+  navigation.
+- `flow_quality_min`: flow quality gate, 0-255 (default 50).
+- `outdoor`: allow the GPS altitude rung (default `false`).
+- `camera`: recommended device path, bus type (`uvc` or `csi`),
+  orientation, resolution, and frame rate.
+- `rangefinder`: topology (`companion`, `fc` (default), `none`), driver
+  (`fc_relay` (default) or `tfluna_uart`), optional serial device,
+  baud.
+- `firmware.type`: `ardupilot`, `px4`, or `inav`.
+
+The agent reads these keys live from the per-drone store once a second
+and restarts itself when any of them changes.
 
 ## MAVLink components
 
-- Component 198, `sub_id` 1: peripheral. Emits `OPTICAL_FLOW_RAD`,
+- Component 198, `sub_id` 1: peripheral. Emits `OPTICAL_FLOW` or
+  `OPTICAL_FLOW_RAD` (by firmware), the `MAV_CMD_SET_MESSAGE_INTERVAL`
+  stream requests,
   `DISTANCE_SENSOR` (when relaying a companion-wired rangefinder),
   `TIMESYNC`, and the 1 Hz companion `HEARTBEAT`.
 

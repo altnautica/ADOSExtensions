@@ -8,10 +8,15 @@
 //! Mode rules:
 //!
 //! * `off` — no checks; armable passthrough.
-//! * `optical_flow` — companion active, flow quality above gate,
-//!   rangefinder healthy.
+//! * `optical_flow` — companion active, flow quality above gate, and a
+//!   configured rangefinder with a fresh reading inside its min-max
+//!   range.
 //! * `optical_flow_degraded` — companion active, flow quality above
-//!   gate, any scale source healthy (rangefinder optional).
+//!   gate, and a live scale source (rangefinder, baro, GPS or vision).
+//!   The 1.5 m static fallback blocks.
+//!
+//! The gate is advisory: it reports readiness to the GCS and does not
+//! stop the flight controller from arming.
 //!
 //! Pure: no MAVLink, no telemetry, no async. The pipeline builds the
 //! [`PreArmInputs`] snapshot and serializes the [`PreArmReport`] onto
@@ -113,6 +118,10 @@ pub struct PreArmInputs {
     pub flow_quality: Option<i32>,
     pub flow_scale_source: Option<String>,
     pub rangefinder_topology: Option<String>, // companion|fc|both|None
+    /// This tick's reading, `None` when no fresh reading exists.
+    pub rangefinder_reading_m: Option<f32>,
+    pub rangefinder_min_m: f32,
+    pub rangefinder_max_m: f32,
 }
 
 /// Companion node state mirrored from the comp-198 heartbeat machine.
@@ -173,7 +182,10 @@ impl PreArmGate {
     }
 
     fn of_checks(&self, inputs: &PreArmInputs, require_rangefinder: bool) -> Vec<PreArmCheck> {
-        let mut checks = vec![self.companion_check(inputs), self.flow_quality_check(inputs)];
+        let mut checks = vec![
+            self.companion_check(inputs),
+            self.flow_quality_check(inputs),
+        ];
         if require_rangefinder {
             checks.push(self.rangefinder_check(inputs));
         } else {
@@ -185,10 +197,9 @@ impl PreArmGate {
     fn companion_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
         match inputs.companion_state {
             CompanionState::Active => PreArmCheck::ok("companion_active", ""),
-            CompanionState::Inactive => PreArmCheck::pending(
-                "companion_active",
-                "Companion has not reported active yet.",
-            ),
+            CompanionState::Inactive => {
+                PreArmCheck::pending("companion_active", "Companion has not reported active yet.")
+            }
             other => PreArmCheck::blocking(
                 "companion_active",
                 format!("Companion state {:?}.", other.as_str()),
@@ -198,9 +209,7 @@ impl PreArmGate {
 
     fn flow_quality_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
         match inputs.flow_quality {
-            None => {
-                PreArmCheck::pending("flow_quality", "Awaiting first optical-flow sample.")
-            }
+            None => PreArmCheck::pending("flow_quality", "Awaiting first optical-flow sample."),
             Some(q) if q >= self.flow_quality_gate => {
                 PreArmCheck::ok("flow_quality", format!("Quality {q}/255."))
             }
@@ -213,10 +222,19 @@ impl PreArmGate {
 
     fn rangefinder_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
         match inputs.rangefinder_topology.as_deref() {
-            Some("companion") | Some("fc") | Some("both") => PreArmCheck::ok(
-                "rangefinder",
-                format!("Topology: {}", inputs.rangefinder_topology.as_deref().unwrap()),
-            ),
+            Some(topology @ ("companion" | "fc" | "both")) => {
+                let (min, max) = (inputs.rangefinder_min_m, inputs.rangefinder_max_m);
+                match inputs.rangefinder_reading_m {
+                    None => PreArmCheck::blocking("rangefinder", "No fresh rangefinder reading."),
+                    Some(d) if max > min && !(min..=max).contains(&d) => PreArmCheck::blocking(
+                        "rangefinder",
+                        format!("Rangefinder reading {d:.2} m outside {min:.2}-{max:.2} m."),
+                    ),
+                    Some(d) => {
+                        PreArmCheck::ok("rangefinder", format!("Topology: {topology}, {d:.2} m"))
+                    }
+                }
+            }
             _ => PreArmCheck::blocking(
                 "rangefinder",
                 "Rangefinder required in this mode. Switch to Optical Flow \
@@ -227,14 +245,14 @@ impl PreArmGate {
 
     fn scale_source_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
         match inputs.flow_scale_source.as_deref() {
-            Some("rangefinder") | Some("baro") | Some("gps") | Some("vision") => PreArmCheck::ok(
+            Some(source @ ("rangefinder" | "baro" | "gps" | "vision")) => {
+                PreArmCheck::ok("scale_source", format!("Scale source: {source}."))
+            }
+            Some("static") => PreArmCheck::blocking(
                 "scale_source",
-                format!("Scale source: {}.", inputs.flow_scale_source.as_deref().unwrap()),
+                "Only the 1.5 m static fallback is available; no live altitude source.",
             ),
-            _ => PreArmCheck::blocking(
-                "scale_source",
-                "No altitude or depth source healthy.",
-            ),
+            _ => PreArmCheck::blocking("scale_source", "No altitude or depth source healthy."),
         }
     }
 }
@@ -250,6 +268,9 @@ mod tests {
             flow_quality: None,
             flow_scale_source: None,
             rangefinder_topology: None,
+            rangefinder_reading_m: None,
+            rangefinder_min_m: 0.2,
+            rangefinder_max_m: 8.0,
         }
     }
 
@@ -261,13 +282,58 @@ mod tests {
     }
 
     #[test]
-    fn optical_flow_armable_when_all_ok() {
+    fn optical_flow_armable_when_all_ok_with_a_fresh_reading() {
         let mut i = base(Mode::OpticalFlow);
         i.companion_state = CompanionState::Active;
         i.flow_quality = Some(120);
         i.rangefinder_topology = Some("companion".to_string());
+        i.rangefinder_reading_m = Some(2.0);
         let r = PreArmGate::default().evaluate(&i);
         assert!(r.armable, "{:?}", r.checks);
+    }
+
+    fn rangefinder_severity(i: &PreArmInputs) -> Severity {
+        PreArmGate::default()
+            .evaluate(i)
+            .checks
+            .into_iter()
+            .find(|c| c.id == "rangefinder")
+            .unwrap()
+            .severity
+    }
+
+    #[test]
+    fn topology_without_a_reading_blocks() {
+        let mut i = base(Mode::OpticalFlow);
+        i.companion_state = CompanionState::Active;
+        i.flow_quality = Some(120);
+        i.rangefinder_topology = Some("fc".to_string());
+        assert_eq!(rangefinder_severity(&i), Severity::Blocking);
+        assert!(!PreArmGate::default().evaluate(&i).armable);
+    }
+
+    #[test]
+    fn out_of_range_reading_blocks() {
+        let mut i = base(Mode::OpticalFlow);
+        i.rangefinder_topology = Some("companion".to_string());
+        i.rangefinder_reading_m = Some(12.0);
+        assert_eq!(rangefinder_severity(&i), Severity::Blocking);
+        i.rangefinder_reading_m = Some(0.1);
+        assert_eq!(rangefinder_severity(&i), Severity::Blocking);
+    }
+
+    #[test]
+    fn degraded_blocks_on_static_scale() {
+        let mut i = base(Mode::OpticalFlowDegraded);
+        i.companion_state = CompanionState::Active;
+        i.flow_quality = Some(120);
+        i.flow_scale_source = Some("static".to_string());
+        let r = PreArmGate::default().evaluate(&i);
+        assert!(!r.armable);
+        assert!(r
+            .checks
+            .iter()
+            .any(|c| c.id == "scale_source" && c.severity == Severity::Blocking));
     }
 
     #[test]

@@ -73,8 +73,8 @@ export const TOUR_STEPS: TourStep[] = [
     titleFallback: "Pre-arm checklist",
     bodyKey: "navigation.tour.preArmBody",
     bodyFallback:
-      "Mode-aware arm-readiness. Every check must be green before " +
-      "the drone is armable in this mode.",
+      "Advisory arm-readiness for this mode. It does not stop the " +
+      "flight controller from arming; check every row is green before you arm.",
   },
 ];
 

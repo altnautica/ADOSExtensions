@@ -167,7 +167,7 @@ mod tests {
         ca.handle_response(1000, 0); // offset 1000
         ca.mark_outgoing(0);
         ca.handle_response(2000, 0); // estimate 2000, drift 1000 < breach
-        // blended = 0.9*1000 + 0.1*2000 = 1100.
+                                     // blended = 0.9*1000 + 0.1*2000 = 1100.
         assert_eq!(ca.convert_to_fc_clock(0), 1100);
     }
 }

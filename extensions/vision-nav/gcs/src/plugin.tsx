@@ -15,11 +15,8 @@ import { definePlugin } from "@altnautica/plugin-sdk";
 import en from "../../locales/en.json";
 
 import { NavigationTab } from "./components/NavigationTab";
+import { firmwareFromConfig, type VisionNavConfig } from "./firmware";
 import type { FirmwareType } from "./types";
-
-interface VisionNavConfig {
-  firmware?: FirmwareType;
-}
 
 const DEFAULT_FIRMWARE: FirmwareType = "ardupilot";
 
@@ -73,7 +70,7 @@ function renderTree(ctx: import("@altnautica/plugin-sdk").PluginContext): void {
 
 definePlugin({
   id: "com.altnautica.vision-nav",
-  version: "0.4.1",
+  version: "0.5.0",
   locale: FLAT_LOCALE,
   async mount(ctx) {
     const host = ensureRootEl();
@@ -81,8 +78,9 @@ definePlugin({
     renderTree(ctx);
 
     ctx.config.onChange<VisionNavConfig>((next) => {
-      if (next && typeof next.firmware === "string") {
-        firmware = next.firmware;
+      const nextFirmware = firmwareFromConfig(next);
+      if (nextFirmware) {
+        firmware = nextFirmware;
         renderTree(ctx);
       }
     });

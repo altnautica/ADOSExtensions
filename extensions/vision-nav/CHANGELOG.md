@@ -2,6 +2,76 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.5.0]
+
+### Fixed
+
+- **The agent now reads the per-drone config.** Mode, engage state,
+  rangefinder, firmware, quality gate and outdoor mode come from the live
+  per-drone store. The agent polls it once a second and restarts on a change,
+  so turning the Engage Skill off stops emission within about a second. With
+  no stored config the plugin defaults to mode `off` and emits nothing.
+- **ArduPilot and iNav now receive optical flow.** They get `OPTICAL_FLOW`
+  (#100) with the raw angular rate in `flow_rate_x/y`; PX4 keeps
+  `OPTICAL_FLOW_RAD` (#106). The firmware in the plugin config picks the
+  message.
+- **PX4 flow scaling.** `OPTICAL_FLOW_RAD` now carries the angle swept over the
+  interval (it carried a rate, about 30 times too large) and the gyro rotation
+  over the interval in `integrated_x/y/zgyro`. The flow is no longer
+  derotated by a field-of-view factor.
+- An unknown distance is sent as -1 instead of 0 m.
+- MAVLink subscriptions now decode the raw frames the host delivers, so the
+  IMU, rangefinder relay, TIMESYNC and scale-ladder inputs receive data.
+- **No frames for 2 s** marks the estimator failed and the companion critical
+  instead of freezing the last state.
+- **The rangefinder pre-arm check needs a fresh reading** inside the sensor's
+  min-max range; a configured topology alone no longer passes.
+- **The static scale fallback is reported as `static`**, not `baro`, and blocks
+  the degraded mode's scale-source check.
+- Health `flowQuality` clears when a tick has no sample instead of repeating
+  the last value.
+- Each outbound frame carries an incrementing sequence number.
+
+### Added
+
+- `outdoor` config key: allows the GPS altitude rung, measured from the first
+  good 3D fix (never AMSL).
+- `active` and `flow_quality_min` in the config form; the schema defaults now
+  match the agent's (rangefinder `fc` / `fc_relay`).
+- The agent asks the flight controller for `RAW_IMU` at 100 Hz and
+  `DISTANCE_SENSOR` at 20 Hz, at start and every 30 s.
+- The TF-Luna reader runs on its own task with raw 8N1 at the configured baud,
+  retries opening every 2 s, and reports an open failure in health
+  `rangefinderError` (the pre-arm check then blocks).
+- Health: `emitErrors` (failed sends), `degradedReasons` (for example a refused
+  MAVLink subscription), and `fcParams`.
+- The PX4 parameter card shows `EKF2_OF_CTRL` and `EKF2_AID_MASK` only when the
+  flight controller reports them.
+- Frames wider than 640 px are tracked at half resolution, and the image
+  pyramid is built once per frame pair.
+
+### Changed
+
+- The ground station reads the firmware from `firmware.type` in the plugin
+  config, so the PX4 and iNav parameter cards appear.
+- Copy: firmware is selected in the config (not auto-detected), the tour calls
+  the pre-arm checklist advisory, and the fallback banner suggests landing or
+  the RC source-set switch.
+- Supported boards: `cm4`, `cm5`, `rock-5c-lite`, `rk3588s2`, `rk3576`, `rpi5`.
+
+### Removed
+
+- The Pi Zero 2 W: its 512 MB of RAM equals the plugin's reservation.
+- The `garmin_lidarlite_i2c` and `vl53l1x_i2c` drivers, which never produced a
+  reading, and the `hardware.i2c` permission. Wire an I2C rangefinder to the
+  flight controller and use `fc_relay`.
+- The `pre_arm` origin block and `firmware.ekf_source_set_index`, which had no
+  effect. Stored configs that carry them still load.
+- The always-empty auto-detect heartbeat fields (`suggestedMode`,
+  `suggestedModeReason`, `detectedCameraCount`, `detectedRangefinderDriver`).
+- The direct-I2C BMI088 IMU source listed in an earlier entry was never present
+  in the Rust agent and is not offered; the IMU comes from MAVLink `RAW_IMU`.
+
 ## [0.4.1]
 
 ### Removed

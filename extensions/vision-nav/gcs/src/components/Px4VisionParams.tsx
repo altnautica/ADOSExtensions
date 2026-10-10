@@ -3,6 +3,8 @@ import type { CSSProperties } from "react";
 interface ParamRow {
   id: string;
   description: string;
+  /** Shown only when the flight controller reports it. */
+  optional?: boolean;
 }
 
 interface ParamGroup {
@@ -14,20 +16,39 @@ const GROUPS: ParamGroup[] = [
   {
     title: "Optical flow",
     rows: [
-      { id: "EKF2_OF_CTRL", description: "Optical flow fusion control bitmask." },
+      {
+        id: "EKF2_OF_CTRL",
+        description: "Optical flow fusion control (PX4 1.14 and newer).",
+        optional: true,
+      },
       { id: "SENS_FLOW_MAXR", description: "Maximum flow rate the sensor reports (rad/s)." },
     ],
   },
   {
     title: "Aid + height",
     rows: [
-      { id: "EKF2_AID_MASK", description: "Aiding sensor selection bitmask." },
+      {
+        id: "EKF2_AID_MASK",
+        description: "Aiding sensor selection bitmask (PX4 before 1.14).",
+        optional: true,
+      },
       { id: "EKF2_HGT_REF", description: "Primary height source reference." },
     ],
   },
 ];
 
-export function Px4VisionParams(): JSX.Element {
+export interface Px4VisionParamsProps {
+  /** Watched parameters the flight controller has reported
+   * (``fcParams`` on the navigation telemetry). */
+  fcParams?: readonly string[];
+}
+
+export function Px4VisionParams({ fcParams = [] }: Px4VisionParamsProps): JSX.Element {
+  const reported = new Set(fcParams);
+  const groups = GROUPS.map((group) => ({
+    ...group,
+    rows: group.rows.filter((row) => !row.optional || reported.has(row.id)),
+  })).filter((group) => group.rows.length > 0);
   const card: CSSProperties = {
     background: "var(--vn-surface, rgba(255,255,255,0.02))",
     border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
@@ -79,7 +100,7 @@ export function Px4VisionParams(): JSX.Element {
         Read-only summary. Edit in Mission Control&apos;s parameter editor and
         restart the EKF after changes.
       </p>
-      {GROUPS.map((group) => (
+      {groups.map((group) => (
         <div key={group.title}>
           <p style={subheading}>{group.title}</p>
           <dl style={table}>

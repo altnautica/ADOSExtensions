@@ -86,13 +86,9 @@ impl OpticalFlowEstimator {
         scale_source: Option<ScaleSourceLabel>,
     ) -> Option<EstimatorOutput> {
         let (prev, curr) = (inputs.prev_gray?, inputs.curr_gray?);
-        let result = self.processor.process(
-            prev,
-            curr,
-            inputs.dt_seconds,
-            inputs.gyro,
-            distance_m,
-        );
+        let result = self
+            .processor
+            .process(prev, curr, inputs.dt_seconds, inputs.gyro, distance_m);
         let quality = result.quality;
         if quality >= self.quality_gate {
             self.state = EstimatorState::Converged;
@@ -108,7 +104,11 @@ impl OpticalFlowEstimator {
             state: self.state,
             flow_rate_x: Some(result.flow_rate_x),
             flow_rate_y: Some(result.flow_rate_y),
-            flow_rate_z: Some(result.flow_rate_z),
+            integrated_x: Some(result.integrated.x),
+            integrated_y: Some(result.integrated.y),
+            integrated_xgyro: Some(result.integrated.xgyro),
+            integrated_ygyro: Some(result.integrated.ygyro),
+            integrated_zgyro: Some(result.integrated.zgyro),
             flow_quality: Some(quality),
             flow_distance_m: distance_m,
             flow_scale_source: scale_source,
@@ -177,9 +177,7 @@ impl Estimator for OpticalFlowDegradedEstimator {
         let label = pick.map(|p| match p.source {
             ScaleRung::Baro => ScaleSourceLabel::Baro,
             ScaleRung::Gps => ScaleSourceLabel::Gps,
-            // The static rung is reported as baro (the physical fallback
-            // expectation); the quality multiplier flags it degraded.
-            ScaleRung::Static => ScaleSourceLabel::Baro,
+            ScaleRung::Static => ScaleSourceLabel::Static,
         });
 
         let mut sample = self.inner.run(inputs, distance, label)?;
@@ -285,7 +283,14 @@ mod tests {
         let prev = textured(128, 128, 0, 0);
         let curr = textured(128, 128, 2, 1);
         let out = e
-            .step(&step_inputs(&prev, &curr, Some(RangeReading { distance_m: 1.5, quality: 90 })))
+            .step(&step_inputs(
+                &prev,
+                &curr,
+                Some(RangeReading {
+                    distance_m: 1.5,
+                    quality: 90,
+                }),
+            ))
             .unwrap();
         assert_eq!(out.output_mode, OutputMode::OpticalFlow);
         assert_eq!(out.flow_scale_source, Some(ScaleSourceLabel::Rangefinder));
@@ -305,8 +310,20 @@ mod tests {
         assert_eq!(out.output_mode, OutputMode::OpticalFlow);
         // Static rung -> degraded regardless of raw quality.
         assert_eq!(out.state, EstimatorState::Degraded);
+        assert_eq!(out.flow_scale_source, Some(ScaleSourceLabel::Static));
         // Quality is multiplied by the 0.2 static factor.
         assert!(out.flow_quality.unwrap() <= (255.0 * 0.2) as i32 + 1);
+    }
+
+    #[test]
+    fn static_rung_reports_static() {
+        use std::sync::Arc;
+        let ladder = Arc::new(ScaleLadder::new(false));
+        let mut e = OpticalFlowDegradedEstimator::new(default_quality_gate(), Some(ladder));
+        let prev = textured(64, 64, 0, 0);
+        let curr = textured(64, 64, 1, 0);
+        let out = e.step(&step_inputs(&prev, &curr, None)).unwrap();
+        assert_eq!(out.flow_scale_source.map(|s| s.as_str()), Some("static"));
     }
 
     #[test]

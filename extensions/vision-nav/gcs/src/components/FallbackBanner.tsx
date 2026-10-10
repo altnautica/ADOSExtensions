@@ -74,6 +74,13 @@ function describeDegradation(
   // Order the reasons by likelihood; only return the first match so
   // the banner stays short. The estimator card carries the full
   // diagnostic context for operators who want details.
+  if (telemetry.flowScaleSource === "static") {
+    return tr(
+      t,
+      "navigation.fallback.reasonStaticScale",
+      "No live altitude source; the flow scale is a fixed 1.5 m estimate.",
+    );
+  }
   if (typeof telemetry.flowQuality === "number" && telemetry.flowQuality < 50) {
     return tr(
       t,
@@ -109,11 +116,15 @@ function suggestionFor(
   telemetry: VisionNavTelemetry,
   t: TFn,
 ): string {
-  if (telemetry.flowScaleSource === null || telemetry.flowScaleSource === undefined) {
+  if (
+    telemetry.flowScaleSource === null ||
+    telemetry.flowScaleSource === undefined ||
+    telemetry.flowScaleSource === "static"
+  ) {
     return tr(
       t,
       "navigation.fallback.suggestionLand",
-      "Switch to GPS mode or land.",
+      "Land, or switch the flight controller back to GPS with your RC source-set switch.",
     );
   }
   if (

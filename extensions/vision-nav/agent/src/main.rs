@@ -23,8 +23,9 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() {
-    // No manifest-supplied static config block is consumed here; the
-    // plugin reads its per-drone config via on_configure.
+    // No static config ships with the binary. The per-drone config is
+    // read live from the host's config store at start (see
+    // `live_config`); a change restarts the process.
     let static_config: BTreeMap<String, rmpv::Value> = BTreeMap::new();
 
     match run_plugin::<VisionNavPlugin, _>(

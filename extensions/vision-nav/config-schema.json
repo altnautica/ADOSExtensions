@@ -7,9 +7,29 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "Operating mode. optical_flow uses a downward camera plus a rangefinder; optical_flow_degraded takes its scale from the barometer / GPS ladder instead; off keeps the plugin loaded but silent.",
+      "description": "Operating mode. optical_flow uses a downward camera plus a rangefinder; optical_flow_degraded takes its scale from the barometer (or GPS height in outdoor mode) instead; off keeps the plugin loaded but silent.",
       "default": "off",
       "enum": ["off", "optical_flow", "optical_flow_degraded"]
+    },
+    "active": {
+      "type": "boolean",
+      "title": "Engaged",
+      "default": true,
+      "description": "Written by the Engage Skill. Off idles vision navigation: nothing is sent to the flight controller."
+    },
+    "flow_quality_min": {
+      "type": "integer",
+      "title": "Flow quality gate",
+      "description": "Minimum optical-flow quality (0-255) for the estimator to report converged and for the pre-arm flow check to pass.",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 50
+    },
+    "outdoor": {
+      "type": "boolean",
+      "title": "Outdoor mode",
+      "default": false,
+      "description": "Outdoor mode: allow the GPS altitude rung, measured from the first 3D fix."
     },
     "camera": {
       "$ref": "#/definitions/camera",
@@ -24,25 +44,26 @@
           "type": "string",
           "title": "Topology",
           "description": "Where the rangefinder is wired. companion = plugin reads it; fc = flight controller already publishes DISTANCE_SENSOR; none = no rangefinder.",
-          "default": "companion",
+          "default": "fc",
           "enum": ["companion", "fc", "none"]
         },
         "driver": {
           "type": "string",
           "title": "Driver",
-          "default": "tfluna_uart",
-          "enum": ["tfluna_uart", "garmin_lidarlite_i2c", "vl53l1x_i2c", "fc_relay"]
+          "description": "fc_relay reads the flight controller's DISTANCE_SENSOR stream; tfluna_uart reads a Benewake TF-Luna on a companion serial port.",
+          "default": "fc_relay",
+          "enum": ["tfluna_uart", "fc_relay"]
         },
         "device": {
           "type": "string",
           "title": "Device node",
-          "description": "Serial device path (for example /dev/ttyUSB0) for UART drivers, or an I2C bus identifier (digit such as \"1\" or path such as /dev/i2c-1) for I2C drivers. Optional when topology is fc or none.",
-          "pattern": "^/dev/(ttyS|ttyUSB|ttyAMA|ttyACM|serial)[0-9]+$|^[0-9]+$|^/dev/i2c-[0-9]+$"
+          "description": "Serial device path (for example /dev/ttyUSB0) for the TF-Luna. Optional when topology is fc or none.",
+          "pattern": "^/dev/(ttyS|ttyUSB|ttyAMA|ttyACM|serial)[0-9]+$"
         },
         "baud": {
           "type": "integer",
           "title": "Baud rate",
-          "description": "Only used for UART-based drivers.",
+          "description": "Only used for the TF-Luna UART driver.",
           "default": 115200,
           "minimum": 1200,
           "maximum": 1000000
@@ -57,48 +78,12 @@
         "type": {
           "type": "string",
           "title": "Firmware",
-          "description": "Flight controller firmware. Optical flow is supported on ArduPilot, PX4, and iNav (7.0+). Betaflight is not supported because the firmware has no position estimator.",
+          "description": "Flight controller firmware. ArduPilot and iNav (7.0+) receive OPTICAL_FLOW; PX4 receives OPTICAL_FLOW_RAD. Betaflight is not supported because the firmware has no position estimator.",
           "default": "ardupilot",
           "enum": ["ardupilot", "px4", "inav"]
-        },
-        "ekf_source_set_index": {
-          "type": "integer",
-          "title": "EKF source set index",
-          "description": "ArduPilot EK3_SRCn set (1-3) that selects the vision-flow source group.",
-          "minimum": 1,
-          "maximum": 3
         }
       },
       "required": ["type"]
-    },
-    "pre_arm": {
-      "type": "object",
-      "title": "Pre-arm origin",
-      "description": "Optional pre-arm helper that pushes a synthetic origin when the firmware refuses to arm without one.",
-      "properties": {
-        "auto_set_origin": {
-          "type": "boolean",
-          "title": "Auto-set EKF origin",
-          "default": false
-        },
-        "origin_lat": {
-          "type": "number",
-          "title": "Origin latitude (deg)",
-          "minimum": -90,
-          "maximum": 90
-        },
-        "origin_lon": {
-          "type": "number",
-          "title": "Origin longitude (deg)",
-          "minimum": -180,
-          "maximum": 180
-        },
-        "origin_alt_m": {
-          "type": "number",
-          "title": "Origin altitude (m AMSL)",
-          "default": 0
-        }
-      }
     }
   },
   "required": ["mode", "camera", "firmware"],
@@ -109,7 +94,7 @@
         "device_path": {
           "type": "string",
           "title": "Device path",
-          "description": "V4L2 or CSI device node (for example /dev/video0).",
+          "description": "Reported to the GCS as the recommended camera. Frames come from the agent's vision bus; choose the captured camera in the agent's camera settings.",
           "default": "/dev/video0",
           "pattern": "^/dev/video[0-9]+$"
         },
@@ -122,7 +107,7 @@
         "orientation": {
           "type": "string",
           "title": "Mount orientation",
-          "description": "Direction the lens points. Downward suits over-ground flight (agriculture, survey, SAR, pipeline patrol) where ground texture is dense. Forward suits indoor or corridor flight. Side is reserved for future SLAM use cases. Auto infers from the bound HAL camera role; only safe when the board profile declares orientation unambiguously.",
+          "description": "Both optical-flow modes need downward (or auto); forward or side leaves vision navigation disengaged.",
           "default": "auto",
           "enum": ["forward", "downward", "side", "auto"]
         },

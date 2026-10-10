@@ -48,6 +48,8 @@ pub enum ScaleSourceLabel {
     Baro,
     Gps,
     Vision,
+    /// The fixed fallback distance; no live altitude source.
+    Static,
 }
 
 impl ScaleSourceLabel {
@@ -57,6 +59,7 @@ impl ScaleSourceLabel {
             ScaleSourceLabel::Baro => "baro",
             ScaleSourceLabel::Gps => "gps",
             ScaleSourceLabel::Vision => "vision",
+            ScaleSourceLabel::Static => "static",
         }
     }
 }
@@ -69,9 +72,17 @@ pub struct EstimatorOutput {
     pub output_mode: OutputMode,
     pub state: EstimatorState,
     // OF path
+    /// Raw (not derotated) angular flow rate, rad/s.
     pub flow_rate_x: Option<f32>,
     pub flow_rate_y: Option<f32>,
-    pub flow_rate_z: Option<f32>,
+    /// Angle the flow swept over the integration interval, rad (not
+    /// derotated).
+    pub integrated_x: Option<f32>,
+    pub integrated_y: Option<f32>,
+    /// Gyro rotation over the interval (aligned gyro rate * dt), rad.
+    pub integrated_xgyro: Option<f32>,
+    pub integrated_ygyro: Option<f32>,
+    pub integrated_zgyro: Option<f32>,
     pub flow_quality: Option<i32>,
     pub flow_distance_m: Option<f32>,
     pub flow_scale_source: Option<ScaleSourceLabel>,
@@ -87,7 +98,11 @@ impl EstimatorOutput {
             state: EstimatorState::Off,
             flow_rate_x: None,
             flow_rate_y: None,
-            flow_rate_z: None,
+            integrated_x: None,
+            integrated_y: None,
+            integrated_xgyro: None,
+            integrated_ygyro: None,
+            integrated_zgyro: None,
             flow_quality: None,
             flow_distance_m: None,
             flow_scale_source: None,

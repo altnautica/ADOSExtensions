@@ -10,12 +10,8 @@
 //! The universal IMU path is MAVLink `RAW_IMU` (#27): every FC
 //! publishes it, in milli-g acceleration and milli-rad/s gyro. The
 //! pipeline subscribes via `ctx.mavlink.subscribe("RAW_IMU", ..)` and
-//! feeds decoded fields into [`ImuBuffer::record_raw_imu`].
-//!
-//! A higher-rate direct-I2C BMI088 source (~400 Hz, bypassing the FC
-//! rate cap) is a documented TODO: it needs raw `/dev/i2c-*` register
-//! reads, which the plugin SDK does not yet expose a facade for. Until
-//! that lands the MAVLink path is the only source; see the module note.
+//! feeds decoded fields into [`ImuBuffer::record_raw_imu`]. The plugin
+//! asks the FC for RAW_IMU at 100 Hz (`MAV_CMD_SET_MESSAGE_INTERVAL`).
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
@@ -36,8 +32,7 @@ pub struct ImuSample {
 const MILLIRAD_PER_S_TO_RAD_PER_S: f32 = 0.001;
 const MG_TO_M_PER_S2: f32 = 9.80665 * 0.001;
 
-/// Source identifier surfaced on the heartbeat. The MAVLink path is the
-/// only source today; the direct-I2C path will add its own id.
+/// Source identifier surfaced on the heartbeat.
 pub const SOURCE_ID_MAVLINK_RAW_IMU: &str = "mavlink-raw-imu";
 
 /// Fixed-capacity ring of recent samples + a smoothed rate estimate.
@@ -119,7 +114,12 @@ impl ImuBuffer {
 
     /// The most recent sample, or `None` if no data yet.
     pub fn latest(&self) -> Option<ImuSample> {
-        self.inner.lock().expect("imu buffer lock").buffer.back().copied()
+        self.inner
+            .lock()
+            .expect("imu buffer lock")
+            .buffer
+            .back()
+            .copied()
     }
 
     /// A snapshot of in-buffer samples, oldest first.
@@ -131,6 +131,13 @@ impl ImuBuffer {
             .iter()
             .copied()
             .collect()
+    }
+
+    /// Pair `frame_ts_ns` with the buffered samples under the lock, with
+    /// no copy of the ring. See [`TimeAligner::lookup`].
+    pub fn aligned(&self, frame_ts_ns: i64, aligner: &mut TimeAligner) -> Option<AlignedSample> {
+        let g = self.inner.lock().expect("imu buffer lock");
+        aligner.lookup_in(frame_ts_ns, g.buffer.iter().copied())
     }
 
     /// Smoothed sample rate in Hz, or `None` until two samples land.
@@ -190,13 +197,19 @@ impl TimeAligner {
     /// samples when both exist. Records the residual into the rolling
     /// window. `None` when the IMU buffer is empty.
     pub fn lookup(&mut self, frame_ts_ns: i64, samples: &[ImuSample]) -> Option<AlignedSample> {
-        if samples.is_empty() {
-            return None;
-        }
+        self.lookup_in(frame_ts_ns, samples.iter().copied())
+    }
+
+    /// [`lookup`](Self::lookup) over any oldest-first sample sequence.
+    pub fn lookup_in<I: IntoIterator<Item = ImuSample>>(
+        &mut self,
+        frame_ts_ns: i64,
+        samples: I,
+    ) -> Option<AlignedSample> {
         let target = frame_ts_ns + self.timeshift_ns;
         let mut before: Option<ImuSample> = None;
         let mut after: Option<ImuSample> = None;
-        for &s in samples {
+        for s in samples {
             if s.ts_ns <= target {
                 before = Some(s);
             } else {
@@ -258,7 +271,9 @@ fn interpolate(before: ImuSample, after: ImuSample, target: i64) -> (ImuSample, 
         yacc: lerp(before.yacc, after.yacc),
         zacc: lerp(before.zacc, after.zacc),
     };
-    let residual = (target - before.ts_ns).abs().min((target - after.ts_ns).abs());
+    let residual = (target - before.ts_ns)
+        .abs()
+        .min((target - after.ts_ns).abs());
     (s, residual)
 }
 
@@ -333,5 +348,17 @@ mod tests {
     fn empty_buffer_lookup_is_none() {
         let mut a = TimeAligner::new(0.0, 60);
         assert!(a.lookup(0, &[]).is_none());
+    }
+
+    #[test]
+    fn buffer_aligned_matches_lookup_on_a_copy() {
+        let buf = ImuBuffer::default();
+        buf.record(sample(0, 0.0));
+        buf.record(sample(10_000_000, 10.0));
+        let mut a = TimeAligner::new(0.0, 60);
+        let mut b = TimeAligner::new(0.0, 60);
+        let direct = buf.aligned(5_000_000, &mut a).unwrap();
+        let copied = b.lookup(5_000_000, &buf.recent()).unwrap();
+        assert_eq!(direct.imu_sample, copied.imu_sample);
     }
 }
