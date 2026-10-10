@@ -1,0 +1,8 @@
+# Signing keys and local secrets never belong in the plugin repo.
+*.pem
+*.key
+.env*
+
+# Build output
+dist/
+node_modules/

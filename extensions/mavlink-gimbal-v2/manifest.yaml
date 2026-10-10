@@ -29,7 +29,7 @@ resource_impact:
   startup_time_seconds: 2
 telemetry_fields:
   - "gimbal"
-documentation_url: "https://docs.altnautica.com/drone-agent/mavlink-gimbal-v2-overview"
+documentation_url: "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-mavlink-gimbal-v2-controller"
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/mavlink-gimbal-v2"
 license: "GPL-3.0-or-later"

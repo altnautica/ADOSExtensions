@@ -41,7 +41,8 @@
 #   manifest's `binaries`); a local bench build passes only its own arch.
 #
 # Signing is the separate, final step and is unchanged across runtimes:
-#   ADOS_SIGNING_KEY=/path/to/key.ed25519 scripts/sign.sh dist/<plugin>.adosplug
+#   ADOS_SIGNING_KEY=/path/to/<signer-id>.priv.pem ADOS_SIGNING_KEY_ID=<signer-id> \
+#     scripts/sign.sh dist/<plugin>.adosplug
 #
 # The signature covers every archive entry, so the binary at agent.entrypoint
 # is protected by the same canonical-payload-hash signature as the manifest. A
@@ -438,4 +439,4 @@ if [[ -z "${payload_list}" ]]; then
 else
   echo "  runtime: rust, payloads from: ${payload_list}, entrypoint: ${entrypoint}"
 fi
-echo "next: ADOS_SIGNING_KEY=<key> ${repo_root}/scripts/sign.sh ${archive_path}"
+echo "next: ADOS_SIGNING_KEY=<key> ADOS_SIGNING_KEY_ID=<signer-id> ${repo_root}/scripts/sign.sh ${archive_path}"

@@ -12,10 +12,11 @@ authors = [{ name = "Altnautica" }]
 keywords = ["ados", "plugin", "siyi", "gimbal", "camera", "driver"]
 dependencies = [
     # Provided by the host agent venv at runtime; declared here so a
-    # standalone checkout can run the unit tests. Used only by the MAVLink
-    # bridge to pack the gimbal/camera/rangefinder frames the pod mirrors
-    # up to the flight controller.
+    # standalone checkout can run the unit tests. pymavlink packs the
+    # gimbal/camera/rangefinder frames the pod mirrors up to the flight
+    # controller; pyserial opens the TTL serial port for the UART transport.
     "pymavlink>=2.4.41",
+    "pyserial>=3.5",
 ]
 
 [project.optional-dependencies]

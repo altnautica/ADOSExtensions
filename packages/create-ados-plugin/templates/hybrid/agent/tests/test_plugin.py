@@ -34,6 +34,9 @@ class FakeLog:
     def info(self, *_args: object, **_kwargs: object) -> None:
         return None
 
+    def warning(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
 
 class FakeCtx:
     def __init__(self, config: dict[str, object]) -> None:

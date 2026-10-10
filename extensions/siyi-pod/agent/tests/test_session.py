@@ -58,6 +58,9 @@ class _SilentTransport:
     def set_on_bytes(self, _cb):
         pass
 
+    def set_on_lost(self, _cb):
+        pass
+
     async def open(self):
         pass
 

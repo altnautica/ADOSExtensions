@@ -31,4 +31,5 @@ dev = [
   "pydantic>=2",
   "structlog>=24",
   "msgpack>=1",
+  "cryptography>=42",
 ]

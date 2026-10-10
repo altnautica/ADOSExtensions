@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from altnautica_siyi_pod.capability_profile import HW_A2_MINI, HW_ZT30
+from altnautica_siyi_pod import control
 from altnautica_siyi_pod.plugin import SiyiPodPlugin
 from altnautica_siyi_pod.transport import MockTransport
 from pymavlink.dialects.v20 import common as mavlink2
@@ -344,10 +345,12 @@ async def test_a2_mini_skills_are_safe_noops():
     await plugin.on_stop(ctx)
 
 
-async def test_skill_record_toggles_recording_via_the_pod():
+async def test_skill_record_toggles_recording_via_the_pod(monkeypatch):
     # The record Skill's config key must fire the real recording path: the pod's
     # record-toggle command flips its recording state, and the read-back tracks
     # it so the Skill Bar shows the true on/off.
+    now = [0.0]
+    monkeypatch.setattr(control, "_monotonic", lambda: now[0])
     ctx = _Ctx()
     plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
     await plugin.on_start(ctx)
@@ -364,7 +367,9 @@ async def test_skill_record_toggles_recording_via_the_pod():
     assert transport.recording is True
     assert plugin.state.recording is True
 
+    # The declarative keys are re-read on the next 1 Hz refresh.
     ctx.config_kv.set("recording", False)
+    now[0] += 1.0
     await plugin.apply_config_once()
     assert transport.recording is False
     assert plugin.state.recording is False

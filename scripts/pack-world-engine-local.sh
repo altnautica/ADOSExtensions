@@ -40,8 +40,8 @@
 #
 # Signing: ADOS_SIGNING_KEY is passed straight through to scripts/sign.sh (a
 # key file path, or base64 key material with ADOS_SIGNING_KEY_INLINE=1); this
-# script never reads the key itself. ADOS_SIGNING_KEY_ID sets the signer id
-# (sign.sh defaults to altnautica-2026-A). A node verifies the signature only
+# script never reads the key itself. ADOS_SIGNING_KEY_ID (required, no
+# default) sets the signer id. A node verifies the signature only
 # against the public key it holds for that id, so an archive signed with a
 # bench key installs on a node that trusts that key or runs with
 # ADOS_PLUGIN_REQUIRE_SIGNED=0.
@@ -49,7 +49,7 @@
 set -euo pipefail
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: ADOS_SIGNING_KEY=<key> pack-world-engine-local.sh <out-dir> <payload-base-url>" >&2
+  echo "usage: ADOS_SIGNING_KEY=<key> ADOS_SIGNING_KEY_ID=<signer-id> pack-world-engine-local.sh <out-dir> <payload-base-url>" >&2
   exit 2
 fi
 if [[ "$(uname -s)-$(uname -m)" != "Darwin-arm64" ]]; then
@@ -59,6 +59,10 @@ fi
 # Checked before the long build, not discovered after it.
 if [[ -z "${ADOS_SIGNING_KEY:-}" ]]; then
   echo "ADOS_SIGNING_KEY is required (see scripts/sign.sh)" >&2
+  exit 2
+fi
+if [[ -z "${ADOS_SIGNING_KEY_ID:-}" ]]; then
+  echo "ADOS_SIGNING_KEY_ID is required (see scripts/sign.sh)" >&2
   exit 2
 fi
 

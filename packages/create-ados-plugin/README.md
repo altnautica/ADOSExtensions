@@ -21,7 +21,10 @@ or piped input, it runs unattended.
 - A skeleton agent subprocess (`agent/plugin.py`) and pytest tests, for
   hybrid/agent-only
 - An `en.json` locale bundle
-- A README pointing at `docs.altnautica.com/developers/`
+- A README pointing at the [developer docs](https://docs.altnautica.com/developers/overview)
+- A `.gitignore` that keeps signing keys (`*.pem`, `*.key`), `.env*`,
+  `dist/` and `node_modules/` out of the plugin repo. `pnpm pack` reads the
+  key path from `ADOS_SIGNING_KEY`; keep the key outside the plugin directory.
 
 The **hybrid** template is the living "everything a plugin can do"
 example. It demonstrates the full platform from one manifest:
@@ -33,7 +36,8 @@ example. It demonstrates the full platform from one manifest:
   slider, an enum dropdown, and a **model picker** bound to
   `engine.detector`,
 - and a **model requirement** (`contributes.models`) with per-board
-  variants.
+  variants, shipped commented out until you point it at a real artifact
+  and its sha256.
 
 The `gcs-only` and `agent-only` templates stay minimal.
 

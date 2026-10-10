@@ -19,3 +19,10 @@ extensions/world-engine/gcs/assets/
 
 # Local omp agent tooling directory (not part of the project)
 .omp/
+
+# Signing keys and local secrets. Public .pem files stay committable.
+keys/
+*.priv.pem
+*.ed25519
+*.key
+.env*

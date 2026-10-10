@@ -176,17 +176,9 @@ mod tests {
             "ws.local",
             8092,
         );
-        assert_eq!(
-            pick_compute_node(&[ws], &[]).unwrap().host,
-            "192.168.1.50"
-        );
+        assert_eq!(pick_compute_node(&[ws], &[]).unwrap().host, "192.168.1.50");
         // With no private address, a routable one beats the overlay.
-        let public = service(
-            Some("ws"),
-            &["100.64.0.1", "203.0.113.7"],
-            "ws.local",
-            8092,
-        );
+        let public = service(Some("ws"), &["100.64.0.1", "203.0.113.7"], "ws.local", 8092);
         assert_eq!(
             pick_compute_node(&[public], &[]).unwrap().host,
             "203.0.113.7"

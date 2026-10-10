@@ -12,9 +12,7 @@
 #
 # The script:
 #   1. Builds the GCS half (esbuild -> plugin.bundle.js)
-#   2. Computes SHA-256 hashes for every asset
-#   3. Replaces the <computed-by-pack.sh> placeholders in manifest.yaml
-#   4. Zips everything into dist/<plugin-id>-<version>.adosplug
+#   2. Zips everything into dist/<plugin-id>-<version>.adosplug
 #
 # Signing is a separate step: scripts/sign.sh <archive>.
 

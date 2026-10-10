@@ -8,6 +8,7 @@ All notable changes to the MAVLink Gimbal v2 Controller extension.
   `shift+c` (was `c`), Nadir `shift+v` (was `v`), Rate mode `shift+g` (was
   `shift+r`, the Return-to-home chord), and the "Aim at this target" action
   `j` (was `g`, the Aim Skill key).
+- The documentation link points at the extensions catalog entry.
 
 ## 1.4.0
 

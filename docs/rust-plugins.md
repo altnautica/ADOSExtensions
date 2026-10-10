@@ -158,7 +158,8 @@ covers every archive entry, so the binary is protected by the same signature as
 the manifest:
 
 ```bash
-ADOS_SIGNING_KEY=/path/to/key.ed25519 scripts/sign.sh dist/<plugin-id>-<version>.adosplug
+ADOS_SIGNING_KEY=/path/to/<signer-id>.priv.pem ADOS_SIGNING_KEY_ID=<signer-id> \
+  scripts/sign.sh dist/<plugin-id>-<version>.adosplug
 ```
 
 `sign.sh` computes the canonical payload hash (sha256 over the sorted

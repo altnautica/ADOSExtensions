@@ -9,8 +9,9 @@ GCS half pairs with:
 - ``greeting`` / ``rate_hz`` are the native settings the GCS renders from the
   manifest's ``contributes.parameters``; the agent reads the same keys.
 - ``detector`` is the shared vision-detector selection (bound to
-  ``engine.detector`` in the manifest); the contributed ``coco-person`` model
-  is what the picker offers.
+  ``engine.detector`` in the manifest); the picker offers every registered
+  detection model, plus ``coco-person`` once the manifest's ``models`` block
+  is enabled.
 
 The plugin host injects a context object with ``config_kv`` (per-node config
 reads), ``events`` (the host event bus), and ``log`` (structured logging).
@@ -69,19 +70,26 @@ class HelloPlugin:
         }
 
     async def _loop(self) -> None:
+        period = 1.0 / _DEFAULT_RATE_HZ
         while True:
-            cfg = await self._read_config()
-            if cfg["active"]:
-                self._ticks += 1
-            await self._ctx.events.publish(
-                STATE_TOPIC,
-                {
-                    "active": cfg["active"],
-                    "greeting": cfg["greeting"],
-                    "ticks": self._ticks,
-                },
-            )
-            period = 1.0 / max(cfg["rate_hz"], 1.0)
+            # One failed cycle (a config read or publish error) is logged and
+            # retried next tick; it never ends the loop. Cancellation still
+            # propagates because CancelledError is not an Exception.
+            try:
+                cfg = await self._read_config()
+                if cfg["active"]:
+                    self._ticks += 1
+                await self._ctx.events.publish(
+                    STATE_TOPIC,
+                    {
+                        "active": cfg["active"],
+                        "greeting": cfg["greeting"],
+                        "ticks": self._ticks,
+                    },
+                )
+                period = 1.0 / max(cfg["rate_hz"], 1.0)
+            except Exception as exc:  # noqa: BLE001 - keep the loop alive
+                self._ctx.log.warning("hello_loop_cycle_failed", error=str(exc))
             await asyncio.sleep(period)
 
 

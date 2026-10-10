@@ -4,6 +4,15 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.2.10]
+
+### Fixed
+
+- `supported_boards` now lists HAL board profile names or SoC ids (`cm4`,
+  `cm5`, `rock-5c-lite`, `rk3588s2`, `rk3576`, `rpi5`, `cubie-a7s`,
+  `cubie-a7z`), so the install gate matches probed boards.
+- The documentation link points at the extensions catalog entry.
+
 ## [0.2.9]
 
 ### Fixed

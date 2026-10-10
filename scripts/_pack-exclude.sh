@@ -43,6 +43,11 @@ PACK_RSYNC_EXCLUDES=(
   --exclude '/package.json'
   --exclude '/tsconfig.json'
   --exclude '/vitest.config.ts'
+  --exclude '.git'
+  --exclude '*.pem'
+  --exclude '*.key'
+  --exclude '.env*'
+  --exclude '.DS_Store'
 )
 
 # Read the entrypoint declared inside the manifest's `gcs:` block. The gcs

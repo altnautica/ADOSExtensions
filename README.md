@@ -11,7 +11,7 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 <p align="center">
   <strong><a href="https://github.com/altnautica/ADOSDroneAgent">ADOS Drone Agent</a></strong> |
   <strong><a href="https://github.com/altnautica/ADOSMissionControl">ADOS Mission Control</a></strong> |
-  <strong><a href="https://docs.altnautica.com/developers">Developer Docs</a></strong> |
+  <strong><a href="https://docs.altnautica.com/developers/overview">Developer Docs</a></strong> |
   <strong><a href="https://discord.gg/uxbvuD4d5q">Discord</a></strong>
 </p>
 
@@ -131,7 +131,7 @@ ados plugin install https://github.com/altnautica/ADOSExtensions/releases/downlo
 
 ## Contributing
 
-First-party only at launch. Community contributions land through the hosted registry submission flow when the registry reaches v1.0. See the [hosted registry developer doc](https://docs.altnautica.com/developers/distribution-registry) for the policy, and the [developer docs](https://docs.altnautica.com/developers) for the manifest, SDKs, and permission model.
+First-party only at launch. Community contributions land through the hosted registry submission flow when the registry reaches v1.0. See the [hosted registry developer doc](https://docs.altnautica.com/developers/distribution-registry) for the policy, and the [developer docs](https://docs.altnautica.com/developers/overview) for the manifest, SDKs, and permission model.
 
 ## License
 

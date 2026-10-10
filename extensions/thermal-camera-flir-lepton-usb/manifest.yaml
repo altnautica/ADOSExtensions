@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.thermal-flir-lepton-usb
 name: "ADOS Thermal Camera FLIR Lepton USB UVC"
-version: "1.3.2"
+version: "1.3.3"
 description: "FLIR Lepton 3.5 radiometric thermal driver, palettes and spot-meter overlay for a PureThermal 2 USB UVC dongle. Capture requires a UVC backend supplied by the agent; without one the extension reports the camera as unavailable."
 description_long: |
   Driver and cockpit surfaces for a FLIR Lepton 3.5 on a PureThermal 2 USB UVC
@@ -30,7 +30,7 @@ features:
   - "Requires a UVC backend supplied by the agent; fails closed without one"
 hardware_requirements:
   cameras: "FLIR Lepton 3.5 on a PureThermal 2 USB UVC dongle (firmware 1.2.2 or newer)"
-  boards: ["cm4", "cm5", "rk3582", "rk3576", "rk3566", "x86"]
+  boards: ["cm4", "cm5", "rock-5c-lite", "rk3576", "rk3566", "generic-x86_64"]
 resource_impact:
   cpu_percent_peak: 30
   ram_mb: 160
@@ -39,7 +39,7 @@ resource_impact:
   startup_time_seconds: 3
 telemetry_fields:
   - "thermal"
-documentation_url: "https://docs.altnautica.com/drone-agent/thermal-camera-overview"
+documentation_url: "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-thermal-camera-flir-lepton-usb-uvc"
 author: "Altnautica"
 homepage: "https://github.com/altnautica/ADOSExtensions/tree/main/extensions/thermal-camera-flir-lepton-usb"
 license: "GPL-3.0-or-later"
@@ -48,7 +48,7 @@ risk: medium
 compatibility:
   ados_version: ">=0.99.125"
   gcs_version: ">=0.56.0"
-  supported_boards: ["cm4", "cm5", "rk3582", "rk3576", "rk3566", "x86"]
+  supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3576", "rk3566", "generic-x86_64"]
 
 agent:
   runtime: python

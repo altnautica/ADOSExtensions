@@ -2,21 +2,23 @@
 
 The pod speaks the same frames over UDP, TCP, or a TTL serial port. A backend is
 anything that satisfies :class:`SiyiTransport`: open the link, send a framed
-byte string, and hand every received byte chunk to a callback. The session
-(``session.py``) owns exactly one transport and does all framing, so the
-backends stay dumb byte pipes.
+byte string, hand every received byte chunk to a callback, and report when its
+read side has ended so the session can reopen it. The session (``session.py``)
+owns exactly one transport and does all framing, so the backends stay dumb byte
+pipes.
 
 :class:`MockTransport` is a deterministic in-memory pod used by every unit test
 so the whole driver runs with no hardware attached: it answers the firmware and
 hardware-id queries for a configurable model, echoes gimbal attitude, and
 synthesises a laser range and an AI-track box. The real backends
-(:class:`UdpTransport`, :class:`TcpTransport`, :class:`UartTransport`) use only
-the standard library plus an optional serial dependency.
+(:class:`UdpTransport`, :class:`TcpTransport`, :class:`UartTransport`) use the
+standard library, plus ``pyserial`` for the serial port.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import struct
 from typing import Callable, Protocol, runtime_checkable
 
@@ -29,6 +31,7 @@ DEFAULT_PORT = 37260
 DEFAULT_BAUD = 115200
 
 OnBytes = Callable[[bytes], None]
+OnLost = Callable[[], None]
 
 
 @runtime_checkable
@@ -36,6 +39,8 @@ class SiyiTransport(Protocol):
     """The byte-pipe surface the session depends on."""
 
     def set_on_bytes(self, callback: OnBytes) -> None: ...
+
+    def set_on_lost(self, callback: OnLost) -> None: ...
 
     async def open(self) -> None: ...
 
@@ -61,6 +66,7 @@ class MockTransport:
         firmware: str = "v1.2.3",
         answer_identity: bool = True,
         track_box: tuple | None = None,
+        fail_opens: int = 0,
     ) -> None:
         self.model = model
         self.laser_range_m = laser_range_m
@@ -71,7 +77,12 @@ class MockTransport:
         # When False the mock stays silent on the firmware / hardware-id queries,
         # simulating a pod that is not yet reachable (drives the retry path).
         self.answer_identity = answer_identity
+        # How many upcoming open() calls fail (a pod that is not yet powered,
+        # or a serial device that has not enumerated); drives the reconnect path.
+        self.fail_opens = fail_opens
+        self.opens = 0
         self._on_bytes: OnBytes | None = None
+        self._on_lost: OnLost | None = None
         self.opened = False
         self.sent: list[bytes] = []
         # Internal pod state the mock mutates in response to commands.
@@ -91,8 +102,21 @@ class MockTransport:
     def set_on_bytes(self, callback: OnBytes) -> None:
         self._on_bytes = callback
 
+    def set_on_lost(self, callback: OnLost) -> None:
+        self._on_lost = callback
+
     async def open(self) -> None:
+        self.opens += 1
+        if self.fail_opens > 0:
+            self.fail_opens -= 1
+            raise ConnectionRefusedError("mock pod is not reachable")
         self.opened = True
+
+    def drop(self) -> None:
+        """End the read side, as a TCP EOF or an unplugged serial device does."""
+        self.opened = False
+        if self._on_lost is not None:
+            self._on_lost()
 
     async def close(self) -> None:
         self.opened = False
@@ -206,11 +230,16 @@ class MockTransport:
 
 
 class _UdpProtocol(asyncio.DatagramProtocol):
-    def __init__(self, on_bytes: OnBytes) -> None:
+    def __init__(self, on_bytes: OnBytes, on_lost: OnLost | None) -> None:
         self._on_bytes = on_bytes
+        self.on_lost = on_lost
 
     def datagram_received(self, data: bytes, _addr) -> None:
         self._on_bytes(data)
+
+    def connection_lost(self, _exc: Exception | None) -> None:
+        if self.on_lost is not None:
+            self.on_lost()
 
 
 class UdpTransport:
@@ -220,19 +249,29 @@ class UdpTransport:
         self._host = host
         self._port = port
         self._on_bytes: OnBytes | None = None
+        self._on_lost: OnLost | None = None
         self._transport: asyncio.DatagramTransport | None = None
+        self._protocol: _UdpProtocol | None = None
 
     def set_on_bytes(self, callback: OnBytes) -> None:
         self._on_bytes = callback
 
+    def set_on_lost(self, callback: OnLost) -> None:
+        self._on_lost = callback
+
     async def open(self) -> None:
         loop = asyncio.get_running_loop()
         cb = self._on_bytes or (lambda _b: None)
-        self._transport, _ = await loop.create_datagram_endpoint(
-            lambda: _UdpProtocol(cb), remote_addr=(self._host, self._port)
+        self._transport, self._protocol = await loop.create_datagram_endpoint(
+            lambda: _UdpProtocol(cb, self._on_lost),
+            remote_addr=(self._host, self._port),
         )
 
     async def close(self) -> None:
+        # Detach first: a close the session asked for is not a lost link.
+        if self._protocol is not None:
+            self._protocol.on_lost = None
+            self._protocol = None
         if self._transport is not None:
             self._transport.close()
             self._transport = None
@@ -250,12 +289,16 @@ class TcpTransport:
         self._host = host
         self._port = port
         self._on_bytes: OnBytes | None = None
+        self._on_lost: OnLost | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
         self._read_task: asyncio.Task | None = None
 
     def set_on_bytes(self, callback: OnBytes) -> None:
         self._on_bytes = callback
+
+    def set_on_lost(self, callback: OnLost) -> None:
+        self._on_lost = callback
 
     async def open(self) -> None:
         self._reader, self._writer = await asyncio.open_connection(
@@ -265,12 +308,17 @@ class TcpTransport:
 
     async def _read_loop(self) -> None:
         assert self._reader is not None
-        while True:
-            chunk = await self._reader.read(4096)
-            if not chunk:
-                return
-            if self._on_bytes is not None:
-                self._on_bytes(chunk)
+        try:
+            while True:
+                chunk = await self._reader.read(4096)
+                if not chunk:
+                    break
+                if self._on_bytes is not None:
+                    self._on_bytes(chunk)
+        except OSError:
+            pass
+        if self._on_lost is not None:
+            self._on_lost()
 
     async def close(self) -> None:
         if self._read_task is not None:
@@ -289,52 +337,104 @@ class TcpTransport:
 
 
 class UartTransport:
-    """TTL serial link to the pod (115200 8N1). Requires pyserial-asyncio."""
+    """TTL serial link to the pod (115200 8N1) over ``pyserial``.
+
+    The port is opened non-blocking and its file descriptor is watched by the
+    event loop: the reader callback drains whatever arrived into the session,
+    and writes go straight to the descriptor. A read error or end-of-file (the
+    adapter was unplugged) reports the link lost so the session reopens it.
+    Needs an event loop with ``add_reader`` support (any POSIX selector loop).
+    """
 
     def __init__(self, port: str, baud: int = DEFAULT_BAUD) -> None:
         self._port = port
         self._baud = baud
         self._on_bytes: OnBytes | None = None
-        self._reader = None
-        self._writer = None
-        self._read_task: asyncio.Task | None = None
+        self._on_lost: OnLost | None = None
+        self._serial = None
+        self._fd: int | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def set_on_bytes(self, callback: OnBytes) -> None:
         self._on_bytes = callback
 
-    async def open(self) -> None:
-        try:
-            import serial_asyncio  # type: ignore
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError(
-                "UART transport requires 'pyserial-asyncio'; install it or use "
-                "the UDP transport"
-            ) from exc
-        self._reader, self._writer = await serial_asyncio.open_serial_connection(
-            url=self._port, baudrate=self._baud
-        )
-        self._read_task = asyncio.create_task(self._read_loop())
+    def set_on_lost(self, callback: OnLost) -> None:
+        self._on_lost = callback
 
-    async def _read_loop(self) -> None:  # pragma: no cover - needs hardware
-        assert self._reader is not None
-        while True:
-            chunk = await self._reader.read(256)
-            if not chunk:
-                return
-            if self._on_bytes is not None:
-                self._on_bytes(chunk)
+    async def open(self) -> None:
+        import serial  # pyserial
+
+        loop = asyncio.get_running_loop()
+        # timeout=0 / write_timeout=0: pyserial opens the descriptor
+        # O_NONBLOCK and never blocks the loop on a read or a write.
+        ser = serial.Serial(self._port, self._baud, timeout=0, write_timeout=0)
+        fd = ser.fileno()
+        try:
+            loop.add_reader(fd, self._on_readable)
+        except BaseException:
+            ser.close()
+            raise
+        self._serial = ser
+        self._fd = fd
+        self._loop = loop
+
+    def _on_readable(self) -> None:
+        fd = self._fd
+        if fd is None:
+            return
+        try:
+            chunk = os.read(fd, 4096)
+        except (BlockingIOError, InterruptedError):
+            return
+        except OSError:
+            chunk = b""
+        if not chunk:
+            self._lose()
+            return
+        if self._on_bytes is not None:
+            self._on_bytes(chunk)
+
+    def _lose(self) -> None:
+        # Stop watching the dead descriptor; the session closes and reopens.
+        if self._loop is not None and self._fd is not None:
+            self._loop.remove_reader(self._fd)
+        self._fd = None
+        if self._on_lost is not None:
+            self._on_lost()
 
     async def close(self) -> None:
-        if self._read_task is not None:
-            self._read_task.cancel()
-            self._read_task = None
-        if self._writer is not None:
-            self._writer.close()
-            self._writer = None
-        self._reader = None
+        if self._loop is not None and self._fd is not None:
+            self._loop.remove_reader(self._fd)
+        self._fd = None
+        self._loop = None
+        if self._serial is not None:
+            ser, self._serial = self._serial, None
+            ser.close()
 
-    async def send(self, frame: bytes) -> None:  # pragma: no cover - needs hardware
-        if self._writer is None:
+    async def send(self, frame: bytes) -> None:
+        fd = self._fd
+        loop = self._loop
+        if fd is None or loop is None:
             raise RuntimeError("UART transport is not open")
-        self._writer.write(frame)
-        await self._writer.drain()
+        view = memoryview(frame)
+        while view:
+            try:
+                written = os.write(fd, view)
+            except (BlockingIOError, InterruptedError):
+                await self._writable(loop, fd)
+                continue
+            view = view[written:]
+
+    @staticmethod
+    async def _writable(loop: asyncio.AbstractEventLoop, fd: int) -> None:
+        ready = loop.create_future()
+
+        def _wake() -> None:
+            if not ready.done():
+                ready.set_result(None)
+
+        loop.add_writer(fd, _wake)
+        try:
+            await ready
+        finally:
+            loop.remove_writer(fd)

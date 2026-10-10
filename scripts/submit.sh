@@ -12,7 +12,11 @@
 #   ADOS_REGISTRY_URL   Base URL. Defaults to https://registry.ados.altnautica.com
 #   ADOS_REGISTRY_TOKEN Bearer token tied to the publisher account.
 #
-# Categories: drivers, ui, ai, telemetry, tools.
+# Categories (required): drivers, ui, ai, telemetry, tools.
+#
+# The registry form fields (plugin id, version, manifest, signature, signer
+# id, payload hash, version bounds) are derived from the archive by
+# scripts/registry_submit_fields.py, which needs python3 with PyYAML.
 #
 # Exit codes follow the agent's CLI envelope:
 #   0  success
@@ -27,7 +31,7 @@ set -euo pipefail
 
 usage() {
   cat <<EOF >&2
-usage: submit.sh <archive.signed.adosplug> [--repo-url URL] [--category CAT]
+usage: submit.sh <archive.signed.adosplug> --category CAT [--repo-url URL]
 
 Required env: ADOS_REGISTRY_TOKEN
 Optional env: ADOS_REGISTRY_URL (default https://registry.ados.altnautica.com)
@@ -71,18 +75,44 @@ if [[ -z "${ADOS_REGISTRY_TOKEN:-}" ]]; then
   exit 2
 fi
 
-base_url="${ADOS_REGISTRY_URL:-https://registry.ados.altnautica.com}"
+if [[ -z "${category}" ]]; then
+  echo "--category is required (drivers ui ai telemetry tools)" >&2
+  exit 2
+fi
+case "${category}" in
+  drivers|ui|ai|telemetry|tools) ;;
+  *)
+    echo "invalid category '${category}'; expected one of: drivers ui ai telemetry tools" >&2
+    exit 2
+    ;;
+esac
 
-form_args=( -F "archive=@${archive}" )
-if [[ -n "${repo_url}" ]]; then
-  form_args+=( -F "repo_url=${repo_url}" )
+if ! python3 -c 'import yaml' 2>/dev/null; then
+  echo "python3 with PyYAML is required (pip install pyyaml)" >&2
+  exit 2
 fi
-if [[ -n "${category}" ]]; then
-  form_args+=( -F "category=${category}" )
-fi
+
+base_url="${ADOS_REGISTRY_URL:-https://registry.ados.altnautica.com}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 response="$(mktemp)"
-trap 'rm -f "${response}"' EXIT
+manifest_file="$(mktemp)"
+trap 'rm -f "${response}" "${manifest_file}"' EXIT
+
+fields="$(python3 "${script_dir}/registry_submit_fields.py" "${archive}" "${manifest_file}")" || exit 2
+
+form_args=(
+  -F "archive=@${archive}"
+  -F "manifest_yaml=<${manifest_file}"
+  --form-string "category=${category}"
+)
+if [[ -n "${repo_url}" ]]; then
+  form_args+=( --form-string "repo_url=${repo_url}" )
+fi
+while IFS= read -r line; do
+  [[ -z "${line}" ]] && continue
+  form_args+=( --form-string "${line}" )
+done <<< "${fields}"
 
 http_status="$(curl --silent --show-error \
   --output "${response}" \

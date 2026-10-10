@@ -2,6 +2,13 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.3.3
+
+- `supported_boards` now lists HAL board profile names or SoC ids (`cm4`,
+  `cm5`, `rock-5c-lite`, `rk3576`, `rk3566`, `generic-x86_64`), so the
+  install gate matches probed boards.
+- The documentation link points at the extensions catalog entry.
+
 ## 1.3.2
 
 - Default Skill keys no longer collide with cockpit bindings: Cycle palette

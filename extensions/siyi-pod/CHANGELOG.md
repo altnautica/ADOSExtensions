@@ -4,6 +4,27 @@
 
 - The Cycle palette Skill's default key is `o` (was `p`, which the cockpit
   reserves for the picture-in-picture toggle, so the Skill was left unbound).
+- The UART transport starts. It needed `pyserial-asyncio`, which was never
+  declared or installed, so `transport: uart` failed on every start. It now
+  opens the port through `pyserial` (declared as a dependency) without
+  blocking, reads it from the event loop, and writes to it directly.
+- A pod that is absent at start, or whose link drops, is reconnected on every
+  transport. When the link fails to open, or its read side ends (a TCP pod
+  that was power-cycled, an unplugged serial adapter), the session closes it,
+  waits 2 s, and reopens it, with no attempt cap; before, only UDP recovered,
+  and a TCP or UART pod stayed dead until the plugin restarted. Starting the
+  plugin no longer fails when the pod is absent. While the link is down every
+  request fails fast as a timeout, and a reopened link puts the pod back
+  through identification before it is commanded, with the operator's settings
+  re-applied.
+- The control loop re-reads the declarative settings (zoom, gimbal mode,
+  palette, thermal gain, recording) once a second rather than every tick; the
+  one-shot photo, record, recenter, laser and Skill keys are still read every
+  tick. This cuts the idle config round-trips to the host by about a quarter.
+- `supported_boards` now lists HAL board profile names or SoC ids (`cm4`,
+  `cm5`, `rock-5c-lite`, `rk3588s2`, `rk3576`, `rpi5`, `generic-x86_64`), so the
+  install gate matches probed boards.
+- The documentation link points at the extensions catalog entry.
 
 ## 0.5.0
 
