@@ -1,0 +1,160 @@
+# extensions
+#
+# The per-extension gate. Runs on every pull request and push to main over the
+# full extension matrix, and is called by the release workflows
+# (release.yml, vision-nav-release.yml, world-engine-release.yml) with the one
+# extension being tagged, so a release runs exactly the checks a pull request
+# does before anything is packed or signed.
+#
+# Per extension:
+#   - the manifest validates against the agent's published plugin-manifest
+#     schema at the pinned agent revision (ajv);
+#   - scripts/lint-manifest.mjs passes (permissions, slots, versions,
+#     capability catalog, documentation link, config keys) against a
+#     Documentation checkout;
+#   - the GCS half's tests (`pnpm --filter ./extensions/<x>/gcs test`, the
+#     same command as `pnpm test:<x>`);
+#   - the Python agent half's tests, one pytest invocation per extension;
+#   - `cargo test -p vision-nav` for vision-nav.
+#
+# The agent revision is the repository variable ADOS_AGENT_REV when set, else
+# the committed ADOS_AGENT_REV file the release builds already pin to.
+
+name: extensions
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+    inputs:
+      ext:
+        description: "The one extension directory name to check."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
+  ADOS_DOCS_REPO: https://github.com/altnautica/Documentation
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      exts: ${{ steps.list.outputs.exts }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: List the extensions to check
+        id: list
+        env:
+          ONE: ${{ inputs.ext }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ONE}" ]; then
+            [ -f "extensions/${ONE}/manifest.yaml" ] || { echo "no extension ${ONE}" >&2; exit 1; }
+            exts="[\"${ONE}\"]"
+          else
+            exts=$(ls -d extensions/*/manifest.yaml | cut -d/ -f2 | python3 -c 'import json,sys; print(json.dumps([l.strip() for l in sys.stdin if l.strip()]))')
+          fi
+          echo "exts=${exts}" >> "$GITHUB_OUTPUT"
+          echo "checking: ${exts}"
+
+  check:
+    needs: plan
+    name: ${{ matrix.ext }}
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        ext: ${{ fromJSON(needs.plan.outputs.exts) }}
+    env:
+      EXT: ${{ matrix.ext }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the agent revision
+        env:
+          REV_VAR: ${{ vars.ADOS_AGENT_REV }}
+        run: |
+          set -euo pipefail
+          rev="${REV_VAR:-$(cat ADOS_AGENT_REV)}"
+          echo "AGENT_REV=${rev}" >> "$GITHUB_ENV"
+          echo "agent revision ${rev}"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate the manifest against the agent schema
+        run: |
+          set -euo pipefail
+          schema="${RUNNER_TEMP}/plugin-manifest.schema.json"
+          curl -fsSL -o "${schema}" \
+            "https://raw.githubusercontent.com/altnautica/ADOSDroneAgent/${AGENT_REV}/schemas/plugin-manifest.schema.json"
+          npm install --no-save --no-package-lock --prefix "${RUNNER_TEMP}/ajv" ajv@8 >/dev/null
+          AJV_DIR="${RUNNER_TEMP}/ajv/node_modules/ajv" node --input-type=module -e '
+            import { createRequire } from "node:module";
+            import { readFileSync } from "node:fs";
+            import YAML from "yaml";
+            const require = createRequire(process.env.AJV_DIR + "/");
+            const Ajv2020 = require(process.env.AJV_DIR + "/dist/2020").default;
+            const ajv = new Ajv2020({ strict: false, allErrors: true });
+            const validate = ajv.compile(JSON.parse(readFileSync(process.argv[1], "utf8")));
+            const manifest = YAML.parse(readFileSync(process.argv[2], "utf8"));
+            if (!validate(manifest)) {
+              for (const e of validate.errors) console.error(`FAIL ${e.instancePath || "/"} ${e.message}`);
+              process.exit(1);
+            }
+            console.log(`schema: OK ${process.argv[2]}`);
+          ' "${schema}" "extensions/${EXT}/manifest.yaml"
+
+      - name: Check out Documentation for the docs link check
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "${ADOS_DOCS_REPO}" "${GITHUB_WORKSPACE}/../Documentation"
+
+      - name: Lint the manifest
+        run: node scripts/lint-manifest.mjs "extensions/${EXT}/manifest.yaml"
+
+      - name: GCS tests
+        run: |
+          pnpm --filter @altnautica/plugin-sdk build
+          pnpm --filter "./extensions/${EXT}/gcs" test
+
+      - name: Setup uv
+        if: hashFiles(format('extensions/{0}/agent/tests/**', matrix.ext)) != ''
+        uses: astral-sh/setup-uv@v5
+
+      - name: Python agent tests
+        if: hashFiles(format('extensions/{0}/agent/tests/**', matrix.ext)) != ''
+        run: |
+          uv sync --all-packages --all-extras --group dev
+          uv run pytest "extensions/${EXT}/agent/tests"
+
+      - name: Check out the agent SDK (sibling path for the workspace path dep)
+        if: matrix.ext == 'vision-nav'
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
+          git -C "${dest}" checkout "${AGENT_REV}"
+
+      - name: Install Rust toolchain
+        if: matrix.ext == 'vision-nav'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust tests
+        if: matrix.ext == 'vision-nav'
+        run: cargo test -p vision-nav

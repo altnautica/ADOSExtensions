@@ -21,24 +21,46 @@ on:
       - "siyi-pod-v*"
 
 jobs:
+  route:
+    runs-on: ubuntu-latest
+    outputs:
+      ext: ${{ steps.route.outputs.ext }}
+    steps:
+      - name: Pick the extension from the tag
+        id: route
+        run: |
+          # Tag form: <ext>-v<semver>
+          echo "ext=${GITHUB_REF_NAME%-v*}" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: route
+    uses: ./.github/workflows/extensions.yml
+    with:
+      ext: ${{ needs.route.outputs.ext }}
+
   build-and-release:
+    needs: [route, checks]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      EXT: ${{ needs.route.outputs.ext }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Pick the extension from the tag
-        id: route
+      - name: Check the tag matches the manifest version
         run: |
-          tag="${GITHUB_REF_NAME}"
-          # Tag form: <ext>-v<semver>
-          ext="${tag%-v*}"
-          version="${tag##*-v}"
-          echo "ext=${ext}" >> "$GITHUB_OUTPUT"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          # Tag form: <ext>-v<semver>. The archive names the manifest version,
+          # so a tag that disagrees would publish a mis-versioned release.
+          tag_version="${GITHUB_REF_NAME##*-v}"
+          manifest_version="$(grep -E '^version:' "extensions/${EXT}/manifest.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
+          if [ "${tag_version}" != "${manifest_version}" ]; then
+            echo "ERROR: tag ${GITHUB_REF_NAME} does not match manifest version ${manifest_version}" >&2
+            exit 1
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -56,51 +78,69 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pnpm install --frozen-lockfile=false
+          pnpm install --frozen-lockfile
           pip install cryptography
 
       - name: Build workspace SDK
         run: pnpm --filter @altnautica/plugin-sdk build
 
-      - name: Run extension tests
-        run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" test
-
       - name: Pack archive
-        run: ./scripts/pack.sh "${{ steps.route.outputs.ext }}"
+        run: ./scripts/pack.sh "${EXT}"
 
       - name: Sign archive
         env:
-          # Use the same first-party private key as sign-release.yml
-          # (the newer pipeline used by extensions/vision-nav-v* tags).
-          # Single keypair means a single public half lives on the
-          # agent at /etc/ados/plugin-keys/altnautica-2026-A.pem.
+          # The same first-party key as the other release workflows; its public
+          # half is committed at keys/altnautica-2026-A.pub.pem.
           ADOS_SIGNING_KEY: ${{ secrets.ALTNAUTICA_PLUGIN_KEY_A }}
           ADOS_SIGNING_KEY_INLINE: "1"
           ADOS_SIGNING_KEY_ID: altnautica-2026-A
         run: |
-          archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | head -n1)"
+          archive="extensions/${EXT}/dist/$(ls "extensions/${EXT}/dist" | grep -E '\.adosplug$' | grep -v '\.signed\.' | head -n1)"
           ./scripts/sign.sh "${archive}"
+          echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
 
-      - name: Assert signer id is first-party
+      - name: Verify the signature against the committed public key
         run: |
-          # Defensive guard against a misconfigured ADOS_SIGNING_KEY_ID
-          # secret producing a placeholder signer (the agent rejects
-          # the install with signature_unknown_signer at runtime, but
-          # we'd rather fail the workflow than ship a broken archive
-          # to the catalog). Allowlist mirrors FIRST_PARTY_SIGNERS in
-          # the agent at src/ados/plugins/signing.py.
-          signed="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.signed\.adosplug$' | head -n1)"
-          signer=$(unzip -p "${signed}" SIGNATURE | head -n1)
-          case "${signer}" in
-            altnautica-2026-A|altnautica-2026-B)
-              echo "OK: signer ${signer}"
-              ;;
-            *)
-              echo "ERROR: signer '${signer}' is not in the first-party allowlist" >&2
-              echo "ERROR: set ADOS_SIGNING_KEY_ID secret to altnautica-2026-A or -B" >&2
-              exit 1
-              ;;
-          esac
+          set -euo pipefail
+          # Recompute the canonical payload hash from the signed archive (sha256
+          # over the sorted "<path>\n<sha256-hex>\n" of every entry except
+          # SIGNATURE, the agent's archive rule) and verify SIGNATURE line 2
+          # against keys/<signer>.pub.pem. A wrong key id, a mismatched private
+          # key or a tampered entry fails here instead of at install.
+          python3 - "${SIGNED}" <<'PY'
+          import base64
+          import hashlib
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          from cryptography.exceptions import InvalidSignature
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+          from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              lines = z.read("SIGNATURE").decode("ascii").splitlines()
+              entries = sorted(
+                  (i.filename, z.read(i))
+                  for i in z.infolist()
+                  if not i.is_dir() and i.filename != "SIGNATURE"
+              )
+          signer, sig_b64 = lines[0].strip(), lines[1].strip()
+          pem = Path("keys") / f"{signer}.pub.pem"
+          if not pem.is_file():
+              sys.exit(f"ERROR: signer '{signer}' has no committed public key at {pem}")
+          key = load_pem_public_key(pem.read_bytes())
+          if not isinstance(key, Ed25519PublicKey):
+              sys.exit(f"ERROR: {pem} is not an Ed25519 public key")
+          agg = hashlib.sha256()
+          for name, data in entries:
+              agg.update(f"{name}\n{hashlib.sha256(data).hexdigest()}\n".encode())
+          try:
+              key.verify(base64.b64decode(sig_b64), agg.digest())
+          except InvalidSignature:
+              sys.exit(f"ERROR: the signature does not verify against {pem}")
+          print(f"OK: signature by {signer} verifies against {pem}")
+          PY
 
       - name: Emit SHA-256 checksum
         run: |
@@ -108,15 +148,15 @@ jobs:
           # pin to gate install_from_url. Emit the digest alongside the
           # signed archive in shasum-compatible format so the catalog
           # client can verify ``shasum -a 256 -c`` on download.
-          signed="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.signed\.adosplug$' | head -n1)"
-          digest=$(shasum -a 256 "${signed}" | awk '{print $1}')
-          printf '%s  %s\n' "${digest}" "$(basename "${signed}")" > "${signed}.sha256"
-          cat "${signed}.sha256"
+          digest=$(shasum -a 256 "${SIGNED}" | awk '{print $1}')
+          printf '%s  %s\n' "${digest}" "$(basename "${SIGNED}")" > "${SIGNED}.sha256"
+          cat "${SIGNED}.sha256"
 
       - name: Upload to GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
           files: |
-            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
-            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug.sha256
-            extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md
+            ${{ env.SIGNED }}
+            ${{ env.SIGNED }}.sha256
+            extensions/${{ env.EXT }}/CHANGELOG.md

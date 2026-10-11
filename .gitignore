@@ -21,7 +21,8 @@ extensions/world-engine/gcs/assets/
 .omp/
 
 # Signing keys and local secrets. Public .pem files stay committable.
-keys/
+keys/*
+!keys/*.pub.pem
 *.priv.pem
 *.ed25519
 *.key

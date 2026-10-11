@@ -19,6 +19,12 @@ uses independent semantic versioning per extension.
   GUIDED/GUIDED_NOGPS are recognised; an unrecognised vehicle never reads
   as guided.
 
+### Changed
+
+- The agent half is split into `fc_state.py` (flight-controller, pose and
+  gimbal state and their MAVLink handlers) and `loop.py` (the follow loop and
+  the `follow.state` read-back). Behaviour is unchanged.
+
 ## [0.2.9]
 
 ### Fixed

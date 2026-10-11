@@ -36,7 +36,13 @@ env:
   ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
 
 jobs:
+  checks:
+    uses: ./.github/workflows/extensions.yml
+    with:
+      ext: world-engine
+
   binaries:
+    needs: checks
     name: Binaries (${{ matrix.arch_os }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -188,14 +194,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pnpm install --frozen-lockfile=false
+          pnpm install --frozen-lockfile
           pip install cryptography
 
       - name: Build the GCS module
         run: pnpm build:world-engine
-
-      - name: Run GCS tests
-        run: pnpm test:world-engine
 
       - name: Collect the binaries
         uses: actions/download-artifact@v4
@@ -229,20 +232,48 @@ jobs:
           ADOS_SIGNING_KEY_ID: altnautica-2026-A
         run: ./scripts/sign.sh "${ARCHIVE}"
 
-      - name: Assert signer id is first-party
+      - name: Verify the signature against the committed public key
         run: |
-          # Allowlist mirrors FIRST_PARTY_SIGNERS in the agent. A misconfigured
-          # key id fails here rather than at install as an unknown signer.
-          signer=$(unzip -p "${SIGNED}" SIGNATURE | head -n1)
-          case "${signer}" in
-            altnautica-2026-A|altnautica-2026-B)
-              echo "OK: signer ${signer}"
-              ;;
-            *)
-              echo "ERROR: signer '${signer}' is not in the first-party allowlist" >&2
-              exit 1
-              ;;
-          esac
+          set -euo pipefail
+          # Recompute the canonical payload hash from the signed archive (sha256
+          # over the sorted "<path>\n<sha256-hex>\n" of every entry except
+          # SIGNATURE, the agent's archive rule) and verify SIGNATURE line 2
+          # against keys/<signer>.pub.pem. A wrong key id, a mismatched private
+          # key or a tampered entry fails here instead of at install.
+          python3 - "${SIGNED}" <<'PY'
+          import base64
+          import hashlib
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          from cryptography.exceptions import InvalidSignature
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+          from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              lines = z.read("SIGNATURE").decode("ascii").splitlines()
+              entries = sorted(
+                  (i.filename, z.read(i))
+                  for i in z.infolist()
+                  if not i.is_dir() and i.filename != "SIGNATURE"
+              )
+          signer, sig_b64 = lines[0].strip(), lines[1].strip()
+          pem = Path("keys") / f"{signer}.pub.pem"
+          if not pem.is_file():
+              sys.exit(f"ERROR: signer '{signer}' has no committed public key at {pem}")
+          key = load_pem_public_key(pem.read_bytes())
+          if not isinstance(key, Ed25519PublicKey):
+              sys.exit(f"ERROR: {pem} is not an Ed25519 public key")
+          agg = hashlib.sha256()
+          for name, data in entries:
+              agg.update(f"{name}\n{hashlib.sha256(data).hexdigest()}\n".encode())
+          try:
+              key.verify(base64.b64decode(sig_b64), agg.digest())
+          except InvalidSignature:
+              sys.exit(f"ERROR: the signature does not verify against {pem}")
+          print(f"OK: signature by {signer} verifies against {pem}")
+          PY
 
       - name: Emit SHA-256 checksum
         run: |

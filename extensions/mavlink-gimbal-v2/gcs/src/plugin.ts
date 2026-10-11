@@ -8,16 +8,9 @@
 
 import { definePlugin } from "@altnautica/plugin-sdk";
 
+import { watchLimits } from "./config-limits";
 import { mountPanel, type PanelHandle } from "./panel";
-import {
-  DEFAULT_LIMITS,
-  type AxisLimits,
-  type GimbalState,
-} from "./types";
-
-interface ConfigShape {
-  limits?: Partial<AxisLimits>;
-}
+import { DEFAULT_LIMITS, type GimbalState } from "./types";
 
 let panel: PanelHandle | null = null;
 let rootEl: HTMLElement | null = null;
@@ -39,11 +32,10 @@ definePlugin({
         panel?.setState(sample);
       }
     });
-    ctx.config.onChange<ConfigShape>((next) => {
-      const merged: AxisLimits = { ...DEFAULT_LIMITS, ...(next.limits ?? {}) };
+    watchLimits(ctx, DEFAULT_LIMITS, (limits) => {
       if (rootEl) {
         panel?.destroy();
-        panel = mountPanel(ctx, rootEl, { limits: merged });
+        panel = mountPanel(ctx, rootEl, { limits });
       }
     });
   },

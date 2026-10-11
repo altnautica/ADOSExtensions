@@ -244,13 +244,11 @@ class _Clock:
 def _install_clock(monkeypatch: Any) -> _Clock:
     """Point the plugin's clock seam at a controllable clock.
 
-    ``raising=False`` on purpose: against a build with no seam this patch is
-    a no-op and the plugin keeps reading real time, so a staleness test still
-    runs and fails on its behavioural assertion (a setpoint that should never
-    have been emitted) rather than erroring on a missing attribute.
+    Every module of the plugin reads ``follow_me.fc_state.monotonic`` at call
+    time, so one patch drives the whole staleness surface.
     """
     clock = _Clock()
-    monkeypatch.setattr(follow_me, "_monotonic", clock, raising=False)
+    monkeypatch.setattr(follow_me.fc_state, "monotonic", clock)
     return clock
 
 

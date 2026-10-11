@@ -1,0 +1,2 @@
+'made.up.capability', which is not in the capability
+'plugin.other-ext.world.read', which is not in the capability

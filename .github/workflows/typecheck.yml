@@ -35,11 +35,8 @@ jobs:
         with:
           node-version: 20
 
-      # Frozen deliberately, unlike release.yml and vision-nav-release.yml which
-      # both use `--frozen-lockfile=false`. Measured on this lockfile: a frozen
-      # install succeeds, so the stronger guarantee is available and a resolution
-      # that drifts from the committed lockfile should fail the gate rather than
-      # be silently accepted.
+      # Frozen, like every release workflow: a resolution that drifts from the
+      # committed lockfile fails the gate rather than being silently accepted.
       - name: Install
         run: pnpm install --frozen-lockfile
 

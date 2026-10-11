@@ -1,0 +1,2 @@
+missing 'telemetry.subscribe.gimbal'
+declares 'telemetry.subscribe.status'

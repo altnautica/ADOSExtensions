@@ -1,0 +1,22 @@
+id: com.example.fx-ok
+name: Fixture
+version: "1.0.0"
+documentation_url: "https://docs.altnautica.com/guide/page#a-section"
+
+agent:
+  entrypoint: plugin.py
+  permissions:
+    - id: mavlink.write
+    - id: vision.frame.read
+    - id: hardware.uart
+
+gcs:
+  entrypoint: "gcs/fx.mjs"
+  permissions:
+    - id: telemetry.subscribe.status
+    - id: made.up.capability
+    - id: plugin.other-ext.world.read
+  contributes:
+    skills:
+      - id: boost
+        activation: { via: config, config_key: boost }

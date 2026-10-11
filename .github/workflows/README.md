@@ -11,6 +11,7 @@ release manager can pick the pipeline that matches the situation.
 | `release.yml`                  | `mavlink-gimbal-v2-v*`, `follow-me-v*`, `siyi-pod-v*` | Per-extension release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. The tag list is the publish allowlist. |
 | `vision-nav-release.yml`       | `vision-nav-v*`                    | Pipeline for vision-nav: cross-compiles the Rust agent half against the SDK revision pinned in `ADOS_AGENT_REV`, then packs with `scripts/pack-rust.sh` and signs. |
 | `world-engine-release.yml`     | `world-engine-v*`                  | Pipeline for the World Engine: builds its binaries per arch (aarch64-linux, x86_64-linux, aarch64-macos), attaches them and the Rerun viewer wasm to the release as install-time payloads, then packs the small archive with `scripts/pack-rust.sh --payload-manifest` and signs. |
+| `extensions.yml`               | pull request, push to main, called by each release workflow | Per-extension checks: validates the manifest against the agent's plugin manifest schema, runs `scripts/lint-manifest.mjs`, the GCS tests, the agent pytest suite when one exists, and `cargo test` for vision-nav. |
 | `rust-check.yml`               | pull request, push to main         | Builds, clippies and tests the Rust agent half against the pinned SDK revision. |
 | `typecheck.yml`                | pull request, push to main         | TypeScript typecheck across every GCS package. |
 
@@ -31,13 +32,15 @@ git tag my-new-extension-v0.1.0
 git push origin my-new-extension-v0.1.0
 ```
 
-The tag triggers `release.yml`. The job checks out the repo, installs
-the workspace, runs that extension's GCS tests, packs the archive with
-`scripts/pack.sh` (which refuses to write a half-archive: both the GCS
-bundle and the module named by a Python `agent.entrypoint` have to be in
-the stage), signs it with `scripts/sign.sh` against the
-`ADOS_SIGNING_KEY` secret, and uploads the signed `.adosplug` to the
-GitHub Release matching the tag. See
+The tag triggers `release.yml`. It first runs `extensions.yml` for that
+extension and refuses a tag whose version differs from the manifest. The
+release job then installs the workspace with a frozen lockfile, packs the
+archive with `scripts/pack.sh` (which refuses to write a half-archive: both
+the GCS bundle and the module named by a Python `agent.entrypoint` have to
+be in the stage), signs it with `scripts/sign.sh` against the
+`ADOS_SIGNING_KEY` secret, verifies the signature against the committed
+public key `keys/<signer>.pub.pem`, and uploads the signed `.adosplug` to
+the GitHub Release matching the tag. See
 `ADOSDroneAgent/docs/plugin-signing/key-generation.md` for the
 maintainer key-generation runbook.
 

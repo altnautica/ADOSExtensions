@@ -34,8 +34,10 @@ from ados.sdk.tracking import LOCK_LOCKED, EffectiveLock, LockedTargetTracker
 
 from altnautica_gimbal_v2 import attitude as gimbal_attitude
 from altnautica_gimbal_v2.aim import AimConfig, GimbalAimController
+from altnautica_gimbal_v2.control import GimbalControlMixin
 from altnautica_gimbal_v2.ctx_router import ONBOARD_COMPUTER_COMP_ID, _CtxRouter
 from altnautica_gimbal_v2.mavlink_driver import MavlinkGimbalDriver
+from altnautica_gimbal_v2.tools import GimbalToolsMixin
 
 log = logging.getLogger(__name__)
 
@@ -43,36 +45,12 @@ log = logging.getLogger(__name__)
 # transport label reported on the health event and the status tool.
 _TRANSPORT = "mavlink"
 
-# How often the control loop reads the one-shot action keys (recenter / nadir)
-# and refreshes the rate-mode flag.
-_CONTROL_HZ = 5.0
-
-# One-shot action keys the cockpit Skills flip to true. The control loop fires
-# the matching command on the rising edge and resets the key so a re-press
-# fires again (the Skill Bar has no nonce; it writes the flag true each press).
-_ACTION_KEYS = ("recenter", "nadir")
-
-# Panel command keys. The Gimbal tab writes ``point`` ({pitch_deg, yaw_deg}),
-# ``roi`` ({lat_deg, lon_deg, alt_m}) or ``roi_clear`` (true); the control loop
-# executes each once and resets it, like the one-shot Skills.
-_POINT_KEY = "point"
-_ROI_KEY = "roi"
-_ROI_CLEAR_KEY = "roi_clear"
-
 # The ``gimbal`` telemetry channel is republished at most this often. The
 # gimbal reports its attitude far faster, and every publish is a host write.
 _TELEMETRY_MIN_INTERVAL_S = 0.2
 
 
-def _finite_numbers(*values: Any) -> bool:
-    """True when every value is a real, finite number (bools excluded)."""
-    return all(
-        isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
-        for v in values
-    )
-
-
-class GimbalV2Plugin:
+class GimbalV2Plugin(GimbalControlMixin, GimbalToolsMixin):
     """Lifecycle-hook plugin the runner instantiates with no args."""
 
     def __init__(self) -> None:
@@ -87,6 +65,10 @@ class GimbalV2Plugin:
         # Rate-control mode: when on, the aim loop commands the gimbal by
         # angular rate instead of an absolute angle. The Skill toggles it.
         self._rate_mode = False
+        # The ``aim`` flag, refreshed with ``rate_mode`` at _STATE_REFRESH_S.
+        self._aim_active = False
+        # Monotonic time of the last state-key refresh; None forces one.
+        self._state_refreshed_at: float | None = None
         # The pitch (degrees) the nadir Skill points the gimbal to (straight
         # down): the driver's lower pitch limit, resolved from its caps.
         self._nadir_pitch = -90.0
@@ -143,6 +125,7 @@ class GimbalV2Plugin:
             await self._cfg("designate_camera", "")
         )
         aim_default = bool(await self._cfg("aim", False))
+        self._aim_active = aim_default
         self._rate_mode = bool(await self._cfg("rate_mode", False))
 
         self._router = _CtxRouter(
@@ -312,13 +295,10 @@ class GimbalV2Plugin:
         now = time.monotonic()
         self._tracker.record(batch, now)
 
-        # The target action flips the ``aim`` key live; read it each batch
-        # so arming/disarming takes effect without a restart. The rate-mode
-        # flag is refreshed by the control loop.
-        try:
-            aim_active = bool(await ctx.config_kv.get("aim", False))
-        except Exception:  # noqa: BLE001
-            aim_active = False
+        # The target action flips the ``aim`` key live; the control loop
+        # refreshes it (and the rate-mode flag) once a second, so arming and
+        # disarming take effect without a restart or a read per batch.
+        aim_active = self._aim_active
 
         if not aim_active:
             # Not armed: do nothing (no command, no drop).
@@ -433,88 +413,6 @@ class GimbalV2Plugin:
             return None
         return s
 
-    # -- control loop (one-shot Skills + rate-mode) -------------------
-
-    async def _control_loop(self) -> None:
-        period = 1.0 / _CONTROL_HZ
-        while True:
-            await asyncio.sleep(period)
-            try:
-                await self.poll_control_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                log.warning("gimbal control tick failed: %s", exc)
-
-    async def poll_control_once(self) -> None:
-        """Refresh the rate-mode flag and fire any pending one-shot action.
-
-        Deterministic and idempotent so tests can drive it directly.
-        """
-        ctx = self._ctx
-        if ctx is None:
-            return
-        try:
-            self._rate_mode = bool(
-                await ctx.config_kv.get("rate_mode", self._rate_mode)
-            )
-        except Exception:  # noqa: BLE001
-            pass
-        # Publish the rate-mode Skill state on change, so the Skill Bar toggle
-        # reflects the mode the loop is actually in rather than a permanent idle.
-        if self._rate_mode != self._last_rate_published:
-            self._last_rate_published = self._rate_mode
-            try:
-                await ctx.events.publish(
-                    "sensor.gimbal.rate_mode",
-                    {"state": "active" if self._rate_mode else "idle"},
-                )
-            except Exception:  # noqa: BLE001
-                log.debug("gimbal rate-mode state publish failed", exc_info=True)
-        for key in _ACTION_KEYS:
-            try:
-                fired = bool(await ctx.config_kv.get(key, False))
-            except Exception:  # noqa: BLE001
-                fired = False
-            if not fired:
-                continue
-            await self._fire_action(key)
-            await self._reset_key(key)
-        await self._run_panel_commands(ctx)
-
-    async def _run_panel_commands(self, ctx: Any) -> None:
-        """Execute the Gimbal tab's point / ROI commands once each and reset
-        them. A value that is not the documented shape is dropped (reset) with
-        a warning rather than sent."""
-        point = await ctx.config_kv.get(_POINT_KEY, None)
-        if isinstance(point, dict):
-            pitch, yaw = point.get("pitch_deg"), point.get("yaw_deg")
-            if _finite_numbers(pitch, yaw):
-                await self._point_at(float(pitch), float(yaw))
-            else:
-                log.warning("gimbal point command is malformed: %r", point)
-            await self._reset_key(_POINT_KEY)
-        roi = await ctx.config_kv.get(_ROI_KEY, None)
-        if isinstance(roi, dict):
-            lat, lon, alt = roi.get("lat_deg"), roi.get("lon_deg"), roi.get("alt_m")
-            driver, session = self._driver, self._session
-            if not _finite_numbers(lat, lon, alt) or abs(lat) > 90 or abs(lon) > 180:
-                log.warning("gimbal ROI command is malformed: %r", roi)
-            elif driver is not None and session is not None:
-                try:
-                    await driver.set_roi_location(session, float(lat), float(lon), float(alt))
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("gimbal ROI lock failed: %s", exc)
-            await self._reset_key(_ROI_KEY)
-        if bool(await ctx.config_kv.get(_ROI_CLEAR_KEY, False)):
-            driver, session = self._driver, self._session
-            if driver is not None and session is not None:
-                try:
-                    await driver.clear_roi(session)
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("gimbal ROI release failed: %s", exc)
-            await self._reset_key(_ROI_CLEAR_KEY)
-
     # -- attitude read-back --------------------------------------------
 
     async def _on_attitude_status(self, delivery: dict[str, Any]) -> None:
@@ -547,24 +445,6 @@ class GimbalV2Plugin:
         except Exception:  # noqa: BLE001
             log.debug("gimbal telemetry extend failed", exc_info=True)
 
-    async def _fire_action(self, key: str) -> None:
-        if key == "recenter":
-            await self._point_at(0.0, 0.0, recenter_model=True)
-        elif key == "nadir":
-            await self._point_at(self._nadir_pitch, 0.0)
-
-    async def _reset_key(self, key: str) -> None:
-        """Reset a one-shot action key so a re-press fires again. The Skill Bar
-        writes the flag true each press with no nonce, so the agent clears it
-        after firing."""
-        setter = getattr(self._ctx.config_kv, "set", None)
-        if setter is None:
-            return
-        try:
-            await setter(key, False)
-        except Exception:  # noqa: BLE001
-            log.debug("gimbal action key reset failed: %s", key, exc_info=True)
-
     async def _point_at(
         self, pitch_deg: float, yaw_deg: float, *, recenter_model: bool = False
     ) -> dict:
@@ -584,49 +464,6 @@ class GimbalV2Plugin:
             # so a subsequent aim resumes from centre, not the pre-recenter angle.
             self._controller.reset()
         return {"ok": True, "pitch_deg": float(pitch_deg), "yaw_deg": float(yaw_deg)}
-
-    # -- MCP tools ----------------------------------------------------
-
-    def _register_tools(self, ctx: Any) -> None:
-        tools = getattr(ctx, "tools", None)
-        if tools is None or not hasattr(tools, "register"):
-            return
-        tools.register("status", self._tool_status)
-        tools.register("point_at", self._tool_point_at)
-        tools.register("recenter", self._tool_recenter)
-
-    async def _tool_status(self, _args: dict) -> dict:
-        aim = self._last_aim_state
-        return {
-            "transport": self._transport,
-            "connected": self._session is not None,
-            "rate_mode": self._rate_mode,
-            "aim": {
-                "aim_active": aim[0] if aim else False,
-                "commanding": aim[1] if aim else False,
-                "lock_state": aim[2] if aim else None,
-                "target_id": aim[3] if aim else None,
-            },
-        }
-
-    async def _tool_point_at(self, args: dict) -> dict:
-        # Every other tool here answers with the {ok, reason} contract, so a
-        # non-numeric or non-finite argument must too: raising out of the
-        # handler would show the caller a transport error instead of a usable
-        # refusal, and a NaN angle means "do not change" on the wire.
-        angles: dict[str, float] = {}
-        for name, default in (("pitch_deg", 0.0), ("yaw_deg", 0.0)):
-            try:
-                value = float(args.get(name, default))
-            except (TypeError, ValueError):
-                return {"ok": False, "reason": f"{name} must be a number"}
-            if not math.isfinite(value):
-                return {"ok": False, "reason": f"{name} must be finite"}
-            angles[name] = value
-        return await self._point_at(angles["pitch_deg"], angles["yaw_deg"])
-
-    async def _tool_recenter(self, _args: dict) -> dict:
-        return await self._point_at(0.0, 0.0, recenter_model=True)
 
     # -- accessors (used by tests) ------------------------------------
 

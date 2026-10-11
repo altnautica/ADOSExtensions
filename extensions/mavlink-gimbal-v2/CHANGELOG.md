@@ -9,6 +9,14 @@ All notable changes to the MAVLink Gimbal v2 Controller extension.
   `shift+r`, the Return-to-home chord), and the "Aim at this target" action
   `j` (was `g`, the Aim Skill key).
 - The documentation link points at the extensions catalog entry.
+- The Gimbal tab is rebuilt only when the configured axis limits change. The
+  host announces every config write, including the tab's own point and ROI
+  commands and the agent's reset of them, and each one used to tear down and
+  remount the panel, losing slider and focus state.
+- The agent half reads the `aim` and `rate_mode` flags once a second instead
+  of on every control tick and every detection batch; each tick reads only the
+  one-shot keys (`recenter`, `nadir`, `point`, `roi`, `roi_clear`). An aim
+  toggle takes effect within a second.
 
 ## 1.4.0
 

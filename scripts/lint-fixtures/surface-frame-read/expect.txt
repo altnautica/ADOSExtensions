@@ -1,0 +1,1 @@
+declares 'vision.frame.read' but the agent half contains no
