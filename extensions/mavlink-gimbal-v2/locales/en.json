@@ -27,6 +27,7 @@
   "state.mode": "Mode",
   "state.lastResponseSec": "Last response",
   "state.unitSec": "s",
+  "settings.title": "Settings",
   "settings.transport.title": "Transport",
   "settings.transport.label": "Driver",
   "settings.transport.mavlink": "MAVLink Gimbal v2 (ArduPilot, Storm32 NT, Gremsy)",

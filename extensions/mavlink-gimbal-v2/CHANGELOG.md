@@ -17,6 +17,12 @@ All notable changes to the MAVLink Gimbal v2 Controller extension.
   of on every control tick and every detection batch; each tick reads only the
   one-shot keys (`recenter`, `nadir`, `point`, `roi`, `roi_clear`). An aim
   toggle takes effect within a second.
+- Gimbal commands now reach the gimbal. The agent half declared component
+  191 on every send, which asks the host to check a reservation the plugin
+  never held, so the host refused each pitch, ROI and primary-control command.
+  Commands now go out with 191 in the frame header and no declared component,
+  the convention Follow-Me uses; 191 stays the companion's shared id and is not
+  reserved by this plugin.
 
 ## 1.4.0
 

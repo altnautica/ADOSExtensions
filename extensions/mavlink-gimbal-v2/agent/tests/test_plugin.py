@@ -31,6 +31,10 @@ class FakeMavlink:
         self.subscriptions: dict = {}
 
     async def send(self, msg_bytes: bytes, component_id: int | None = None) -> dict:
+        # The host's rule: a declared component_id must be one this plugin
+        # registered, or the send is refused.
+        if component_id is not None and component_id not in {c for c, _ in self.registered}:
+            raise RuntimeError(f"component_id {component_id} not reserved")
         self.sent.append((bytes(msg_bytes), component_id))
         return {}
 
@@ -158,9 +162,11 @@ async def test_locked_target_produces_a_gimbal_command() -> None:
 
         assert len(ctx.mavlink.sent) == 1
         frame, comp = ctx.mavlink.sent[0]
-        assert comp == 191
+        # Sent as the companion (header 191) without reserving that shared id.
+        assert comp is None
         # It is a real gimbal-manager pitch/yaw command.
         msg = mavlink2.MAVLink(None).decode(bytearray(frame))
+        assert msg.get_srcComponent() == 191
         assert msg.get_type() == "COMMAND_LONG"
         assert msg.command == MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
     finally:

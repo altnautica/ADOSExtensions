@@ -58,12 +58,16 @@ async def test_command_long_round_trips_to_gimbal_pitchyaw() -> None:
 
     assert len(fake.sent) == 1
     frame, comp = fake.sent[0]
-    assert comp == 191
+    # No reservation is asked for: 191 is the companion's shared id, and a
+    # declared component_id makes the host require this plugin to hold it.
+    assert comp is None
     assert len(frame) > 0
 
     decoder = mavlink2.MAVLink(None)
     msg = decoder.decode(bytearray(frame))
     assert msg.get_type() == "COMMAND_LONG"
+    assert msg.get_srcSystem() == 1
+    assert msg.get_srcComponent() == 191
     assert msg.command == MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW
     assert msg.target_system == 1
     assert msg.target_component == 154
@@ -91,11 +95,12 @@ async def test_command_int_round_trips_to_set_roi_location() -> None:
 
     assert len(fake.sent) == 1
     frame, comp = fake.sent[0]
-    assert comp == 191
+    assert comp is None
 
     decoder = mavlink2.MAVLink(None)
     msg = decoder.decode(bytearray(frame))
     assert msg.get_type() == "COMMAND_INT"
+    assert msg.get_srcComponent() == 191
     assert msg.command == MAV_CMD_DO_SET_ROI_LOCATION
     assert msg.x == 129710000  # lat * 1e7
     assert msg.y == 775940000  # lon * 1e7

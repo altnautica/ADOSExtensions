@@ -16,9 +16,13 @@ on an ACK; the gimbal-manager state machine handles re-emit on timeout, so
 a scheduled send that fails is logged, never raised back into the driver.
 
 The frame is sent under the vehicle's own system id with the onboard
-computer component id (191), matching the Follow-Me convention, so the
-autopilot / gimbal manager treats the command as an authorized on-board
-command on the same vehicle.
+computer component id (191) in its header, matching the Follow-Me
+convention, so the autopilot / gimbal manager treats the command as an
+authorized on-board command on the same vehicle. The send declares no
+``component_id``: that argument asks the host to check a reservation, and
+191 is the companion's shared id, never reserved by one plugin (a
+reservation is exclusive and would refuse every other on-board sender's
+191 frames). The host still gates the header id it carries.
 """
 
 from __future__ import annotations
@@ -57,7 +61,6 @@ class _CtxRouter:
         src_component: int = ONBOARD_COMPUTER_COMP_ID,
     ) -> None:
         self._ctx_mavlink = ctx_mavlink
-        self._src_component = int(src_component)
         self._loop = loop
         # A stateless encoder bound to the source (system, component). No
         # file object is attached; it is used only to pack messages into
@@ -128,7 +131,7 @@ class _CtxRouter:
 
         try:
             task = loop.create_task(
-                self._ctx_mavlink.send(frame, component_id=self._src_component)
+                self._ctx_mavlink.send(frame)
             )
             self._pending.add(task)
             task.add_done_callback(self._on_send_done)
