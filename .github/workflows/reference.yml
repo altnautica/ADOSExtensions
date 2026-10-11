@@ -37,8 +37,8 @@ jobs:
           set -uo pipefail
           cp extensions/follow-me/manifest.yaml /tmp/manifest.yaml
           sed -i 's/^version: .*/version: "0.0.0-selftest"/' extensions/follow-me/manifest.yaml
-          node scripts/emit-reference.mjs --check
-          status=$?
+          status=0
+          node scripts/emit-reference.mjs --check || status=$?
           cp /tmp/manifest.yaml extensions/follow-me/manifest.yaml
           if [ "$status" -ne 1 ]; then
             echo "planted drift was not detected (exit $status)"
