@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import { createPluginContext } from "../src/api";
-import { PluginClient } from "../src/client";
+import { PluginClient, TOKEN_MISSING_REFUSAL } from "../src/client";
 import { HostError, PROTOCOL_VERSION, type RpcEnvelope } from "../src/protocol";
 import { MemoryTransport } from "../src/transport";
 
@@ -324,5 +324,104 @@ describe("PluginClient capability token", () => {
     });
     await client.request("ping", "", {});
     expect(sent.map((e) => e.token)).toEqual([undefined, "tok-1", "tok-2"]);
+  });
+});
+
+describe("a request sent before the host published the token", () => {
+  /** A token-verifying host: a request without a token is refused as the
+   * host refuses it, one with a token is answered. */
+  function tokenHost(transport: MemoryTransport, sent: Array<string | undefined>) {
+    transport.onPluginSend = (env) => {
+      if (env.type !== "request") return;
+      sent.push(env.token);
+      transport.pushFromHost({
+        id: env.id,
+        type: "response",
+        method: env.method,
+        capability: env.capability,
+        args: env.token ? { ok: true } : null,
+        version: PROTOCOL_VERSION,
+        ...(env.token
+          ? {}
+          : { error: { code: "capability_denied", message: TOKEN_MISSING_REFUSAL } }),
+      });
+    };
+  }
+
+  function publishToken(transport: MemoryTransport, token: string) {
+    transport.pushFromHost({
+      id: "tok",
+      type: "event",
+      method: "capability.token",
+      capability: "",
+      args: { token },
+      version: PROTOCOL_VERSION,
+    });
+  }
+
+  it("is sent once more with the token when it arrives", async () => {
+    const { transport, client } = setup();
+    const sent: Array<string | undefined> = [];
+    tokenHost(transport, sent);
+    const pending = client.request("telemetry.subscribe", "telemetry.subscribe.gimbal", {
+      topic: "gimbal",
+    });
+    await Promise.resolve();
+    publishToken(transport, "tok-1");
+    await expect(pending).resolves.toEqual({ ok: true });
+    expect(sent).toEqual([undefined, "tok-1"]);
+  });
+
+  it("keeps a telemetry subscription the host refused before the token", async () => {
+    const { transport, client } = setup();
+    const ctx = createPluginContext({ client });
+    const sent: Array<string | undefined> = [];
+    tokenHost(transport, sent);
+    const seen: unknown[] = [];
+    const subscribing = ctx.telemetry.subscribe("gimbal", (s) => seen.push(s));
+    await Promise.resolve();
+    publishToken(transport, "tok-1");
+    await subscribing;
+    transport.pushFromHost({
+      id: "e1",
+      type: "event",
+      method: "telemetry.gimbal",
+      capability: "telemetry.subscribe.gimbal",
+      args: { pitchDeg: -30 },
+      version: PROTOCOL_VERSION,
+    });
+    expect(seen).toEqual([{ pitchDeg: -30 }]);
+  });
+
+  it("stands refused when no token arrives within the timeout", async () => {
+    const { transport, client } = setup();
+    const sent: Array<string | undefined> = [];
+    tokenHost(transport, sent);
+    await expect(client.request("ping", "", {}, { timeoutMs: 25 })).rejects.toMatchObject({
+      code: "capability_denied",
+      message: TOKEN_MISSING_REFUSAL,
+    });
+    expect(sent).toEqual([undefined]);
+  });
+
+  it("does not retry any other refusal", async () => {
+    const { transport, client } = setup();
+    let calls = 0;
+    transport.onPluginSend = (env) => {
+      calls += 1;
+      transport.pushFromHost({
+        id: env.id,
+        type: "response",
+        method: env.method,
+        capability: env.capability,
+        args: null,
+        version: PROTOCOL_VERSION,
+        error: { code: "capability_denied", message: "capability_denied:token_expired" },
+      });
+    };
+    const pending = client.request("ping", "", {}, { timeoutMs: 25 });
+    publishToken(transport, "tok-1");
+    await expect(pending).rejects.toMatchObject({ code: "capability_denied" });
+    expect(calls).toBe(1);
   });
 });

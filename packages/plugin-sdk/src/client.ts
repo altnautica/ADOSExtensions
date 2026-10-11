@@ -24,6 +24,9 @@ export type RequestCapability =
 /** Host event carrying the capability token to stamp on every request. */
 export const CAPABILITY_TOKEN_EVENT = "capability.token";
 
+/** The host's refusal of a request that carried no capability token. */
+export const TOKEN_MISSING_REFUSAL = "capability_denied:token_missing";
+
 /** One in-flight request awaiting the host's response. */
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -49,6 +52,8 @@ export class PluginClient {
    * request without one, so every request carries the current value.
    */
   private token: string | null = null;
+  /** Requests refused for a missing token, waiting for the host to publish one. */
+  private readonly tokenWaiters = new Set<(arrived: boolean) => void>();
 
   constructor(opts?: { transport?: Transport; idGen?: () => string }) {
     this.transport = opts?.transport ?? createWindowTransport();
@@ -66,14 +71,65 @@ export class PluginClient {
     }
     this.pending.clear();
     this.subscriptions.clear();
+    for (const waiter of [...this.tokenWaiters]) waiter(false);
   }
 
-  /** Send a request and wait for the host's response. */
-  request<TResult = unknown, TArgs = unknown>(
+  /**
+   * Send a request and wait for the host's response.
+   *
+   * A host that verifies capability tokens publishes the token when the frame
+   * loads, which can land after the plugin's `mount` sent its first requests
+   * (a telemetry subscription, a config read). Such a request is refused as
+   * {@link TOKEN_MISSING_REFUSAL}; it is sent once more when the token
+   * arrives within the request's timeout, and the refusal stands otherwise.
+   */
+  async request<TResult = unknown, TArgs = unknown>(
     method: string,
     capability: RequestCapability,
     args: TArgs,
     options?: { timeoutMs?: number },
+  ): Promise<TResult> {
+    const timeoutMs = options?.timeoutMs ?? 5_000;
+    const sentWithToken = this.token !== null;
+    try {
+      return await this.send<TResult, TArgs>(method, capability, args, timeoutMs);
+    } catch (err) {
+      if (
+        sentWithToken ||
+        !(err instanceof HostError) ||
+        err.code !== "capability_denied" ||
+        err.message !== TOKEN_MISSING_REFUSAL
+      ) {
+        throw err;
+      }
+      if (!(await this.tokenArrival(timeoutMs))) throw err;
+      return this.send<TResult, TArgs>(method, capability, args, timeoutMs);
+    }
+  }
+
+  /** Resolves true once a capability token is held, false after `timeoutMs`
+   * (unbounded for a request with no deadline) or on dispose. */
+  private tokenArrival(timeoutMs: number): Promise<boolean> {
+    if (this.token !== null) return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter = (arrived: boolean) => {
+        clearTimeout(timer);
+        this.tokenWaiters.delete(waiter);
+        resolve(arrived);
+      };
+      if (timeoutMs > 0 && timeoutMs !== Number.POSITIVE_INFINITY) {
+        timer = setTimeout(() => waiter(false), timeoutMs);
+      }
+      this.tokenWaiters.add(waiter);
+    });
+  }
+
+  private send<TResult, TArgs>(
+    method: string,
+    capability: RequestCapability,
+    args: TArgs,
+    timeoutMs: number,
   ): Promise<TResult> {
     const id = this.idGen();
     return new Promise<TResult>((resolve, reject) => {
@@ -93,7 +149,6 @@ export class PluginClient {
         ...(this.token !== null ? { token: this.token } : {}),
       };
       this.transport.send(env);
-      const timeoutMs = options?.timeoutMs ?? 5_000;
       if (timeoutMs > 0 && timeoutMs !== Number.POSITIVE_INFINITY) {
         const timer = setTimeout(() => {
           if (this.pending.get(id) !== slot) return;
@@ -215,6 +270,9 @@ export class PluginClient {
       if (env.method === CAPABILITY_TOKEN_EVENT) {
         const token = (env.args as { token?: unknown } | null)?.token;
         this.token = typeof token === "string" && token.length > 0 ? token : null;
+        if (this.token !== null) {
+          for (const waiter of [...this.tokenWaiters]) waiter(true);
+        }
       }
       const set = this.subscriptions.get(env.method);
       if (!set) return;
