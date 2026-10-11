@@ -20,6 +20,7 @@ import { MemoryTransport } from "./transport";
  *
  * Usage:
  *   const harness = createPluginHarness({
+ *     grantedCapabilities: ['telemetry.subscribe.battery'],
  *     mount: async (ctx) => { await ctx.telemetry.subscribe('battery', ...); },
  *   });
  *   await harness.start();
@@ -132,17 +133,18 @@ export function createPluginHarness(
         sendResponse(env, undefined, planned);
         return;
       }
-      // Capability gate. The harness mirrors the real host: an RPC
-      // whose declared capability isn't granted is rejected.
-      if (
-        env.capability &&
-        !granted.has(env.capability) &&
-        !env.capability.startsWith("ui.slot.") &&
-        env.method !== "telemetry.subscribe"
-      ) {
+      // Capability gate. The harness mirrors the real host: an RPC whose
+      // declared capability isn't granted is rejected. A telemetry
+      // subscription is gated on its full topic
+      // (`telemetry.subscribe.<topic>`), the way the host resolves it, so a
+      // test without the topic grant sees the denial a real install would.
+      // `ui.slot.*` is not exempt for RPCs either; only host-pushed events
+      // (which never pass through this gate) carry a slot capability freely.
+      const required = requiredCapability(env);
+      if (required && !granted.has(required)) {
         sendResponse(env, undefined, {
           code: "permission_denied",
-          message: `plugin lacks capability ${env.capability}`,
+          message: `plugin lacks capability ${required}`,
         });
         return;
       }
@@ -252,4 +254,13 @@ export function createPluginHarness(
       ctx.client.dispose();
     },
   };
+}
+
+/** The capability the host requires for one request envelope. */
+function requiredCapability(env: RpcEnvelope): string {
+  if (env.method === "telemetry.subscribe") {
+    const topic = (env.args as { topic?: unknown } | null)?.topic;
+    return typeof topic === "string" ? `telemetry.subscribe.${topic}` : env.capability;
+  }
+  return env.capability;
 }

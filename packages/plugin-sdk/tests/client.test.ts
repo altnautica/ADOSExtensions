@@ -51,7 +51,7 @@ describe("PluginClient.request", () => {
       });
     };
     await expect(
-      client.request("vehicle.command", "vehicle.command", {}),
+      client.request("command.send", "command.send", {}),
     ).rejects.toMatchObject({
       name: "HostError",
       code: "permission_denied",

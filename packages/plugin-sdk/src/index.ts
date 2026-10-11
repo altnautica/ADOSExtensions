@@ -22,7 +22,7 @@ export {
   type Transport,
 } from "./transport";
 
-export { PluginClient, CAPABILITY_TOKEN_EVENT } from "./client";
+export { PluginClient, CAPABILITY_TOKEN_EVENT, type RequestCapability } from "./client";
 
 export {
   createPluginContext,

@@ -286,7 +286,10 @@ export type PluginSlotName =
   | "settings.section"
   | "node.detail.tab"
   | "cockpit.panel"
-  | "flight.skill";
+  | "cockpit.widget"
+  | "flight.skill"
+  | "node.agent.page"
+  | "node.surface";
 
 /**
  * One iframe-slot contribution (a panel/overlay/notification channel). The

@@ -1,3 +1,4 @@
+import type { CapabilityId } from "./capabilities.generated";
 import {
   HostError,
   PROTOCOL_VERSION,
@@ -7,6 +8,18 @@ import {
 import { createWindowTransport, type Transport } from "./transport";
 
 type EventHandler<TArgs = unknown> = (args: TArgs) => void;
+
+/**
+ * The capability a request declares. A catalog id from the generated
+ * capability table, a topic-scoped telemetry grant, a plugin-scoped id, or
+ * `""` for a call the host does not gate. A misspelled catalog id is a type
+ * error instead of a runtime denial.
+ */
+export type RequestCapability =
+  | CapabilityId
+  | `telemetry.subscribe.${string}`
+  | `plugin.${string}`
+  | "";
 
 /** Host event carrying the capability token to stamp on every request. */
 export const CAPABILITY_TOKEN_EVENT = "capability.token";
@@ -58,7 +71,7 @@ export class PluginClient {
   /** Send a request and wait for the host's response. */
   request<TResult = unknown, TArgs = unknown>(
     method: string,
-    capability: string,
+    capability: RequestCapability,
     args: TArgs,
     options?: { timeoutMs?: number },
   ): Promise<TResult> {

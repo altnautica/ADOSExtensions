@@ -49,6 +49,41 @@ describe("createPluginHarness", () => {
     await harness.teardown();
   });
 
+  it("gates a telemetry subscription on its full topic capability", async () => {
+    let denied: string | null = null;
+    const harness = createPluginHarness({
+      // The bare base grant is not enough: the host resolves the topic.
+      grantedCapabilities: ["telemetry.subscribe", "telemetry.subscribe.gimbal"],
+      mount: async (ctx) => {
+        try {
+          await ctx.telemetry.subscribe("battery", () => {});
+        } catch (err) {
+          denied = (err as Error).message;
+        }
+      },
+    });
+    await harness.start();
+    expect(denied).toMatch(/telemetry\.subscribe\.battery/);
+    await harness.teardown();
+  });
+
+  it("gates ui.slot RPCs instead of exempting them", async () => {
+    let denied: string | null = null;
+    const harness = createPluginHarness({
+      grantedCapabilities: [],
+      mount: async (ctx) => {
+        try {
+          await ctx.notifications.publish({ channelId: "t", severity: "warning", title: "x" });
+        } catch (err) {
+          denied = (err as Error).message;
+        }
+      },
+    });
+    await harness.start();
+    expect(denied).toMatch(/ui\.slot\.notification-channel/);
+    await harness.teardown();
+  });
+
   it("captures notifications and recording marks separately for assertions", async () => {
     const harness = createPluginHarness({
       grantedCapabilities: [

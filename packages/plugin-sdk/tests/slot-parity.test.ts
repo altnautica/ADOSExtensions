@@ -28,7 +28,10 @@ const HOST_SLOTS = [
   "settings.section",
   "node.detail.tab",
   "cockpit.panel",
+  "cockpit.widget",
   "flight.skill",
+  "node.agent.page",
+  "node.surface",
 ] as const;
 
 /** Every member of the SDK union, restated as values. A missing entry is a
@@ -43,7 +46,10 @@ const SDK_SLOTS: readonly PluginSlotName[] = [
   "settings.section",
   "node.detail.tab",
   "cockpit.panel",
+  "cockpit.widget",
   "flight.skill",
+  "node.agent.page",
+  "node.surface",
 ];
 
 describe("plugin slot parity", () => {
