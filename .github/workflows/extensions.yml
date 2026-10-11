@@ -133,6 +133,15 @@ jobs:
           pnpm --filter @altnautica/plugin-sdk build
           pnpm --filter "./extensions/${EXT}/gcs" test
 
+      # Every extension: the agent-half tests import the real host SDK from this
+      # sibling checkout, and vision-nav's Rust half uses it as a path dependency.
+      - name: Check out the agent SDK (sibling path)
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
+          git -C "${dest}" checkout "${AGENT_REV}"
+
       - name: Setup uv
         if: hashFiles(format('extensions/{0}/agent/tests/**', matrix.ext)) != ''
         uses: astral-sh/setup-uv@v5
@@ -142,14 +151,6 @@ jobs:
         run: |
           uv sync --all-packages --all-extras --group dev
           uv run pytest "extensions/${EXT}/agent/tests"
-
-      - name: Check out the agent SDK (sibling path for the workspace path dep)
-        if: matrix.ext == 'vision-nav'
-        run: |
-          set -euo pipefail
-          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
-          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
-          git -C "${dest}" checkout "${AGENT_REV}"
 
       - name: Install Rust toolchain
         if: matrix.ext == 'vision-nav'
