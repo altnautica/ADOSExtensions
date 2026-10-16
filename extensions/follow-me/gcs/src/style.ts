@@ -54,10 +54,10 @@ export const labelRow: CSSProperties = {
 };
 
 export const inputStyle: CSSProperties = {
-  background: "var(--fm-input-bg, #0b1220)",
+  background: "var(--fm-input-bg, #0a0a0a)",
   border: "1px solid var(--fm-border, rgba(255,255,255,0.12))",
   borderRadius: "0.375rem",
-  color: "var(--fm-text, #e5e7eb)",
+  color: "var(--fm-text, #ededed)",
   fontSize: "0.8125rem",
   padding: "0.3rem 0.5rem",
   width: "6.5rem",

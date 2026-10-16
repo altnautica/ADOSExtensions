@@ -149,7 +149,7 @@ const card: CSSProperties = {
   border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
   borderRadius: "0.5rem",
   padding: "0.875rem 1rem",
-  color: "var(--vn-text, #e5e7eb)",
+  color: "var(--vn-text, #ededed)",
   display: "flex",
   flexDirection: "column",
   gap: "0.625rem",
@@ -163,7 +163,7 @@ const heading: CSSProperties = {
   fontSize: "0.8125rem",
   fontWeight: 600,
   margin: 0,
-  color: "var(--vn-text-2, #cbd5e1)",
+  color: "var(--vn-text-2, #b4b4b4)",
 };
 const subhead: CSSProperties = {
   fontSize: "0.75rem",
@@ -178,11 +178,11 @@ const row: CSSProperties = {
 const button = (active: boolean): CSSProperties => ({
   padding: "0.625rem 0.75rem",
   background: active
-    ? "var(--vn-accent, #2563eb)"
+    ? "var(--vn-accent, #3a82ff)"
     : "var(--vn-surface-2, rgba(255,255,255,0.06))",
-  color: "var(--vn-text, #e5e7eb)",
+  color: "var(--vn-text, #ededed)",
   border: active
-    ? "1px solid var(--vn-accent, #2563eb)"
+    ? "1px solid var(--vn-accent, #3a82ff)"
     : "1px solid var(--vn-border, rgba(255,255,255,0.08))",
   borderRadius: "0.375rem",
   cursor: "pointer",

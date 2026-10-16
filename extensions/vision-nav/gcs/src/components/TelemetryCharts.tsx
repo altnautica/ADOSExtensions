@@ -74,7 +74,7 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
       label: tr(t, "navigation.charts.flowQuality", "Flow quality"),
       unit: "/255",
       values: flowQualityRef.current,
-      colorVar: "var(--vn-accent, #2563eb)",
+      colorVar: "var(--vn-accent, #3a82ff)",
       yMin: 0,
       yMax: 255,
     },
@@ -197,7 +197,7 @@ const card: CSSProperties = {
   border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
   borderRadius: "0.5rem",
   padding: "0.875rem 1rem",
-  color: "var(--vn-text, #e5e7eb)",
+  color: "var(--vn-text, #ededed)",
   display: "flex",
   flexDirection: "column",
   gap: "0.625rem",
@@ -206,7 +206,7 @@ const heading: CSSProperties = {
   fontSize: "0.8125rem",
   fontWeight: 600,
   margin: 0,
-  color: "var(--vn-text-2, #cbd5e1)",
+  color: "var(--vn-text-2, #b4b4b4)",
 };
 const grid: CSSProperties = {
   display: "grid",

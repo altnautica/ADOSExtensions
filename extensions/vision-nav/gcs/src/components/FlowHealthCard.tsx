@@ -41,12 +41,12 @@ export function FlowHealthCard({ telemetry }: Props): JSX.Element {
     display: "flex",
     flexDirection: "column",
     gap: "0.625rem",
-    color: "var(--vn-text, #e5e7eb)",
+    color: "var(--vn-text, #ededed)",
   };
   const heading: CSSProperties = {
     fontSize: "0.8125rem",
     fontWeight: 600,
-    color: "var(--vn-text-2, #cbd5e1)",
+    color: "var(--vn-text-2, #b4b4b4)",
     margin: 0,
   };
   const barOuter: CSSProperties = {
@@ -70,7 +70,7 @@ export function FlowHealthCard({ telemetry }: Props): JSX.Element {
   };
   const value: CSSProperties = {
     fontVariantNumeric: "tabular-nums",
-    color: "var(--vn-text, #e5e7eb)",
+    color: "var(--vn-text, #ededed)",
   };
   const label: CSSProperties = {
     color: "var(--vn-text-3, #94a3b8)",

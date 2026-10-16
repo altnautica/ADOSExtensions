@@ -165,7 +165,7 @@ const banner = (isFailed: boolean): CSSProperties => ({
   background: isFailed
     ? "color-mix(in srgb, var(--vn-error, #ef4444) 12%, transparent)"
     : "color-mix(in srgb, var(--vn-warn, #f59e0b) 12%, transparent)",
-  color: "var(--vn-text, #e5e7eb)",
+  color: "var(--vn-text, #ededed)",
 });
 const iconBlock = (isFailed: boolean): CSSProperties => ({
   width: "1.75rem",
@@ -193,5 +193,5 @@ const title: CSSProperties = {
 };
 const body: CSSProperties = {
   fontSize: "0.75rem",
-  color: "var(--vn-text-2, #cbd5e1)",
+  color: "var(--vn-text-2, #b4b4b4)",
 };

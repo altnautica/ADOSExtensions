@@ -27,7 +27,7 @@ export function CompanionStatusPill({ state }: Props): JSX.Element {
     padding: "0.25rem 0.75rem",
     borderRadius: "9999px",
     background: "var(--vn-surface-2, rgba(255,255,255,0.04))",
-    color: "var(--vn-text, #e5e7eb)",
+    color: "var(--vn-text, #ededed)",
     border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
     fontSize: "0.8125rem",
     fontWeight: 500,

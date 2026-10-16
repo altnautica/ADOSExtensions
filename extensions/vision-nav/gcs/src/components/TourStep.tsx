@@ -97,11 +97,11 @@ const overlay: CSSProperties = {
 const card: CSSProperties = {
   maxWidth: "420px",
   width: "100%",
-  background: "var(--vn-surface, #0b1220)",
+  background: "var(--vn-surface, #0a0a0a)",
   border: "1px solid var(--vn-border, rgba(255,255,255,0.12))",
   borderRadius: "0.5rem",
   padding: "1rem 1.125rem",
-  color: "var(--vn-text, #e5e7eb)",
+  color: "var(--vn-text, #ededed)",
   boxShadow: "0 10px 32px rgba(0, 0, 0, 0.4)",
   display: "flex",
   flexDirection: "column",
@@ -125,7 +125,7 @@ const title: CSSProperties = {
 const body: CSSProperties = {
   fontSize: "0.8125rem",
   margin: 0,
-  color: "var(--vn-text-2, #cbd5e1)",
+  color: "var(--vn-text-2, #b4b4b4)",
   lineHeight: 1.45,
 };
 const actions: CSSProperties = {
@@ -134,7 +134,7 @@ const actions: CSSProperties = {
 };
 const primaryBtn: CSSProperties = {
   padding: "0.5rem 1rem",
-  background: "var(--vn-accent, #2563eb)",
+  background: "var(--vn-accent, #3a82ff)",
   color: "white",
   border: "none",
   borderRadius: "0.375rem",

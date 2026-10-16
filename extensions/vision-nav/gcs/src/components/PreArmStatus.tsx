@@ -121,7 +121,7 @@ const card: CSSProperties = {
   border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
   borderRadius: "0.5rem",
   padding: "0.875rem 1rem",
-  color: "var(--vn-text, #e5e7eb)",
+  color: "var(--vn-text, #ededed)",
   display: "flex",
   flexDirection: "column",
   gap: "0.5rem",
@@ -135,7 +135,7 @@ const heading: CSSProperties = {
   fontSize: "0.8125rem",
   fontWeight: 600,
   margin: 0,
-  color: "var(--vn-text-2, #cbd5e1)",
+  color: "var(--vn-text-2, #b4b4b4)",
 };
 const armablePill = (ready: boolean): CSSProperties => ({
   display: "inline-flex",
@@ -182,7 +182,7 @@ const indicator = (severity: PreArmCheckSeverity): CSSProperties => ({
       : severity === "pending"
         ? "var(--vn-warn, #f59e0b)"
         : "var(--vn-error, #ef4444)",
-  color: "#0b1220",
+  color: "#0a0a0a",
   alignItems: "center",
   justifyContent: "center",
   fontSize: "0.625rem",

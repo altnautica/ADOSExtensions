@@ -54,7 +54,7 @@ export function Px4VisionParams({ fcParams = [] }: Px4VisionParamsProps): JSX.El
     border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
     borderRadius: "0.5rem",
     padding: "0.875rem 1rem",
-    color: "var(--vn-text, #e5e7eb)",
+    color: "var(--vn-text, #ededed)",
     display: "flex",
     flexDirection: "column",
     gap: "0.75rem",
@@ -63,7 +63,7 @@ export function Px4VisionParams({ fcParams = [] }: Px4VisionParamsProps): JSX.El
     fontSize: "0.8125rem",
     fontWeight: 600,
     margin: 0,
-    color: "var(--vn-text-2, #cbd5e1)",
+    color: "var(--vn-text-2, #b4b4b4)",
   };
   const subheading: CSSProperties = {
     fontSize: "0.75rem",
@@ -87,7 +87,7 @@ export function Px4VisionParams({ fcParams = [] }: Px4VisionParamsProps): JSX.El
   };
   const paramName: CSSProperties = {
     fontFamily: "var(--vn-mono, ui-monospace, SFMono-Regular, monospace)",
-    color: "var(--vn-text, #e5e7eb)",
+    color: "var(--vn-text, #ededed)",
   };
   const paramDesc: CSSProperties = {
     color: "var(--vn-text-3, #94a3b8)",

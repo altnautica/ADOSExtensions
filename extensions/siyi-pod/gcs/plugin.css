@@ -1,6 +1,6 @@
 .siyi-panel {
   font: 13px/1.4 system-ui, sans-serif;
-  color: var(--text-primary, #e6f2ff);
+  color: var(--text-primary, #ededed);
   padding: 8px;
 }
 .siyi-overlay-mode .siyi-panel {
@@ -37,9 +37,9 @@
 .siyi-sel,
 .siyi-num,
 .siyi-range {
-  background: var(--surface-secondary, #1a2230);
+  background: var(--surface-secondary, #1a1a1a);
   color: inherit;
-  border: 1px solid var(--border, #2a3546);
+  border: 1px solid var(--border, #3d3d3d);
   border-radius: 4px;
   padding: 3px 8px;
   font: inherit;
