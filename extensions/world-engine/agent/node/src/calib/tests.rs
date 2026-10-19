@@ -41,10 +41,6 @@ impl ToolRunner for StandIn {
             Err(e) => Err(StageError::io(e)),
         }
     }
-
-    fn is_stand_in(&self) -> bool {
-        true
-    }
 }
 
 fn req(target: CalibTarget) -> CalibRequest {

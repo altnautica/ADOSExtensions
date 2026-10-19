@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useHost } from "../host/context";
+import { AtlasControlClient, type AtlasReadiness } from "../lib/agent/atlas-control-client";
 import { CaptureClient } from "../lib/agent/capture-client";
 import type { CaptureCoverage, CaptureState } from "../lib/capture/capture-state";
 
@@ -22,6 +23,9 @@ export interface CaptureFeed {
   /** The last state the device answered (kept through missed polls). */
   state: CaptureState | null;
   coverage: CaptureCoverage | null;
+  /** The device's Atlas readiness (capture service running, cameras
+   * configured), or null while unknown. */
+  readiness: AtlasReadiness | null;
   /** True until the first state poll resolves. */
   loading: boolean;
   /** The device has never answered a capture state. */
@@ -66,6 +70,8 @@ export function useCapture(): CaptureFeed {
   const client = useMemo(() => new CaptureClient(host.agent), [host.agent]);
   const [memory, setMemory] = useState<PollMemory<CaptureState>>({ value: null, misses: 0 });
   const [coverage, setCoverage] = useState<CaptureCoverage | null>(null);
+  const control = useMemo(() => new AtlasControlClient(host.agent), [host.agent]);
+  const [readiness, setReadiness] = useState<AtlasReadiness | null>(null);
   const [loading, setLoading] = useState(true);
   const alive = useRef(true);
   useEffect(() => {
@@ -85,14 +91,20 @@ export function useCapture(): CaptureFeed {
     const c = await client.getCoverage();
     if (alive.current) setCoverage(c);
   }, [client]);
+  const readReadiness = useCallback(async () => {
+    const r = await control.getReadiness();
+    if (alive.current) setReadiness(r);
+  }, [control]);
 
   usePoll(readState, CAPTURE_POLL_MS);
   usePoll(readCoverage, COVERAGE_POLL_MS);
+  usePoll(readReadiness, COVERAGE_POLL_MS);
 
   return {
     client,
     state: memory.value,
     coverage,
+    readiness,
     loading,
     absent: !loading && memory.value === null,
     stale: memory.value !== null && memory.misses >= STALE_AFTER_MISSES,

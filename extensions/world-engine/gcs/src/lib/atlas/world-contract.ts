@@ -12,7 +12,7 @@
  * whose `v` this build does not speak is rejected before its payload is read,
  * because mis-parsing a payload against the wrong schema is worse than dropping
  * it. This mirrors that, and reports WHICH version was refused so an operator
- * surface can say "this build speaks 1, the node sent 2" rather than
+ * surface can name the refused and the spoken version rather than say
  * "malformed".
  */
 
@@ -24,8 +24,6 @@ import { asMsgpackMap, decodeMsgpack, MsgpackError } from "./msgpack";
 export const ATLAS_CAPTURE_STATE_TOPIC = "atlas.capture.state";
 /** A selected pose-tagged keyframe, emitted drone-to-compute. */
 export const ATLAS_KEYFRAME_TOPIC = "atlas.keyframe";
-/** The offloaded-pose return leg, compute-to-drone. */
-export const ATLAS_POSE_OFFLOAD_TOPIC = "atlas.pose.offload";
 
 /** Shared-data: current 6-DoF pose plus world anchor (~10 Hz). */
 export const PLUGIN_ATLAS_POSE_TOPIC = "plugin.world-engine.pose";

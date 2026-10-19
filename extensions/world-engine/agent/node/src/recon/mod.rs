@@ -31,7 +31,7 @@ pub use pipeline::{run_staged, StageSink};
 pub use preset::Preset;
 pub use process::ProcessRunner;
 pub use products_stage::ArtifactOut;
-pub use runner::{ResolvedTool, StageError, ToolInvocation, ToolRunner};
+pub use runner::{RecordingRunner, ResolvedTool, StageError, ToolInvocation, ToolRunner};
 #[cfg(any(test, feature = "mock"))]
 pub use stand_in::StandInRunner;
 

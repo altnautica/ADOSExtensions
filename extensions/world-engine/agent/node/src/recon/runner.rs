@@ -154,9 +154,84 @@ pub trait ToolRunner: Send + Sync {
     /// Run `inv` to completion, handing every output line to `on_line`.
     /// A non-zero exit is `E_TOOL_FAILED` carrying the output tail.
     fn run(&self, inv: &ToolInvocation, on_line: &mut dyn FnMut(&str)) -> Result<(), StageError>;
+}
 
-    /// Whether this runner synthesizes outputs instead of running tools.
-    fn is_stand_in(&self) -> bool {
-        false
+/// A runner that reports every tool it runs (name and resolved version,
+/// `override` for an `ADOS_TOOL_<NAME>` executable) to `on_run` before
+/// handing the run to `inner`, so a job records the tools it actually used.
+pub struct RecordingRunner<'a> {
+    pub inner: &'a dyn ToolRunner,
+    pub on_run: &'a (dyn Fn(&ResolvedTool) + Send + Sync),
+}
+
+impl ToolRunner for RecordingRunner<'_> {
+    fn resolve(&self, tool: &str) -> Result<ResolvedTool, StageError> {
+        self.inner.resolve(tool)
+    }
+
+    fn run(&self, inv: &ToolInvocation, on_line: &mut dyn FnMut(&str)) -> Result<(), StageError> {
+        (self.on_run)(&self.inner.resolve(&inv.tool)?);
+        self.inner.run(inv, on_line)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    /// Resolves every tool except `missing`; `brush` as an override.
+    struct Fake;
+
+    impl ToolRunner for Fake {
+        fn resolve(&self, tool: &str) -> Result<ResolvedTool, StageError> {
+            if tool == "missing" {
+                return Err(StageError::tool_missing(tool, "absent"));
+            }
+            Ok(ResolvedTool {
+                name: tool.to_string(),
+                version: if tool == "brush" { "override" } else { "1.2.3" }.into(),
+                program: PathBuf::from(tool),
+                prefix_args: Vec::new(),
+                home: PathBuf::new(),
+                wsl: false,
+            })
+        }
+
+        fn run(&self, inv: &ToolInvocation, _: &mut dyn FnMut(&str)) -> Result<(), StageError> {
+            self.resolve(&inv.tool).map(|_| ())
+        }
+    }
+
+    #[test]
+    fn records_only_tools_that_run() {
+        let seen = Mutex::new(Vec::new());
+        let record = |t: &ResolvedTool| {
+            seen.lock()
+                .unwrap()
+                .push((t.name.clone(), t.version.clone()))
+        };
+        let runner = RecordingRunner {
+            inner: &Fake,
+            on_run: &record,
+        };
+        runner.resolve("colmap").unwrap();
+        runner
+            .run(&ToolInvocation::new("glim", "."), &mut |_| {})
+            .unwrap();
+        runner
+            .run(&ToolInvocation::new("brush", "."), &mut |_| {})
+            .unwrap();
+        assert!(runner
+            .run(&ToolInvocation::new("missing", "."), &mut |_| {})
+            .is_err());
+        assert_eq!(
+            *seen.lock().unwrap(),
+            [
+                ("glim".to_string(), "1.2.3".to_string()),
+                ("brush".to_string(), "override".to_string())
+            ]
+        );
     }
 }

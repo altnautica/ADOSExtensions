@@ -19,7 +19,7 @@ fn valid_name(name: &str) -> bool {
 }
 
 /// `CON`, `PRN`, `AUX`, `NUL`, `COM<n>`, `LPT<n>`, with any extension.
-fn windows_device(name: &str) -> bool {
+pub(crate) fn windows_device(name: &str) -> bool {
     let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
     match stem.as_str() {
         "CON" | "PRN" | "AUX" | "NUL" => true,

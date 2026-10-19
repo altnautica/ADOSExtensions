@@ -25,8 +25,8 @@ use crate::{
 /// Command-line options of a standalone run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandaloneOptions {
-    /// State directory: `node/jobs.db`, `node/work/` (jobs, sessions),
-    /// `node/owner-token`.
+    /// State directory: `node/jobs.db`, `node/work/` (job outputs),
+    /// `node/sessions/` (uploaded capture sessions), `node/owner-token`.
     pub data_dir: PathBuf,
     /// Listen address, e.g. `0.0.0.0:8092`.
     pub listen: String,

@@ -1,6 +1,8 @@
 //! Persistence for staged jobs: one row per (job, stage) so a job interrupted
 //! by a node restart resumes at the stage that was running, plus the
-//! structured error a failed staged job carries.
+//! structured error a failed staged job carries and the tools it ran.
+
+use std::collections::BTreeMap;
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -182,6 +184,30 @@ impl JobStore {
         Ok(())
     }
 
+    /// Record a tool a job ran, with the version it resolved to.
+    pub fn record_job_tool(
+        &self,
+        job_id: &str,
+        tool: &str,
+        version: &str,
+    ) -> Result<(), ComputeError> {
+        self.conn.execute(
+            "INSERT INTO job_tools (job_id, tool, version) VALUES (?1, ?2, ?3)
+             ON CONFLICT(job_id, tool) DO UPDATE SET version = excluded.version",
+            params![job_id, tool, version],
+        )?;
+        Ok(())
+    }
+
+    /// The tools a job ran, by name, with their resolved versions.
+    pub fn job_tools(&self, job_id: &str) -> Result<BTreeMap<String, String>, ComputeError> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tool, version FROM job_tools WHERE job_id = ?1")?;
+        let rows = stmt.query_map(params![job_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
     /// The outputs of the newest completed session reconstruction of
     /// `session_id` (empty when it was never reconstructed).
     pub fn latest_session_outputs(&self, session_id: &str) -> Result<Vec<Output>, ComputeError> {
@@ -282,6 +308,21 @@ mod tests {
         assert_eq!(s.job_error("j").unwrap(), Some(e));
         s.clear_job_error("j").unwrap();
         assert_eq!(s.job_error("j").unwrap(), None);
+    }
+
+    #[test]
+    fn job_tools_record_the_latest_version_per_job() {
+        let s = JobStore::open_in_memory().unwrap();
+        assert!(s.job_tools("j").unwrap().is_empty());
+        s.record_job_tool("j", "colmap", "3.11.1").unwrap();
+        s.record_job_tool("j", "brush", "override").unwrap();
+        s.record_job_tool("j", "colmap", "3.12.0").unwrap();
+        s.record_job_tool("k", "glim", "1.0").unwrap();
+        let tools = s.job_tools("j").unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools["colmap"], "3.12.0");
+        assert_eq!(tools["brush"], "override");
+        assert_eq!(s.job_tools("k").unwrap()["glim"], "1.0");
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Turn received Atlas keyframes into a reconstructor-ingestible dataset.
 //!
 //! Each keyframe carries the compressed image bytes plus a world-from-camera
-//! pose and the camera model (the drone computed the pose on-board from VIO or
-//! from an offloaded SLAM return). This module streams each keyframe's image
+//! pose and the camera model (the drone computed the pose on-board from its
+//! own odometry). This module streams each keyframe's image
 //! to disk as it arrives and accumulates the lightweight per-frame camera
 //! record, then on bag-finalize writes the capture contract's `transforms.json`
 //! (Nerfstudio layout plus `contract`, `ados_anchor` and a per-frame `t_ns`)

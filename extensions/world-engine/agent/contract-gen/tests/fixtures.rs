@@ -1,11 +1,13 @@
 //! Every golden JSON fixture validates against its schema (full constraints,
 //! via the `jsonschema` crate) and round-trips through the generated type
-//! unchanged; broken variants are refused by the schema.
+//! unchanged; broken variants are refused by the schema. The tiny-session
+//! documents and the documents `SessionWriter` writes validate too.
 
 use std::path::PathBuf;
 
 use ados_capture_contract::{
-    ArtifactDescriptor, Manifest, Placement, Rig, TransformsJson, SCHEMA_BASE_URI, SCHEMA_FILES,
+    ArtifactDescriptor, Manifest, Placement, Rig, SessionWriter, TransformsJson, SCHEMA_BASE_URI,
+    SCHEMA_FILES,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -142,4 +144,35 @@ fn every_schema_file_is_listed_and_has_a_fixture_test() {
     on_disk.sort();
     let listed: Vec<String> = SCHEMA_FILES.iter().map(|(n, _)| n.to_string()).collect();
     assert_eq!(on_disk, listed, "SCHEMA_FILES drifted from contract/schema");
+}
+
+const TINY_SESSION: &str = "tiny-session/sim-1-20261019T000000Z-0001";
+
+#[test]
+fn tiny_session_documents_validate() {
+    assert_valid(
+        "manifest.schema.json",
+        &fixture(&format!("{TINY_SESSION}/manifest.json")),
+    );
+    assert_valid(
+        "rig.schema.json",
+        &fixture(&format!("{TINY_SESSION}/rig.json")),
+    );
+}
+
+#[test]
+fn session_writer_output_validates() {
+    let manifest: Manifest =
+        serde_json::from_value(fixture(&format!("{TINY_SESSION}/manifest.json"))).unwrap();
+    let rig: Rig = serde_json::from_value(fixture(&format!("{TINY_SESSION}/rig.json"))).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let writer = SessionWriter::create(tmp.path(), manifest, &rig).unwrap();
+    let dir = writer.dir().to_path_buf();
+    writer.finish().unwrap();
+    let read = |name: &str| -> Value {
+        serde_json::from_str(&std::fs::read_to_string(dir.join(name)).unwrap()).unwrap()
+    };
+    assert_valid("manifest.schema.json", &read("manifest.json"));
+    assert_valid("rig.schema.json", &read("rig.json"));
+    ados_capture_contract::verify_checksums(&dir).unwrap();
 }

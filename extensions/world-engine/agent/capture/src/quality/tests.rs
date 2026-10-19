@@ -185,3 +185,25 @@ fn a_silent_camera_leaves_the_chips() {
     assert_eq!(level(&h, "texture"), "ok");
     assert_eq!(h[1].value, Some(300.0));
 }
+
+#[test]
+fn no_live_camera_warns_instead_of_reading_ok() {
+    let mut m = QualityMonitor::new();
+    let h = m.health(NOW);
+    for id in ["blur", "texture"] {
+        let chip = h.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(chip.level, "warn", "{id} with nothing measuring");
+        assert_eq!(chip.value, None);
+    }
+    m.on_frame(
+        "cam_fl",
+        0,
+        FrameQuality {
+            blur: 300.0,
+            corners: 300,
+            mean: 100.0,
+        },
+    );
+    // The only camera went silent: back to no measurement.
+    assert_eq!(level(&m.health(CAMERA_STALE_NS + 1), "blur"), "warn");
+}

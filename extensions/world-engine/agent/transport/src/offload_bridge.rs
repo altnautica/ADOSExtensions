@@ -40,8 +40,9 @@ pub struct OffloadReturnBridge {
 }
 
 impl OffloadReturnBridge {
-    /// A bridge for `mode` with the target-age freshness budget (`pose_budget_ms`
-    /// matters only for `Full`/`SlamOnly`). `model_id` labels the published batch.
+    /// A bridge for `mode` with the target-age freshness budget. The gate's
+    /// `pose_budget_ms` is unused by the detection-only `VisionOnly` mode this
+    /// extension runs. `model_id` labels the published batch.
     pub fn new(
         mode: OffloadMode,
         target_budget_ms: i64,

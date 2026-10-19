@@ -179,9 +179,20 @@ pub async fn run_staged_job(ctx: &WorkerCtx, job: JobRecord, staged: StagedJob) 
             state: c.state.clone(),
             job_id: jid.clone(),
         };
+        let record = |tool: &recon::ResolvedTool| {
+            let engine = c.state.blocking_lock();
+            let store = engine.scheduler().store();
+            if let Err(e) = store.record_job_tool(&jid, &tool.name, &tool.version) {
+                tracing::warn!(job = %jid, tool = %tool.name, error = %e, "recording tool failed");
+            }
+        };
+        let runner = recon::RecordingRunner {
+            inner: c.runner.as_ref(),
+            on_run: &record,
+        };
         let run = RunCtx {
             work_root: &c.work_root,
-            runner: c.runner.as_ref(),
+            runner: &runner,
             sink: &sink,
             tour_viewer: c.tour_viewer.clone(),
             vram_mb: nvidia_gpu().and_then(|g| g.vram_total_mb),

@@ -333,6 +333,9 @@
     "controls": "Capture",
     "cameras": "Cameras",
     "noCameras": "No capture camera is configured.",
+    "serviceStopped": "The capture service is stopped, so no camera is streaming.",
+    "noCameraFrames": "The capture service is running but no camera is streaming yet.",
+    "camerasUnknown": "No camera is streaming; the capture service status is unknown.",
     "coverage": "Coverage",
     "noCoverage": "Coverage appears once recording starts",
     "roomCoverage": "Room coverage {pct} %",
@@ -398,6 +401,7 @@
     "loading": "Reading sessions",
     "absent": "No capture service is answering on this device.",
     "empty": "No sessions recorded yet.",
+    "stale": "The device has not answered for a few seconds; showing its last session list.",
     "title": "Sessions",
     "col": { "session": "Session", "duration": "Duration", "size": "Size", "rooms": "Rooms", "upload": "Upload" },
     "upload": {

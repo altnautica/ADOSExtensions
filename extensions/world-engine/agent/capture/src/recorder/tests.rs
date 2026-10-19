@@ -316,3 +316,21 @@ fn a_writer_io_error_ends_recording() {
     assert_eq!(s.lost_after_error, 1);
     assert_eq!(s.images.get("cam_fl"), None);
 }
+
+#[test]
+fn the_marker_stays_fresh_while_finish_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let marker = dir.path().join(crate::storage::RECORDING_MARKER);
+    let old = SystemTime::now() - Duration::from_secs(600);
+    File::create(&marker).unwrap().set_modified(old).unwrap();
+    let out = with_marker_heartbeat(&marker, Duration::from_millis(20), || {
+        std::thread::sleep(Duration::from_millis(200));
+        7
+    });
+    assert_eq!(out, 7);
+    let mtime = fs::metadata(&marker).unwrap().modified().unwrap();
+    assert!(
+        mtime > old + Duration::from_secs(500),
+        "a long finish must not leave the marker stale"
+    );
+}

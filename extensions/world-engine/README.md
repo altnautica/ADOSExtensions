@@ -107,15 +107,13 @@ Per-node plugin configuration (`config-schema.json`):
 | `atlas.selection.*` | Keyframe selection thresholds |
 | `atlas.intrinsics.*` | Camera intrinsics |
 | `atlas.live_reconstruct` | Rebuild the world incrementally on the compute node while keyframes arrive (default `false`) |
-| `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02), `slam_position_sigma_m` (0.25), `slam_orientation_sigma_rad` (0.01), `timebase_sigma_ns` (uncertainty of the keyframe timebase, -1 = unmeasured) |
-| `atlas.pose_max_age_ms` | Oldest pose a keyframe may be tagged with, in ms (500) |
+| `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02) |
 | `atlas.pose_publish_interval_ms` | Interval between published world poses, in ms (100) |
 | `offload.enabled` | Perception offload: `auto`, `on` or `off` |
 | `offload.compute_node_addr` | Compute node pinned as `host:port` for both the Atlas forwarder and the offload session; empty discovers one on the LAN over mDNS |
 | `serving.enabled` | Serve perception offload on this compute node |
 | `serving.detector_model` | Detector model the compute node serves |
 | `relay.enabled` | Run the Atlas relay on this ground station (default `false`) |
-| `relay.listen_port` | Ground-station relay listen port |
 | `relay.compute_base_url` | Compute node the ground-station relay forwards to |
 
 ## Reconstruction tools

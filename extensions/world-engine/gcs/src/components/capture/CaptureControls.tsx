@@ -22,7 +22,7 @@ const t = translator("capture");
 const ERROR_KEYS: Record<string, string> = {
   E_STORAGE_FULL: "errStorageFull",
   E_ALREADY_RECORDING: "errAlreadyRecording",
-  service_unavailable: "errServiceDown",
+  E_CAPTURE_UNAVAILABLE: "errServiceDown",
   transport_error: "errUnreachable",
 };
 

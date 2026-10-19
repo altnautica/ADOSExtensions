@@ -93,7 +93,6 @@
       "kind": "docker",
       "note": "upstream publishes no image; built locally from the pinned commit's Dockerfile",
       "image": "local/kalibr:1f60227442d2",
-      "image_id": "sha256:f0fbefa1c83af2296a4616e4ac27b96e0750ffba4b532d1a6c02ebcc5dac5df2",
       "build": {
         "repo": "https://github.com/ethz-asl/kalibr",
         "commit": "1f60227442d25e36365ef5f72cd80b9666d73467",

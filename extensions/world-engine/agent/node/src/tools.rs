@@ -107,14 +107,6 @@ impl ToolPins {
     pub fn get(&self, name: &str) -> Option<&ToolPin> {
         self.tools.get(name)
     }
-
-    /// `{name: version}` for every pinned tool, as surfaced on a job's `tools`.
-    pub fn versions(&self) -> BTreeMap<String, String> {
-        self.tools
-            .iter()
-            .map(|(k, v)| (k.clone(), v.version.clone()))
-            .collect()
-    }
 }
 
 static PINS: LazyLock<ToolPins> =
@@ -329,7 +321,6 @@ mod tests {
             Some("node_modules/.bin/splat-transform")
         );
         assert_eq!(p.get("kalibr").unwrap().kind, ToolKind::Docker);
-        assert_eq!(p.versions()["gsplat_train"], "0.1.0");
         let wsl = p.get("gsplat_train").unwrap().wsl.as_ref().unwrap();
         assert_eq!(wsl.python.as_deref(), Some("/opt/v/bin/python"));
         assert_eq!(p.get("kalibr").unwrap().wsl, None);
@@ -337,7 +328,7 @@ mod tests {
 
     #[test]
     fn wsl_paths_map_drives() {
-        assert_eq!(wsl_path(r"D:\Github\x y\z"), "/mnt/d/Github/x y/z");
+        assert_eq!(wsl_path(r"C:\work\x y\z"), "/mnt/c/work/x y/z");
         assert_eq!(wsl_path("C:/a"), "/mnt/c/a");
         assert_eq!(wsl_path(r"\\?\E:\w"), "/mnt/e/w");
         assert_eq!(wsl_path("/already/unix"), "/already/unix");

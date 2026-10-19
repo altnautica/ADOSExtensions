@@ -79,7 +79,7 @@ ados-vision = { path = "../ADOSDroneAgent/crates/ados-vision", default-features 
 # The capture storage sidecar reader and admission rule (capture root,
 # E_STORAGE_FULL), shared with the agent's janitor.
 ados-config = { path = "../ADOSDroneAgent/crates/ados-config" }
-# The sensor bus client and frame codec (/run/ados/sensors.sock, seam J).
+# The sensor bus client and frame codec (/run/ados/sensing/sensors.sock, seam J).
 ados-sensorbus = { path = "../ADOSDroneAgent/crates/ados-sensorbus" }
 # The capture contract crate (generated from the MIT schema files).
 ados-capture-contract = { path = "extensions/world-engine/agent/contract-gen" }

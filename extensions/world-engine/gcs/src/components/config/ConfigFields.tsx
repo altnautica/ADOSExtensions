@@ -21,8 +21,8 @@ export type ConfigRecord = Record<string, unknown>;
 export type SetConfigValue = (key: string, value: unknown) => Promise<void>;
 
 /**
- * Read `dottedKey` (e.g. `atlas.pose_tier`) out of a config that may hold it
- * nested (`{atlas: {pose_tier}}`), flat (`{"atlas.pose_tier": …}`) or any mix
+ * Read `dottedKey` (e.g. `atlas.capture_profile`) out of a config that may hold it
+ * nested (`{atlas: {capture_profile}}`), flat (`{"atlas.capture_profile": …}`) or any mix
  * of the two. Undefined when absent, so a surface can say "not set" instead of
  * inventing a default.
  */

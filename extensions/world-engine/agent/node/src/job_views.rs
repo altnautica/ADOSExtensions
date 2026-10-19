@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use crate::recon::{self, StageError};
+use crate::recon::StageError;
 use crate::store_stages::{StageRow, StageState};
 use crate::worker::NvidiaGpu;
 use crate::{ComputeError, ComputeJobKind, ComputeJobState, JobRecord, JobStore, Output};
@@ -32,6 +32,8 @@ pub struct JobView {
     pub stages: Vec<StageRow>,
     pub gpu: Option<NvidiaGpu>,
     pub eta_s: Option<u64>,
+    /// Every tool the job has run so far, with the version it resolved to
+    /// (`override` for an `ADOS_TOOL_<NAME>` executable).
     pub tools: std::collections::BTreeMap<String, String>,
     pub error: Option<StageError>,
 }
@@ -41,19 +43,6 @@ fn now_ns() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as i64)
         .unwrap_or(0)
-}
-
-/// The pinned tools whose versions a job reports.
-fn job_tools(job: &JobRecord) -> std::collections::BTreeMap<String, String> {
-    let pins = crate::tools::pins();
-    let mut names = recon::required_tools(job);
-    if job.kind == ComputeJobKind::Calibrate {
-        names.extend(["kalibr", "dvlc"]);
-    }
-    names
-        .into_iter()
-        .filter_map(|n| pins.get(n).map(|p| (n.to_string(), p.version.clone())))
-        .collect()
 }
 
 impl JobView {
@@ -102,7 +91,7 @@ impl JobView {
         Ok(Self {
             session_id: text("session_id"),
             preset: text("preset"),
-            tools: job_tools(&job),
+            tools: store.job_tools(&job.id)?,
             gpu: (job.state == ComputeJobState::Running)
                 .then(|| gpu.cloned())
                 .flatten(),
@@ -209,7 +198,14 @@ mod tests {
         assert!(json["eta_s"].as_u64().is_some());
         assert_eq!(json["session_id"], "s1");
         assert!(json["error"].is_null());
-        assert!(json["tools"].is_object());
+        assert_eq!(json["tools"], serde_json::json!({}));
+        s.record_job_tool("j", "colmap", "3.11.1").unwrap();
+        s.record_job_tool("j", "glim", "override").unwrap();
+        let v = JobView::build(&s, s.get_job("j").unwrap().unwrap(), None).unwrap();
+        assert_eq!(
+            serde_json::to_value(&v).unwrap()["tools"],
+            serde_json::json!({"colmap": "3.11.1", "glim": "override"})
+        );
     }
 
     #[test]

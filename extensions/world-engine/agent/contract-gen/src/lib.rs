@@ -38,7 +38,10 @@ mod session_id;
 pub mod topics;
 mod writer;
 
-pub use checksums::{verify_checksums, write_checksums, CHECKSUMS_FILE};
+pub use checksums::{
+    check_checksums, parse_checksums, verify_checksums, write_checksums, ChecksumReport,
+    CHECKSUMS_FILE,
+};
 pub use reader::{SessionMessage, SessionReader};
 pub use schema::*;
 pub use session_id::session_id;

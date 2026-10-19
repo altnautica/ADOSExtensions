@@ -18,12 +18,13 @@ import { ViewerLoading } from "../../components/atlas/viewers/ViewerLoading";
 import { Section } from "../../components/ui/Section";
 import { translator } from "../../host/i18n";
 import { useCapture } from "../../hooks/use-capture";
+import { cameraEmptyReason } from "../../lib/capture/camera-empty";
 import { CalmState } from "../workstation/CalmState";
 
 const t = translator("capture");
 
 export function CapturePage() {
-  const { client, state, coverage, loading, absent, stale, refresh } = useCapture();
+  const { client, state, coverage, readiness, loading, absent, stale, refresh } = useCapture();
   if (loading) return <ViewerLoading label={t("loading")} />;
   if (absent || !state) return <CalmState icon={ScanLine} message={t("absent")} />;
 
@@ -40,7 +41,7 @@ export function CapturePage() {
       <div className="we:grid we:gap-3 we:lg:grid-cols-[1fr_auto]">
         <Section title={t("cameras")}>
           {state.frames.perCamera.length === 0 ? (
-            <p className="we:text-[11px] we:text-text-tertiary">{t("noCameras")}</p>
+            <p className="we:text-[11px] we:text-text-tertiary">{t(cameraEmptyReason(readiness))}</p>
           ) : (
             <div className="we:grid we:gap-2 we:sm:grid-cols-2">
               {state.frames.perCamera.map((c) => (

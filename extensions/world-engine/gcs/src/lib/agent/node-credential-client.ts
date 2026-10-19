@@ -27,7 +27,8 @@ export type NodeLane =
   | "atlas.world"
   | "offload.stream"
   | "artifacts.read"
-  | "jobs.submit";
+  | "jobs.submit"
+  | "sessions.upload";
 
 export const DRONE_LANES: readonly NodeLane[] = [
   "atlas.ingest",
@@ -35,6 +36,7 @@ export const DRONE_LANES: readonly NodeLane[] = [
   "offload.stream",
   "artifacts.read",
   "jobs.submit",
+  "sessions.upload",
 ];
 
 /** A ground station only relays Atlas capture events off the air. */

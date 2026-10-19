@@ -52,14 +52,13 @@ hex = { workspace = true }
 # Total/unified-memory read for the macOS host-GPU block.
 sysinfo = { version = "0.38", default-features = false, features = ["system", "disk"] }
 # Reconstruction products: LAZ 1.4 point clouds, the tour bundle zip, image
-# export of recorded frames, Kalibr YAML import, the k-d tree behind cloud
-# comparisons, and blake3 for the resumable upload lane.
+# export of recorded frames, Kalibr YAML import and the k-d tree behind cloud
+# comparisons.
 las = { version = "0.11", features = ["laz"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 serde_yaml_ng = "0.10"
 kiddo = "6"
-blake3 = "1"
 getrandom = "0.3"
 # ROS 2 bag export for the LiDAR-camera calibration container.
 mcap = { version = "0.25", default-features = false }
@@ -102,6 +101,8 @@ axum = { workspace = true }
 async-trait = { workspace = true }
 # Integration tests drive the stand-in tool runners.
 world-engine-node = { path = ".", features = ["mock"] }
+# Upload tests build `checksums.b3` listings.
+blake3 = "1"
 
 [target.'cfg(unix)'.dev-dependencies]
 ados-offload = { workspace = true }

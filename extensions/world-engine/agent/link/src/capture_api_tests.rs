@@ -10,7 +10,7 @@ use world_engine_protocol::capture_ctl::{codes as ctl_codes, CtlReply, ExposureM
 fn live_view() -> CaptureStateView {
     let mut v = idle_view(StorageView {
         free_bytes: Some(812_345_678_901),
-        est_remaining_s: Some(14_400.0),
+        est_remaining_s: Some(14_400),
     });
     v.state = "recording".into();
     v.session_id = Some("visor-1-20261019T101500Z-3fa2".into());

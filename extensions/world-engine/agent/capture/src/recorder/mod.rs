@@ -341,7 +341,8 @@ fn write_loop(
             let m = w.manifest_mut();
             m.operator = operator;
             m.health = health;
-            let _ = reply.send(w.finish().map_err(|e| e.to_string()));
+            let r = with_marker_heartbeat(&marker, TOUCH_EVERY, || w.finish());
+            let _ = reply.send(r.map_err(|e| e.to_string()));
             return;
         }
         if matches!(item, Item::Image { .. }) {
@@ -425,6 +426,26 @@ fn write_item(
         Item::Finish { .. } => unreachable!("handled by the loop"),
     }
     Ok(())
+}
+
+/// Run `f` (the session finish, which hashes every segment and can outlast
+/// the janitor's stale window) while a side thread refreshes `marker` every
+/// `every`, so the session never looks abandoned mid-finish.
+pub(crate) fn with_marker_heartbeat<T>(marker: &Path, every: Duration, f: impl FnOnce() -> T) -> T {
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    std::thread::scope(|s| {
+        // Owned by this closure so a panicking `f` still drops it on unwind
+        // and the scope's join cannot hang.
+        let stop_tx = stop_tx;
+        s.spawn(move || {
+            while let Err(RecvTimeoutError::Timeout) = stop_rx.recv_timeout(every) {
+                touch(marker);
+            }
+        });
+        let out = f();
+        drop(stop_tx);
+        out
+    })
 }
 
 fn touch(path: &Path) {

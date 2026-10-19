@@ -37,7 +37,9 @@ describe("CaptureClient", () => {
       message: "E_STORAGE_FULL",
     });
     const down = stubAgent(() => json(503, {}));
-    expect(await new CaptureClient(down.agent).stop()).toMatchObject({ ok: false, code: "service_unavailable" });
+    expect(await new CaptureClient(down.agent).stop()).toMatchObject({ ok: false, code: "E_CAPTURE_UNAVAILABLE" });
+    const stopped = stubAgent(() => json(503, { error: "E_CAPTURE_UNAVAILABLE" }));
+    expect(await new CaptureClient(stopped.agent).start()).toMatchObject({ ok: false, code: "E_CAPTURE_UNAVAILABLE" });
     const gone = stubAgent(() => Promise.reject(new Error("net")));
     expect(await new CaptureClient(gone.agent).stop()).toMatchObject({ ok: false, code: "transport_error" });
   });

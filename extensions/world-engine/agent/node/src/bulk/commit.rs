@@ -1,20 +1,18 @@
 //! `POST /api/compute/sessions/:id/commit`: verify every session file against
 //! `checksums.b3`, mark the session committed and run the commit hook.
 
-use std::collections::BTreeSet;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ados_capture_contract::{Manifest, CHECKSUMS_FILE};
+use ados_capture_contract::{check_checksums, Error as ContractError, Manifest, CHECKSUMS_FILE};
 use axum::extract::{Path as UrlPath, State};
 use axum::http::StatusCode;
 use axum::Json;
 use serde_json::{json, Value};
 
 use super::disk::{self, Marker};
-use super::paths;
 use super::routes::{blocking, check_id, require_session, ApiError, ApiResult, Ctx};
 use super::validate::validate_session_docs;
 use super::{CommittedSession, MANIFEST_FILE, UPLOAD_DIR};
@@ -39,89 +37,42 @@ pub(crate) enum Verdict {
     BadList(String),
 }
 
-/// Parse `checksums.b3` into `(rel, lowercase hex hash)` pairs.
-fn parse_listing(body: &str) -> Result<Vec<(String, String)>, String> {
-    body.lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| {
-            let (hash, rel) = line
-                .split_once("  ")
-                .ok_or_else(|| format!("bad checksum line `{line}`"))?;
-            if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Err(format!("bad hash for `{rel}`"));
-            }
-            if !paths::valid_rel(rel) || rel == CHECKSUMS_FILE {
-                return Err(format!("checksum path `{rel}` is not a session file"));
-            }
-            Ok((rel.to_string(), hash.to_ascii_lowercase()))
-        })
-        .collect()
-}
-
-fn hash_file(path: &Path) -> io::Result<String> {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update_reader(File::open(path)?)?;
-    Ok(hasher.finalize().to_hex().to_string())
-}
-
-/// Check every file of `dir` against its checksum list, reporting every
-/// failure rather than the first. Mismatching files are deleted so the
-/// device re-sends them.
+/// Check every file of `dir` against its checksum list (via the contract's
+/// [`check_checksums`]), reporting every failure rather than the first.
+/// Mismatching files are deleted so the device re-sends them.
 pub(crate) fn verify_session(dir: &Path) -> io::Result<Verdict> {
     let pending = disk::pending_parts(dir)?;
     if !pending.is_empty() {
         return Ok(Verdict::Incomplete(pending));
     }
-    let body = match fs::read_to_string(dir.join(CHECKSUMS_FILE)) {
-        Ok(body) => body,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+    let report = match check_checksums(dir) {
+        Ok(report) => report,
+        Err(ContractError::Io(e)) if e.kind() == io::ErrorKind::NotFound => {
             return Ok(Verdict::Incomplete(vec![CHECKSUMS_FILE.to_string()]))
         }
-        Err(e) if e.kind() == io::ErrorKind::InvalidData => {
+        Err(ContractError::Io(e)) if e.kind() == io::ErrorKind::InvalidData => {
             return Ok(Verdict::BadList("checksums.b3 is not UTF-8".to_string()))
         }
-        Err(e) => return Err(e),
+        Err(ContractError::Io(e)) => return Err(e),
+        Err(e) => return Ok(Verdict::BadList(e.to_string())),
     };
-    let listing = match parse_listing(&body) {
-        Ok(listing) => listing,
-        Err(message) => return Ok(Verdict::BadList(message)),
-    };
-    let listed: BTreeSet<&str> = listing.iter().map(|(rel, _)| rel.as_str()).collect();
-    let received = disk::complete_files(dir)?;
-    let have: BTreeSet<&str> = received.iter().map(|(rel, _)| rel.as_str()).collect();
-
-    let missing: Vec<String> = listed
-        .iter()
-        .filter(|rel| !have.contains(*rel))
-        .map(|rel| rel.to_string())
-        .collect();
-    if !missing.is_empty() {
-        return Ok(Verdict::Incomplete(missing));
+    if !report.missing.is_empty() {
+        return Ok(Verdict::Incomplete(report.missing));
     }
-    let unlisted: Vec<String> = have
-        .iter()
-        .filter(|rel| **rel != CHECKSUMS_FILE && !listed.contains(*rel))
-        .map(|rel| rel.to_string())
-        .collect();
-    if !unlisted.is_empty() {
-        return Ok(Verdict::Unlisted(unlisted));
+    if !report.unlisted.is_empty() {
+        return Ok(Verdict::Unlisted(report.unlisted));
     }
-
-    let mut mismatched = BTreeSet::new();
-    for (rel, hash) in &listing {
-        if hash_file(&dir.join(rel))? != *hash {
-            mismatched.insert(rel.clone());
-        }
-    }
-    if !mismatched.is_empty() {
-        for rel in &mismatched {
+    if !report.mismatched.is_empty() {
+        for rel in &report.mismatched {
             fs::remove_file(dir.join(rel))?;
         }
-        return Ok(Verdict::Mismatch(mismatched.into_iter().collect()));
+        return Ok(Verdict::Mismatch(report.mismatched));
     }
+    // The committed totals cover every received file, the list included.
+    let list_len = fs::metadata(dir.join(CHECKSUMS_FILE))?.len();
     Ok(Verdict::Verified {
-        files: received.len() as u64,
-        bytes: received.iter().map(|(_, len)| len).sum(),
+        files: report.files + 1,
+        bytes: report.bytes + list_len,
     })
 }
 

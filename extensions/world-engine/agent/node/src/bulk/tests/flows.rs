@@ -157,3 +157,24 @@ async fn missing_and_unlisted_files_refuse_commit() {
     );
     assert_eq!(h.calls.load(Ordering::SeqCst), 0);
 }
+
+#[tokio::test]
+async fn escaping_checksum_paths_refuse_commit() {
+    let hash = "0".repeat(64);
+    for rel in [
+        "../rig.json",
+        "C:/rig.json",
+        "segments\\..\\rig.json",
+        "/rig.json",
+    ] {
+        let h = harness();
+        assert_eq!(h.post_manifest().await.status, StatusCode::CREATED);
+        h.upload("rig.json").await;
+        let dir = h.store.session_dir(ID);
+        std::fs::write(dir.join("checksums.b3"), format!("{hash}  {rel}\n")).unwrap();
+        let reply = h.commit().await;
+        assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY, "{rel}");
+        assert_eq!(reply.json["error"], "E_BAD_CHECKSUMS", "{rel}");
+        assert_eq!(h.calls.load(Ordering::SeqCst), 0);
+    }
+}

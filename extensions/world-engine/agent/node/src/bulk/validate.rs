@@ -8,13 +8,16 @@ use ados_capture_contract::{SCHEMA_BASE_URI, SCHEMA_FILES};
 use jsonschema::Validator;
 use serde_json::{json, Value};
 
+use super::paths::windows_device;
+
 /// Longest accepted id.
 const MAX_SAFE_ID_LEN: usize = 64;
 /// Most schema errors quoted in one report.
 const MAX_REPORTED: usize = 8;
 
 /// An id that is safe as a single path segment and as a tool argument:
-/// 1 to 64 bytes of `[a-z0-9_-]`, starting with `[a-z0-9]`. Lowercase only, so
+/// 1 to 64 bytes of `[a-z0-9_-]`, starting with `[a-z0-9]`, and not a name
+/// Windows maps to a device (`con`, `nul`, `com1`, ...). Lowercase only, so
 /// two ids never name the same folder on a case-insensitive filesystem; no
 /// leading `-`, so an id never reads as a command-line flag.
 pub fn is_safe_id(id: &str) -> bool {
@@ -27,6 +30,7 @@ pub fn is_safe_id(id: &str) -> bool {
         && bytes
             .iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'_' | b'-'))
+        && !windows_device(id)
 }
 
 struct Validators {
@@ -140,6 +144,12 @@ mod tests {
             ".x",
             "a.b",
             "a b",
+            "con",
+            "nul",
+            "aux",
+            "prn",
+            "com1",
+            "lpt9",
             &long,
         ] {
             assert!(!is_safe_id(bad), "{bad:?}");

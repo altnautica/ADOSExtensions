@@ -117,7 +117,7 @@ mod tests {
                 m.req,
                 CtlRequest::Mark(MarkArgs {
                     room: "Hall".into(),
-                    floor: 2
+                    floor: Some(2)
                 })
             );
             m.reply

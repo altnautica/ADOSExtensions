@@ -188,8 +188,8 @@ impl ComputeClient {
         .await
     }
 
-    /// Submit a job: a reconstruction over a dataset, or a
-    /// perception / SLAM offload whose frame rides `params`. Pass `job_id` to make
+    /// Submit a job of any [`ComputeJobKind`] (a perception offload's frame
+    /// rides `params`). Pass `job_id` to make
     /// the submit idempotent — reusing the same id on a retry (after a timeout
     /// over a lossy link) yields a `409 Conflict` rather than a duplicate job.
     pub async fn submit_job(

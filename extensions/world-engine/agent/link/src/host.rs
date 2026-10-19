@@ -67,8 +67,10 @@ pub trait Host: Send + Sync + 'static {
         service_type: &str,
         window: Duration,
     ) -> Result<Vec<DiscoveredService>, ClientError>;
-    /// `video.whep.offer` (cap `video.whep.relay`): relay a WHEP offer to the
-    /// agent's own WHEP endpoint for `camera_id`'s preview leg.
+    /// `video.whep.offer` (cap `video.whep.relay`): relay a WHEP offer for
+    /// camera `camera_id`; the host resolves the media leg serving it (the
+    /// primary camera to `main`) and refuses an unknown camera
+    /// (`unknown_camera: ...`).
     async fn whep_offer(&self, camera_id: &str, offer_sdp: &str)
         -> Result<WhepAnswer, ClientError>;
     /// `video.whep.close` (cap `video.whep.relay`): tear a WHEP session down

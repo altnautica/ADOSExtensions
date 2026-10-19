@@ -2,7 +2,7 @@
 
 All notable changes to the World Engine extension.
 
-## [Unreleased]
+## [2.0.0]
 
 ### Added
 
@@ -32,9 +32,7 @@ All notable changes to the World Engine extension.
   `PUT /atlas/capture/exposure`, `GET /atlas/sessions`,
   `POST /atlas/sessions/<id>/{upload,reconstruct}`, `DELETE /atlas/sessions/<id>`
   and `GET /atlas/calib[/<version>]` over control protocol v2, with
-  `{"error": CODE, "detail": ..}` refusals. `whep` and `PUT /atlas/rig` answer
-  `503` (`E_WHEP_UNREACHABLE`, `E_RIG_UNREACHABLE`): the sandbox cannot reach
-  the agent's own listeners.
+  `{"error": CODE, "detail": ..}` refusals.
 - **Resumable session uploader.** Finished sessions go to the paired node over
   the LAN only, in ranged chunks of at most 8 MiB that resume from the node's
   `HEAD` offset after a dropped link; `.uploaded` is written after the commit
@@ -61,7 +59,17 @@ All notable changes to the World Engine extension.
   (`capture/livox`) feeds LiDAR scans.
 - **WHEP preview and rig write through the agent.** `POST|DELETE
   /atlas/capture/whep` and `PUT /atlas/rig` relay through the host methods
-  `video.whep.relay` and `sensors.rig.write`.
+  `video.whep.relay` and `sensors.rig.write`. The preview resolves the capture
+  camera to its media leg from the agent's video roster (the primary camera is
+  served at `main`); a camera not in the roster answers `404`.
+- **GCS capture surfaces.** Visor node pages `capture` (camera grid, coverage
+  map, trajectory, health chips, REC/MARK, room and floor, exposure lock),
+  `sessions` (list, upload progress, preset picker, job pipeline, viewer, tour
+  bundle download) and `calibration`; drones gain `sessions`; the compute
+  surface shows the job pipeline stages.
+- **Spark viewer.** Splats render with Spark (SPZ and `.RAD` streaming) with
+  walk and orbit modes, floorplan overlay, room hotspots and a measure tool; a
+  standalone `tour-viewer` build feeds the tour bundle.
 - **Crashed sessions.** A `.recording` session the capture service does not
   own and that is older than 120 s is listed as not finished; it can be
   deleted with `?force=true` and is never uploaded (`E_NOT_FINISHED`).
@@ -111,6 +119,14 @@ All notable changes to the World Engine extension.
   3 s control wait) answers `pending` and the apply finishes in the
   background, its read-back landing in the capture state. Gain is a
   multiplier (×) throughout.
+- Compute-node datasets are written as the contract `transforms.json`, with
+  the session anchor and per-frame exposure times.
+- `atlas.intrinsics` and `atlas.pose_prior` refuse unknown keys, so a
+  pre-contract override fails with an error naming the accepted keys.
+- The session anchor is the mean of the first 100 3D fixes, with its MSL
+  altitude raised to the ellipsoid by the EGM2008 geoid (1° grid).
+- A selected frame whose pose arrived more than 50 ms from the exposure is
+  not sent as a keyframe; the count is logged.
 - Front-panel presses are matched on the host's button label (`B1` REC, `B2`
   MARK) instead of a GPIO pin.
 
@@ -119,16 +135,8 @@ All notable changes to the World Engine extension.
 - The nerfstudio backend, the monocular-depth seed script and the random seed
   cloud; the placeholder reconstructor in release builds; the SLAM offload job
   kind.
-- Compute-node datasets are written as the contract `transforms.json`, with
-  the session anchor and per-frame exposure times.
-- `atlas.intrinsics` and `atlas.pose_prior` refuse unknown keys, so a
-  pre-contract override fails with an error naming the accepted keys.
-- `atlas.pose_prior.clock_offset_sigma_ns` is renamed `timebase_sigma_ns`.
 - The `atlas.hud` pin settings (`rec_pin`, `mark_pin`).
-- The session anchor is the mean of the first 100 3D fixes, with its MSL
-  altitude raised to the ellipsoid by the EGM2008 geoid (1° grid).
-- A selected frame whose pose arrived more than 50 ms from the exposure is
-  not sent as a keyframe; the count is logged.
+- The `@mkkellogg/gaussian-splats-3d` splat viewer.
 
 ## [1.0.1]
 

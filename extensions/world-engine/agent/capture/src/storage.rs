@@ -1,5 +1,5 @@
 //! Where capture sessions live, read from the agent's capture-storage sidecar
-//! (`/run/ados/capture-storage.json`, written by the supervisor's janitor).
+//! (`/run/ados/capture-storage/capture-storage.json`, written by the supervisor's janitor).
 //!
 //! The janitor owns the capture root, its budget and eviction; this module
 //! only asks it. A session directory is the janitor's to count once it holds
@@ -23,7 +23,7 @@ pub const ACTIVE_DIR_ENV: &str = "ADOS_CAPTURE_ACTIVE_DIR";
 pub fn sidecar_path() -> PathBuf {
     std::env::var_os(SIDECAR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| ados_protocol::paths::run_path("capture-storage.json"))
+        .unwrap_or_else(|| ados_protocol::paths::run_path("capture-storage"))
 }
 
 /// The marker the MAVLink router watches to raise the FC sensor rates while a

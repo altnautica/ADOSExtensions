@@ -1,4 +1,4 @@
-//! Sensor-bus ingest (seam J, `/run/ados/sensors.sock`).
+//! Sensor-bus ingest (seam J, `/run/ados/sensing/sensors.sock`).
 //!
 //! One task subscribes to the `clock`, `imu`, `gnss` and `trigger` kinds and
 //! keeps a [`SensorState`]: a 10 s IMU ring per stream, recent trigger

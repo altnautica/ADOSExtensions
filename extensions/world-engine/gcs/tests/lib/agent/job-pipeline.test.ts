@@ -1,6 +1,6 @@
 /**
  * The staged pipeline a compute node reports on a job: coercion, stage rows
- * derived from the current stage where the node lists none, overall progress,
+ * exactly as the node reports them, overall progress,
  * the ETA readout, and the structured error (`E_TOOL_MISSING` + tool).
  */
 
@@ -21,6 +21,8 @@ const RAW = {
   stages: [
     { id: "prepare", state: "done", started_ns: 1, ended_ns: 2 },
     { id: "sfm", state: "done" },
+    { id: "train", state: "running", progress: 0.5 },
+    { id: "features", state: "pending" },
   ],
   gpu: { name: "RTX 5070", util_pct: 97, vram_used_mb: 7270 },
   eta_s: 1500,
@@ -40,20 +42,24 @@ describe("coerceJobPipeline", () => {
     expect(coerceJobPipeline({ state: "running" })).toBeNull();
   });
 
-  it("fills unreported stages from the current stage", () => {
+  it("renders the node's stages in node order and never invents done stages", () => {
     const rows = stageRows(coerceJobPipeline(RAW)!);
     expect(rows.map((r) => [r.id, r.state])).toEqual([
       ["prepare", "done"],
       ["sfm", "done"],
       ["train", "running"],
-      ["mesh", "pending"],
-      ["products", "pending"],
+      ["features", "pending"],
     ]);
     expect(rows[2]?.progress).toBe(0.5);
   });
 
-  it("weights progress by stage: two done + half of the third of five", () => {
-    expect(pipelineFraction(coerceJobPipeline(RAW)!)).toBeCloseTo(2.5 / 5, 12);
+  it("is null when the node reports no stages, so the view falls back to progress", () => {
+    expect(coerceJobPipeline({ stage: "train", stages: [] })).toBeNull();
+    expect(coerceJobPipeline({ stage: "train" })).toBeNull();
+  });
+
+  it("weights progress by stage: two done + half of the third of four", () => {
+    expect(pipelineFraction(coerceJobPipeline(RAW)!)).toBeCloseTo(2.5 / 4, 12);
     expect(pipelineFraction(coerceJobPipeline({ ...RAW, stage: "done" })!)).toBe(1);
   });
 

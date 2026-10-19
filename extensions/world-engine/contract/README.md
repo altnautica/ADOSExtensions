@@ -61,7 +61,7 @@ Foxglove message schemas (`foxglove.RawImage`, `foxglove.CompressedImage`, `foxg
 - `health` flags are true when the condition was raised at any point in the session.
 
 ### `checksums.b3`
-One line per file in the session directory except itself: `<blake3 hex>  <relative path>`, `/`-separated, sorted by path.
+One line per file in the session directory except itself: `<blake3 hex>  <relative path>`, `/`-separated, sorted by path. Any file or directory whose name starts with `.` (device state markers such as `.recording` and `.uploaded`) is never listed, and a consumer requires the listed set to equal the session's files.
 
 ### Session directory
 ```
@@ -87,7 +87,7 @@ Protobuf message encoding, lz4-compressed chunks. Every message's MCAP log and p
 |`/lidar/<id>/points`|`foxglove.PointCloud`, frame `<id>`, with a per-point `t_offset_ns` field (`UINT32`, nanoseconds after the message time)|
 |`/pose/<source>`|`foxglove.PoseInFrame`, frame `world`; `<source>` is `truth` (simulation), `fc_ekf`, `vio` or `lidar`|
 |`/pose/<source>/cov`|`ados.capture.v1.PoseCov {t_ns, cov[36], health}` for the pose with the same `t_ns`|
-|`/clock`|`ados.capture.v1.ClockSample {t_ns, host_mono_ns, utc_ns, locked, sigma_ns}`|
+|`/clock`|`ados.capture.v1.ClockSample {t_ns, host_mono_ns, utc_ns, locked, sigma_ns}`; producers always set `sigma_ns` (`-1` = unmeasured), since an absent field decodes as `0` (exact)|
 |`/health`|JSON|
 
 ### Artifact descriptor and placement sidecar

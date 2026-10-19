@@ -115,6 +115,48 @@ async fn host_refusals_map_to_403_and_503() {
 }
 
 #[tokio::test]
+async fn the_camera_id_goes_to_the_host_as_is_and_an_unknown_camera_is_404() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new();
+    *host.whep_reply.lock() = Ok(WhepAnswer {
+        sdp: "v=0 answer".into(),
+        location: Some("/whep/s1?camera=main".into()),
+    });
+    let app = drone_router(test_api(
+        host.clone(),
+        &dir.path().join("none.sock"),
+        dir.path(),
+    ));
+    // The primary capture camera is asked for by its own id (the host maps it
+    // to the `main` leg); the host's id rule allows upper case and `-`.
+    let (st, _, _) = raw(
+        app.clone(),
+        "POST",
+        "/atlas/capture/whep?camera=Front-1",
+        "v=0",
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED);
+    assert_eq!(host.whep_offers.lock()[0].0, "Front-1");
+
+    *host.whep_reply.lock() =
+        Err("unknown_camera: \"rear\" is not a configured, enabled camera".into());
+    let (st, _, body) = raw(app, "POST", "/atlas/capture/whep?camera=rear", "v=0").await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    assert!(body.contains("E_UNKNOWN_CAMERA"), "{body}");
+}
+
+#[test]
+fn camera_ids_follow_the_host_path_segment_rule() {
+    for ok in ["main", "cam_fl", "Front-1", "a".repeat(100).as_str()] {
+        assert!(camera_id_ok(ok), "{ok}");
+    }
+    for bad in ["", "../x", "a/b", "a b", "a.b", "a?b"] {
+        assert!(!camera_id_ok(bad), "{bad}");
+    }
+}
+
+#[tokio::test]
 async fn a_rig_is_checked_then_relayed_with_the_core_reply_verbatim() {
     let dir = tempfile::tempdir().unwrap();
     let host = FakeHost::new();

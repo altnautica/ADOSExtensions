@@ -193,7 +193,8 @@ impl QualityMonitor {
 
     /// The six chips, in display order, at host `now_ns`. A chip covering
     /// cameras reports the worst camera that delivered a frame within
-    /// [`CAMERA_STALE_NS`].
+    /// [`CAMERA_STALE_NS`]; with no live camera, blur and texture have no
+    /// value and read `warn` (nothing is measuring, so not `ok`).
     pub fn health(&mut self, now_ns: u64) -> Vec<HealthView> {
         let live: Vec<&CameraQuality> = self
             .cameras
@@ -201,7 +202,7 @@ impl QualityMonitor {
             .filter(|c| now_ns.saturating_sub(c.last_t_ns) <= CAMERA_STALE_NS)
             .collect();
         let worst = |f: &dyn Fn(&CameraQuality) -> Level| {
-            live.iter().map(|c| f(c)).max().unwrap_or(Level::Ok)
+            live.iter().map(|c| f(c)).max().unwrap_or(Level::Warn)
         };
         let blur_level = worst(&|c| c.levels.0);
         let tex_level = worst(&|c| c.levels.1);

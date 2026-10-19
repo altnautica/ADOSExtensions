@@ -7,10 +7,6 @@
 
 import { arr, num, obj, objOrNull, str } from "../capture/coerce";
 
-/** Pipeline stages in run order. */
-export const PIPELINE_STAGES = ["prepare", "sfm", "train", "mesh", "products"] as const;
-export type PipelineStage = (typeof PIPELINE_STAGES)[number];
-
 export type StageState = "pending" | "running" | "done" | "failed" | "skipped";
 
 export interface StageRow {
@@ -28,7 +24,7 @@ export interface JobError {
 }
 
 export interface JobPipeline {
-  /** The current stage (`queued`, a {@link PipelineStage}, `done`, `failed`). */
+  /** The current stage (`queued`, a stage id, `done`, `failed`). */
   stage: string;
   stageProgress: number | null;
   stages: StageRow[];
@@ -51,21 +47,24 @@ export function coerceJobError(raw: unknown): JobError | null {
 }
 
 /** The pipeline block of a job, or null for a job that reports no stages
- * (an offload job, or a node before staged reconstruction). */
+ * (an offload job, or a node before staged reconstruction); the job view then
+ * falls back to the job's flat `progress`. */
 export function coerceJobPipeline(raw: Record<string, unknown>): JobPipeline | null {
   const stage = str(raw.stage);
   if (!stage) return null;
+  const stages = arr(raw.stages).flatMap((s) => {
+    const e = obj(s);
+    const id = str(e.id);
+    if (!id) return [];
+    const state = STAGE_STATES.find((x) => x === e.state) ?? "pending";
+    return [{ id, state, progress: num(e.progress), startedNs: num(e.started_ns), endedNs: num(e.ended_ns) }];
+  });
+  if (stages.length === 0) return null;
   const gpu = objOrNull(raw.gpu);
   return {
     stage,
     stageProgress: num(raw.stage_progress),
-    stages: arr(raw.stages).flatMap((s) => {
-      const e = obj(s);
-      const id = str(e.id);
-      if (!id) return [];
-      const state = STAGE_STATES.find((x) => x === e.state) ?? "pending";
-      return [{ id, state, progress: num(e.progress), startedNs: num(e.started_ns), endedNs: num(e.ended_ns) }];
-    }),
+    stages,
     gpu: gpu ? { name: str(gpu.name), utilPct: num(gpu.util_pct), vramUsedMb: num(gpu.vram_used_mb) } : null,
     etaS: num(raw.eta_s),
     tools: Object.entries(obj(raw.tools)).flatMap(([name, v]) =>
@@ -75,24 +74,10 @@ export function coerceJobPipeline(raw: Record<string, unknown>): JobPipeline | n
   };
 }
 
-/** Every pipeline stage with its state: the node's rows where reported, the
- * rest derived from the current stage (earlier = done, later = pending). */
+/** The node's stage rows, in the order the node reports them. Only reported
+ * stages are shown; none is ever assumed done. */
 export function stageRows(p: JobPipeline): StageRow[] {
-  const current = PIPELINE_STAGES.indexOf(p.stage as PipelineStage);
-  return PIPELINE_STAGES.map((id, i) => {
-    const reported = p.stages.find((s) => s.id === id);
-    if (reported) return reported;
-    let state: StageState = "pending";
-    if (p.stage === "done" || (current >= 0 && i < current)) state = "done";
-    else if (i === current) state = p.stage === "failed" ? "failed" : "running";
-    return {
-      id,
-      state,
-      progress: i === current ? p.stageProgress : null,
-      startedNs: null,
-      endedNs: null,
-    };
-  });
+  return p.stages;
 }
 
 /** Overall progress `0..1`: completed stages plus the running stage's share. */

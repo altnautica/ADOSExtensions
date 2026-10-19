@@ -26,7 +26,7 @@ import { CalmState } from "../workstation/CalmState";
 const t = translator("sessions");
 
 export function SessionsPage() {
-  const { client, sessions, rates, loading, absent, refresh } = useSessions();
+  const { client, sessions, rates, loading, absent, stale, refresh } = useSessions();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** Jobs this page started, per session, until the node lists them. */
   const [launched, setLaunched] = useState<Record<string, { node: string | null; jobId: string | null }>>({});
@@ -52,6 +52,11 @@ export function SessionsPage() {
 
   return (
     <div className="we:flex we:flex-col we:gap-3 we:p-3">
+      {stale && (
+        <p role="status" className="we:rounded we:bg-status-warning/15 we:px-2 we:py-1 we:text-[11px] we:text-status-warning">
+          {t("stale")}
+        </p>
+      )}
       <Section title={t("title")}>
         <SessionTable
           client={client}

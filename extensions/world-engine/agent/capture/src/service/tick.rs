@@ -220,8 +220,8 @@ impl Engine {
         if self.session.is_some() {
             self.begin_close();
         }
-        if let Some(h) = self.closing.take() {
-            match h.await {
+        if let Some(c) = self.closing.take() {
+            match c.handle.await {
                 Ok(Ok(m)) => tracing::info!(session = %m.session_id, "capture_session_closed"),
                 Ok(Err(e)) => tracing::error!(error = %e, "capture_session_close_failed"),
                 Err(e) => tracing::error!(error = %e, "capture_session_close_panicked"),

@@ -66,7 +66,7 @@ export class CaptureClient {
     if (!res) return { ok: false, code: "transport_error", message: "The device did not answer." };
     const e = obj(res.json);
     if (res.status >= 200 && res.status < 300) return { ok: true, value: coerce(e) };
-    const code = str(e.error) ?? (res.status === 503 ? "service_unavailable" : `http_${res.status}`);
+    const code = str(e.error) ?? (res.status === 503 ? "E_CAPTURE_UNAVAILABLE" : `http_${res.status}`);
     return { ok: false, code, message: str(e.detail) ?? str(e.message) ?? code };
   }
 

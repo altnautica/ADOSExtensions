@@ -3,7 +3,7 @@
 //! Every producer on the sensor bus and the framebus stamps host
 //! `CLOCK_MONOTONIC` nanoseconds. The agent's clock service publishes
 //! `ClockSample`s relating that clock to the timebase a session should use
-//! (`/run/ados/clock.json` names it), so the recorder converts each stamp once
+//! (`/run/ados/sensing/clock.json` names it), so the recorder converts each stamp once
 //! with [`ClockMap::to_session`].
 
 use std::path::{Path, PathBuf};
@@ -31,11 +31,11 @@ pub fn realtime_ns() -> i64 {
 /// Env override of the clock sidecar path.
 pub const CLOCK_SIDECAR_ENV: &str = "ADOS_CLOCK_SIDECAR";
 
-/// `/run/ados/clock.json`.
+/// `/run/ados/sensing/clock.json` (registry id `clock`).
 pub fn clock_sidecar_path() -> PathBuf {
     std::env::var_os(CLOCK_SIDECAR_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| ados_protocol::paths::run_path("clock.json"))
+        .unwrap_or_else(|| ados_protocol::paths::run_path("clock"))
 }
 
 /// The fields of `clock.json` the recorder reads.

@@ -4,7 +4,10 @@
 //! - `POST /atlas/capture/whep?camera=<id>` (body: the SDP offer,
 //!   `application/sdp`) → `201` with the SDP answer and a `Location` of
 //!   `whep?location=<opaque>` (relative to this route), through
-//!   `video.whep.offer`.
+//!   `video.whep.offer`. `<id>` is the camera's own id (`[A-Za-z0-9_-]+`); the
+//!   host resolves it to the media leg that serves it (the primary camera to
+//!   `main`) and refuses one that is not a configured, enabled camera (`404
+//!   E_UNKNOWN_CAMERA`).
 //! - `DELETE /atlas/capture/whep?location=<opaque>` → `{"ok":true}`, through
 //!   `video.whep.close`.
 //! - `PUT /atlas/rig` (a contract rig document): checked locally (`400
@@ -47,6 +50,9 @@ pub fn host_error(e: ClientError, unreachable: &str) -> ApiError {
         ),
         ClientError::Rpc(m) => {
             let head = m.split(':').next().unwrap_or("").trim();
+            if head == "unknown_camera" {
+                return ApiError::new(StatusCode::NOT_FOUND, codes::UNKNOWN_CAMERA, m);
+            }
             let down = head.ends_with("_unavailable")
                 || matches!(head, "not_implemented" | "not_available" | "unknown_method");
             if down {
@@ -77,13 +83,13 @@ fn pct(s: &str) -> String {
     out
 }
 
-/// A rig sensor id: `[a-z0-9_]`, 1..=64 bytes.
+/// A camera id the host relays: `[A-Za-z0-9_-]+`, the host's path-segment
+/// rule (no length bound there either).
 fn camera_id_ok(id: &str) -> bool {
     !id.is_empty()
-        && id.len() <= 64
         && id
             .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -98,7 +104,8 @@ async fn whep_offer(
     body: Bytes,
 ) -> Response {
     let Some(camera) = q.camera.filter(|c| camera_id_ok(c)) else {
-        return ApiError::bad_request("`camera` must be a rig camera id").into_response();
+        return ApiError::bad_request("`camera` must be a camera id ([A-Za-z0-9_-]+)")
+            .into_response();
     };
     if body.is_empty() || body.len() > MAX_SDP {
         return ApiError::bad_request("the body must be an SDP offer").into_response();

@@ -95,6 +95,12 @@ describe("profiles", () => {
       expect.arrayContaining(["atlas.ingest", "atlas.world", "offload.stream", "jobs.submit"]),
     );
   });
+
+  it("gives drone and visor peers the session upload lane", () => {
+    expect(lanesForPeer("drone")).toContain("sessions.upload");
+    expect(lanesForPeer("visor")).toContain("sessions.upload");
+    expect(lanesForPeer("ground-station")).not.toContain("sessions.upload");
+  });
 });
 
 describe("planProvisioning", () => {

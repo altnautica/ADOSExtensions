@@ -461,8 +461,4 @@ impl ToolRunner for StandInRunner {
             _ => Ok(()),
         }
     }
-
-    fn is_stand_in(&self) -> bool {
-        true
-    }
 }

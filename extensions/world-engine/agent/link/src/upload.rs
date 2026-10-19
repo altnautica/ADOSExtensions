@@ -14,13 +14,13 @@
 //! the device is idle or charging ([`crate::power`]).
 
 use std::collections::{HashMap, VecDeque};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::http::StatusCode;
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use world_engine_capture::storage::UPLOADED_MARKER;
@@ -79,6 +79,25 @@ impl UploadView {
     }
 }
 
+/// What `.uploaded` records about the commit (fields it cannot read are
+/// `None`).
+#[derive(Debug, Default, Deserialize)]
+struct UploadedMarker {
+    #[serde(default)]
+    node: Option<String>,
+    #[serde(default)]
+    bytes: Option<u64>,
+}
+
+impl UploadedMarker {
+    fn read(dir: &Path) -> Self {
+        std::fs::read(dir.join(UPLOADED_MARKER))
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+}
+
 struct Job {
     view: UploadView,
     failed_at: Option<Instant>,
@@ -132,16 +151,19 @@ impl UploadManager {
         (self.inner.root)()
     }
 
-    /// The progress of `dir`: the live job, else committed (marker present)
-    /// or idle.
+    /// The progress of `dir`: the live job, else committed (marker present,
+    /// node and bytes as the marker records them) or idle.
     pub fn view(&self, dir: &SessionDir, size_bytes: u64) -> UploadView {
         if let Some(job) = self.inner.jobs.lock().get(&dir.id) {
             return job.view.clone();
         }
         let mut v = UploadView::idle(size_bytes);
         if dir.uploaded {
+            let marker = UploadedMarker::read(&dir.path);
             v.state = UploadState::Committed;
-            v.bytes_sent = size_bytes;
+            v.bytes_total = marker.bytes.unwrap_or(size_bytes);
+            v.bytes_sent = v.bytes_total;
+            v.node = marker.node;
         }
         v
     }

@@ -44,6 +44,8 @@ pub mod codes {
     pub const NO_CALIB: &str = "E_NO_CALIB";
     pub const IO: &str = "E_IO";
     pub const WHEP_UNREACHABLE: &str = "E_WHEP_UNREACHABLE";
+    /// The camera is not a configured, enabled camera on the agent.
+    pub const UNKNOWN_CAMERA: &str = "E_UNKNOWN_CAMERA";
     pub const RIG_INVALID: &str = "E_RIG_INVALID";
     pub const RIG_UNREACHABLE: &str = "E_RIG_UNREACHABLE";
     /// The plugin is not granted the host method's capability.

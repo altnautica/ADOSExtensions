@@ -56,7 +56,7 @@ export type ComputeJobState =
 /** One reconstruction / offload job the engine tracks. */
 export interface ComputeJob {
   id: string;
-  /** "reconstruct" | "perception_offload" | "slam_offload" (free-form). */
+  /** "reconstruct" | "perception_offload" (free-form). */
   kind: string;
   datasetId: string | null;
   state: ComputeJobState;

@@ -22,7 +22,7 @@ const ERROR_KEYS: Record<string, string> = {
   E_NOT_UPLOADED: "errNotUploaded",
   E_TOOL_MISSING: "errToolMissing",
   transport_error: "errUnreachable",
-  service_unavailable: "errServiceDown",
+  E_CAPTURE_UNAVAILABLE: "errServiceDown",
 };
 
 export function PresetPicker({

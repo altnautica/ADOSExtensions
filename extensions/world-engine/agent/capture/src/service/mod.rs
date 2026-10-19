@@ -134,7 +134,7 @@ pub(crate) struct Engine {
     session: Option<ActiveSession>,
     /// The rig the open session records with.
     rig: Option<Rig>,
-    closing: Option<JoinHandle<anyhow::Result<Manifest>>>,
+    closing: Option<Closing>,
     quality: QualityMonitor,
     coverage: Coverage,
     exposure: ExposureView,
@@ -277,3 +277,10 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
 mod tests;
 #[cfg(test)]
 mod tests_timebase;
+
+/// A session being finished on a blocking thread; its id stays reported in
+/// the state view until the finish completes.
+struct Closing {
+    session_id: String,
+    handle: JoinHandle<anyhow::Result<Manifest>>,
+}

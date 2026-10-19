@@ -4,7 +4,7 @@
 //! so argv[1] is the plugin id; the socket and token come from the host's
 //! environment). `on_start` spawns the capture supervisor, which follows the
 //! `atlas.*` plugin config: while capture is enabled it tags each engine frame
-//! with the flight controller's pose (or an offloaded SLAM pose), selects
+//! with the active pose provider's pose (FC EKF, VIO or LiDAR), selects
 //! keyframes, and publishes the keyframe + pose + capture-state streams on the
 //! extension's private atlas bus. `on_stop` stops it. Runs until SIGTERM /
 //! SIGINT.

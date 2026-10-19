@@ -98,6 +98,12 @@ impl JobStore {
              CREATE TABLE IF NOT EXISTS job_errors (
                  job_id TEXT PRIMARY KEY,
                  error TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS job_tools (
+                 job_id TEXT NOT NULL,
+                 tool TEXT NOT NULL,
+                 version TEXT NOT NULL,
+                 PRIMARY KEY (job_id, tool)
              );",
         )?;
         Ok(Self { conn })
@@ -358,7 +364,8 @@ impl JobStore {
         )?;
         self.conn.execute_batch(
             "DELETE FROM job_stages WHERE job_id NOT IN (SELECT id FROM jobs);
-             DELETE FROM job_errors WHERE job_id NOT IN (SELECT id FROM jobs);",
+             DELETE FROM job_errors WHERE job_id NOT IN (SELECT id FROM jobs);
+             DELETE FROM job_tools WHERE job_id NOT IN (SELECT id FROM jobs);",
         )?;
         Ok(n)
     }

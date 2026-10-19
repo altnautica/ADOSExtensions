@@ -80,7 +80,7 @@ impl Engine {
                 if m.room.trim().is_empty() {
                     return CtlReply::err(codes::BAD_REQUEST, "room is empty");
                 }
-                match self.mark(m.room, Some(m.floor)) {
+                match self.mark(m.room, m.floor.map(i64::from)) {
                     Some(segment) => CtlReply::ok(json!({ "segment": segment })),
                     None => CtlReply::err(codes::NOT_RECORDING, "no session is open"),
                 }
@@ -238,7 +238,10 @@ impl Engine {
             c.last_kf_ns = None;
         }
         self.keyframes.start(id.clone());
-        self.keyframes.set_anchored(true);
+        // The recorder fixes the session frame at start; the anchor may not
+        // exist (no GNSS fix yet), which is reported, not hidden.
+        self.keyframes.set_frame_fixed(true);
+        self.keyframes.set_anchored(s.anchor.is_some());
         self.keyframes.set_pose_tier(self.pose.source());
         self.rig = Some(rig);
         self.session = Some(s);
@@ -286,15 +289,21 @@ impl Engine {
             frames_dropped_pct: dropped_pct,
         };
         stop_and_bag(&mut self.keyframes);
-        self.closing = Some(tokio::task::spawn_blocking(move || s.finish(t_end, health)));
+        let session_id = s.session_id.clone();
+        let handle = tokio::task::spawn_blocking(move || s.finish(t_end, health));
+        self.closing = Some(super::Closing { session_id, handle });
     }
 
     pub(super) async fn poll_closing(&mut self) {
-        if !self.closing.as_ref().is_some_and(|h| h.is_finished()) {
+        if !self
+            .closing
+            .as_ref()
+            .is_some_and(|c| c.handle.is_finished())
+        {
             return;
         }
-        if let Some(h) = self.closing.take() {
-            match h.await {
+        if let Some(c) = self.closing.take() {
+            match c.handle.await {
                 Ok(Ok(m)) => {
                     tracing::info!(session = %m.session_id, segments = m.segments.len(), "capture_session_closed")
                 }

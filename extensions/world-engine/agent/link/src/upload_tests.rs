@@ -79,7 +79,8 @@ async fn commit(State(n): State<SharedNode>) -> Response {
     let seen = n.marker.exists();
     n.marker_at_commit.push(seen);
     if n.commit_ok {
-        Json(json!({"ok": true, "files": n.files.len(), "bytes": 1})).into_response()
+        let bytes: usize = n.files.values().map(Vec::len).sum();
+        Json(json!({"ok": true, "files": n.files.len(), "bytes": bytes})).into_response()
     } else {
         (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -195,6 +196,30 @@ async fn the_marker_is_written_only_after_the_commit_ack() {
     let n = node.lock();
     assert!(n.marker_at_commit.iter().all(|seen| !seen));
     assert_eq!(n.files["segments/000000.mcap"], vec![3u8; 5000]);
+    drop(n);
+
+    // After a link restart (a fresh manager, no live job) the committed row
+    // keeps the node and bytes the marker recorded.
+    let restarted = manager(FakeHost::new(), root.path());
+    let dir = SessionDir::open(root.path(), id).unwrap();
+    let after = restarted.view(&dir, 7);
+    assert_eq!(after.state, UploadState::Committed);
+    assert_eq!(after.node.as_deref(), Some(addr.as_str()));
+    assert_eq!(after.bytes_total, v.bytes_total);
+    assert_eq!(after.bytes_sent, v.bytes_total);
+}
+
+#[test]
+fn a_marker_without_fields_lists_committed_with_the_directory_size() {
+    let root = tempfile::tempdir().unwrap();
+    let id = "visor-1-20261019T101500Z-0003";
+    let dir_path = finished_session(root.path(), id);
+    std::fs::write(dir_path.join(UPLOADED_MARKER), b"").unwrap();
+    let m = manager(FakeHost::new(), root.path());
+    let v = m.view(&SessionDir::open(root.path(), id).unwrap(), 42);
+    assert_eq!(v.state, UploadState::Committed);
+    assert_eq!(v.node, None);
+    assert_eq!((v.bytes_sent, v.bytes_total), (42, 42));
 }
 
 #[tokio::test]

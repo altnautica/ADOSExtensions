@@ -82,8 +82,9 @@ pub struct StartArgs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MarkArgs {
     pub room: String,
+    /// The new room's floor; absent keeps the session's current floor.
     #[serde(default)]
-    pub floor: i64,
+    pub floor: Option<i32>,
 }
 
 /// Exposure regime (A9): `walking` caps exposure at 4 ms, `slow` at 10 ms,
@@ -106,6 +107,7 @@ pub enum ExposureMode {
 /// `control_unsupported`, `gain_unit_unknown`, `not_capture_camera`, ..).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExposureView {
+    #[serde(default)]
     pub locked: bool,
     /// Exposure time, microseconds.
     #[serde(default)]
@@ -213,7 +215,9 @@ pub struct HealthView {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct StorageView {
     pub free_bytes: Option<u64>,
-    pub est_remaining_s: Option<f64>,
+    /// Whole seconds of recording left at the current write rate; `None`
+    /// when unknown.
+    pub est_remaining_s: Option<u64>,
 }
 
 /// `GET /atlas/capture/state`.
@@ -261,8 +265,17 @@ mod tests {
             r,
             CtlRequest::Mark(MarkArgs {
                 room: "Kitchen".into(),
-                floor: 1
+                floor: Some(1)
             })
+        );
+        let r: CtlRequest = serde_json::from_value(json!({"cmd": "mark", "room": "Hall"})).unwrap();
+        assert_eq!(
+            r,
+            CtlRequest::Mark(MarkArgs {
+                room: "Hall".into(),
+                floor: None
+            }),
+            "an absent floor keeps the current one, it is not floor 0"
         );
         let s: CtlRequest = serde_json::from_value(json!({"cmd": "start"})).unwrap();
         assert_eq!(s, CtlRequest::Start(StartArgs::default()));
@@ -284,6 +297,32 @@ mod tests {
         let v: ExposureView = serde_json::from_value(json!({"locked": true})).unwrap();
         assert!(!v.applied);
         assert_eq!(serde_json::to_value(v).unwrap()["applied"], false);
+    }
+
+    #[test]
+    fn an_exposure_put_may_omit_every_field() {
+        let v: ExposureView = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(v, ExposureView::default());
+        let v: ExposureView =
+            serde_json::from_value(json!({"exposure_us": 4000, "gain": 2.0})).unwrap();
+        assert!(!v.locked);
+        assert_eq!(v.mode, None);
+        assert_eq!(v.exposure_us, Some(4000));
+    }
+
+    #[test]
+    fn storage_figures_serialize_as_integers() {
+        let s = StorageView {
+            free_bytes: Some(812_345_678_901),
+            est_remaining_s: Some(14_400),
+        };
+        let text = serde_json::to_string(&s).unwrap();
+        assert_eq!(
+            text,
+            r#"{"free_bytes":812345678901,"est_remaining_s":14400}"#
+        );
+        let unknown = serde_json::to_value(StorageView::default()).unwrap();
+        assert!(unknown["est_remaining_s"].is_null());
     }
 
     #[test]

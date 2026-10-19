@@ -41,7 +41,7 @@ dependencies = [
 
 [[package]]
 name = "ados-config"
-version = "0.103.5"
+version = "0.104.0"
 dependencies = [
  "ados-protocol",
  "nix 0.29.0",
@@ -65,14 +65,14 @@ dependencies = [
 
 [[package]]
 name = "ados-offload"
-version = "0.103.5"
+version = "0.104.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ados-protocol"
-version = "0.103.5"
+version = "0.104.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -98,7 +98,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sdk"
-version = "0.103.5"
+version = "0.104.0"
 dependencies = [
  "ados-protocol",
  "async-trait",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sensorbus"
-version = "0.103.5"
+version = "0.104.0"
 dependencies = [
  "ados-protocol",
  "jsonschema 0.18.3",
@@ -134,10 +134,11 @@ dependencies = [
 
 [[package]]
 name = "ados-vision"
-version = "0.103.5"
+version = "0.104.0"
 dependencies = [
  "ados-config",
  "ados-protocol",
+ "ados-sensorbus",
  "anyhow",
  "memmap2",
  "nix 0.29.0",
