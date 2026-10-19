@@ -167,6 +167,8 @@ mod descriptors;
 mod keyframe;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_bus;
 
 pub use descriptors::{
     Generation, MeshDescriptor, OccupancyDescriptor, OccupancyField, PointCloudDescriptor,

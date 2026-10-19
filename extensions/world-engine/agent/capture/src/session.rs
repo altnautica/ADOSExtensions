@@ -85,6 +85,9 @@ pub struct CaptureSession {
     anchored: bool,
     pose_tier: PoseSource,
     dropped_keyframes: u64,
+    /// Selected frames refused this session because their pose sat too far from
+    /// the exposure (see `MAX_PAIRING_RESIDUAL_MS`).
+    pairing_rejected: u64,
     // Pose-publish decimation. ONE clock for the whole rig, not one per camera:
     // the rig has a single pose, so an N-camera rig must not publish N times the
     // documented rate onto the same bus that carries multi-MB keyframes.
@@ -114,6 +117,7 @@ impl CaptureSession {
             anchored: false,
             pose_tier: PoseSource::LocalVio,
             dropped_keyframes: 0,
+            pairing_rejected: 0,
             pose_interval_ms: pose_interval_ms.max(0),
             last_pose_pub_ms: None,
         }
@@ -130,6 +134,7 @@ impl CaptureSession {
         self.last_accept = None;
         self.selectors.clear();
         self.dropped_keyframes = 0;
+        self.pairing_rejected = 0;
         self.last_pose_pub_ms = None;
         // The anchor is per-session: a new session must not inherit the previous
         // run's latch, or its first keyframes would be selected before this
@@ -205,6 +210,18 @@ impl CaptureSession {
     /// the keyframe count claims frames the reconstruction never received.
     pub fn note_keyframe_dropped(&mut self, dropped: u64) {
         self.dropped_keyframes = self.dropped_keyframes.saturating_add(dropped);
+    }
+
+    /// Record a selected frame refused for its frame-to-pose gap; returns the
+    /// session's running count.
+    pub fn note_pairing_rejected(&mut self) -> u64 {
+        self.pairing_rejected = self.pairing_rejected.saturating_add(1);
+        self.pairing_rejected
+    }
+
+    /// Selected frames refused this session for their frame-to-pose gap.
+    pub fn pairing_rejected(&self) -> u64 {
+        self.pairing_rejected
     }
 
     /// Whether the session-wide keyframe cap has stopped selection.

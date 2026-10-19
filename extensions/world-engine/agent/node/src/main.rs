@@ -854,6 +854,7 @@ async fn publish_world_generation(
         .params
         .get("generation")
         .and_then(|v| v.as_u64())
+        .and_then(|g| u32::try_from(g).ok())
         .unwrap_or(0);
 
     let mut set: WorldDescriptorSet =

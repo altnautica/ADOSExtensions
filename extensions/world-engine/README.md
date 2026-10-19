@@ -91,7 +91,7 @@ Per-node plugin configuration (`config-schema.json`):
 | `atlas.selection.*` | Keyframe selection thresholds |
 | `atlas.intrinsics.*` | Camera intrinsics |
 | `atlas.live_reconstruct` | Rebuild the world incrementally on the compute node while keyframes arrive (default `false`) |
-| `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02), `slam_position_sigma_m` (0.25), `slam_orientation_sigma_rad` (0.01), `clock_offset_sigma_ns` (-1 = unknown) |
+| `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02), `slam_position_sigma_m` (0.25), `slam_orientation_sigma_rad` (0.01), `timebase_sigma_ns` (uncertainty of the keyframe timebase, -1 = unmeasured) |
 | `atlas.pose_max_age_ms` | Oldest pose a keyframe may be tagged with, in ms (500) |
 | `atlas.pose_publish_interval_ms` | Interval between published world poses, in ms (100) |
 | `offload.enabled` | Perception offload: `auto`, `on` or `off` |

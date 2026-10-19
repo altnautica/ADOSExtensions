@@ -29,6 +29,7 @@
 //! import surface.
 
 mod config;
+pub mod geo;
 mod selector;
 mod session;
 

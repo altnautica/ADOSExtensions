@@ -78,9 +78,9 @@
         "orientation_sigma_rad": { "type": "number", "exclusiveMinimum": 0, "default": 0.02 },
         "slam_position_sigma_m": { "type": "number", "exclusiveMinimum": 0, "default": 0.25 },
         "slam_orientation_sigma_rad": { "type": "number", "exclusiveMinimum": 0, "default": 0.01 },
-        "clock_offset_sigma_ns": {
+        "timebase_sigma_ns": {
           "type": "integer",
-          "description": "One-sigma uncertainty of the node clock in ns; negative means unmeasured.",
+          "description": "One-sigma uncertainty, in ns, of the timebase keyframes are stamped on (this host's monotonic clock against its reference); negative means unmeasured.",
           "default": -1
         }
       },

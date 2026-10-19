@@ -96,6 +96,7 @@ async fn sitl_capture_emits_keyframes_pose_and_state_end_to_end() {
         // budget keeps replay timing out of the assertion. The freshness
         // behaviour has its own test below.
         pose_max_age_ms: 60_000,
+        max_pairing_residual_ms: 60_000.0,
         ..AtlasRuntimeConfig::default()
     };
     let session = CaptureSession::new(config);
@@ -245,6 +246,7 @@ async fn sitl_capture_recovers_from_a_malformed_keyframe_frame() {
         // budget keeps replay timing out of the assertion. The freshness
         // behaviour has its own test below.
         pose_max_age_ms: 60_000,
+        max_pairing_residual_ms: 60_000.0,
         ..AtlasRuntimeConfig::default()
     };
     let session = CaptureSession::new(config);
@@ -337,6 +339,16 @@ async fn run_and_collect(
     pose_max_age_ms: i64,
     window: Duration,
 ) -> (Vec<KeyframeEnvelope>, Vec<CaptureStatus>) {
+    run_with_pairing_budget(poses, pose_max_age_ms, pose_max_age_ms as f64, window).await
+}
+
+/// [`run_and_collect`] with an explicit frame-to-pose pairing budget.
+async fn run_with_pairing_budget(
+    poses: Vec<PoseSample>,
+    pose_max_age_ms: i64,
+    max_pairing_residual_ms: f64,
+    window: Duration,
+) -> (Vec<KeyframeEnvelope>, Vec<CaptureStatus>) {
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("atlas.sock").to_string_lossy().to_string();
     let publisher = AtlasPublisher::bind(&sock).await.unwrap();
@@ -353,6 +365,7 @@ async fn run_and_collect(
         enabled: true,
         capture: config.clone(),
         pose_max_age_ms,
+        max_pairing_residual_ms,
         ..AtlasRuntimeConfig::default()
     };
     let session = CaptureSession::new(config);
@@ -515,5 +528,34 @@ async fn every_keyframe_carries_the_inputs_a_reconstructor_needs() {
             Err(world_engine_protocol::atlas::KeyframeReject::TimeSigma { .. })
         ),
         "an unmeasured clock must not pass a strict budget"
+    );
+}
+
+#[tokio::test]
+async fn a_frame_paired_with_a_pose_far_from_its_exposure_never_becomes_a_keyframe() {
+    // Every pose arrived a full second before the frames: fresh enough for the
+    // age gate (60 s here), far outside the 50 ms pairing budget.
+    let poses: Vec<PoseSample> = (0..5)
+        .map(|i| PoseSample {
+            arrival_mono_ns: world_engine_capture::mono_ns() - 1_000_000_000,
+            ..pose_at(i as f64 * 10.0, i * 100)
+        })
+        .collect();
+    let (keyframes, states) = run_with_pairing_budget(
+        poses,
+        60_000,
+        world_engine_capture::runtime::MAX_PAIRING_RESIDUAL_MS,
+        Duration::from_millis(1200),
+    )
+    .await;
+    assert!(
+        keyframes.is_empty(),
+        "a 1 s frame-to-pose gap must not become a keyframe"
+    );
+    assert!(
+        states
+            .iter()
+            .any(|s| s.state == world_engine_protocol::atlas::CaptureState::Capturing),
+        "the capture keeps running on the live pose lane"
     );
 }

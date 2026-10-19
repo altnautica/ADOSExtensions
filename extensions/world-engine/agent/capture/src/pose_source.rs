@@ -31,7 +31,9 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use ados_capture_contract::{GeoAnchor, GeoAnchorDatum, GeoAnchorSource};
+use ados_capture_contract::GeoAnchor;
+
+use crate::geo::AnchorLatch;
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
 use ados_protocol::state::STATE_V2_MAX_FRAME;
 use ados_sdk::{ClientError, EventCallback, PluginContext};
@@ -131,9 +133,9 @@ type Shared = Arc<Mutex<Option<PoseSample>>>;
 /// What the telemetry feed shares with the pose providers reading it.
 #[derive(Default)]
 struct FeedState {
-    /// The session anchor, fixed on the first fix and reused so every pose is
-    /// in one consistent local frame.
-    anchor: Arc<Mutex<Option<GeoAnchor>>>,
+    /// The session anchor, latched at the mean of the first 3D fixes and reused
+    /// so every pose is in one consistent local frame.
+    anchor: Arc<Mutex<AnchorLatch>>,
     /// The stated uncertainty the current capture run poses with.
     prior: PosePrior,
     latest: Option<PoseSample>,
@@ -223,8 +225,8 @@ pub fn diagonal_cov(position_sigma_m: f64, orientation_sigma_rad: f64) -> Vec<f6
     cov
 }
 
-/// Convert one decoded state snapshot into a local-frame pose, fixing the
-/// session anchor on the first valid fix. The caller converts the delivered
+/// Convert one decoded state snapshot into a local-frame pose, folding 3D
+/// fixes into the session anchor latch. The caller converts the delivered
 /// snapshot into a field-addressed value first.
 ///
 /// The sample's age is the POSITION's age, not the snapshot's: the router
@@ -236,7 +238,7 @@ pub fn diagonal_cov(position_sigma_m: f64, orientation_sigma_rad: f64) -> Vec<f6
 /// (`position_age_ms` null or absent) carries no pose at all.
 fn parse_state_pose(
     v: &serde_json::Value,
-    anchor: &Arc<Mutex<Option<GeoAnchor>>>,
+    anchor: &Arc<Mutex<AnchorLatch>>,
     prior: &PosePrior,
 ) -> Option<PoseSample> {
     let position_age_ms = v.get("position_age_ms")?.as_u64()?;
@@ -270,23 +272,13 @@ fn parse_state_pose(
         .and_then(|x| x.as_f64())
         .filter(|d| d.is_finite() && *d > 0.0);
 
-    // Fix the anchor once, on the first 3D fix at a real position. The vehicle
-    // state carries the flight controller's MSL altitude only; with no geoid
-    // model on this path the undulation is recorded as 0, so `h_ellipsoid_m`
-    // holds that MSL height and `geoid_undulation_m: 0` says so.
-    let mut anchor_guard = anchor.lock();
-    if anchor_guard.is_none() && fix >= 3 && (lat != 0.0 || lon != 0.0) {
-        *anchor_guard = Some(GeoAnchor {
-            lat_deg: lat,
-            lon_deg: lon,
-            h_ellipsoid_m: alt_msl,
-            geoid_undulation_m: 0.0,
-            datum: GeoAnchorDatum::Wgs84,
-            source: GeoAnchorSource::GnssMean,
-        });
-    }
-    let anchor_now = anchor_guard.clone();
-    drop(anchor_guard);
+    // The anchor is the mean of the first `ANCHOR_FIXES` 3D fixes at a real
+    // position, its MSL altitude raised to the ellipsoid by the EGM2008 geoid.
+    let anchor_now = if fix >= 3 && (lat != 0.0 || lon != 0.0) {
+        anchor.lock().observe(lat, lon, alt_msl)
+    } else {
+        anchor.lock().anchor()
+    };
 
     let t = match &anchor_now {
         Some(a) => geodetic_to_enu(lat, lon, alt_rel, a),
@@ -525,8 +517,8 @@ mod tests {
             lon_deg: 77.59,
             h_ellipsoid_m: 900.0,
             geoid_undulation_m: 0.0,
-            datum: GeoAnchorDatum::Wgs84,
-            source: GeoAnchorSource::GnssMean,
+            datum: ados_capture_contract::GeoAnchorDatum::Wgs84,
+            source: ados_capture_contract::GeoAnchorSource::GnssMean,
         };
         assert_eq!(geodetic_to_enu(12.97, 77.59, 5.0, &a), [0.0, 0.0, 5.0]);
         // ~0.001 deg north is ~111 m.
@@ -537,16 +529,32 @@ mod tests {
 
     #[test]
     fn parse_state_pose_fixes_anchor_and_builds_pose() {
-        let anchor = Arc::new(Mutex::new(None));
+        let anchor = Arc::new(Mutex::new(AnchorLatch::default()));
         let prior = PosePrior::default();
         let v: serde_json::Value = serde_json::from_str(
             r#"{"position_age_ms":40,"position":{"lat":12.97,"lon":77.59,"alt_msl":900.0,"alt_rel":10.0,"heading":0.0},"attitude":{"roll":0.0,"pitch":0.0,"yaw":0.0},"gps":{"fix_type":3,"eph":1.2,"epv":1.8}}"#,
         )
         .unwrap();
+        let first = parse_state_pose(&v, &anchor, &prior).expect("a pose");
+        assert!(
+            first.anchor.is_none(),
+            "one fix does not anchor the session"
+        );
+        for _ in 1..crate::geo::ANCHOR_FIXES - 1 {
+            parse_state_pose(&v, &anchor, &prior).unwrap();
+        }
         let s = parse_state_pose(&v, &anchor, &prior).expect("a pose");
         assert_eq!(s.source, PoseSource::LocalVio);
         assert_eq!(s.health, VioHealth::Good);
-        assert!(s.anchor.is_some(), "anchor fixed on the first 3D fix");
+        let a = s
+            .anchor
+            .clone()
+            .expect("anchored on the mean of the first fixes");
+        assert!((a.h_ellipsoid_m - (900.0 + a.geoid_undulation_m)).abs() < 1e-9);
+        assert!(
+            a.geoid_undulation_m < -80.0,
+            "EGM2008 N near Bengaluru is about -86 m"
+        );
         assert_eq!(s.pose.t, [0.0, 0.0, 10.0], "at the anchor, up = alt_rel");
         assert_eq!(
             s.cov.len(),
@@ -584,7 +592,7 @@ mod tests {
         // The router republishes the snapshot on its own cadence, so a stalled
         // GPS arrives "fresh" every frame. The position's own age must carry
         // into the arrival instant the freshness gate reads.
-        let anchor = Arc::new(Mutex::new(None));
+        let anchor = Arc::new(Mutex::new(AnchorLatch::default()));
         let prior = PosePrior::default();
         let stale: serde_json::Value = serde_json::from_str(
             r#"{"position_age_ms":5000,"position":{"lat":12.97,"lon":77.59,"alt_msl":900.0,"alt_rel":10.0},"attitude":{"roll":0.0,"pitch":0.0,"yaw":0.0},"gps":{"fix_type":3}}"#,
@@ -607,7 +615,7 @@ mod tests {
 
     #[test]
     fn parse_state_pose_without_fix_is_degraded_origin() {
-        let anchor = Arc::new(Mutex::new(None));
+        let anchor = Arc::new(Mutex::new(AnchorLatch::default()));
         let v: serde_json::Value = serde_json::from_str(
             r#"{"position_age_ms":40,"position":{"lat":0.0,"lon":0.0,"alt_msl":0.0,"alt_rel":2.0,"heading":0.0},"attitude":{"roll":0.0,"pitch":0.0,"yaw":0.0},"gps":{"fix_type":0}}"#,
         )
@@ -633,11 +641,13 @@ mod tests {
         let feed = TelemetryPoseFeed::new();
         let pose = feed.provider(PosePrior::default());
         assert!(pose.latest().is_none(), "no pose before any delivery");
-        feed.on_state(rmpv::ext::to_value(&snapshot).unwrap());
+        for _ in 0..crate::geo::ANCHOR_FIXES {
+            feed.on_state(rmpv::ext::to_value(&snapshot).unwrap());
+        }
         let s = pose.latest().expect("a pose from the delivered state");
-        let anchor = s.anchor.expect("anchored on the delivered 3D fix");
-        assert_eq!((anchor.lat_deg, anchor.lon_deg), (12.97, 77.59));
-        assert_eq!(anchor.h_ellipsoid_m, 900.0);
+        let anchor = s.anchor.expect("anchored on the delivered 3D fixes");
+        assert!((anchor.lat_deg - 12.97).abs() < 1e-9 && (anchor.lon_deg - 77.59).abs() < 1e-9);
+        assert!((anchor.h_ellipsoid_m - (900.0 + anchor.geoid_undulation_m)).abs() < 1e-9);
         assert_eq!(s.source, PoseSource::LocalVio);
         // A newer state with no decoded position says there is no current pose;
         // the cache never holds the old one forward.

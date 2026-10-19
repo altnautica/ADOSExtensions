@@ -76,7 +76,12 @@ pub fn select_pose_tier(cfg: PoseTierConfig, npu_present: bool, compute_paired: 
 /// calibrated the operator supplies these so reconstruction is metric; absent,
 /// the service derives an uncalibrated pinhole from the frame size and the
 /// field of view.
+///
+/// Unknown keys are refused, so a pre-contract override
+/// (`distortion_model`/`distortion_params`) fails with an error naming the
+/// accepted keys instead of silently becoming a calibrated pinhole.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct IntrinsicsOverride {
     #[serde(default = "pinhole")]
     pub model: CameraModelModel,
@@ -164,7 +169,7 @@ const ASSUMED_DOP: f64 = 2.0;
 /// small pins cameras to wrong positions and is exactly what makes
 /// `pose_prior_mapper` unstable.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct PosePrior {
     /// Position sigma in metres, stated outright. When set it wins over the
     /// DOP derivation — the right knob for an RTK rig.
@@ -180,12 +185,13 @@ pub struct PosePrior {
     pub slam_position_sigma_m: f64,
     /// Orientation sigma in radians for an offloaded SLAM pose.
     pub slam_orientation_sigma_rad: f64,
-    /// One-sigma uncertainty of this node's `CLOCK_REALTIME`, in nanoseconds,
-    /// or negative for UNMEASURED (the default and the honest value on a node
-    /// with no PPS-disciplined clock). A rig running chrony against a GPS PPS
-    /// refclock states its real figure here, which is what lets the consumer
-    /// apply the strict keyframe budget.
-    pub clock_offset_sigma_ns: i64,
+    /// One-sigma uncertainty, in nanoseconds, of the timebase keyframes are
+    /// stamped on (this host's `CLOCK_MONOTONIC` against its reference), or
+    /// negative for UNMEASURED (the default and the honest value on a node
+    /// with no disciplined clock). A rig whose clock is disciplined (chrony
+    /// against a GPS PPS refclock) states its real figure here, which is what
+    /// lets the consumer apply the strict keyframe budget.
+    pub timebase_sigma_ns: i64,
 }
 
 impl Default for PosePrior {
@@ -196,7 +202,7 @@ impl Default for PosePrior {
             orientation_sigma_rad: 0.02,
             slam_position_sigma_m: 0.25,
             slam_orientation_sigma_rad: 0.01,
-            clock_offset_sigma_ns: -1,
+            timebase_sigma_ns: -1,
         }
     }
 }
@@ -233,6 +239,13 @@ impl PosePrior {
 /// pose a frame: at 15 m/s a 500 ms-old position is 7.5 m away, which is larger
 /// than the keyframe selector's own baseline threshold, so the frame would be
 /// entered into the reconstruction at a place the aircraft was not.
+/// The widest frame-to-pose gap a keyframe may carry: 50 ms, half an interval
+/// of the ~10 Hz vehicle-state pose, beyond which the position error at cruise
+/// speed exceeds the keyframe selector's own baseline threshold. A wider
+/// pairing never becomes a keyframe; the frame still feeds the live pose lane.
+/// Interpolating pose providers retire this gate.
+pub const MAX_PAIRING_RESIDUAL_MS: f64 = 50.0;
+
 fn default_pose_max_age_ms() -> i64 {
     500
 }
@@ -294,6 +307,9 @@ pub struct AtlasRuntimeConfig {
     pub pose_prior: PosePrior,
     /// Age budget for the pose a frame is tagged with, in milliseconds.
     pub pose_max_age_ms: i64,
+    /// Widest gap between a frame and the pose it is tagged with that may still
+    /// become a keyframe, in milliseconds ([`MAX_PAIRING_RESIDUAL_MS`]).
+    pub max_pairing_residual_ms: f64,
     /// Minimum interval between published pose descriptors, in milliseconds.
     pub pose_publish_interval_ms: i64,
 }
@@ -309,6 +325,7 @@ impl Default for AtlasRuntimeConfig {
             intrinsics: HashMap::new(),
             pose_prior: PosePrior::default(),
             pose_max_age_ms: default_pose_max_age_ms(),
+            max_pairing_residual_ms: MAX_PAIRING_RESIDUAL_MS,
             pose_publish_interval_ms: default_pose_publish_interval_ms(),
         }
     }
@@ -431,6 +448,7 @@ impl AtlasRuntimeConfig {
             intrinsics: intrinsics(values)?,
             pose_prior: typed(values, KEY_POSE_PRIOR, PosePrior::default())?,
             pose_max_age_ms: integer(values, KEY_POSE_MAX_AGE_MS, default_pose_max_age_ms())?,
+            max_pairing_residual_ms: MAX_PAIRING_RESIDUAL_MS,
             pose_publish_interval_ms: integer(
                 values,
                 KEY_POSE_PUBLISH_INTERVAL_MS,
@@ -632,5 +650,23 @@ mod tests {
         let m = c.intrinsics_for("front", 1280, 720);
         assert_eq!(m.model, CameraModelModel::Kb4);
         assert_eq!(m.dist.len(), 4);
+    }
+
+    #[test]
+    fn the_pre_contract_override_shape_fails_loudly() {
+        let old = values(&[(
+            KEY_INTRINSICS,
+            json!({"front": {"fx": 900.0, "fy": 900.0, "cx": 640.0, "cy": 360.0,
+                             "distortion_model": "radtan",
+                             "distortion_params": [0.1, -0.2, 0.001, 0.002]}}),
+        )]);
+        let err = AtlasRuntimeConfig::from_values("", &old).unwrap_err();
+        assert_eq!(err.key, KEY_INTRINSICS);
+        assert!(err.reason.contains("distortion_model"), "{}", err.reason);
+        assert!(
+            err.reason.contains("dist"),
+            "the error names the new keys: {}",
+            err.reason
+        );
     }
 }

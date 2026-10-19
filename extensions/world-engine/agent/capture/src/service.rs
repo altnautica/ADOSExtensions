@@ -406,6 +406,22 @@ async fn process_frame(
     // off the reactor: the per-pixel YUV->RGB + JPEG pass is tens of ms on a
     // companion-class CPU and must not block a worker thread.
     if session.would_select(&f.camera_id, &ps.pose, f.ts_ms) {
+        // A pose too far from the exposure would place the keyframe where the
+        // rig was not; it feeds the live pose lane only, and the selector
+        // baseline is not advanced, so the next well-paired frame is taken.
+        let residual_ms = (frame_mono_ns - ps.arrival_mono_ns) as f64 / 1_000_000.0;
+        if !residual_ms.is_finite() || residual_ms.abs() > runtime.max_pairing_residual_ms {
+            let rejected_total = session.note_pairing_rejected();
+            tracing::debug!(
+                camera = %f.camera_id,
+                residual_ms,
+                budget_ms = runtime.max_pairing_residual_ms,
+                rejected_total,
+                "atlas_keyframe_dropped_pairing_residual"
+            );
+            publish_pose_only(session, publisher, &f.camera_id, &ps, f.ts_ms).await;
+            return;
+        }
         let (w, h, fmt, pixels) = (f.width, f.height, f.format, f.pixels);
         let encoded =
             tokio::task::spawn_blocking(move || encode_keyframe_jpeg(w, h, fmt, &pixels)).await;
@@ -425,7 +441,7 @@ async fn process_frame(
                 return;
             }
         };
-        let time = time_alignment(frame_mono_ns, runtime.pose_prior.clock_offset_sigma_ns);
+        let time = time_alignment(frame_mono_ns, runtime.pose_prior.timebase_sigma_ns);
         let fi = FrameInput {
             image: KeyframeImage {
                 encoding: ImageEncoding::Jpeg,

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 /// stream: generation N's splat, cloud, mesh and occupancy all describe the
 /// same capture state, so a consumer can diff generations and a viewer can
 /// fetch coarse chunks of N while N-1 is still on screen.
-pub type Generation = u64;
+pub type Generation = u32;
 
 /// Shared-data descriptor on [`super::PLUGIN_ATLAS_POINTCLOUD_TOPIC`]. The heavy buffer
 /// rides the shm ring (`shm_name`/`slot`/`seq`) or a
