@@ -25,7 +25,13 @@ impl Engine {
     pub(super) fn on_bus(&mut self, ev: BusEvent) {
         match &ev {
             BusEvent::Imu { src, batch } => self.pose.feed_imu(src, batch),
-            BusEvent::Clock(_) | BusEvent::Gnss { .. } | BusEvent::Trigger { .. } => {}
+            // The open session's map follows its own timebase, paused or not.
+            BusEvent::Clock(s) => {
+                if let Some(session) = self.session.as_mut() {
+                    session.clock.observe(*s);
+                }
+            }
+            BusEvent::Gnss { .. } | BusEvent::Trigger { .. } => {}
         }
         if self.recorder().is_none() {
             return;
@@ -51,7 +57,13 @@ impl Engine {
                 raw.t_ns = self.to_session(raw.t_ns);
                 Item::GnssRaw { src, raw }
             }
-            BusEvent::Clock(s) => Item::Clock(s),
+            // The sample is kept as published; its log time is the session
+            // time of its host instant, so a sample on another timebase (the
+            // host fallback, a source switch) cannot land outside the session.
+            BusEvent::Clock(s) => Item::Clock {
+                t_ns: self.to_session(s.host_mono_ns),
+                sample: s,
+            },
         };
         if let Some(r) = self.recorder() {
             r.submit(item);
@@ -59,13 +71,8 @@ impl Engine {
     }
 
     fn map_imu(&self, batch: &mut ImuBatch) {
-        let tb = self.session.as_ref().map(|s| s.timebase);
-        let sensors = self.sensors.lock();
         for s in &mut batch.samples {
-            s.t_ns = match tb {
-                Some(tb) => crate::clock::session_time(tb, &sensors.clock, s.t_ns),
-                None => sensors.clock.to_session(s.t_ns),
-            };
+            s.t_ns = self.to_session(s.t_ns);
         }
     }
 

@@ -275,3 +275,5 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_timebase;

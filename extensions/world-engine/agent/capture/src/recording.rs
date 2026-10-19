@@ -10,6 +10,7 @@ use ados_capture_contract::{
 };
 use world_engine_protocol::capture_ctl::{codes, CtlReply, OperatorAnchor, StartArgs};
 
+use crate::clock::ClockMap;
 use crate::recorder::convert::ImageEncoding;
 use crate::recorder::{Recorder, RecorderConfig};
 use crate::storage;
@@ -27,6 +28,8 @@ pub struct StartEnv<'a> {
     pub profile: &'a str,
     pub rig: Rig,
     pub timebase: Timebase,
+    /// The session's own host → session map ([`crate::clock::ClockMap::for_session`]).
+    pub clock: ClockMap,
     pub sigma_ns: i64,
     /// Session-timebase ns now.
     pub t0_ns: u64,
@@ -47,6 +50,9 @@ pub struct ActiveSession {
     pub started_mono_ns: u64,
     pub t0_ns: u64,
     pub timebase: Timebase,
+    /// The map every stamp of this session goes through; only this session's
+    /// clock samples move it, and only within its own timebase.
+    pub clock: ClockMap,
     pub anchor: Option<GeoAnchor>,
     pub site: Option<String>,
     pub floor: i64,
@@ -185,6 +191,7 @@ impl ActiveSession {
             started_mono_ns: now_mono_ns,
             t0_ns: env.t0_ns,
             timebase: env.timebase,
+            clock: env.clock,
             anchor,
             site,
             floor,
@@ -236,4 +243,4 @@ impl ActiveSession {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -156,13 +156,16 @@ fn every_channel_is_recorded_and_segments_roll() {
             cov,
         });
     }
-    rec.send(Item::Clock(ClockSample {
+    rec.send(Item::Clock {
         t_ns: 1_000_000_000,
-        host_mono_ns: 5,
-        utc_ns: None,
-        locked: true,
-        sigma_ns: 0,
-    }));
+        sample: ClockSample {
+            t_ns: 1_000_000_000,
+            host_mono_ns: 5,
+            utc_ns: None,
+            locked: true,
+            sigma_ns: 0,
+        },
+    });
     rec.send(Item::Health {
         t_ns: 2_000_000_000,
         json: serde_json::json!({"blur": "ok"}),

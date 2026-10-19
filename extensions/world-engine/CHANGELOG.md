@@ -70,6 +70,11 @@ All notable changes to the World Engine extension.
   its stamps. Exposure reports `applied: false` until the camera applies it and
   uses the nearest flicker-safe value under the mode cap. A bad item is skipped
   and counted; only a writer I/O error ends recording.
+- Each capture session maps every stamp through its own clock map (host-fallback
+  clock samples ignored, steps over 50 ms refused, never backwards), so a
+  session never mixes timebases; the segment roll counts forward time from
+  the segment's first message only, and the listed duration is the last
+  segment end minus `t0_ns`.
 - Auto-queued uploads run only while the auto gate (idle or charging, not
   recording) stays open and pause, to resume from the node's offset, when it
   closes; operator uploads are not gated. IPv6 node addresses are bracketed.

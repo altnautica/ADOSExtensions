@@ -174,16 +174,23 @@ fn manifest_of(dir: &Path) -> Value {
         .unwrap_or(Value::Null)
 }
 
+/// Last segment end minus the session start `t0_ns` (both on the session
+/// timebase); the earliest segment start when the manifest has no `t0_ns`.
+/// A segment may start before `t0_ns` (a sample stamped before the start), so
+/// the segment start is only the fallback.
 fn duration_s(manifest: &Value) -> Option<f64> {
     let segments = manifest.get("segments")?.as_array()?;
-    let start = segments
-        .iter()
-        .filter_map(|s| s.get("t_start_ns")?.as_u64())
-        .min()?;
     let end = segments
         .iter()
         .filter_map(|s| s.get("t_end_ns")?.as_u64())
         .max()?;
+    let start = match manifest.get("t0_ns").and_then(Value::as_u64) {
+        Some(t0) => t0,
+        None => segments
+            .iter()
+            .filter_map(|s| s.get("t_start_ns")?.as_u64())
+            .min()?,
+    };
     Some(end.saturating_sub(start) as f64 / 1e9)
 }
 
@@ -289,13 +296,14 @@ mod tests {
         std::fs::write(dir.join("segments/000000.mcap"), vec![0u8; 1000]).unwrap();
         let manifest = json!({
             "session_id": id, "timebase": "hub_freerun", "utc_at_t0_ns": 1_760_868_900_000_000_000i64,
+            "t0_ns": 5_000_000_000u64,
             "anchor": {"source": "operator"},
             "operator": {"floor": 0, "rooms": [
                 {"name": "Dock", "floor": 0, "t_start_ns": 1, "t_end_ns": 2},
                 {"name": "Aisle 1", "floor": 1, "t_start_ns": 2, "t_end_ns": 3},
                 {"name": "Dock", "floor": 0, "t_start_ns": 3, "t_end_ns": 4}]},
             "segments": [
-                {"file": "segments/000000.mcap", "t_start_ns": 5_000_000_000u64, "t_end_ns": 9_000_000_000u64, "bytes": 1000},
+                {"file": "segments/000000.mcap", "t_start_ns": 4_990_000_000u64, "t_end_ns": 9_000_000_000u64, "bytes": 1000},
                 {"file": "segments/000001.mcap", "t_start_ns": 9_000_000_000u64, "t_end_ns": 317_400_000_000u64, "bytes": 0}]
         });
         let body = serde_json::to_vec(&manifest).unwrap();
@@ -306,7 +314,11 @@ mod tests {
         assert_eq!(dirs.len(), 1);
         let r = row(&dirs[0], idle(0));
         assert_eq!(r.started_at_utc.as_deref(), Some("2025-10-19T10:15:00Z"));
+        // From t0, not from the IMU sample stamped 10 ms before it.
         assert_eq!(r.duration_s, Some(312.4));
+        let mut no_t0 = manifest.clone();
+        no_t0.as_object_mut().unwrap().remove("t0_ns");
+        assert_eq!(duration_s(&no_t0), Some(312.41));
         assert_eq!(r.size_bytes, 1000 + body.len() as u64 + 2);
         assert_eq!(r.frames, None);
         assert_eq!(r.rooms, ["Dock", "Aisle 1"]);

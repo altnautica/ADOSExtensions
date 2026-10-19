@@ -191,7 +191,7 @@ impl Engine {
             None => (Timebase::HostMonotonic, -1),
         };
         let now = crate::clock::mono_ns();
-        let (t0, utc) = {
+        let (t0, utc, map) = {
             let s = self.sensors.lock();
             // A session never mixes timebases: a non-host one waits for its
             // first bus sample instead of starting on the host clock.
@@ -204,17 +204,18 @@ impl Engine {
                     ),
                 ));
             }
-            let utc = s
-                .clock
+            let map = s.clock.for_session();
+            let utc = map
                 .utc_at(now)
                 .or_else(|| (timebase == Timebase::HostMonotonic).then(crate::clock::realtime_ns));
-            (crate::clock::session_time(timebase, &s.clock, now), utc)
+            (crate::clock::session_time(timebase, &map, now), utc, map)
         };
         let env = StartEnv {
             device_id: &self.cfg.device_id,
             profile: &self.profile,
             rig: rig.clone(),
             timebase,
+            clock: map,
             sigma_ns: sigma,
             t0_ns: t0,
             utc_at_t0_ns: utc,
@@ -241,10 +242,6 @@ impl Engine {
         self.keyframes.set_pose_tier(self.pose.source());
         self.rig = Some(rig);
         self.session = Some(s);
-        self.sensors
-            .lock()
-            .clock
-            .set_monotonic(timebase != Timebase::HostMonotonic);
         tracing::info!(session = %id, ?timebase, "capture_session_started");
         self.publish_status().await;
         Ok(id)
@@ -255,7 +252,12 @@ impl Engine {
     pub(super) fn begin_close(&mut self) {
         let t_end = self.to_session(crate::clock::mono_ns());
         let Some(s) = self.session.take() else { return };
-        self.sensors.lock().clock.set_monotonic(false);
+        if s.clock.rejected > 0 {
+            tracing::warn!(
+                rejected = s.clock.rejected,
+                "capture_session_clock_samples_refused"
+            );
+        }
         let flags = self.quality.raised;
         let stats = s.recorder.stats();
         let mut dropped_pct = self.dropped_pct();

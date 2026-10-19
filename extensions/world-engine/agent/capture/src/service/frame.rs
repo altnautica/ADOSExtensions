@@ -18,15 +18,14 @@ use crate::session::{FrameInput, PoseInput};
 const KF_IMU_WINDOW_NS: u64 = 200_000_000;
 
 impl Engine {
-    /// Session-timebase ns of host monotonic `host_ns`: the identity for a
-    /// `host_monotonic` session, the bus clock map otherwise (and with no
-    /// session open).
+    /// Session-timebase ns of host monotonic `host_ns`, through the open
+    /// session's own map (the identity for a `host_monotonic` session). With
+    /// no session open the stamp stays on the host clock, which is what an
+    /// idle keyframe is labelled with.
     pub(super) fn to_session(&self, host_ns: u64) -> u64 {
-        let sensors = self.sensors.lock();
-        let map = &sensors.clock;
-        match self.session_timebase() {
-            Some(tb) => crate::clock::session_time(tb, map, host_ns),
-            None => map.to_session(host_ns),
+        match &self.session {
+            Some(s) => crate::clock::session_time(s.timebase, &s.clock, host_ns),
+            None => host_ns,
         }
     }
 
@@ -187,7 +186,7 @@ impl Engine {
         };
         let (t_session, trig) = self.frame_time(f);
         let (timebase, sigma) = match &self.session {
-            Some(s) => (s.timebase, self.sensors.lock().clock.lock().1),
+            Some(s) => (s.timebase, s.clock.lock().1),
             None => (Timebase::HostMonotonic, -1),
         };
         let cam = self.cams.get(&f.camera_id).cloned().unwrap_or_default();

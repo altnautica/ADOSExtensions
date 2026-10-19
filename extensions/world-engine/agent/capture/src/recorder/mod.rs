@@ -85,7 +85,12 @@ pub enum Item {
         pose: PoseInFrame,
         cov: PoseCov,
     },
-    Clock(ClockSample),
+    /// A bus clock sample as published, logged at `t_ns` (the session time of
+    /// its host instant).
+    Clock {
+        t_ns: u64,
+        sample: ClockSample,
+    },
     Health {
         t_ns: u64,
         json: serde_json::Value,
@@ -403,7 +408,7 @@ fn write_item(
             w.write_proto(&topics::pose(source), t_ns, &pose)?;
             w.write_proto(&topics::pose_cov(source), t_ns, &cov)?;
         }
-        Item::Clock(s) => w.write_proto(topics::CLOCK, s.t_ns, &s)?,
+        Item::Clock { t_ns, sample } => w.write_proto(topics::CLOCK, t_ns, &sample)?,
         Item::Health { t_ns, json } => w.write_json(topics::HEALTH, t_ns, &json)?,
         Item::Keyframe { file, jpeg } => {
             if !crate::storage::safe_session_id(file.trim_end_matches(".jpg")) {

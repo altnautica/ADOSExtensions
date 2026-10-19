@@ -30,6 +30,7 @@ fn env<'a>(sidecar: &'a Path) -> StartEnv<'a> {
         profile: "visor",
         rig: crate::recorder::tests::rig(),
         timebase: Timebase::HubFreerun,
+        clock: crate::clock::ClockMap::new(),
         sigma_ns: 420_000,
         t0_ns: 5_000_000_000,
         utc_at_t0_ns: Some(1_760_000_000_000_000_000),

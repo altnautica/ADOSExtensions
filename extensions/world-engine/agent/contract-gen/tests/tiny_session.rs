@@ -305,6 +305,33 @@ fn segments_roll_on_duration_and_size() {
 }
 
 #[test]
+fn out_of_order_and_off_timebase_stamps_do_not_count_as_elapsed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut w = SessionWriter::create(tmp.path(), manifest(), &rig())
+        .unwrap()
+        .with_limits(SegmentLimits {
+            max_bytes: u64::MAX,
+            max_duration_ns: 1_000_000_000,
+        });
+    // 0.1 s steps over 1.4 s, each followed by a stamp 0.05 s in the past and
+    // one hours away (a message off the session timebase): only the real
+    // 1.4 s counts, so the segment rolls once, at 1.0 s.
+    for i in 0..15u64 {
+        let t = T0 + i * 100_000_000;
+        for at in [t, t - 50_000_000, T0 + 40_000_000_000_000] {
+            let clock = ClockSample {
+                t_ns: at,
+                ..Default::default()
+            };
+            w.write_proto(topics::CLOCK, at, &clock).unwrap();
+        }
+    }
+    let m = w.finish().unwrap();
+    assert_eq!(m.segments.len(), 2, "{:?}", m.segments);
+    assert_eq!(m.segments[1].t_start_ns, T0 + 950_000_000);
+}
+
+#[test]
 fn decode_refuses_the_wrong_message_type() {
     let tmp = tempfile::tempdir().unwrap();
     let r = SessionReader::open(&build(tmp.path())).unwrap();

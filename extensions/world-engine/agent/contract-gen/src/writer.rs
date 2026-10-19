@@ -2,7 +2,11 @@
 //!
 //! Messages go to `segments/NNNNNN.mcap` (protobuf encoding, lz4 chunks); a
 //! segment is closed and the next one opened when it reaches
-//! [`SegmentLimits::max_bytes`] or spans [`SegmentLimits::max_duration_ns`].
+//! [`SegmentLimits::max_bytes`] or has recorded [`SegmentLimits::max_duration_ns`]
+//! of elapsed time since its first message. Elapsed time is the sum of the
+//! forward steps between messages: a message older than the newest one (out
+//! of order) and a forward jump longer than the duration limit (a stamp off
+//! the session timebase) add nothing.
 //! Every segment carries `rig.json` and a snapshot of the manifest taken when
 //! the segment opened as attachments; `manifest.json` in the directory,
 //! written by [`SessionWriter::finish`], is the authoritative copy.
@@ -24,7 +28,8 @@ use crate::{topics, write_checksums, Error, Result, FILE_DESCRIPTOR_SET, MCAP_PR
 pub struct SegmentLimits {
     /// Roll once the segment file reaches this many bytes.
     pub max_bytes: u64,
-    /// Roll once a message is this far past the segment's first message.
+    /// Roll once this much time has elapsed since the segment's first
+    /// message (see the module notes for what counts as elapsed).
     pub max_duration_ns: u64,
 }
 
@@ -70,8 +75,25 @@ struct OpenSegment {
     file: String,
     t_start_ns: u64,
     t_end_ns: u64,
+    /// The stamp elapsed time is counted from (the newest counted message).
+    last_ns: u64,
+    /// Elapsed time since the segment's first message.
+    elapsed_ns: u64,
     channels: HashMap<String, u16>,
     seq: u32,
+}
+
+impl OpenSegment {
+    /// Elapsed time a message at `t_ns` adds, and the stamp counted from
+    /// after it.
+    fn step(&self, t_ns: u64, window: u64) -> (u64, u64) {
+        match t_ns.checked_sub(self.last_ns) {
+            Some(0) | None => (0, self.last_ns),
+            Some(d) if d <= window => (d, t_ns),
+            // A jump past the window is a stamp off the timebase: ignore it.
+            Some(_) => (0, self.last_ns),
+        }
+    }
 }
 
 /// Writes one session directory. Call [`SessionWriter::finish`] to close the
@@ -201,13 +223,18 @@ impl SessionWriter {
         seg.seq = seg.seq.wrapping_add(1);
         seg.t_start_ns = seg.t_start_ns.min(t_ns);
         seg.t_end_ns = seg.t_end_ns.max(t_ns);
+        let (add, last) = seg.step(t_ns, self.limits.max_duration_ns);
+        seg.elapsed_ns = seg.elapsed_ns.saturating_add(add);
+        seg.last_ns = last;
         Ok(())
     }
 
     fn roll_if_due(&mut self, t_ns: u64) -> Result<()> {
         let due = self.segment.as_ref().is_some_and(|s| {
             s.high.load(Ordering::Relaxed) >= self.limits.max_bytes
-                || t_ns.saturating_sub(s.t_start_ns) >= self.limits.max_duration_ns
+                || s.elapsed_ns
+                    .saturating_add(s.step(t_ns, self.limits.max_duration_ns).0)
+                    >= self.limits.max_duration_ns
         });
         if due {
             self.close_segment()?;
@@ -248,6 +275,8 @@ impl SessionWriter {
             file,
             t_start_ns: t_ns,
             t_end_ns: t_ns,
+            last_ns: t_ns,
+            elapsed_ns: 0,
             channels: HashMap::new(),
             seq: 0,
         });

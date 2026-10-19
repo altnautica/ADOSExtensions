@@ -82,9 +82,9 @@ pub fn timebase_str(t: Timebase) -> &'static str {
 }
 
 /// Whether a session on `timebase` can open now: a non-host timebase needs
-/// at least one bus clock sample to map onto it.
+/// at least one bus clock sample on that timebase to map onto it.
 pub fn timebase_ready(timebase: Timebase, map: &ClockMap) -> bool {
-    timebase == Timebase::HostMonotonic || map.last().is_some()
+    timebase == Timebase::HostMonotonic || map.is_mapped()
 }
 
 /// Session-timebase ns of host monotonic `host_ns` for a session on
@@ -97,17 +97,32 @@ pub fn session_time(timebase: Timebase, map: &ClockMap, host_ns: u64) -> u64 {
     }
 }
 
-/// Maps host monotonic ns onto a session timebase from the two latest clock
-/// samples (offset + rate). With no sample the map is the identity, which is
-/// exact for `host_monotonic`.
+/// Largest step a session's map takes from one clock sample. A sample further
+/// from the map's prediction is on another timebase (the clock service fell
+/// back to the host clock or switched source) and is refused.
+pub const SESSION_STEP_TOL_NS: u64 = 50_000_000;
+
+/// Maps host monotonic ns onto a session timebase from the clock samples
+/// (an anchor plus the rate between the last two samples). With no sample the
+/// map is the identity, which is exact for `host_monotonic`.
+///
+/// The clock service publishes `t_ns == host_mono_ns` when its timebase has
+/// no fit (the host fallback); such a sample is not on the source timebase
+/// and never moves the map.
 #[derive(Debug, Clone, Default)]
 pub struct ClockMap {
-    prev: Option<ClockSample>,
+    /// The newest sample of any kind (lock state, UTC, liveness).
+    latest: Option<ClockSample>,
+    /// The last sample taken into the map, raw (rate reference).
     last: Option<ClockSample>,
-    /// While a session records, a sample that would move mapped time
-    /// backwards is refused.
-    monotonic: bool,
-    /// Samples refused by the monotonic guard.
+    /// `(host_ns, session_ns)` the map extrapolates from.
+    anchor: Option<(u64, u64)>,
+    /// Session ns per host ns; `None` is 1.
+    rate: Option<f64>,
+    /// A session's own map: refuses steps over [`SESSION_STEP_TOL_NS`] and
+    /// never moves mapped time backwards.
+    guarded: bool,
+    /// Samples a guarded map refused.
     pub rejected: u64,
 }
 
@@ -116,67 +131,90 @@ impl ClockMap {
         Self::default()
     }
 
-    /// Turn the monotonic guard on for a session's life, off after it.
-    pub fn set_monotonic(&mut self, on: bool) {
-        self.monotonic = on;
+    /// A session's own copy of this map, frozen against timebase switches
+    /// for the session's life.
+    pub fn for_session(&self) -> Self {
+        Self {
+            guarded: true,
+            rejected: 0,
+            ..self.clone()
+        }
+    }
+
+    /// Whether a sample on the source timebase has been taken.
+    pub fn is_mapped(&self) -> bool {
+        self.anchor.is_some()
     }
 
     /// Fold in one bus `clock` sample. A sample not newer on the host clock
-    /// than the last one is ignored, and so (while guarded) is one whose
-    /// session time at its own host instant is behind the current mapping.
-    /// Returns whether the sample was taken.
+    /// than the newest one is ignored; a host-fallback sample only updates the
+    /// lock state. A guarded map also refuses a sample more than
+    /// [`SESSION_STEP_TOL_NS`] from its prediction, and takes one behind it
+    /// without stepping back. Returns whether the map took the sample.
     pub fn observe(&mut self, s: ClockSample) -> bool {
         if self
-            .last
+            .latest
             .as_ref()
             .is_some_and(|l| s.host_mono_ns <= l.host_mono_ns)
         {
             return false;
         }
-        if self.monotonic && self.last.is_some() && s.t_ns < self.to_session(s.host_mono_ns) {
-            self.rejected += 1;
+        self.latest = Some(s);
+        if s.t_ns == s.host_mono_ns {
             return false;
         }
-        self.prev = self.last.take();
+        let predicted = self.anchor.map(|_| self.to_session(s.host_mono_ns));
+        let behind = match predicted {
+            Some(p) if self.guarded => {
+                if s.t_ns.abs_diff(p) > SESSION_STEP_TOL_NS {
+                    self.rejected += 1;
+                    return false;
+                }
+                s.t_ns < p
+            }
+            _ => false,
+        };
+        self.rate = self
+            .last
+            .filter(|l| l.host_mono_ns < s.host_mono_ns)
+            .map(|l| (s.t_ns as f64 - l.t_ns as f64) / (s.host_mono_ns - l.host_mono_ns) as f64)
+            // A rate far from 1 is a source jump (a sim reset), not drift.
+            .filter(|r| (r - 1.0).abs() < 1e-3);
+        // Behind the prediction: keep mapped time continuous at this instant
+        // and let the new rate carry the correction.
+        let t = match predicted {
+            Some(p) if behind => p,
+            _ => s.t_ns,
+        };
+        self.anchor = Some((s.host_mono_ns, t));
         self.last = Some(s);
         true
     }
 
+    /// The newest sample seen.
     pub fn last(&self) -> Option<&ClockSample> {
-        self.last.as_ref()
+        self.latest.as_ref()
     }
 
     /// Session-timebase ns of host monotonic `host_ns`.
     pub fn to_session(&self, host_ns: u64) -> u64 {
-        let Some(l) = &self.last else {
+        let Some((h, t)) = self.anchor else {
             return host_ns;
         };
-        let rate = match &self.prev {
-            Some(p) if l.host_mono_ns > p.host_mono_ns => {
-                let r = (l.t_ns as f64 - p.t_ns as f64) / (l.host_mono_ns - p.host_mono_ns) as f64;
-                // A rate far from 1 is a source jump (a sim reset), not drift.
-                if (r - 1.0).abs() < 1e-3 {
-                    r
-                } else {
-                    1.0
-                }
-            }
-            _ => 1.0,
-        };
-        let dh = host_ns as f64 - l.host_mono_ns as f64;
-        (l.t_ns as f64 + dh * rate).max(0.0).round() as u64
+        let dh = host_ns as f64 - h as f64;
+        (t as f64 + dh * self.rate.unwrap_or(1.0)).max(0.0).round() as u64
     }
 
     /// UTC ns at host monotonic `host_ns`, when the samples carry UTC.
     pub fn utc_at(&self, host_ns: u64) -> Option<i64> {
-        let l = self.last.as_ref()?;
+        let l = self.latest.as_ref()?;
         let utc = l.utc_ns?;
         Some(utc + (host_ns as i64 - l.host_mono_ns as i64))
     }
 
     /// Lock state and sigma of the latest sample (`-1` when none).
     pub fn lock(&self) -> (bool, i64) {
-        self.last
+        self.latest
             .as_ref()
             .map_or((false, -1), |l| (l.locked, l.sigma_ns))
     }
@@ -246,15 +284,17 @@ mod tests {
 
     #[test]
     fn guarded_time_never_decreases_across_a_sample() {
-        let mut m = ClockMap::new();
-        m.set_monotonic(true);
-        assert!(m.observe(sample(10_000_000_000, 1_000_000_000)));
+        let mut shared = ClockMap::new();
+        shared.observe(sample(10_000_000_000, 1_000_000_000));
+        let mut m = shared.for_session();
         let mut prev = 0;
         let mut host = 1_000_000_000;
-        // A reset of the source (t jumps back) and a forward step.
+        // A reset of the source (t jumps back), a forward step, and a sample
+        // slightly behind the prediction.
         let arrivals = [
             (1_500_000_000, sample(2_000_000_000, 1_500_000_000)),
             (2_000_000_000, sample(11_000_000_100, 2_000_000_000)),
+            (2_500_000_000, sample(11_499_990_000, 2_500_000_000)),
         ];
         for (at, s) in arrivals {
             while host < at + 400_000_000 {
@@ -268,9 +308,35 @@ mod tests {
             }
         }
         assert_eq!(m.rejected, 1);
-        // Unguarded (between sessions) a reset is taken.
-        m.set_monotonic(false);
-        assert!(m.observe(sample(0, 3_000_000_000)));
+        // The shared (unguarded) map takes a reset.
+        assert!(shared.observe(sample(0, 3_000_000_000)));
+    }
+
+    #[test]
+    fn a_session_map_ignores_host_fallback_and_source_switches() {
+        // Hub free-run time is hours behind the host clock.
+        let off = 40_000_000_000_000u64;
+        let mut shared = ClockMap::new();
+        // The clock service's host fallback is no mapping.
+        shared.observe(sample(900_000_000 + off, 900_000_000 + off));
+        assert!(!timebase_ready(Timebase::HubFreerun, &shared));
+        shared.observe(sample(1_000_000_000, 1_000_000_000 + off));
+        assert!(timebase_ready(Timebase::HubFreerun, &shared));
+        let mut m = shared.for_session();
+        for k in 1..60u64 {
+            let host = 1_000_000_000 + off + k * 1_000_000_000;
+            // Every other sample is the host fallback, every fifth a jump to
+            // another source.
+            let s = match k % 5 {
+                0 => sample(1_700_000_000_000_000_000, host),
+                _ if k % 2 == 0 => sample(host, host),
+                _ => sample(1_000_000_000 + k * 1_000_000_000, host),
+            };
+            m.observe(s);
+            let t = m.to_session(host + 500_000_000);
+            assert_eq!(t, 1_000_000_000 + k * 1_000_000_000 + 500_000_000);
+        }
+        assert!(m.rejected >= 11, "{}", m.rejected);
     }
 
     #[test]
