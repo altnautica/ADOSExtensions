@@ -27,6 +27,11 @@ use serde_json::Value;
 /// Wire version of this control protocol.
 pub const CAPTURE_CTL_VERSION: u16 = 2;
 
+/// How long the link waits for a control reply (`stop` excepted). The
+/// capture service answers every other request, `exposure` included, inside
+/// this.
+pub const CONTROL_REQUEST_TIMEOUT_MS: u64 = 3_000;
+
 /// Refusal codes.
 pub mod codes {
     pub const STORAGE_FULL: &str = "E_STORAGE_FULL";
@@ -96,12 +101,16 @@ pub enum ExposureMode {
 /// is the request; `applied` is true only when every enabled capture camera
 /// took the values, which are then the first camera's read-back. Otherwise
 /// the requested (quantised) values are echoed with `applied: false` and
-/// `reason` names why (`not_v4l2`, `control_unsupported`, `timeout`, ..).
+/// `reason` names why: `pending` while the cameras are still being set (a
+/// later state read carries the outcome), or the host's code (`not_v4l2`,
+/// `control_unsupported`, `gain_unit_unknown`, `not_capture_camera`, ..).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExposureView {
     pub locked: bool,
+    /// Exposure time, microseconds.
     #[serde(default)]
     pub exposure_us: Option<u32>,
+    /// Analogue gain as a multiplier (×; 1.0 is unity), not dB.
     #[serde(default)]
     pub gain: Option<f32>,
     #[serde(default)]

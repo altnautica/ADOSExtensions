@@ -55,9 +55,11 @@ export function ExposureControl({
       </span>
       {exposure.locked && !exposure.applied && (
         <span className="we:text-status-warning" role="status">
-          {exposure.reason
-            ? t("exposureNotAppliedReason", { reason: exposure.reason })
-            : t("exposureNotApplied")}
+          {exposure.reason === "pending"
+            ? t("exposureApplying")
+            : exposure.reason
+              ? t("exposureNotAppliedReason", { reason: exposure.reason })
+              : t("exposureNotApplied")}
         </span>
       )}
       <select

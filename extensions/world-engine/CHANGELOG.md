@@ -100,7 +100,12 @@ All notable changes to the World Engine extension.
   and at run start for a configured lock; unlock returns the cameras to auto
   exposure. `applied` is true only when every camera took the values, which
   are then the read-back; otherwise `reason` names why (`not_v4l2`,
-  `control_unsupported`, `timeout`) and the GCS shows "Requested, not applied".
+  `control_unsupported`, `gain_unit_unknown`, `not_capture_camera`) and the
+  GCS shows "Requested, not applied". Cameras are set in parallel; a reply
+  still waiting after the host's engine wait plus a margin (inside the link's
+  3 s control wait) answers `pending` and the apply finishes in the
+  background, its read-back landing in the capture state. Gain is a
+  multiplier (×) throughout.
 - Front-panel presses are matched on the host's button label (`B1` REC, `B2`
   MARK) instead of a GPIO pin.
 

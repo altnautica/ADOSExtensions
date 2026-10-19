@@ -8,7 +8,7 @@ use world_engine_protocol::atlas::CaptureState;
 use world_engine_protocol::capture_ctl::{codes, CtlReply, CtlRequest, ExposureView, StartArgs};
 
 use super::{Engine, ExposureDone};
-use crate::camera_control::{apply_exposure, APPLY_TIMEOUT};
+use crate::camera_control::{apply_within, PENDING, REPLY_BUDGET};
 use crate::clock::ClockSidecar;
 use crate::control::ControlMsg;
 use crate::hud::HudAction;
@@ -32,7 +32,8 @@ pub(crate) fn stop_and_bag(session: &mut CaptureSession) -> bool {
 
 impl Engine {
     /// Answer a control request. An exposure request is answered once the
-    /// cameras have taken it (or [`APPLY_TIMEOUT`]), off the loop.
+    /// cameras have taken it, or `pending` after [`REPLY_BUDGET`], off the
+    /// loop.
     pub(super) async fn handle(&mut self, msg: ControlMsg) {
         let ControlMsg { req, reply } = msg;
         if let CtlRequest::Exposure(e) = req {
@@ -117,9 +118,13 @@ impl Engine {
     }
 
     /// Apply the current exposure to every enabled capture camera on its own
-    /// task; the result comes back through [`Self::exposure_done`].
+    /// task. Until it finishes the state reads `pending`; a reply still
+    /// waiting at [`REPLY_BUDGET`] is answered `pending`, and the final
+    /// result comes back through [`Self::exposure_done`] either way.
     pub(super) fn apply_exposure(&mut self, reply: Option<oneshot::Sender<CtlReply>>) {
         self.exposure_seq += 1;
+        self.exposure.applied = false;
+        self.exposure.reason = Some(PENDING.into());
         let seq = self.exposure_seq;
         let want = self.exposure.clone();
         let ctl = self.camera.clone();
@@ -131,8 +136,16 @@ impl Engine {
             .collect();
         let tx = self.exposure_tx.clone();
         tokio::spawn(async move {
+            let mut reply = reply;
             let view = match ctl {
-                Some(ctl) => apply_exposure(ctl.as_ref(), &cameras, want, APPLY_TIMEOUT).await,
+                Some(ctl) => {
+                    apply_within(ctl, cameras, want, REPLY_BUDGET, |pending| {
+                        if let Some(r) = reply.take() {
+                            let _ = r.send(CtlReply::ok(&pending));
+                        }
+                    })
+                    .await
+                }
                 None => ExposureView {
                     applied: false,
                     reason: Some("camera_control_unavailable".into()),

@@ -32,10 +32,12 @@ export interface ExposureState {
   /** The operator's request; `applied` says whether the cameras took it. */
   locked: boolean;
   exposureUs: number | null;
+  /** Analogue gain as a multiplier (×; 1.0 is unity). */
   gain: number | null;
   mode: ExposureMode | null;
   applied: boolean;
-  /** Why the request was not applied (`not_v4l2`, `timeout`, ..). */
+  /** Why the request was not applied: `pending` while the cameras are being
+   * set, else the host's code (`not_v4l2`, `gain_unit_unknown`, ..). */
   reason: string | null;
 }
 

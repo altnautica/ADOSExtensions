@@ -386,6 +386,7 @@
     "errUnreachable": "The device did not answer.",
     "exposureLocked": "Locked",
     "exposureAuto": "Auto",
+    "exposureApplying": "Applying to the cameras",
     "exposureNotApplied": "Requested, not applied",
     "exposureNotAppliedReason": "Requested, not applied ({reason})",
     "exposureMode": "Exposure mode",

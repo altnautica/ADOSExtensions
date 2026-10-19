@@ -14,11 +14,12 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use world_engine_protocol::atlas::CaptureStatus;
-use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest};
+use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest, CONTROL_REQUEST_TIMEOUT_MS};
 
 /// A bounded per-request timeout so a wedged capture service cannot hang the
-/// route's connection; a local reply is near-instant.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+/// route's connection; a local reply is near-instant and an exposure apply
+/// answers inside it.
+const REQUEST_TIMEOUT: Duration = Duration::from_millis(CONTROL_REQUEST_TIMEOUT_MS);
 /// `stop` closes the last segment and writes the manifest and checksums.
 const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 

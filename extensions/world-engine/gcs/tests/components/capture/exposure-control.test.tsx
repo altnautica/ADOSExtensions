@@ -37,6 +37,11 @@ describe("ExposureControl", () => {
     expect(screen.getByText(messages.capture.exposureNotApplied)).toBeTruthy();
   });
 
+  it("shows an apply still running as applying, not as a failure", () => {
+    show({ locked: true, applied: false, reason: "pending" });
+    expect(screen.getByText(messages.capture.exposureApplying)).toBeTruthy();
+  });
+
   it("shows no flag for an applied lock or auto exposure", () => {
     show({ locked: true, applied: true });
     expect(screen.queryByRole("status")).toBeNull();
