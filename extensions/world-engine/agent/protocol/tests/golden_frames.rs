@@ -107,7 +107,7 @@ fn render() -> String {
         ingest_rate_hz: 9.75,
         capped: true,
         anchored: true,
-        pose_tier: PoseSource::OffloadedSlam,
+        pose_tier: PoseSource::Vio,
         dropped_keyframes: 4,
     };
     let splat_bytes = splat().to_msgpack().unwrap();

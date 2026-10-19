@@ -25,8 +25,6 @@ pub const HTTP_SOCKET: &str = "http.sock";
 pub const ATLAS_BUS_SOCKET: &str = "atlas.sock";
 /// The capture service's control socket (start / stop / pause / resume / status).
 pub const ATLAS_CONTROL_SOCKET: &str = "atlas-control.sock";
-/// Where offloaded SLAM poses are published for the capture service to read.
-pub const ATLAS_POSE_OFFLOAD_SOCKET: &str = "atlas-pose-offload.sock";
 
 /// The private socket directory, from the process environment.
 pub fn ipc_dir() -> PathBuf {

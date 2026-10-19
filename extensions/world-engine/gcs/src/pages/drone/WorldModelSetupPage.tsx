@@ -1,6 +1,6 @@
 /**
  * The drone's world-model setup page: the capture-service master switch, the
- * pose-source preference (plugin config `atlas.pose_tier`), and the capture
+ * pose-source preference (plugin config `atlas.pose_provider`), and the capture
  * profile and reconstruction detail shown read-only. The World Model page owns
  * those two writes, next to the capture controls, so this page never runs a
  * second writer for the same keys.
@@ -33,9 +33,9 @@ const CAPTURE_PROFILE_LABELS: Record<string, string> = {
 
 const POSE_TIER_OPTIONS = [
   { value: "auto", label: t("poseTierAuto") },
-  { value: "local", label: t("poseTierLocal") },
-  { value: "offload", label: t("poseTierOffload") },
-  { value: "hybrid", label: t("poseTierHybrid") },
+  { value: "fc_ekf", label: t("poseTierFcEkf") },
+  { value: "vio", label: t("poseTierVio") },
+  { value: "lidar", label: t("poseTierLidar") },
 ];
 
 /** The capture-service switch: on/off follows the drone's reported readiness;
@@ -110,7 +110,7 @@ export function WorldModelSetupPage() {
 
         <div className="we:border-t we:border-border-default we:pt-3">
           <ConfigSelectField
-            configKey="atlas.pose_tier"
+            configKey="atlas.pose_provider"
             label={t("poseTierLabel")}
             hint={t("poseTierHint")}
             options={POSE_TIER_OPTIONS}

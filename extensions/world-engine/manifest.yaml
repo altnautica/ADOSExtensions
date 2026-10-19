@@ -122,6 +122,30 @@ agent:
       size_bytes: 1
       arch_os: x86_64-windows
       profiles: [workstation, compute]
+    - path: bin/aarch64-linux/basalt-ados
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/basalt-ados-aarch64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [drone, visor]
+    - path: bin/x86_64-linux/basalt-ados
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/basalt-ados-x86_64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [drone, visor]
+    - path: lib/aarch64-linux/liblivox_lidar_sdk_shared.so
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/livox-sdk2-aarch64-linux.so"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [visor]
+    - path: lib/x86_64-linux/liblivox_lidar_sdk_shared.so
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/livox-sdk2-x86_64-linux.so"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [visor]
     # The Rerun web viewer's wasm, served to the GCS half as a plugin asset.
     # Every profile serves the GCS module, so every profile fetches it.
     - path: gcs/assets/re_viewer_bg.wasm
@@ -151,6 +175,14 @@ agent:
     - id: hardware.gpu
     - id: cloud.publish
     - id: cloud.records
+    # capture: sensor bus + clock, session storage, FC EKF messages, the
+    # onboard display page and front-panel buttons; link: MCP tools.
+    - id: sensor.stream.read
+    - id: capture.storage.write
+    - id: mavlink.read
+    - id: display.oled.page
+    - id: button.subscribe
+    - id: mcp.expose
   contributes:
     services:
       - name: capture
@@ -171,6 +203,63 @@ agent:
         subscribe_capability: plugin.world-engine.world.read
       - topic: plugin.world-engine.mesh
         subscribe_capability: plugin.world-engine.world.read
+    tools:
+      - name: capture_start
+        description: "Start a capture session on this device, optionally tagged with site, floor and room."
+        safety_class: safe_write
+        inputSchema:
+          type: object
+          properties:
+            site: { type: string }
+            floor: { type: integer }
+            room: { type: string }
+          additionalProperties: false
+      - name: capture_stop
+        description: "Stop the capture session; returns the final capture state."
+        safety_class: safe_write
+        inputSchema: { type: object, properties: {}, additionalProperties: false }
+      - name: capture_mark
+        description: "Mark the room and floor the operator just entered; returns the segment number."
+        safety_class: safe_write
+        inputSchema:
+          type: object
+          properties:
+            room: { type: string, minLength: 1 }
+            floor: { type: integer }
+          required: [room]
+          additionalProperties: false
+      - name: sessions_list
+        description: "List the capture sessions on this device with size, rooms and upload state."
+        safety_class: read
+        inputSchema: { type: object, properties: {}, additionalProperties: false }
+      - name: reconstruct
+        description: "Submit a reconstruction of an uploaded session to the paired compute node; returns the job id."
+        safety_class: safe_write
+        inputSchema:
+          type: object
+          properties:
+            session_id: { type: string }
+            preset: { type: string, enum: [preview, hq, tour, warehouse] }
+          required: [session_id, preset]
+          additionalProperties: false
+      - name: job_status
+        description: "Read a reconstruction job's stage, progress and error from the paired compute node."
+        safety_class: read
+        inputSchema:
+          type: object
+          properties:
+            job_id: { type: string }
+          required: [job_id]
+          additionalProperties: false
+      - name: tour_bundle
+        description: "Get the walkthrough tour bundle URL a finished reconstruction job produced."
+        safety_class: read
+        inputSchema:
+          type: object
+          properties:
+            job_id: { type: string }
+          required: [job_id]
+          additionalProperties: false
 
 gcs:
   entrypoint: "gcs/world-engine.mjs"

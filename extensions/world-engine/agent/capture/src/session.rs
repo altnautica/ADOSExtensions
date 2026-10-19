@@ -115,7 +115,7 @@ impl CaptureSession {
             recent_frames_ms: VecDeque::with_capacity(INGEST_WINDOW),
             last_accept: None,
             anchored: false,
-            pose_tier: PoseSource::LocalVio,
+            pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
             pairing_rejected: 0,
             pose_interval_ms: pose_interval_ms.max(0),
@@ -521,7 +521,7 @@ mod tests {
                 cov: None,
             },
             pose_cov: vec![0.25; 36],
-            pose_source: PoseSource::LocalVio,
+            pose_source: PoseSource::FcEkf,
             time: TimeAlignment::unmeasured(),
             anchor: Some(anchor()),
             imu_window: vec![ImuSample {
@@ -973,12 +973,12 @@ mod tests {
             config(vec![cam("front", CameraRole::Primary, true)]),
             "sess-tier",
         );
-        assert_eq!(s.status().pose_tier, PoseSource::LocalVio);
-        s.set_pose_tier(PoseSource::OffloadedSlam);
+        assert_eq!(s.status().pose_tier, PoseSource::FcEkf);
+        s.set_pose_tier(PoseSource::Vio);
         assert_eq!(
             s.status().pose_tier,
-            PoseSource::OffloadedSlam,
-            "a silent switch to offloaded SLAM must be visible on the status"
+            PoseSource::Vio,
+            "a switch of provider must be visible on the status"
         );
     }
 }

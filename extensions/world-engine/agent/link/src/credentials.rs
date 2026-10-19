@@ -34,6 +34,10 @@ pub const STORE_FILE: &str = "workstation-credentials.json";
 pub const ATLAS_INGEST_LANE: NodeLane = NodeLane::from_static("atlas.ingest");
 /// The lane the perception-offload session presents.
 pub const OFFLOAD_STREAM_LANE: NodeLane = NodeLane::from_static("offload.stream");
+/// The lane the session uploader presents (`/api/compute/sessions/<id>/...`).
+pub const SESSION_UPLOAD_LANE: NodeLane = NodeLane::from_static("sessions.upload");
+/// The lane a reconstruction submit presents (`POST /api/compute/jobs`).
+pub const JOB_SUBMIT_LANE: NodeLane = NodeLane::from_static("jobs.submit");
 
 /// A node id, not free text.
 const MAX_NODE_ID_LEN: usize = 128;

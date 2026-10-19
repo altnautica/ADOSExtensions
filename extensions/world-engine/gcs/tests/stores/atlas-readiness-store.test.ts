@@ -15,7 +15,7 @@ function readiness(overrides: Partial<AtlasReadiness>): AtlasReadiness {
     captureProfile: "balanced",
     reconstructSteps: 30000,
     camerasConfigured: 6,
-    poseSource: "local_vio",
+    poseSource: "fc_ekf",
     serviceRunning: true,
     capturing: false,
     state: "idle",

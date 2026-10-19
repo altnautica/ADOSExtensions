@@ -2,6 +2,7 @@
 
 export const CAPABILITY_IDS = [
   "button.subscribe",
+  "capture.storage.write",
   "cloud.publish",
   "cloud.read",
   "cloud.records",
@@ -48,6 +49,7 @@ export const CAPABILITY_IDS = [
   "sensor.imu.register",
   "sensor.lidar.register",
   "sensor.payload.register",
+  "sensor.stream.read",
   "telemetry.extend",
   "telemetry.read",
   "telemetry.subscribe",

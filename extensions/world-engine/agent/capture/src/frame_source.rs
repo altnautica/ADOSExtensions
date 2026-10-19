@@ -1,6 +1,6 @@
 //! Where the capture service gets camera frames.
 //!
-//! Two sources behind one enum (the [`crate::pose_source`] sibling pattern):
+//! Two sources behind one enum:
 //!
 //! - [`EngineFrameSource`] is the real path. The plugin host delivers the
 //!   vision engine's frames through `ctx.vision.subscribe_frames`, whose
@@ -20,12 +20,24 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-/// One frame pulled from a source: its pixels plus what they are.
+/// One frame pulled from a source: its pixels plus what they are and when
+/// they were exposed.
 #[derive(Debug, Clone)]
 pub struct CapturedFrame {
     pub camera_id: String,
-    /// Capture time in unix milliseconds.
+    /// Capture time in unix milliseconds (the keyframe selector's clock).
     pub ts_ms: i64,
+    /// Host monotonic nanoseconds; mid-exposure when the source knows it.
+    pub ts_ns: u64,
+    /// The source clock's own stamp, interpreted per `timebase`.
+    pub ts_sensor_ns: Option<u64>,
+    /// `ados_protocol::framebus::TIMEBASE_*` of `ts_sensor_ns`.
+    pub timebase: u8,
+    /// The hardware trigger that exposed this frame, when the source joined one.
+    pub trigger_seq: Option<u64>,
+    pub exposure_ns: Option<u32>,
+    /// The producer's per-camera frame sequence.
+    pub seq: u64,
     pub width: u32,
     pub height: u32,
     pub format: FrameFormat,
@@ -38,6 +50,12 @@ impl From<Frame> for CapturedFrame {
         Self {
             camera_id: d.camera_id,
             ts_ms: unix_ms_of_mono(d.ts_ns),
+            ts_ns: d.ts_ns,
+            ts_sensor_ns: d.ts_sensor_ns,
+            timebase: d.timebase,
+            trigger_seq: d.trigger_seq,
+            exposure_ns: d.exposure_ns,
+            seq: d.seq,
             width: d.width,
             height: d.height,
             format: d.format,
@@ -50,7 +68,7 @@ impl From<Frame> for CapturedFrame {
 /// the host monotonic clock; the capture record carries unix time, so the
 /// frame's age on the monotonic clock is subtracted from the wall clock now.
 fn unix_ms_of_mono(ts_ns: u64) -> i64 {
-    let age_ms = (crate::pose_source::mono_ns() - ts_ns as i64).max(0) / 1_000_000;
+    let age_ms = (crate::clock::mono_ns().saturating_sub(ts_ns) / 1_000_000) as i64;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -76,10 +94,10 @@ impl AtlasFrameSource {
     }
 }
 
-/// How many frames may wait for the capture loop. The loop takes one frame at a
-/// time; a small queue absorbs a keyframe encode without holding frames long
-/// enough to go stale against their pose.
-const FRAME_QUEUE_DEPTH: usize = 4;
+/// How many frames may wait for the capture loop. Every frame is recorded, so
+/// the queue absorbs a segment roll or a keyframe encode (about a second of a
+/// two-camera 20 Hz rig); a frame that finds it full is dropped and counted.
+const FRAME_QUEUE_DEPTH: usize = 48;
 
 /// The attached receiver's side of the router: where frames go and which
 /// cameras are wanted.
@@ -101,6 +119,9 @@ struct Sink {
 #[derive(Default)]
 pub struct FrameRouter {
     sink: Mutex<Option<Sink>>,
+    /// Frames dropped at the callback because the loop was behind, per camera,
+    /// since the last [`FrameRouter::take_drops`].
+    drops: Mutex<HashMap<String, u64>>,
 }
 
 impl FrameRouter {
@@ -127,6 +148,12 @@ impl FrameRouter {
             last_seq: HashMap::new(),
         });
         EngineFrameSource { rx }
+    }
+
+    /// Frames dropped because the capture loop was behind, per camera, since
+    /// the previous call.
+    pub fn take_drops(&self) -> HashMap<String, u64> {
+        std::mem::take(&mut *self.drops.lock())
     }
 
     /// Detach the current run; later frames are dropped at the callback.
@@ -163,6 +190,7 @@ impl FrameRouter {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(f)) => {
                 tracing::trace!(camera = %f.camera_id, "atlas_frame_dropped_loop_behind");
+                *self.drops.lock().entry(f.camera_id).or_default() += 1;
             }
             // The run's source was dropped; stop routing to it.
             Err(mpsc::error::TrySendError::Closed(_)) => *guard = None,
@@ -176,6 +204,11 @@ pub struct EngineFrameSource {
 }
 
 impl EngineFrameSource {
+    /// A source over an explicit channel (replay and tests).
+    pub fn from_receiver(rx: mpsc::Receiver<CapturedFrame>) -> Self {
+        Self { rx }
+    }
+
     /// The next routed frame, or `None` once the router detached this source.
     pub async fn next(&mut self) -> Option<CapturedFrame> {
         self.rx.recv().await
@@ -212,6 +245,12 @@ impl SyntheticFrameSource {
             .map(|i| CapturedFrame {
                 camera_id: camera_id.to_string(),
                 ts_ms: start_ts_ms + i as i64 * interval_ms,
+                ts_ns: (start_ts_ms + i as i64 * interval_ms).max(0) as u64 * 1_000_000,
+                ts_sensor_ns: None,
+                timebase: ados_protocol::framebus::TIMEBASE_HOST,
+                trigger_seq: None,
+                exposure_ns: None,
+                seq: i as u64,
                 width,
                 height,
                 format: FrameFormat::Rgb24,
@@ -249,7 +288,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as i64;
-        let ts_ns = (crate::pose_source::mono_ns() - 2_000_000_000) as u64;
+        let ts_ns = crate::clock::mono_ns() - 2_000_000_000;
         let unix = unix_ms_of_mono(ts_ns);
         assert!((unix - (now - 2_000)).abs() < 500, "{unix} vs {now}");
     }

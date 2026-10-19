@@ -27,8 +27,45 @@ All notable changes to the World Engine extension.
   LiDAR-camera); `POST /api/compute/measure`; job files served with ranges.
 - Pinned tool set (`agent/node/tools/tool-pins.json`) with fetch scripts.
 - A standalone node (`--standalone`) and a Windows build of the node.
+- **Device capture surface.** The link serves `POST /atlas/capture/{start,
+  stop,pause,resume,mark}`, `GET /atlas/capture/{state,coverage}`,
+  `PUT /atlas/capture/exposure`, `GET /atlas/sessions`,
+  `POST /atlas/sessions/<id>/{upload,reconstruct}`, `DELETE /atlas/sessions/<id>`
+  and `GET /atlas/calib[/<version>]` over control protocol v2, with
+  `{"error": CODE, "detail": ..}` refusals. `whep` and `PUT /atlas/rig` answer
+  `503` (`E_WHEP_UNREACHABLE`, `E_RIG_UNREACHABLE`): the sandbox cannot reach
+  the agent's own listeners.
+- **Resumable session uploader.** Finished sessions go to the paired node over
+  the LAN only, in ranged chunks of at most 8 MiB that resume from the node's
+  `HEAD` offset after a dropped link; `.uploaded` is written after the commit
+  ACK. `atlas.auto_upload` uploads when the device is idle or charging and not
+  recording.
+- **Device calibration store** (`<data dir>/calib/<rig_id>/<version>.json`,
+  an `active` pointer per rig) and a Kalibr `camchain-imucam.yaml` + `imu.yaml`
+  importer.
+- MCP tools `capture_start`, `capture_stop`, `capture_mark`, `sessions_list`,
+  `reconstruct`, `job_status`, `tour_bundle`.
+- **Session recorder.** The capture service records `ados.capture/1` sessions
+  under the agent's capture root (admission from the janitor sidecar,
+  `E_STORAGE_FULL` otherwise): every camera frame stamped at its joined
+  trigger, IMU, triggers, GNSS bytes and fixes, LiDAR scans, clock samples,
+  `/pose/<source>` with covariance and a 1 Hz `/health` record; segments roll
+  at 4 GiB or 10 min; `.recording` is kept and refreshed while a session is
+  open; site, floor and MARK rooms land in the manifest.
+- **Sensor-bus ingest** (`sensor.stream.read`): a 10 s IMU ring, trigger join,
+  and the host-to-session clock map.
+- **Pose providers** with SE(3) interpolation and a 50 ms extrapolation limit:
+  the FC EKF (exact WGS-84 to ENU), Basalt stereo-inertial VIO
+  (`capture/basalt`, BSD-3, live socket input), KISS-ICP LiDAR odometry
+  (`capture/python/kiss_icp_live`) and a replay provider. A Livox SDK2 driver
+  (`capture/livox`) feeds LiDAR scans.
+- **Capture quality and HUD**: blur, texture, mains flicker, coverage voxels,
+  corridor degeneracy, storage and clock chips; the `capture_hud` display page;
+  B1 / B2 passthrough presses start/stop and MARK.
 
 ### Changed
+
+- `atlas.pose_tier` and the offloaded-SLAM pose lane are removed; `atlas.pose_provider` (`auto|fc_ekf|vio|lidar`) replaces them. `PoseSource` is `fc_ekf|vio|lidar|replay`. Checksums skip dot-file markers.
 
 - **Atlas envelope version 2.** Keyframes carry the contract camera model,
   geo anchor, a timebase-stamped exposure time and IMU samples with `t_ns` and

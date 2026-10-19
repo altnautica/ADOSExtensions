@@ -179,6 +179,15 @@ impl ComputeClient {
         .await
     }
 
+    /// Read a job's full status view as the node serves it (the record plus
+    /// the staged pipeline's `stage`, `stages`, `gpu`, `eta_s`, `tools` and a
+    /// structured `error`), undecoded.
+    pub async fn job_view(&self, id: &str) -> Result<serde_json::Value, ClientError> {
+        let seg = encode_segment(id);
+        self.send_json(self.http.get(self.url(&format!("/api/compute/jobs/{seg}"))))
+            .await
+    }
+
     /// Read a job's status + progress.
     pub async fn job_status(&self, id: &str) -> Result<JobRecord, ClientError> {
         let seg = encode_segment(id);

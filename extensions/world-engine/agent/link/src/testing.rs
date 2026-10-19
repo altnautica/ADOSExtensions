@@ -25,6 +25,8 @@ pub struct FakeHost {
     pub aux_open_reply: Mutex<Result<Value, String>>,
     pub aux_sent: Mutex<Vec<(u8, Vec<u8>)>>,
     pub aux_callback: Mutex<Option<AuxCallback>>,
+    /// The vehicle-state callback the link subscribed.
+    pub state_callback: Mutex<Option<crate::host::StateCallback>>,
     /// `None` answers `node.info` with an error.
     pub node_info: Mutex<Option<NodeInfo>>,
     /// The instances an `mdns.browse` answers with, by service type; a type
@@ -49,6 +51,7 @@ impl FakeHost {
             ]))),
             aux_sent: Mutex::default(),
             aux_callback: Mutex::default(),
+            state_callback: Mutex::default(),
             node_info: Mutex::default(),
             mdns: Mutex::default(),
             mdns_browsed: Mutex::default(),
@@ -152,6 +155,15 @@ impl Host for FakeHost {
 
     async fn config_set(&self, key: &str, value: Value) -> Result<(), ClientError> {
         self.config.lock().insert(key.to_string(), value);
+        self.touch();
+        Ok(())
+    }
+
+    async fn telemetry_subscribe(
+        &self,
+        callback: crate::host::StateCallback,
+    ) -> Result<(), ClientError> {
+        *self.state_callback.lock() = Some(callback);
         self.touch();
         Ok(())
     }

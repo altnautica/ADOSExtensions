@@ -330,7 +330,7 @@ impl AtlasIngest {
                 ingest_rate_hz: 0.0,
                 capped: false,
                 anchored: true,
-                pose_tier: PoseSource::LocalVio,
+                pose_tier: PoseSource::FcEkf,
                 dropped_keyframes: 0,
             };
             let result = self.bag(&status, now_ms)?;
@@ -640,7 +640,7 @@ mod tests {
                 cov: None,
             },
             pose_cov: vec![0.0009; world_engine_protocol::atlas::POSE_COV_LEN],
-            pose_source: PoseSource::LocalVio,
+            pose_source: PoseSource::FcEkf,
             time: world_engine_protocol::atlas::TimeAlignment::unmeasured(),
             anchor: Some(GeoAnchor {
                 lat_deg: 12.97,
@@ -673,7 +673,7 @@ mod tests {
             ingest_rate_hz: 9.0,
             capped: false,
             anchored: true,
-            pose_tier: PoseSource::LocalVio,
+            pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
         };
         AtlasEvent::new(

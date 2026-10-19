@@ -3,9 +3,11 @@
 //! The host runs it as `world-engine-link com.altnautica.world-engine` and the
 //! mode follows the node profile the host exports (`ADOS_NODE_PROFILE`):
 //!
-//! - **drone**: the Atlas forwarder ([`forward`]), the shared-topic republish
-//!   and the `status` telemetry ([`monitor`]), the perception-offload
-//!   reconciler ([`offload`]), and the drone HTTP API ([`api`]).
+//! - **drone / visor**: the Atlas forwarder ([`forward`]), the shared-topic
+//!   republish and the `status` telemetry ([`monitor`]), the
+//!   perception-offload reconciler ([`offload`]), the session uploader
+//!   ([`upload`]), the device HTTP API ([`api`]) and the MCP tools
+//!   ([`tools`]).
 //! - **ground-station**: the radio aux-lane relay ([`relay`]) and the ground
 //!   HTTP API.
 //! - **workstation / compute**: the `node` service owns the HTTP socket and the
@@ -13,17 +15,27 @@
 //!   for shutdown.
 
 pub mod api;
+pub mod calib_api;
+pub mod capture_api;
 pub mod compute_node;
 pub mod control;
 pub mod credentials;
 pub mod forward;
 pub mod host;
+pub mod jobs_api;
+pub mod lan_node;
 pub mod monitor;
 pub mod offload;
+pub mod power;
 pub mod relay;
+pub mod reply;
 pub mod sdk;
+pub mod sessions;
+pub mod sessions_api;
 #[cfg(test)]
 mod testing;
+pub mod tools;
+pub mod upload;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,7 +45,7 @@ use parking_lot::Mutex;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use world_engine_protocol::paths::{self, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
-use world_engine_transport::serve_unix;
+use world_engine_transport::{serve_unix, BulkConfig};
 
 use crate::api::DroneApi;
 use crate::control::ControlClient;
@@ -42,7 +54,9 @@ use crate::forward::{ForwardStatus, Forwarder};
 use crate::host::Host;
 use crate::monitor::CaptureState;
 use crate::offload::Reconciler;
+use crate::power::PowerWatch;
 use crate::relay::Relay;
+use crate::upload::UploadManager;
 
 /// How long `on_stop` waits for each task to wind down.
 const STOP_GRACE: Duration = Duration::from_secs(5);
@@ -137,15 +151,43 @@ impl LinkPlugin {
         let forward = Arc::new(Mutex::new(ForwardStatus::default()));
         let capture = Arc::new(CaptureState::default());
 
-        let router = api::drone_router(
-            DroneApi {
-                host: host.clone(),
-                control: ControlClient::new(paths::ipc_dir().join(ATLAS_CONTROL_SOCKET)),
-                forward: forward.clone(),
-                profile: "drone".to_string(),
-            },
+        let control = ControlClient::new(paths::ipc_dir().join(ATLAS_CONTROL_SOCKET));
+        let uploads = UploadManager::new(
+            host.clone(),
             credentials.clone(),
+            Arc::new(world_engine_capture::storage::session_root),
+            BulkConfig::default(),
         );
+        let calib_root = ctx
+            .data_dir
+            .as_deref()
+            .map(|d| d.join(world_engine_capture::calib::CALIB_DIR))
+            .or_else(world_engine_capture::calib::default_root);
+        let api = DroneApi {
+            host: host.clone(),
+            control: control.clone(),
+            forward: forward.clone(),
+            profile: ados_sdk::node_profile(),
+            credentials: credentials.clone(),
+            uploads: uploads.clone(),
+            calib_root,
+        };
+        ctx.tools.serve(tools::handler(api.clone()));
+        let router = api::drone_router(api);
+        let power = PowerWatch::default();
+        {
+            let (host, power) = (host.clone(), power.clone());
+            self.tasks.push(tokio::spawn(
+                async move { power.subscribe(host.as_ref()).await },
+            ));
+        }
+        self.tasks
+            .push(tokio::spawn(uploads.clone().run(shutdown.clone())));
+        self.tasks.push(tokio::spawn(uploads.run_auto(
+            control,
+            power,
+            shutdown.clone(),
+        )));
         self.tasks.push(serve_http(router, shutdown.clone())?);
         self.tasks.push(tokio::spawn(
             Forwarder {

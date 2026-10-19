@@ -26,6 +26,8 @@ path = "src/main.rs"
 [dependencies]
 world-engine-protocol = { path = "../protocol" }
 world-engine-transport = { path = "../transport" }
+world-engine-capture = { path = "../capture" }
+ados-capture-contract = { workspace = true }
 ados-sdk = { workspace = true }
 # Node-credential store, the capture-bus framing, the aux channel ids, the
 # cloud-publish limits, and the vision detection-bus types.

@@ -51,7 +51,7 @@ fn keyframe(session: &str, kf_id: u64, camera: &str, fx: f64) -> KeyframeEnvelop
             cov: None,
         },
         pose_cov: vec![0.0009; world_engine_protocol::atlas::POSE_COV_LEN],
-        pose_source: PoseSource::LocalVio,
+        pose_source: PoseSource::FcEkf,
         time: TimeAlignment {
             t_exposure_mid_ns: 5_000_000_000 + kf_id * 100_000_000,
             timebase: Timebase::HostMonotonic,

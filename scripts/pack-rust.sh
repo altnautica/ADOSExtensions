@@ -205,6 +205,10 @@ else
     --exclude 'target' \
     --include '/agent/' \
     --include '/agent/python/***' \
+    --include '/agent/capture/' \
+    --include '/agent/capture/python/' \
+    --include '/agent/capture/python/***' \
+    --exclude '/agent/capture/python/**/.venv/***' \
     --exclude '/agent/***' \
     "${ext_dir}/" "${stage}/"
 

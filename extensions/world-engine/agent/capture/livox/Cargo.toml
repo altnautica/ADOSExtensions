@@ -1,0 +1,33 @@
+# Livox SDK2 point-cloud and IMU packet decoding for the World Engine capture
+# service: a pure-Rust decoder of the LiDAR's Ethernet data packets, scan
+# assembly and device-to-host time mapping. The optional `sdk` feature loads
+# the upstream Livox SDK2 shared library (MIT) at run time and feeds the
+# packets its callbacks hand over through the same decoder; nothing from the
+# SDK is linked at build time.
+[package]
+name = "ados-livox"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Livox SDK2 packet decoder, scan assembly and run-time SDK2 binding for World Engine capture."
+
+[lib]
+name = "ados_livox"
+path = "src/lib.rs"
+
+[features]
+default = []
+# Load liblivox_lidar_sdk_shared.so with libloading and drive the SDK2 C API.
+# Unix only; on other targets the feature compiles to nothing.
+sdk = ["dep:libloading", "dep:libc"]
+
+[dependencies]
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libloading = { version = "0.8", optional = true }
+libc = { version = "0.2", optional = true }

@@ -1,5 +1,7 @@
 //! `checksums.b3`: one `<blake3 hex>  <relative path>` line per session file,
-//! sorted by path, `/`-separated. The checksum file itself is not listed.
+//! sorted by path, `/`-separated. The checksum file itself is not listed, nor
+//! any dot-file (the device's state markers such as `.recording` and
+//! `.uploaded`, which come and go after the session is closed).
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -18,6 +20,12 @@ fn hash_file(path: &Path) -> Result<String> {
 fn collect(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in fs::read_dir(dir)? {
         let path = entry?.path();
+        if path
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+        {
+            continue;
+        }
         if path.is_dir() {
             collect(&path, root, out)?;
         } else if path != root.join(CHECKSUMS_FILE) {

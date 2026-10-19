@@ -29,11 +29,14 @@
 //!
 //! The drone-side compute client lives here too, so the light drone binary
 //! reaches a node without linking the node's reconstruction stack:
-//! [`ComputeClient`] (the job API), [`mdns`] (the compute-node service type
-//! and the pick over a host browse), and the
-//! perception-offload orchestrator with its safety-gated return bridge.
+//! [`ComputeClient`] (the job API), [`BulkClient`] (the resumable session
+//! upload lane), [`mdns`] (the compute-node service type and the pick over a
+//! host browse), and the perception-offload orchestrator with its
+//! safety-gated return bridge.
 
 mod bearer;
+mod bulk;
+mod bulk_plan;
 mod client;
 mod error;
 mod ladder;
@@ -50,6 +53,11 @@ mod wfb_relay;
 mod world_stream;
 
 pub use bearer::{AtlasBearer, BearerKind};
+pub use bulk::BulkClient;
+pub use bulk_plan::{
+    BulkConfig, BulkError, Committed, PlanFile, SessionPlan, CHECKSUMS_FILE, MANIFEST_FILE,
+    MAX_CHUNK_BYTES,
+};
 pub use client::{ClientError, ComputeClient};
 pub use error::TransportError;
 pub use ladder::BearerLadder;

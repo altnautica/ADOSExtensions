@@ -23,6 +23,7 @@ members = [
   "extensions/world-engine/agent/protocol",
   "extensions/world-engine/agent/transport",
   "extensions/world-engine/agent/capture",
+  "extensions/world-engine/agent/capture/livox",
   "extensions/world-engine/agent/node",
   "extensions/world-engine/agent/link",
 ]
@@ -75,6 +76,11 @@ ados-offload = { path = "../ADOSDroneAgent/crates/ados-offload" }
 # The ONNX detector backend a compute node hosts for perception offload.
 # Optional in the node crate, behind its `onnx` / `coreml` features.
 ados-vision = { path = "../ADOSDroneAgent/crates/ados-vision", default-features = false }
+# The capture storage sidecar reader and admission rule (capture root,
+# E_STORAGE_FULL), shared with the agent's janitor.
+ados-config = { path = "../ADOSDroneAgent/crates/ados-config" }
+# The sensor bus client and frame codec (/run/ados/sensors.sock, seam J).
+ados-sensorbus = { path = "../ADOSDroneAgent/crates/ados-sensorbus" }
 # The capture contract crate (generated from the MIT schema files).
 ados-capture-contract = { path = "extensions/world-engine/agent/contract-gen" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "net", "io-util", "sync", "time", "process", "fs"] }

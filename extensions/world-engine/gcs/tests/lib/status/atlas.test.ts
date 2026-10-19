@@ -77,7 +77,7 @@ describe("mapAtlasSlice", () => {
         keyframesIngested: 400,
         capped: true,
         anchored: false,
-        poseTier: "offloaded_slam",
+        poseTier: "vio",
         droppedKeyframes: 7,
       },
       current,
@@ -89,7 +89,7 @@ describe("mapAtlasSlice", () => {
     // the reconstruction input.
     expect(patch?.live.capped).toBe(true);
     expect(patch?.live.anchored).toBe(false);
-    expect(patch?.live.poseTier).toBe("offloaded_slam");
+    expect(patch?.live.poseTier).toBe("vio");
     expect(patch?.live.droppedKeyframes).toBe(7);
   });
 

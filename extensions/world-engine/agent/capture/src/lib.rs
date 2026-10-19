@@ -33,44 +33,54 @@ pub mod geo;
 mod selector;
 mod session;
 
+pub mod calib;
+mod calib_kalibr;
+pub mod clock;
 pub mod control;
 pub mod encode;
 pub mod frame_source;
-pub mod pose_source;
+pub mod geodesy;
+pub mod hud;
+pub mod lidar_record;
+pub mod lidar_scan;
+pub mod lidar_source;
+pub mod mavlink_msg;
+pub mod pose;
+pub mod providers;
 pub mod publish;
+pub mod quality;
+pub mod recorder;
+pub mod recording;
+pub mod rig_source;
 pub mod runtime;
+pub mod sensor_bus;
 pub mod service;
+pub mod storage;
 pub mod supervisor;
+pub mod vehicle;
 
 pub use config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 pub use selector::{rotation_angle, KeyframeSelector};
 pub use session::{CaptureOutput, CaptureSession, FrameInput, PoseInput};
 
-pub use control::{serve_control, AtlasControlCmd};
+pub use control::{serve_control, ControlMsg};
 pub use encode::encode_keyframe_jpeg;
 pub use frame_source::{
     AtlasFrameSource, CapturedFrame, EngineFrameSource, FrameRouter, SyntheticFrameSource,
 };
-pub use pose_source::{
-    build_pose_provider, diagonal_cov, euler_to_rotation, geodetic_to_enu, mono_ms, mono_ns,
-    HybridPose, OffloadPose, PoseProvider, PoseSample, ReplayPose, TelemetryPose,
-    TelemetryPoseFeed,
-};
+pub use pose::{PoseEstimate, PoseProvider, PoseTrack};
 pub use publish::AtlasPublisher;
-pub use runtime::{
-    default_intrinsics, select_pose_tier, AtlasRuntimeConfig, ConfigError, PosePrior, PoseTier,
-    PoseTierConfig, CONFIG_KEYS,
-};
-pub use service::{new_session_id, run_capture_loop};
+pub use runtime::{default_intrinsics, AtlasRuntimeConfig, ConfigError, PosePrior, CONFIG_KEYS};
+pub use service::{run_capture_loop, LoopDeps, Paths};
 
 // Re-export the shared wire contract so callers get one import surface.
 pub use world_engine_protocol::atlas::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
     KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, MeshDescriptor,
     OccupancyDescriptor, OccupancyField, PointCloudDescriptor, Pose, PoseDescriptor, PoseSource,
-    SplatDescriptor, TimeAlignment, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_POSE_OFFLOAD_TOPIC,
-    PLUGIN_ATLAS_MESH_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
-    PLUGIN_ATLAS_POSE_TOPIC, PLUGIN_ATLAS_SPLAT_TOPIC,
+    SplatDescriptor, TimeAlignment, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_MESH_TOPIC,
+    PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_POSE_TOPIC,
+    PLUGIN_ATLAS_SPLAT_TOPIC,
 };
 
 /// Errors from the Atlas capture core. The frame-by-frame capture path is

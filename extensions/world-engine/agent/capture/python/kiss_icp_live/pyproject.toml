@@ -1,0 +1,27 @@
+[project]
+name = "kiss-icp-live"
+version = "0.1.0"
+description = "Live KISS-ICP LiDAR odometry over a Unix socket, with the ICP Hessian eigenvalues per scan"
+license = "GPL-3.0-or-later"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  # KISS-ICP is MIT (PRBonn/kiss-icp); the version is pinned so the odometry
+  # and its config fields stay fixed across installs.
+  "kiss-icp==1.3.0",
+  "numpy>=1.26",
+  # k-d tree over the local map for the per-scan normals of the Hessian.
+  "scipy>=1.11",
+]
+
+[tool.uv]
+package = false
+environments = ["sys_platform == 'win32'", "sys_platform == 'linux'"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

@@ -15,6 +15,8 @@ use rmpv::Value;
 
 /// A callback for one received aux datagram `(channel, payload)`.
 pub type AuxCallback = Arc<dyn Fn(u8, Vec<u8>) + Send + Sync>;
+/// A callback for one vehicle-state snapshot (the agent's state map).
+pub type StateCallback = Arc<dyn Fn(Value) + Send + Sync>;
 
 /// The config scope every link write lands in (the host falls back to the
 /// global scope on a node with no bound drone id).
@@ -29,6 +31,9 @@ pub trait Host: Send + Sync + 'static {
     async fn config_set(&self, key: &str, value: Value) -> Result<(), ClientError>;
     /// `telemetry.extend` (cap `telemetry.extend`).
     async fn telemetry_extend(&self, channel: &str, payload: Value) -> Result<(), ClientError>;
+    /// `telemetry.subscribe` (cap `telemetry.read`): the vehicle-state
+    /// snapshot, at most 10 Hz, to `callback`.
+    async fn telemetry_subscribe(&self, callback: StateCallback) -> Result<(), ClientError>;
     /// `event.publish` (cap `event.publish`).
     async fn event_publish(&self, topic: &str, payload: Value) -> Result<(), ClientError>;
     /// `cloud.publish` (cap `cloud.publish`); the reply map as the host sent it.
@@ -68,6 +73,10 @@ impl Host for PluginContext {
 
     async fn telemetry_extend(&self, channel: &str, payload: Value) -> Result<(), ClientError> {
         self.telemetry.extend(channel, payload).await.map(|_| ())
+    }
+
+    async fn telemetry_subscribe(&self, callback: StateCallback) -> Result<(), ClientError> {
+        self.telemetry.subscribe(callback).await
     }
 
     async fn event_publish(&self, topic: &str, payload: Value) -> Result<(), ClientError> {

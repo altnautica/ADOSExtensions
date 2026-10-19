@@ -23,9 +23,21 @@ pub fn encode_keyframe_jpeg(
     format: FrameFormat,
     data: &[u8],
 ) -> anyhow::Result<Vec<u8>> {
+    encode_jpeg(width, height, format, data, JPEG_QUALITY)
+}
+
+/// [`encode_keyframe_jpeg`] at an explicit quality (the session recorder's
+/// JPEG mode records at 95).
+pub fn encode_jpeg(
+    width: u32,
+    height: u32,
+    format: FrameFormat,
+    data: &[u8],
+    quality: u8,
+) -> anyhow::Result<Vec<u8>> {
     let rgb = to_rgb8(width, height, format, data)?;
     let mut out = Vec::new();
-    let mut enc = JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY);
+    let mut enc = JpegEncoder::new_with_quality(&mut out, quality);
     enc.encode(&rgb, width, height, ExtendedColorType::Rgb8)
         .map_err(|e| anyhow::anyhow!("jpeg encode {width}x{height}: {e}"))?;
     Ok(out)

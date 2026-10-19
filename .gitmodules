@@ -1,0 +1,3 @@
+[submodule "extensions/world-engine/agent/capture/basalt/upstream"]
+	path = extensions/world-engine/agent/capture/basalt/upstream
+	url = https://gitlab.com/VladyslavUsenko/basalt.git

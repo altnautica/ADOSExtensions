@@ -79,7 +79,7 @@ fn sample_keyframe() -> KeyframeEnvelope {
         camera: sample_camera(),
         pose: sample_pose(),
         pose_cov: sample_cov(),
-        pose_source: PoseSource::LocalVio,
+        pose_source: PoseSource::FcEkf,
         time: sample_time(),
         anchor: Some(sample_anchor()),
         imu_window: vec![ImuSample {
@@ -104,23 +104,7 @@ fn keyframe_envelope_round_trips() {
     assert_eq!(kf, back);
     assert_eq!(back.camera_role, CameraRole::Primary);
     assert_eq!(back.tier, KeyframeTier::Full);
-    assert_eq!(back.pose_source, PoseSource::LocalVio);
-}
-
-#[test]
-fn offloaded_pose_round_trips() {
-    let op = OffloadedPose {
-        session_id: "sess-1".into(),
-        kf_id: 7,
-        camera_id: "front".into(),
-        pose: sample_pose(),
-        source: PoseSource::OffloadedSlam,
-        ts_ms: 1_700_000_000_000,
-    };
-    let bytes = op.to_msgpack().expect("encode");
-    let back = OffloadedPose::from_msgpack(&bytes).expect("decode");
-    assert_eq!(op, back);
-    assert_eq!(back.source, PoseSource::OffloadedSlam);
+    assert_eq!(back.pose_source, PoseSource::FcEkf);
 }
 
 #[test]
@@ -134,7 +118,7 @@ fn world_model_descriptors_round_trip() {
         ingest_rate_hz: 9.5,
         capped: false,
         anchored: true,
-        pose_tier: PoseSource::LocalVio,
+        pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
     };
     let back = CaptureStatus::from_msgpack(&status.to_msgpack().unwrap()).unwrap();
@@ -404,7 +388,7 @@ fn a_keyframe_without_time_or_covariance_decodes_as_untrustworthy() {
         "camera": {"model": "pinhole", "width": 1, "height": 1, "fx": 1.0, "fy": 1.0,
                    "cx": 0.5, "cy": 0.5, "dist": [], "calibrated": false, "readout_ns": 0},
         "pose": {"R": [1.0,0.0,0.0,0.0,1.0,0.0,0.0,0.0,1.0], "t": [0.0,0.0,0.0], "cov": null},
-        "pose_source": "local_vio",
+        "pose_source": "fc_ekf",
         "anchor": null,
         "imu_window": [], "flags": {"is_loop_closure": false,
         "is_session_start": true, "is_session_end": false}

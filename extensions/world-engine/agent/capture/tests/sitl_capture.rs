@@ -1,561 +1,276 @@
-//! SITL capture gate: drive the real capture loop end to end with a synthetic
-//! frame source and a replay pose source, over a real atlas bus, and assert the
-//! keyframe + pose + capture-state streams come out correctly — with no camera,
-//! no flight controller, and no shared memory.
+//! SITL capture: the real capture loop records a session from synthetic
+//! framebus frames (two triggered cameras on simulation time) and sensor-bus
+//! IMU, trigger and clock frames, and the session validates with the contract
+//! reader: both cameras, every 1 kHz IMU sample, triggers joined, timebase
+//! `sim`.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_capture_contract::{GeoAnchor, GeoAnchorDatum, GeoAnchorSource};
-use ados_protocol::frame::PLUGIN_MAX_FRAME;
-use ados_protocol::framebus::FrameFormat;
-use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
+use ados_capture_contract::foxglove::RawImage;
+use ados_capture_contract::v1::{ClockSample, ImuBatch, ImuSample, TriggerRecord};
+use ados_capture_contract::{SessionReader, Timebase};
+use ados_config::capture_storage::{CaptureState, CaptureStorageSidecar, CaptureUsage};
+use ados_protocol::framebus::{FrameFormat, TIMEBASE_SIM};
 use ados_protocol::shutdown::Shutdown;
+use parking_lot::Mutex;
+use tokio::sync::{mpsc, oneshot};
+use world_engine_capture::pose::replay::ReplayPose;
+use world_engine_capture::pose::{diagonal_cov, se3, PoseEstimate};
+use world_engine_capture::sensor_bus::{BusEvent, SensorState};
+use world_engine_capture::vehicle::VehicleFeed;
 use world_engine_capture::{
-    diagonal_cov, mono_ns, run_capture_loop, AtlasFrameSource, AtlasPublisher, AtlasRuntimeConfig,
-    CameraConfig, CaptureConfig, CaptureProfile, CaptureSession, CapturedFrame, KeyframeBudget,
-    PoseProvider, PoseSample, ReplayPose, SelectionParams, SyntheticFrameSource,
+    run_capture_loop, AtlasFrameSource, AtlasPublisher, AtlasRuntimeConfig, CapturedFrame,
+    ControlMsg, EngineFrameSource, LoopDeps, Paths, PoseSource, VioHealth,
 };
-use world_engine_protocol::atlas::{
-    AtlasEvent, CameraRole, CaptureStatus, ImageEncoding, KeyframeEnvelope, Pose, PoseDescriptor,
-    PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
-    PLUGIN_ATLAS_POSE_TOPIC,
-};
+use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 
-/// A pose sample whose ANCHOR is latched, so the capture path has a world frame
-/// and will select keyframes, and whose arrival is stamped on the local
-/// monotonic clock at construction so the freshness gate reads it as current.
-fn pose_at(x: f64, ts_ms: i64) -> PoseSample {
-    PoseSample {
-        pose: Pose {
-            r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-            t: [x, 0.0, 0.0],
-            cov: None,
+/// Host monotonic ns at simulation time 0.
+const HOST0: u64 = 50_000_000_000;
+/// Simulation time of the first frame.
+const SIM0: u64 = 1_000_000_000;
+const FRAMES: u64 = 20;
+const FRAME_NS: u64 = 50_000_000;
+
+fn rig_json() -> serde_json::Value {
+    let cam = |id: &str, role: &str, y: f64| {
+        serde_json::json!({"id": id, "kind": "camera", "role": role,
+            "T_body_sensor": [0.0,0.0,1.0,0.1, -1.0,0.0,0.0,y, 0.0,-1.0,0.0,0.0, 0.0,0.0,0.0,1.0],
+            "camera": {"model": "pinhole", "width": 64, "height": 48, "fx": 50.0, "fy": 50.0,
+                       "cx": 32.0, "cy": 24.0, "dist": [], "calibrated": true, "readout_ns": 0},
+            "time_offset_ns": 0})
+    };
+    serde_json::json!({"contract": "ados.capture/1", "rig_id": "sim-rig", "calib_version": "1",
+        "sensors": [cam("cam_fl", "front_left", 0.05), cam("cam_fr", "front_right", -0.05),
+            {"id": "imu0", "kind": "imu", "role": "nav",
+             "T_body_sensor": [1.0,0.0,0.0,0.0, 0.0,1.0,0.0,0.0, 0.0,0.0,1.0,0.0, 0.0,0.0,0.0,1.0],
+             "time_offset_ns": 0}]})
+}
+
+fn frame(cam: &str, k: u64) -> CapturedFrame {
+    CapturedFrame {
+        camera_id: cam.into(),
+        ts_ms: (k * 50) as i64,
+        ts_ns: HOST0 + SIM0 + k * FRAME_NS,
+        ts_sensor_ns: Some(SIM0 + k * FRAME_NS),
+        timebase: TIMEBASE_SIM,
+        trigger_seq: Some(k),
+        exposure_ns: Some(2_000_000),
+        seq: k,
+        width: 64,
+        height: 48,
+        format: FrameFormat::Gray8,
+        pixels: (0..64 * 48)
+            .map(|i| ((i * 7 + k as usize) % 251) as u8)
+            .collect(),
+    }
+}
+
+fn bus_events() -> Vec<BusEvent> {
+    let mut ev = vec![BusEvent::Clock(ClockSample {
+        t_ns: 0,
+        host_mono_ns: HOST0,
+        utc_ns: None,
+        locked: true,
+        sigma_ns: 1_000,
+    })];
+    // 1.2 s of IMU at 1 kHz in 10 ms batches, from sim 0.9 s.
+    for b in 0..120u64 {
+        ev.push(BusEvent::Imu {
+            src: "imu0".into(),
+            batch: ImuBatch {
+                samples: (0..10)
+                    .map(|i| {
+                        let n = b * 10 + i;
+                        ImuSample {
+                            t_ns: HOST0 + 900_000_000 + n * 1_000_000,
+                            seq: n,
+                            gyro: vec![0.0, 0.0, 0.01],
+                            accel: vec![0.0, 0.0, 9.81],
+                            temp_c: None,
+                        }
+                    })
+                    .collect(),
+            },
+        });
+    }
+    for k in 0..FRAMES {
+        for cam in ["cam_fl", "cam_fr"] {
+            ev.push(BusEvent::Trigger {
+                camera: cam.into(),
+                rec: TriggerRecord {
+                    seq: k,
+                    t_mid_ns: HOST0 + SIM0 + k * FRAME_NS,
+                    exposure_ns: 2_000_000,
+                    gain: 1.0,
+                },
+            });
+        }
+    }
+    ev
+}
+
+fn write_sidecars(dir: &std::path::Path) -> Paths {
+    let root = dir.join("capture");
+    std::fs::create_dir_all(&root).unwrap();
+    let sc = CaptureStorageSidecar {
+        version: 1,
+        updated_ns: 0,
+        capture_root: root.to_string_lossy().into_owned(),
+        volume: None,
+        capture: CaptureUsage {
+            used_bytes: 0,
+            budget_bytes: 1 << 40,
+            budget_pct: 85,
+            floor_free_bytes: 0,
+            sessions: 0,
+            uploaded: 0,
+            evict_unuploaded: false,
+            state: CaptureState::Ok,
         },
-        anchor: Some(GeoAnchor {
-            lat_deg: 12.97,
-            lon_deg: 77.59,
-            h_ellipsoid_m: 920.0,
-            geoid_undulation_m: 0.0,
-            datum: GeoAnchorDatum::Wgs84,
-            source: GeoAnchorSource::GnssMean,
-        }),
-        source: PoseSource::LocalVio,
-        ts_ms,
-        arrival_mono_ns: mono_ns(),
-        health: VioHealth::Good,
-        cov: diagonal_cov(0.03, 0.01),
-    }
-}
-
-#[tokio::test]
-async fn sitl_capture_emits_keyframes_pose_and_state_end_to_end() {
-    let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas.sock").to_string_lossy().to_string();
-
-    // The atlas bus, with a subscriber connected before any publish.
-    let publisher = AtlasPublisher::bind(&sock).await.unwrap();
-    let mut sub = connect_with_retry(&sock, 50, Duration::from_millis(20))
-        .await
-        .unwrap();
-    // Let the accept loop register the subscriber before the loop publishes.
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // Five RGB frames, spaced 100 ms apart, one camera.
-    let frames = AtlasFrameSource::Synthetic(SyntheticFrameSource::solid("front", 8, 8, 5, 0, 100));
-
-    // Poses aligned 1:1 with the frames. Baseline is the last KEYFRAME, so:
-    //   f0 @0.0   -> first keyframe (session start)
-    //   f1 @0.1   -> under 0.5 m  -> pose only
-    //   f2 @0.7   -> 0.7 m        -> keyframe
-    //   f3 @0.8   -> 0.1 m from 0.7 -> pose only
-    //   f4 @1.5   -> 0.8 m from 0.7 -> keyframe
-    let poses = vec![
-        pose_at(0.0, 0),
-        pose_at(0.1, 100),
-        pose_at(0.7, 200),
-        pose_at(0.8, 300),
-        pose_at(1.5, 400),
-    ];
-    let pose: Arc<dyn PoseProvider> = Arc::new(ReplayPose::new(poses));
-
-    let config = CaptureConfig {
-        cameras: vec![CameraConfig {
-            id: "front".into(),
-            role: CameraRole::Primary,
-            enabled: true,
-            reconstruct: true,
-        }],
-        profile: CaptureProfile::Orbit,
-        selection: SelectionParams::default(),
+        write_probe: None,
     };
-    let runtime = AtlasRuntimeConfig {
-        enabled: true,
-        capture: config.clone(),
-        // This test asserts keyframe production, not pose freshness; a wide
-        // budget keeps replay timing out of the assertion. The freshness
-        // behaviour has its own test below.
-        pose_max_age_ms: 60_000,
-        max_pairing_residual_ms: 60_000.0,
-        ..AtlasRuntimeConfig::default()
+    let paths = Paths {
+        storage_sidecar: dir.join("capture-storage.json"),
+        clock_sidecar: dir.join("clock.json"),
+        rig: dir.join("rig.json"),
+        active_marker: Some(dir.join("active")),
     };
-    let session = CaptureSession::new(config);
-    let cancel = Shutdown::new();
-
-    // No control commands in this run; the sender stays alive so the control
-    // channel remains open (the loop simply never receives a command).
-    let (_control_tx, control_rx) = tokio::sync::mpsc::channel(1);
-    let loop_cancel = cancel.clone();
-    let handle = tokio::spawn(async move {
-        run_capture_loop(
-            frames,
-            pose,
-            publisher,
-            session,
-            runtime,
-            "sess-sitl".into(),
-            control_rx,
-            loop_cancel,
-        )
-        .await;
-    });
-
-    // Collect events until we have the three expected keyframes (or time out).
-    let mut keyframes: Vec<KeyframeEnvelope> = Vec::new();
-    let mut poses_seen = 0usize;
-    let mut states: Vec<CaptureStatus> = Vec::new();
-    let deadline = Duration::from_secs(5);
-    let collect = tokio::time::timeout(deadline, async {
-        // Read until all three keyframes AND the trailing capture-state snapshot
-        // that reports the third are in (the state event is published right after
-        // its keyframe, so stopping at the keyframe alone would miss it).
-        while keyframes.len() < 3 || !states.iter().any(|s| s.keyframes >= 3) {
-            let payload = match read_length_prefixed(&mut sub, PLUGIN_MAX_FRAME, true).await {
-                Ok(Some(p)) => p,
-                _ => break,
-            };
-            let ev = AtlasEvent::decode(&payload).expect("atlas event");
-            match ev.topic.as_str() {
-                ATLAS_KEYFRAME_TOPIC => {
-                    keyframes.push(KeyframeEnvelope::from_msgpack(&ev.payload).unwrap())
-                }
-                PLUGIN_ATLAS_POSE_TOPIC => {
-                    let _ = PoseDescriptor::from_msgpack(&ev.payload).unwrap();
-                    poses_seen += 1;
-                }
-                ATLAS_CAPTURE_STATE_TOPIC => {
-                    states.push(CaptureStatus::from_msgpack(&ev.payload).unwrap())
-                }
-                other => panic!("unexpected atlas topic {other}"),
-            }
-        }
-    })
-    .await;
-    cancel.trigger();
-    let _ = handle.await;
-
-    assert!(collect.is_ok(), "timed out collecting atlas events");
-
-    // Three keyframes, in order, only the first marks the session start.
-    assert_eq!(keyframes.len(), 3, "exactly three keyframes selected");
-    assert_eq!(keyframes[0].kf_id, 0);
-    assert!(
-        keyframes[0].flags.is_session_start,
-        "first keyframe starts the session"
-    );
-    assert!(!keyframes[1].flags.is_session_start);
-    assert!(!keyframes[2].flags.is_session_start);
-    for kf in &keyframes {
-        assert_eq!(kf.session_id, "sess-sitl");
-        assert_eq!(kf.camera_id, "front");
-        assert_eq!(kf.camera_role, CameraRole::Primary);
-        assert_eq!(kf.pose_source, PoseSource::LocalVio);
-        assert_eq!(kf.image.encoding, ImageEncoding::Jpeg);
-        // The keyframe carries a real JPEG (SOI marker), proving the encode ran.
-        assert_eq!(&kf.image.bytes[..2], &[0xFF, 0xD8], "keyframe is a JPEG");
-        // Derived intrinsics: principal point centred, positive focal length.
-        assert!(kf.camera.fx > 0.0);
-    }
-
-    // Every frame contributed a pose to the live stream (>= 3 keyframes' frames;
-    // at least the frames we fed produced poses).
-    assert!(poses_seen >= 3, "pose stream flowed, got {poses_seen}");
-    // Capture state advanced (the keyframe count climbed across snapshots).
-    assert!(
-        states.iter().any(|s| s.keyframes >= 3),
-        "capture state reported the keyframe count"
-    );
-    assert!(states.iter().all(|s| s.session_id == "sess-sitl"));
-}
-
-#[tokio::test]
-async fn sitl_capture_recovers_from_a_malformed_keyframe_frame() {
-    // A frame whose bytes are too small for its declared dimensions fails the
-    // keyframe encode. The loop must not panic or stall: it publishes the pose
-    // for the bad frame (the ~10 Hz stream stays whole), leaves the selector
-    // baseline unadvanced, and produces the keyframe from the next good frame.
-    let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas.sock").to_string_lossy().to_string();
-    let publisher = AtlasPublisher::bind(&sock).await.unwrap();
-    let mut sub = connect_with_retry(&sock, 50, Duration::from_millis(20))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let good = |ts: i64| CapturedFrame {
-        camera_id: "front".into(),
-        ts_ms: ts,
-        width: 8,
-        height: 8,
-        format: FrameFormat::Rgb24,
-        pixels: vec![0u8; 8 * 8 * 3],
-    };
-    let frames = AtlasFrameSource::Synthetic(SyntheticFrameSource::new(vec![
-        good(0),
-        // Malformed: declared 8x8 RGB but only 4 bytes → encode fails.
-        CapturedFrame {
-            camera_id: "front".into(),
-            ts_ms: 100,
-            width: 8,
-            height: 8,
-            format: FrameFormat::Rgb24,
-            pixels: vec![0u8; 4],
-        },
-        good(200),
-    ]));
-    // Poses past the 0.5 m threshold so both good frames AND the bad one select.
-    let pose: Arc<dyn PoseProvider> = Arc::new(ReplayPose::new(vec![
-        pose_at(0.0, 0),
-        pose_at(0.7, 100),
-        pose_at(0.8, 200),
-    ]));
-    let config = CaptureConfig {
-        cameras: vec![CameraConfig {
-            id: "front".into(),
-            role: CameraRole::Primary,
-            enabled: true,
-            reconstruct: true,
-        }],
-        profile: CaptureProfile::Freeform,
-        selection: SelectionParams::default(),
-    };
-    let runtime = AtlasRuntimeConfig {
-        enabled: true,
-        capture: config.clone(),
-        // This test asserts keyframe production, not pose freshness; a wide
-        // budget keeps replay timing out of the assertion. The freshness
-        // behaviour has its own test below.
-        pose_max_age_ms: 60_000,
-        max_pairing_residual_ms: 60_000.0,
-        ..AtlasRuntimeConfig::default()
-    };
-    let session = CaptureSession::new(config);
-    let cancel = Shutdown::new();
-    let (_control_tx, control_rx) = tokio::sync::mpsc::channel(1);
-    let loop_cancel = cancel.clone();
-    let handle = tokio::spawn(async move {
-        run_capture_loop(
-            frames,
-            pose,
-            publisher,
-            session,
-            runtime,
-            "sess-mal".into(),
-            control_rx,
-            loop_cancel,
-        )
-        .await;
-    });
-
-    let mut keyframes = 0usize;
-    let mut poses = 0usize;
-    let collect = tokio::time::timeout(Duration::from_secs(5), async {
-        // Two good frames → two keyframes; the malformed frame contributes only a
-        // pose. Reaching two keyframes proves the loop recovered.
-        while keyframes < 2 {
-            let payload = match read_length_prefixed(&mut sub, PLUGIN_MAX_FRAME, true).await {
-                Ok(Some(p)) => p,
-                _ => break,
-            };
-            let ev = AtlasEvent::decode(&payload).unwrap();
-            match ev.topic.as_str() {
-                ATLAS_KEYFRAME_TOPIC => keyframes += 1,
-                PLUGIN_ATLAS_POSE_TOPIC => poses += 1,
-                ATLAS_CAPTURE_STATE_TOPIC => {}
-                other => panic!("unexpected atlas topic {other}"),
-            }
-        }
-    })
-    .await;
-    cancel.trigger();
-    let _ = handle.await;
-
-    assert!(
-        collect.is_ok(),
-        "loop did not recover from the malformed frame"
-    );
-    assert_eq!(keyframes, 2, "the two good frames each produced a keyframe");
-    assert!(
-        poses >= 3,
-        "every frame incl. the malformed one published a pose, got {poses}"
-    );
-}
-
-#[tokio::test]
-async fn disabled_config_capture_validates_to_no_cameras() {
-    // The daemon's enable/validate gate: a capture config with no enabled camera
-    // is rejected before the loop runs (the daemon exits clean on this).
-    let cfg = CaptureConfig {
-        cameras: vec![CameraConfig {
-            id: "front".into(),
-            role: CameraRole::Primary,
-            enabled: false,
-            reconstruct: false,
-        }],
-        profile: CaptureProfile::Freeform,
-        selection: SelectionParams::default(),
-    };
-    assert!(cfg.validate().is_err(), "no enabled camera is rejected");
-}
-
-/// Build the one-camera capture config the freshness tests drive.
-fn one_camera_config() -> CaptureConfig {
-    CaptureConfig {
-        cameras: vec![CameraConfig {
-            id: "front".into(),
-            role: CameraRole::Primary,
-            enabled: true,
-            reconstruct: true,
-        }],
-        profile: CaptureProfile::Freeform,
-        selection: SelectionParams::default(),
-    }
-}
-
-/// Drive the capture loop over a real bus with `poses` and `pose_max_age_ms`,
-/// returning every event the subscriber saw within `window`.
-async fn run_and_collect(
-    poses: Vec<PoseSample>,
-    pose_max_age_ms: i64,
-    window: Duration,
-) -> (Vec<KeyframeEnvelope>, Vec<CaptureStatus>) {
-    run_with_pairing_budget(poses, pose_max_age_ms, pose_max_age_ms as f64, window).await
-}
-
-/// [`run_and_collect`] with an explicit frame-to-pose pairing budget.
-async fn run_with_pairing_budget(
-    poses: Vec<PoseSample>,
-    pose_max_age_ms: i64,
-    max_pairing_residual_ms: f64,
-    window: Duration,
-) -> (Vec<KeyframeEnvelope>, Vec<CaptureStatus>) {
-    let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas.sock").to_string_lossy().to_string();
-    let publisher = AtlasPublisher::bind(&sock).await.unwrap();
-    let mut sub = connect_with_retry(&sock, 50, Duration::from_millis(20))
-        .await
-        .unwrap();
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let n = poses.len();
-    let frames = AtlasFrameSource::Synthetic(SyntheticFrameSource::solid("front", 8, 8, n, 0, 100));
-    let pose: Arc<dyn PoseProvider> = Arc::new(ReplayPose::new(poses));
-    let config = one_camera_config();
-    let runtime = AtlasRuntimeConfig {
-        enabled: true,
-        capture: config.clone(),
-        pose_max_age_ms,
-        max_pairing_residual_ms,
-        ..AtlasRuntimeConfig::default()
-    };
-    let session = CaptureSession::new(config);
-    let cancel = Shutdown::new();
-    let (_control_tx, control_rx) = tokio::sync::mpsc::channel(1);
-    let loop_cancel = cancel.clone();
-    let handle = tokio::spawn(async move {
-        run_capture_loop(
-            frames,
-            pose,
-            publisher,
-            session,
-            runtime,
-            "sess-fresh".into(),
-            control_rx,
-            loop_cancel,
-        )
-        .await;
-    });
-
-    let mut keyframes = Vec::new();
-    let mut states = Vec::new();
-    let _ = tokio::time::timeout(window, async {
-        loop {
-            let payload = match read_length_prefixed(&mut sub, PLUGIN_MAX_FRAME, true).await {
-                Ok(Some(p)) => p,
-                _ => break,
-            };
-            let ev = AtlasEvent::decode(&payload).expect("atlas event");
-            match ev.topic.as_str() {
-                ATLAS_KEYFRAME_TOPIC => {
-                    keyframes.push(KeyframeEnvelope::from_msgpack(&ev.payload).unwrap())
-                }
-                ATLAS_CAPTURE_STATE_TOPIC => {
-                    states.push(CaptureStatus::from_msgpack(&ev.payload).unwrap())
-                }
-                PLUGIN_ATLAS_POSE_TOPIC => {}
-                other => panic!("unexpected atlas topic {other}"),
-            }
-        }
-    })
-    .await;
-    cancel.trigger();
-    let _ = handle.await;
-    (keyframes, states)
-}
-
-#[tokio::test]
-async fn a_stale_pose_stops_keyframe_production_instead_of_freezing_one_in() {
-    // THE P0. When the flight-controller link dies mid-flight the pose cache used
-    // to keep returning the last pose forever, and every subsequent frame was
-    // tagged with that frozen pose and entered the reconstruction as truth — a
-    // whole capture placed at one point in space, with no other symptom.
-    //
-    // Every pose here arrived 10 s ago on the local monotonic clock against a
-    // 500 ms budget, which is exactly the shape a frozen cache holds. Nothing may
-    // be selected, and the status must SAY it is lost rather than hold `good`.
-    let stale: Vec<PoseSample> = (0..5)
-        .map(|i| PoseSample {
-            arrival_mono_ns: mono_ns() - 10_000_000_000,
-            ..pose_at(i as f64, i * 100)
-        })
-        .collect();
-    let (keyframes, states) = run_and_collect(stale, 500, Duration::from_millis(1200)).await;
-
-    assert!(
-        keyframes.is_empty(),
-        "a pose past its age budget must be treated as absent, got {} keyframes",
-        keyframes.len()
-    );
-    assert!(
-        states.iter().any(|s| s.vio_health == VioHealth::Lost),
-        "the capture status must report the pose stream lost, saw {:?}",
-        states.iter().map(|s| s.vio_health).collect::<Vec<_>>()
-    );
-
-    // Control: the identical run with fresh arrivals DOES produce keyframes, so
-    // the assertion above is measuring the freshness gate and not a broken rig.
-    let fresh: Vec<PoseSample> = (0..5).map(|i| pose_at(i as f64, i * 100)).collect();
-    let (keyframes, _) = run_and_collect(fresh, 60_000, Duration::from_millis(1200)).await;
-    assert!(
-        !keyframes.is_empty(),
-        "the same rig with fresh poses must still capture"
-    );
-}
-
-#[tokio::test]
-async fn no_keyframe_is_captured_before_the_geo_anchor_latches() {
-    // Before the first 3D fix a pose translation is [0, 0, alt_rel] at the local
-    // origin; after it, ENU metres from the anchor. Capturing across that
-    // transition put keyframes at the origin AND keyframes hundreds of metres
-    // away into one session, which the reconstructor reads as a teleport.
-    let unanchored: Vec<PoseSample> = (0..5)
-        .map(|i| PoseSample {
-            anchor: None,
-            health: VioHealth::Degraded,
-            ..pose_at(i as f64, i * 100)
-        })
-        .collect();
-    let (keyframes, states) =
-        run_and_collect(unanchored, 60_000, Duration::from_millis(1200)).await;
-
-    assert!(
-        keyframes.is_empty(),
-        "no keyframe may be selected before the session has a world frame"
-    );
-    assert!(
-        states.iter().all(|s| !s.anchored),
-        "the status must report the capture as unanchored so the operator can see why it is idle"
-    );
-}
-
-#[tokio::test]
-async fn every_keyframe_carries_the_inputs_a_reconstructor_needs() {
-    // A keyframe with no position-prior sigma destabilises the bundle
-    // adjustment, and one with no time alignment cannot be placed against its
-    // pose. Both now ride the envelope, and the consumer-side validator agrees.
-    let poses: Vec<PoseSample> = (0..5).map(|i| pose_at(i as f64, i * 100)).collect();
-    let (keyframes, _) = run_and_collect(poses, 60_000, Duration::from_millis(1200)).await;
-    assert!(!keyframes.is_empty(), "the rig captured");
-
-    for kf in &keyframes {
-        assert_eq!(
-            kf.pose_cov.len(),
-            world_engine_protocol::atlas::POSE_COV_LEN,
-            "the reconstructor's position-prior sigma must ride the envelope"
-        );
-        assert!(kf.anchor.is_some(), "the world frame is resolved");
-        assert_eq!(
-            kf.time.timebase,
-            ados_capture_contract::Timebase::HostMonotonic,
-            "a host-stamped frame names the host's monotonic clock as its timebase"
-        );
-        assert!(
-            kf.time.t_exposure_mid_ns > 0,
-            "the frame carries its own monotonic exposure stamp"
-        );
-        assert!(
-            kf.validate().is_ok(),
-            "a captured keyframe must be usable: {:?}",
-            kf.validate()
-        );
-        // This platform has no disciplined clock, so the timebase uncertainty
-        // is honestly reported as unmeasured rather than claimed as exact.
-        assert!(
-            !kf.clock_is_disciplined(),
-            "an undisciplined clock must report itself as such"
-        );
-        assert_eq!(
-            kf.time.trigger_seq, None,
-            "no trigger lane is wired, so no exact exposure time is claimed"
-        );
-    }
-
-    // The other direction: a strict (disciplined-clock) consumer refuses these
-    // frames, which is the whole point of reporting the sigma.
-    assert!(
-        matches!(
-            keyframes[0].validate_with(&KeyframeBudget::strict()),
-            Err(world_engine_protocol::atlas::KeyframeReject::TimeSigma { .. })
-        ),
-        "an unmeasured clock must not pass a strict budget"
-    );
-}
-
-#[tokio::test]
-async fn a_frame_paired_with_a_pose_far_from_its_exposure_never_becomes_a_keyframe() {
-    // Every pose arrived a full second before the frames: fresh enough for the
-    // age gate (60 s here), far outside the 50 ms pairing budget.
-    let poses: Vec<PoseSample> = (0..5)
-        .map(|i| PoseSample {
-            arrival_mono_ns: world_engine_capture::mono_ns() - 1_000_000_000,
-            ..pose_at(i as f64 * 10.0, i * 100)
-        })
-        .collect();
-    let (keyframes, states) = run_with_pairing_budget(
-        poses,
-        60_000,
-        world_engine_capture::runtime::MAX_PAIRING_RESIDUAL_MS,
-        Duration::from_millis(1200),
+    std::fs::write(&paths.storage_sidecar, serde_json::to_vec(&sc).unwrap()).unwrap();
+    std::fs::write(
+        &paths.clock_sidecar,
+        br#"{"timebase":"sim","locked":true,"sigma_ns":1000}"#,
     )
-    .await;
-    assert!(
-        keyframes.is_empty(),
-        "a 1 s frame-to-pose gap must not become a keyframe"
-    );
-    assert!(
-        states
-            .iter()
-            .any(|s| s.state == world_engine_protocol::atlas::CaptureState::Capturing),
-        "the capture keeps running on the live pose lane"
-    );
+    .unwrap();
+    std::fs::write(&paths.rig, serde_json::to_vec(&rig_json()).unwrap()).unwrap();
+    paths
+}
+
+async fn ask(tx: &mpsc::Sender<ControlMsg>, req: CtlRequest) -> CtlReply {
+    let (reply, rx) = oneshot::channel();
+    tx.send(ControlMsg { req, reply }).await.unwrap();
+    rx.await.unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_two_camera_sim_session_records_and_validates() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = write_sidecars(dir.path());
+    let values: BTreeMap<String, serde_json::Value> = [
+        ("atlas.enabled".to_string(), serde_json::json!(true)),
+        (
+            "atlas.cameras".to_string(),
+            serde_json::json!([{"id": "cam_fl"}, {"id": "cam_fr", "role": "aux"}]),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let cfg = AtlasRuntimeConfig::from_values("sim-visor", &values).unwrap();
+    let poses: Vec<PoseEstimate> = (0..30u64)
+        .map(|k| PoseEstimate {
+            t_ns: HOST0 + SIM0 - 200_000_000 + k * FRAME_NS,
+            r: se3::IDENTITY,
+            t: [k as f64 * 0.1, 0.0, 1.5],
+            cov: diagonal_cov(0.05, 0.01),
+            source: PoseSource::Replay,
+            health: VioHealth::Good,
+        })
+        .collect();
+    let sensors = Arc::new(Mutex::new(SensorState::default()));
+    let events = bus_events();
+    for e in &events {
+        sensors.lock().apply(e);
+    }
+    let (bus_tx, bus_rx) = mpsc::channel(1024);
+    let (ctl_tx, ctl_rx) = mpsc::channel(8);
+    let frames: Vec<CapturedFrame> = (0..FRAMES)
+        .flat_map(|k| [frame("cam_fl", k), frame("cam_fr", k)])
+        .collect();
+    let publisher = AtlasPublisher::bind(&dir.path().join("atlas.sock").to_string_lossy())
+        .await
+        .unwrap();
+    let cancel = Shutdown::new();
+    // Start before any frame flows: the loop serves control first.
+    let start = {
+        let tx = ctl_tx.clone();
+        tokio::spawn(async move { ask(&tx, CtlRequest::Start(StartArgs::default())).await })
+    };
+    // Frames flow through an engine source fed after the start.
+    let (ftx, frx) = mpsc::channel(64);
+    let deps = LoopDeps {
+        cfg,
+        profile: "visor".into(),
+        frames: AtlasFrameSource::Engine(EngineFrameSource::from_receiver(frx)),
+        router: None,
+        pose: Arc::new(ReplayPose::new(poses)),
+        fc: None,
+        vehicle: VehicleFeed::new(),
+        sensors,
+        bus_rx,
+        lidar_rx: None,
+        publisher,
+        control_rx: ctl_rx,
+        hud_rx: None,
+        view_tx: None,
+        paths: paths.clone(),
+    };
+    let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));
+    let started = start.await.unwrap();
+    assert!(started.ok, "{started:?}");
+    let session_id = started.result["session_id"].as_str().unwrap().to_string();
+    for e in events {
+        bus_tx.send(e).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for f in frames {
+        ftx.send(f).await.unwrap();
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let state = ask(&ctl_tx, CtlRequest::State).await;
+    assert_eq!(state.result["state"], "recording");
+    let stop = ask(&ctl_tx, CtlRequest::Stop).await;
+    assert!(stop.ok);
+    cancel.trigger();
+    lp.await.unwrap();
+
+    let sdir = dir.path().join("capture").join(&session_id);
+    assert!(!sdir.join(".recording").exists());
+    assert!(!dir.path().join("active").exists());
+    let r = SessionReader::open(&sdir).unwrap();
+    r.verify().unwrap();
+    assert_eq!(r.manifest().timebase, Timebase::Sim);
+    assert_eq!(r.rig().rig_id, "sim-rig");
+    let (mut fl, mut fr, mut imu, mut trig, mut poses_seen) = (0, 0, 0, 0, 0);
+    let mut image_times = Vec::new();
+    r.for_each_message(|m| {
+        match m.topic {
+            "/cam/cam_fl/image" => {
+                fl += 1;
+                let img: RawImage = m.decode()?;
+                assert_eq!(img.encoding, "mono8");
+                image_times.push(m.t_ns);
+            }
+            "/cam/cam_fr/image" => fr += 1,
+            "/imu/imu0" => {
+                let b: ImuBatch = m.decode()?;
+                imu += b.samples.len();
+                // Samples are on simulation time.
+                assert!(b.samples.iter().all(|s| s.t_ns < 2_200_000_000));
+            }
+            "/cam/cam_fl/trigger" | "/cam/cam_fr/trigger" => trig += 1,
+            "/pose/replay" => poses_seen += 1,
+            _ => {}
+        }
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!((fl, fr), (FRAMES as usize, FRAMES as usize));
+    assert_eq!(imu, 1200, "every 1 kHz sample preserved");
+    assert_eq!(trig, 2 * FRAMES as usize);
+    assert!(poses_seen > 0);
+    // Images carry their trigger's mid-exposure on simulation time.
+    image_times.sort_unstable();
+    assert_eq!(image_times[0], SIM0);
+    assert_eq!(image_times[1] - image_times[0], FRAME_NS);
 }

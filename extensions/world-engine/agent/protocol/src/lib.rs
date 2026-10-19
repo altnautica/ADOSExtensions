@@ -16,6 +16,7 @@
 
 pub mod atlas;
 pub mod atlas_state;
+pub mod capture_ctl;
 pub mod compute;
 pub mod node_credential;
 pub mod offload;

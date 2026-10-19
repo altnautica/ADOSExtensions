@@ -14,15 +14,13 @@
       "type": "string",
       "title": "Capture profile",
       "description": "The flight pattern the keyframe selection is tuned for.",
-      "enum": ["orbit", "lawnmower", "freeform", "inspection"],
+      "enum": [
+        "orbit",
+        "lawnmower",
+        "freeform",
+        "inspection"
+      ],
       "default": "freeform"
-    },
-    "atlas.pose_tier": {
-      "type": "string",
-      "title": "Pose source",
-      "description": "auto resolves to the flight-controller pose; local forces the flight-controller pose; offload uses the compute node's SLAM pose; hybrid takes whichever arrived most recently.",
-      "enum": ["auto", "local", "offload", "hybrid"],
-      "default": "auto"
     },
     "atlas.reconstruct_steps": {
       "type": "integer",
@@ -48,17 +46,39 @@
       "items": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "title": "Camera id", "minLength": 1 },
+          "id": {
+            "type": "string",
+            "title": "Camera id",
+            "minLength": 1
+          },
           "role": {
             "type": "string",
             "title": "Role",
-            "enum": ["primary", "aux", "down", "left", "right", "back", "up"],
+            "enum": [
+              "primary",
+              "aux",
+              "down",
+              "left",
+              "right",
+              "back",
+              "up"
+            ],
             "default": "primary"
           },
-          "enabled": { "type": "boolean", "title": "Captured", "default": true },
-          "reconstruct": { "type": "boolean", "title": "Feeds the reconstruction", "default": true }
+          "enabled": {
+            "type": "boolean",
+            "title": "Captured",
+            "default": true
+          },
+          "reconstruct": {
+            "type": "boolean",
+            "title": "Feeds the reconstruction",
+            "default": true
+          }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       }
     },
@@ -73,26 +93,27 @@
       "title": "Pose uncertainty",
       "description": "The pose prior each keyframe carries into the reconstruction. Set position_sigma_m outright for an RTK rig; otherwise it is the reported DOP times gnss_uere_m.",
       "properties": {
-        "position_sigma_m": { "type": ["number", "null"], "exclusiveMinimum": 0, "default": null },
-        "gnss_uere_m": { "type": "number", "exclusiveMinimum": 0, "default": 2.5 },
-        "orientation_sigma_rad": { "type": "number", "exclusiveMinimum": 0, "default": 0.02 },
-        "slam_position_sigma_m": { "type": "number", "exclusiveMinimum": 0, "default": 0.25 },
-        "slam_orientation_sigma_rad": { "type": "number", "exclusiveMinimum": 0, "default": 0.01 },
-        "timebase_sigma_ns": {
-          "type": "integer",
-          "description": "One-sigma uncertainty, in ns, of the timebase keyframes are stamped on (this host's monotonic clock against its reference); negative means unmeasured.",
-          "default": -1
+        "position_sigma_m": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "exclusiveMinimum": 0,
+          "default": null
+        },
+        "gnss_uere_m": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 2.5
+        },
+        "orientation_sigma_rad": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "default": 0.02
         }
       },
       "additionalProperties": false,
       "default": {}
-    },
-    "atlas.pose_max_age_ms": {
-      "type": "integer",
-      "title": "Pose age budget (ms)",
-      "description": "A frame is only keyframed with a pose younger than this.",
-      "minimum": 0,
-      "default": 500
     },
     "atlas.pose_publish_interval_ms": {
       "type": "integer",
@@ -137,15 +158,47 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
-          "model": { "type": "string", "enum": ["pinhole", "opencv", "opencv_fisheye", "kb4"], "default": "pinhole" },
-          "fx": { "type": "number" },
-          "fy": { "type": "number" },
-          "cx": { "type": "number" },
-          "cy": { "type": "number" },
-          "dist": { "type": "array", "items": { "type": "number" }, "default": [] },
-          "readout_ns": { "type": "integer", "minimum": 0, "default": 0 }
+          "model": {
+            "type": "string",
+            "enum": [
+              "pinhole",
+              "opencv",
+              "opencv_fisheye",
+              "kb4"
+            ],
+            "default": "pinhole"
+          },
+          "fx": {
+            "type": "number"
+          },
+          "fy": {
+            "type": "number"
+          },
+          "cx": {
+            "type": "number"
+          },
+          "cy": {
+            "type": "number"
+          },
+          "dist": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "default": []
+          },
+          "readout_ns": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 0
+          }
         },
-        "required": ["fx", "fy", "cx", "cy"],
+        "required": [
+          "fx",
+          "fy",
+          "cx",
+          "cy"
+        ],
         "additionalProperties": false
       }
     },
@@ -153,11 +206,18 @@
       "type": "string",
       "title": "Perception offload",
       "description": "auto offloads detection when the drone has no accelerator and a compute node is reachable on the LAN; on forces offload; off never offloads.",
-      "enum": ["auto", "on", "off"],
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
       "default": "auto"
     },
     "offload.compute_node_addr": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "title": "Compute node address",
       "description": "Pin a compute node as host:port. Empty discovers one on the LAN.",
       "default": null
@@ -166,11 +226,18 @@
       "type": "string",
       "title": "Serve perception offload",
       "description": "auto accepts and serves LAN offload sessions; on forces serving; off never serves.",
-      "enum": ["auto", "on", "off"],
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
       "default": "auto"
     },
     "serving.detector_model": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "title": "Served detector model",
       "description": "Model id of the detector served to drones. Empty uses the node's default.",
       "default": null
@@ -182,10 +249,180 @@
       "default": false
     },
     "relay.compute_base_url": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "title": "Compute node URL",
       "description": "The compute node the relay re-posts to (http://host:8092). Empty discovers one on the LAN.",
       "default": null
+    },
+    "atlas.pose_provider": {
+      "type": "string",
+      "title": "Pose provider",
+      "enum": [
+        "auto",
+        "fc_ekf",
+        "vio",
+        "lidar"
+      ],
+      "default": "auto",
+      "description": "auto: Basalt VIO on a visor stereo rig, else the flight controller EKF."
+    },
+    "atlas.record_on_start": {
+      "type": "boolean",
+      "default": false,
+      "description": "Open a capture session as soon as the capture service starts."
+    },
+    "atlas.image_encoding": {
+      "type": "string",
+      "enum": [
+        "raw",
+        "jpeg"
+      ],
+      "default": "raw",
+      "description": "Recorded image encoding: raw planes or JPEG q95."
+    },
+    "atlas.mains_hz": {
+      "type": "integer",
+      "enum": [
+        50,
+        60
+      ],
+      "default": 50,
+      "description": "Mains frequency the exposure rule avoids flicker for."
+    },
+    "atlas.exposure": {
+      "type": "object",
+      "default": {
+        "locked": false,
+        "mode": "walking"
+      },
+      "properties": {
+        "locked": {
+          "type": "boolean"
+        },
+        "exposure_us": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "gain": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mode": {
+          "enum": [
+            "walking",
+            "slow",
+            "short",
+            null
+          ]
+        }
+      }
+    },
+    "atlas.hud": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "rec_pin": {
+          "type": "integer",
+          "default": 5
+        },
+        "mark_pin": {
+          "type": "integer",
+          "default": 6
+        }
+      }
+    },
+    "atlas.vio": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "binary": {
+          "type": "string"
+        },
+        "left": {
+          "type": "string",
+          "default": "cam_fl"
+        },
+        "right": {
+          "type": "string",
+          "default": "cam_fr"
+        },
+        "imu": {
+          "type": "string",
+          "default": "imu0"
+        }
+      }
+    },
+    "atlas.lidar": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "lidar_id": {
+          "type": "string",
+          "default": "lidar0"
+        },
+        "uv": {
+          "type": "string",
+          "default": "uv"
+        },
+        "project_dir": {
+          "type": "string"
+        },
+        "sdk_library": {
+          "type": "string"
+        },
+        "host_ip": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "lidar_ips": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        }
+      }
+    },
+    "atlas.segment": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "type": "integer",
+          "default": 4294967296
+        },
+        "max_duration_s": {
+          "type": "integer",
+          "default": 600
+        }
+      }
+    },
+    "atlas.auto_upload": {
+      "type": "boolean",
+      "default": false,
+      "description": "Upload finished sessions to the paired compute node over the LAN when idle or charging."
+    },
+    "atlas.rig_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "description": "Rig whose calibration versions the calibration page lists."
     }
   },
   "additionalProperties": false

@@ -6,7 +6,7 @@
 //! data rather than only viewable. Two topic roots:
 //!
 //! - `atlas.*` is the extension's own internal namespace (capture state, the
-//!   keyframe lane, the offloaded-pose return leg). It stays between the
+//!   keyframe lane). It stays between the
 //!   extension's processes and the compute node it streams to.
 //! - `plugin.world-engine.*` is the shared-data namespace other plugins
 //!   subscribe to through the extension's manifest `shared_topics` declaration.
@@ -36,12 +36,6 @@ pub const ATLAS_CAPTURE_STATE_TOPIC: &str = "atlas.capture.state";
 /// the capture artifact, not shared plugin data); a compute node and the
 /// world-model stream lane consume it.
 pub const ATLAS_KEYFRAME_TOPIC: &str = "atlas.keyframe";
-
-/// The compute node returns an offloaded pose to the drone on this topic. The
-/// drone streamed an image to the node, the node ran SLAM, and the pose comes
-/// back here for the drone to stamp into the keyframe envelope. This is the
-/// localization return leg for NPU-less boards.
-pub const ATLAS_POSE_OFFLOAD_TOPIC: &str = "atlas.pose.offload";
 
 /// Shared-data: current 6-DoF pose plus world anchor (~10 Hz).
 pub const PLUGIN_ATLAS_POSE_TOPIC: &str = "plugin.world-engine.pose";
@@ -176,8 +170,8 @@ pub use descriptors::{
 };
 pub use keyframe::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
-    KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, OffloadedPose, Pose,
-    PoseDescriptor, PoseSource, TimeAlignment, VioHealth, KEYFRAME_MAX_SIGMA_NS, POSE_COV_LEN,
+    KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, Pose, PoseDescriptor, PoseSource,
+    TimeAlignment, VioHealth, KEYFRAME_MAX_SIGMA_NS, POSE_COV_LEN,
 };
 
 /// The on-wire version stamped on every [`AtlasEvent`] envelope. Every atlas
@@ -281,7 +275,6 @@ macro_rules! impl_msgpack {
 
 impl_msgpack!(
     KeyframeEnvelope,
-    OffloadedPose,
     CaptureStatus,
     PoseDescriptor,
     PointCloudDescriptor,

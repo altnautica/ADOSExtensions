@@ -27,9 +27,10 @@ import {
 /** Pose-estimation source the capture rig runs. Left open so a richer agent can
  * advertise another source without breaking the type. */
 export type AtlasPoseSource =
-  | "local_vio"
-  | "offloaded_slam"
-  | "hybrid"
+  | "auto"
+  | "fc_ekf"
+  | "vio"
+  | "lidar"
   | (string & {});
 
 /** Capture lifecycle state (lowercase on the wire). Open for forward states. */
@@ -155,7 +156,7 @@ export function coerceReadiness(raw: unknown): AtlasReadiness | null {
         ? num(e.reconstruct_steps)
         : DEFAULT_RECONSTRUCTION_STEPS,
     camerasConfigured: num(e.cameras_configured),
-    poseSource: str(e.pose_source) || "local_vio",
+    poseSource: str(e.pose_source) || "auto",
     serviceRunning: boolOrNull(e.service_running),
     capturing: boolOrNull(e.capturing),
     state: strOrNull(e.state),

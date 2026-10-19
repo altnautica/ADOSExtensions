@@ -95,10 +95,10 @@ async fn a_capture_loop_that_is_behind_never_blocks_the_callback() {
     let router = FrameRouter::new();
     let mut src = router.attach(HashSet::new());
     let mut front = engine("front", &router);
-    for i in 0..32 {
+    for i in 0..100 {
         front.push_solid(i);
     }
-    assert_eq!(front.deliver_all(), 32);
+    assert_eq!(front.deliver_all(), 100);
 
     let mut queued = 0;
     while tokio::time::timeout(Duration::from_millis(100), src.next())
@@ -108,7 +108,7 @@ async fn a_capture_loop_that_is_behind_never_blocks_the_callback() {
         queued += 1;
     }
     assert!(
-        (1..32).contains(&queued),
+        (1..100).contains(&queued),
         "a bounded backlog is kept, the rest dropped (got {queued})"
     );
 }

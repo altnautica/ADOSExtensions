@@ -31,8 +31,10 @@ const CAPTURE_PROFILES: readonly SelectOption[] = [
 ];
 
 const POSE_SOURCE_KEY: Record<string, string> = {
-  offloaded_slam: "capture.poseOffloadedSlam",
-  hybrid: "capture.poseHybrid",
+  auto: "capture.poseAuto",
+  fc_ekf: "capture.poseFcEkf",
+  vio: "capture.poseVio",
+  lidar: "capture.poseLidar",
 };
 
 function InfoRow({ label, value }: { label: string; value: string }) {
@@ -127,7 +129,7 @@ export function WorldModelSetupView({
                   <InfoRow label={t("capture.camerasLabel")} value={String(readiness.camerasConfigured)} />
                   <InfoRow
                     label={t("capture.poseSourceLabel")}
-                    value={t(POSE_SOURCE_KEY[readiness.poseSource] ?? "capture.poseLocalVio")}
+                    value={t(POSE_SOURCE_KEY[readiness.poseSource] ?? "capture.poseAuto")}
                   />
                   <div className="we:flex we:items-center we:justify-between we:gap-2 we:text-[11px]">
                     <span className="we:text-text-tertiary">{t("capture.profileLabel")}</span>

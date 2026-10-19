@@ -91,7 +91,9 @@ Per-node plugin configuration (`config-schema.json`):
 |---|---|
 | `atlas.enabled` | Run the capture service on this drone |
 | `atlas.capture_profile` | Keyframe selection profile |
-| `atlas.pose_tier` | Pose source: `auto`, `local` (flight controller), `offload` (SLAM on the compute node) or `hybrid` |
+| `atlas.pose_provider` | Pose provider: `auto`, `fc_ekf` (flight controller), `vio` (on-device visual-inertial) or `lidar` (on-device LiDAR odometry) |
+| `atlas.auto_upload` | Upload finished sessions to the paired compute node over the LAN when the device is idle or charging and not recording (default `false`) |
+| `atlas.rig_id` | Rig whose calibrations `GET /atlas/calib` lists; empty uses the only rig in the device calibration store |
 | `atlas.reconstruct_steps` | Training steps for the reconstruction (the detail level) |
 | `atlas.hfov_deg` | Camera horizontal field of view used when no intrinsics are given |
 | `atlas.cameras[]` | Cameras the capture service reads |

@@ -1,0 +1,21 @@
+{
+  "name": "basalt-ados",
+  "version-string": "1.0.0",
+  "description": "Dependencies of basalt-ados: the Basalt VIO subset only.",
+  "license": "BSD-3-Clause",
+  "dependencies": [
+    "basalt-headers",
+    "cereal",
+    "eigen3",
+    "fmt",
+    "magic-enum",
+    "nlohmann-json",
+    {
+      "name": "opencv4",
+      "default-features": false
+    },
+    "opengv",
+    "sophus",
+    "tbb"
+  ]
+}

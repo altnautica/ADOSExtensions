@@ -28,8 +28,14 @@ ados-sdk = { workspace = true }
 # The vision framebus value types and the Unix-socket framing the atlas bus,
 # control socket and offload-pose reader speak.
 ados-protocol = { workspace = true }
-# The link-aware freshness gate the capture path age-gates each pose with.
-ados-offload = { workspace = true }
+# The sensor bus client (seam J) and the capture storage admission rule.
+ados-sensorbus = { workspace = true }
+ados-config = { workspace = true }
+ados-livox = { path = "livox" }
+prost = "0.14"
+prost-types = "0.14"
+# Kalibr calibration YAML import.
+serde_yaml_ng = "0.10"
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
@@ -46,6 +52,11 @@ nix = { version = "0.29", default-features = false, features = ["time"] }
 # Encode a selected keyframe's raw frame to JPEG before it ships to the compute
 # node (a reconstructor ingests compressed images, never raw planes).
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[features]
+default = ["livox-sdk"]
+# Drive a Livox LiDAR through the SDK2 shared library (Linux).
+livox-sdk = ["ados-livox/sdk"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

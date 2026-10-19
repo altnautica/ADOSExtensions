@@ -138,7 +138,7 @@ mod tests {
             ingest_rate_hz: 9.0,
             capped: false,
             anchored: true,
-            pose_tier: PoseSource::LocalVio,
+            pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
         };
         let frame =

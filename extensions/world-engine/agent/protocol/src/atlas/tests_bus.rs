@@ -6,7 +6,6 @@ use super::*;
 fn topic_names_are_stable() {
     assert_eq!(ATLAS_CAPTURE_STATE_TOPIC, "atlas.capture.state");
     assert_eq!(ATLAS_KEYFRAME_TOPIC, "atlas.keyframe");
-    assert_eq!(ATLAS_POSE_OFFLOAD_TOPIC, "atlas.pose.offload");
     assert_eq!(PLUGIN_ATLAS_POSE_TOPIC, "plugin.world-engine.pose");
     assert_eq!(
         PLUGIN_ATLAS_POINTCLOUD_TOPIC,
@@ -33,7 +32,7 @@ fn atlas_event_round_trips_and_carries_a_struct_payload() {
         ingest_rate_hz: 9.5,
         capped: false,
         anchored: true,
-        pose_tier: PoseSource::LocalVio,
+        pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
     };
     let ev = AtlasEvent::new(
@@ -107,7 +106,6 @@ fn every_shared_data_topic_names_an_enforced_capability() {
     for topic in [
         ATLAS_KEYFRAME_TOPIC,
         ATLAS_CAPTURE_STATE_TOPIC,
-        ATLAS_POSE_OFFLOAD_TOPIC,
         "plugin.other.thing",
     ] {
         assert_eq!(atlas_topic_subscribe_capability(topic), None);

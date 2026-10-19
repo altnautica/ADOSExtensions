@@ -48,8 +48,8 @@ export interface AtlasLiveState {
    * before it, so a capture with `anchored: false` is running and producing
    * nothing. */
   anchored: boolean | null;
-  /** Which producer filled the pose being tagged ("local_vio" |
-   * "offloaded_slam" | "hybrid"), so a silent switch to offloaded SLAM is
+  /** Which producer filled the pose being tagged ("fc_ekf" |
+   * "fc_ekf" | "vio" | "lidar" | "replay"), so a switch of provider is
    * visible rather than inferred. */
   poseTier: string | null;
   /** Keyframes the capture path produced but the bus could not deliver, so the

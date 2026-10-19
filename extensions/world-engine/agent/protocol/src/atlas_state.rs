@@ -58,8 +58,8 @@ pub struct AtlasStateSlice<'a> {
     /// before it, so a capture with `anchored: false` is running and producing
     /// nothing, which is otherwise indistinguishable from a stalled camera.
     anchored: bool,
-    /// Which producer filled the pose being tagged (`local_vio` /
-    /// `offloaded_slam`), so a silent switch to offloaded SLAM is visible.
+    /// Which provider filled the pose being tagged (`fc_ekf` / `vio` /
+    /// `lidar` / `replay`), so a switch of provider is visible.
     pose_tier: &'a PoseSource,
     /// Keyframes that reached no subscriber, so the ingested count is not read
     /// as reconstruction input that exists.
@@ -123,7 +123,7 @@ mod tests {
             ingest_rate_hz: 9.5,
             capped: false,
             anchored: true,
-            pose_tier: PoseSource::LocalVio,
+            pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
         }
     }

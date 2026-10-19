@@ -66,7 +66,7 @@ fn bagged(keyframes: u64) -> AtlasEvent {
         ingest_rate_hz: 9.0,
         capped: false,
         anchored: true,
-        pose_tier: PoseSource::LocalVio,
+        pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
     };
     AtlasEvent::new(
@@ -294,7 +294,7 @@ fn keyframe_env(session_id: &str, camera_id: &str, kf_id: u64) -> KeyframeEnvelo
             cov: None,
         },
         pose_cov: vec![0.0009; POSE_COV_LEN],
-        pose_source: PoseSource::LocalVio,
+        pose_source: PoseSource::FcEkf,
         time: TimeAlignment::unmeasured(),
         anchor: Some(GeoAnchor {
             lat_deg: 12.97,
@@ -680,7 +680,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
         ingest_rate_hz: 9.0,
         capped: false,
         anchored: true,
-        pose_tier: PoseSource::LocalVio,
+        pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
     };
     ladder

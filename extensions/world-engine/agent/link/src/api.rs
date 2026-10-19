@@ -1,18 +1,20 @@
 //! The link's HTTP API on the plugin's `http.sock` (the control plane forwards
 //! `/api/plugins/<id>/x/<rest>` here as `/<rest>`, already authenticated).
 //!
-//! Drone:
-//! - `GET /atlas/readiness`: whether this drone can build a world model and
+//! Drone and Visor:
+//! - `GET /atlas/readiness`: whether this device can build a world model and
 //!   whether it is capturing now: `enabled` / `cameras_configured` /
-//!   `capture_profile` / `pose_source` / `reconstruct_steps` from the plugin
-//!   config, the live `state` / `capturing` / `session_id` / `service_running`
-//!   from the capture service's control socket, and the `compute_node_id` the
+//!   `capture_profile` / `pose_source` (the configured `atlas.pose_provider`:
+//!   `auto|fc_ekf|vio|lidar`) / `reconstruct_steps` from the plugin config,
+//!   the live `state` / `capturing` / `session_id` / `service_running` from
+//!   the capture service's control socket, and the `compute_node_id` the
 //!   forwarder is streaming to.
 //! - `PUT /atlas/config`: patch the Atlas plugin config (enable, capture
 //!   profile, reconstruction steps, camera set). Nothing is restarted: the
 //!   capture service re-reads its config every 5 s.
-//! - `POST /atlas/capture/{start,stop,pause,resume}`: drive the live session
-//!   through the control socket; the reply is the resulting capture status.
+//! - The capture session ([`crate::capture_api`]), recorded sessions and
+//!   their upload ([`crate::sessions_api`]), reconstruction on the paired node
+//!   ([`crate::jobs_api`]) and the calibration store ([`crate::calib_api`]).
 //! - `GET /compute/status`: a drone has no compute heartbeat, so always the
 //!   not-a-compute-node 404.
 //! - `POST /node-credential`: see [`crate::credentials`].
@@ -21,23 +23,26 @@
 //! - `GET /atlas-relay/status`: the relay's live counters.
 //! - `POST /node-credential`.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{get, put};
 use axum::{Json, Router};
 use rmpv::Value as Mpv;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use world_engine_protocol::atlas::{CaptureState, CaptureStatus};
+use world_engine_protocol::atlas::CaptureState;
 
-use crate::control::{ControlClient, ControlError, LiveCapture};
+use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{self, CredentialStore};
 use crate::forward::SharedForward;
 use crate::host::{config_json, Host};
 use crate::relay::{status_body, SharedSnapshot};
+use crate::upload::UploadManager;
+use crate::{calib_api, capture_api, jobs_api, sessions_api};
 
 /// The capture profiles the capture service accepts.
 const VALID_CAPTURE_PROFILES: [&str; 4] = ["orbit", "lawnmower", "freeform", "inspection"];
@@ -45,13 +50,15 @@ const VALID_CAPTURE_PROFILES: [&str; 4] = ["orbit", "lawnmower", "freeform", "in
 const VALID_CAMERA_ROLES: [&str; 7] = ["primary", "aux", "down", "left", "right", "back", "up"];
 /// The default reconstruction detail level (training steps).
 const DEFAULT_RECONSTRUCT_STEPS: u64 = 30_000;
+/// The pose providers `atlas.pose_provider` selects between.
+const POSE_PROVIDERS: [&str; 4] = ["auto", "fc_ekf", "vio", "lidar"];
 
 /// An error body: `{"detail": message}`.
 pub fn detail(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "detail": message.into() }))).into_response()
 }
 
-/// What the drone routes read.
+/// What the drone routes and the MCP tools read.
 #[derive(Clone)]
 pub struct DroneApi {
     pub host: Arc<dyn Host>,
@@ -59,30 +66,25 @@ pub struct DroneApi {
     pub forward: SharedForward,
     /// This node's profile, reported verbatim.
     pub profile: String,
+    /// The installed node credentials (the bulk lanes present them).
+    pub credentials: CredentialStore,
+    /// The session uploader; it also knows the capture root.
+    pub uploads: UploadManager,
+    /// The device calibration store root; `None` without a data directory.
+    pub calib_root: Option<PathBuf>,
 }
 
 /// The drone router.
-pub fn drone_router(api: DroneApi, credentials: CredentialStore) -> Router {
+pub fn drone_router(api: DroneApi) -> Router {
+    let credentials = api.credentials.clone();
     Router::new()
         .route("/atlas/readiness", get(get_readiness))
         .route("/atlas/config", put(put_config))
-        .route(
-            "/atlas/capture/start",
-            post(|s: State<DroneApi>| capture(s, "start")),
-        )
-        .route(
-            "/atlas/capture/stop",
-            post(|s: State<DroneApi>| capture(s, "stop")),
-        )
-        .route(
-            "/atlas/capture/pause",
-            post(|s: State<DroneApi>| capture(s, "pause")),
-        )
-        .route(
-            "/atlas/capture/resume",
-            post(|s: State<DroneApi>| capture(s, "resume")),
-        )
         .route("/compute/status", get(get_compute_status))
+        .merge(capture_api::routes())
+        .merge(sessions_api::routes())
+        .merge(jobs_api::routes())
+        .merge(calib_api::routes())
         .with_state(api)
         .merge(credentials::router(credentials))
 }
@@ -104,15 +106,6 @@ async fn get_compute_status() -> Response {
         StatusCode::NOT_FOUND,
         "no compute status (not a compute node, or the compute daemon is not running)",
     )
-}
-
-/// Map the configured pose tier to the pose source the drone will use.
-fn pose_source_for(tier: &str) -> &'static str {
-    match tier {
-        "offload" => "offloaded_slam",
-        "hybrid" => "hybrid",
-        _ => "local_vio",
-    }
 }
 
 /// The stable wire string for a capture state.
@@ -142,9 +135,10 @@ async fn get_readiness(State(api): State<DroneApi>) -> Response {
         .as_u64()
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_RECONSTRUCT_STEPS);
-    let pose_tier = config_json(host, "atlas.pose_tier")
+    let pose_provider = config_json(host, "atlas.pose_provider")
         .await
         .as_str()
+        .filter(|p| POSE_PROVIDERS.contains(p))
         .unwrap_or("auto")
         .to_string();
     let cameras_configured = config_json(host, "atlas.cameras")
@@ -157,7 +151,7 @@ async fn get_readiness(State(api): State<DroneApi>) -> Response {
         })
         .unwrap_or(0);
 
-    let live = LiveCapture::from(api.control.command("status").await);
+    let live = LiveCapture::from(api.control.status().await);
     let (service_running, capturing, state, session_id, camera_count, keyframes, ingest_rate_hz) =
         match &live {
             LiveCapture::Running(s) => (
@@ -202,7 +196,7 @@ async fn get_readiness(State(api): State<DroneApi>) -> Response {
         "capture_profile": capture_profile,
         "reconstruct_steps": reconstruct_steps,
         "cameras_configured": cameras_configured,
-        "pose_source": pose_source_for(&pose_tier),
+        "pose_source": pose_provider,
         "service_running": service_running,
         "capturing": capturing,
         "state": state,
@@ -321,258 +315,6 @@ async fn put_config(State(api): State<DroneApi>, Json(body): Json<AtlasConfigBod
     .into_response()
 }
 
-/// Forward a capture command and shape the reply: the post-command status; a
-/// 503 when nothing is listening (the command did not apply); a 504 when the
-/// command was written but not answered in time (a slow stop may still apply).
-fn capture_reply(result: Result<CaptureStatus, ControlError>) -> Response {
-    match LiveCapture::from(result) {
-        LiveCapture::Running(status) => Json(status).into_response(),
-        LiveCapture::NotRunning => detail(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "atlas capture service is not running",
-        ),
-        LiveCapture::Unknown => detail(
-            StatusCode::GATEWAY_TIMEOUT,
-            "atlas capture service did not confirm the command in time; it may still apply",
-        ),
-    }
-}
-
-async fn capture(State(api): State<DroneApi>, cmd: &'static str) -> Response {
-    capture_reply(api.control.command(cmd).await)
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::control::tests::{capturing_status, fake_control_socket};
-    use crate::forward::ForwardStatus;
-    use crate::testing::FakeHost;
-    use axum::body::Body;
-    use axum::http::Request;
-    use parking_lot::Mutex;
-    use std::path::Path;
-    use tower::ServiceExt;
-
-    fn api(host: Arc<FakeHost>, control: &Path) -> DroneApi {
-        DroneApi {
-            host,
-            control: ControlClient::new(control.to_path_buf()),
-            forward: Arc::new(Mutex::new(ForwardStatus::default())),
-            profile: "drone".into(),
-        }
-    }
-
-    fn router(api: DroneApi, dir: &Path) -> Router {
-        drone_router(
-            api,
-            CredentialStore {
-                path: Some(dir.join("creds.json")),
-            },
-        )
-    }
-
-    async fn call(
-        router: Router,
-        method: &str,
-        uri: &str,
-        body: Option<Value>,
-    ) -> (StatusCode, Value) {
-        let mut req = Request::builder().method(method).uri(uri);
-        let body = match body {
-            Some(b) => {
-                req = req.header("content-type", "application/json");
-                Body::from(b.to_string())
-            }
-            None => Body::empty(),
-        };
-        let resp = router.oneshot(req.body(body).unwrap()).await.unwrap();
-        let status = resp.status();
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
-    }
-
-    #[tokio::test]
-    async fn readiness_reports_idle_when_the_service_is_down() {
-        let dir = tempfile::tempdir().unwrap();
-        let host = FakeHost::new();
-        host.set_config("atlas.enabled", json!(true));
-        host.set_config(
-            "atlas.cameras",
-            json!([{"id": "front", "enabled": true}, {"id": "down", "enabled": false}]),
-        );
-        let (st, body) = call(
-            router(api(host, &dir.path().join("none.sock")), dir.path()),
-            "GET",
-            "/atlas/readiness",
-            None,
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(body["enabled"], json!(true));
-        assert_eq!(body["profile"], json!("drone"));
-        assert_eq!(body["cameras_configured"], json!(1));
-        assert_eq!(body["capture_profile"], json!("freeform"));
-        assert_eq!(body["reconstruct_steps"], json!(30000));
-        assert_eq!(body["pose_source"], json!("local_vio"));
-        assert_eq!(body["service_running"], json!(false));
-        assert_eq!(body["capturing"], json!(false));
-        assert_eq!(body["state"], json!("idle"));
-        assert!(body["session_id"].is_null());
-        assert!(body["compute_node_id"].is_null());
-        // No service means no live counters, not zero of them.
-        assert!(body["keyframes"].is_null());
-        assert!(body["camera_count"].is_null());
-    }
-
-    #[tokio::test]
-    async fn readiness_reads_the_live_session_and_the_forwarders_node() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("atlas-control.sock");
-        let recorded = fake_control_socket(&sock, capturing_status());
-        let host = FakeHost::new();
-        host.set_config("atlas.pose_tier", json!("offload"));
-        let api = api(host, &sock);
-        // The forwarder resolved a node.
-        api.forward.lock().note_node(Some("workstation-01".into()));
-        let (_, body) = call(router(api, dir.path()), "GET", "/atlas/readiness", None).await;
-        assert_eq!(body["service_running"], json!(true));
-        assert_eq!(body["capturing"], json!(true));
-        assert_eq!(body["state"], json!("capturing"));
-        assert_eq!(body["session_id"], json!("sess-1"));
-        assert_eq!(body["keyframes"], json!(4));
-        assert_eq!(body["pose_source"], json!("offloaded_slam"));
-        assert_eq!(body["compute_node_id"], json!("workstation-01"));
-        assert_eq!(recorded.lock()[0], r#"{"cmd":"status"}"#);
-    }
-
-    #[tokio::test]
-    async fn a_config_patch_writes_only_the_provided_keys() {
-        let dir = tempfile::tempdir().unwrap();
-        let host = FakeHost::new();
-        host.set_config("atlas.capture_profile", json!("orbit"));
-        host.set_config("atlas.reconstruct_steps", json!(7000));
-        let app = router(api(host.clone(), &dir.path().join("none.sock")), dir.path());
-        let (st, body) = call(
-            app.clone(),
-            "PUT",
-            "/atlas/config",
-            Some(json!({"enabled": true, "cameras": [
-                {"id": "front", "role": "primary", "enabled": true, "reconstruct": true}
-            ]})),
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(body["status"], json!("ok"));
-        assert_eq!(body["enabled"], json!(true));
-        assert_eq!(body["persisted"], json!(true));
-        assert_eq!(body["restart"]["status"], json!("ok"));
-        assert_eq!(host.config_value("atlas.enabled"), json!(true));
-        assert_eq!(
-            host.config_value("atlas.cameras")[0]["role"],
-            json!("primary")
-        );
-        // Untouched keys survive.
-        assert_eq!(host.config_value("atlas.capture_profile"), json!("orbit"));
-        assert_eq!(host.config_value("atlas.reconstruct_steps"), json!(7000));
-
-        // A patch without `enabled` reports the stored value.
-        let (_, body) = call(
-            app,
-            "PUT",
-            "/atlas/config",
-            Some(json!({"reconstruct_steps": 9000})),
-        )
-        .await;
-        assert_eq!(body["enabled"], json!(true));
-        assert_eq!(host.config_value("atlas.reconstruct_steps"), json!(9000));
-    }
-
-    #[tokio::test]
-    async fn invalid_config_patches_are_refused_before_any_write() {
-        let dir = tempfile::tempdir().unwrap();
-        let host = FakeHost::new();
-        let app = router(api(host.clone(), &dir.path().join("none.sock")), dir.path());
-        for bad in [
-            json!({"reconstruct_steps": 500}),
-            json!({"enabled": true, "capture_profile": "balanced"}),
-            json!({"enabled": true, "cameras": [{"id": "front", "role": "navigation"}]}),
-            json!({"cameras": [{"id": "a", "role": 7}]}),
-        ] {
-            let (st, body) = call(app.clone(), "PUT", "/atlas/config", Some(bad)).await;
-            assert_eq!(st, StatusCode::BAD_REQUEST);
-            assert!(body["detail"].is_string());
-        }
-        assert!(host.config.lock().is_empty());
-        // A camera with no role is left to the schema (a partial patch).
-        let ok = AtlasConfigBody {
-            enabled: None,
-            capture_profile: None,
-            reconstruct_steps: None,
-            cameras: Some(json!([{"id": "a", "enabled": true}])),
-        };
-        assert!(validate_config_body(&ok).is_ok());
-    }
-
-    #[tokio::test]
-    async fn capture_commands_reach_the_control_socket_or_report_why_not() {
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("atlas-control.sock");
-        let recorded = fake_control_socket(&sock, capturing_status());
-        let (st, body) = call(
-            router(api(FakeHost::new(), &sock), dir.path()),
-            "POST",
-            "/atlas/capture/stop",
-            None,
-        )
-        .await;
-        assert_eq!(st, StatusCode::OK);
-        assert_eq!(body["session_id"], json!("sess-1"));
-        assert_eq!(recorded.lock()[0], r#"{"cmd":"stop"}"#);
-
-        let (st, body) = call(
-            router(
-                api(FakeHost::new(), &dir.path().join("none.sock")),
-                dir.path(),
-            ),
-            "POST",
-            "/atlas/capture/start",
-            None,
-        )
-        .await;
-        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            body["detail"],
-            json!("atlas capture service is not running")
-        );
-        assert_eq!(
-            capture_reply(Err(ControlError::Timeout)).status(),
-            StatusCode::GATEWAY_TIMEOUT
-        );
-    }
-
-    #[tokio::test]
-    async fn a_drone_has_no_compute_status() {
-        let dir = tempfile::tempdir().unwrap();
-        let (st, body) = call(
-            router(
-                api(FakeHost::new(), &dir.path().join("none.sock")),
-                dir.path(),
-            ),
-            "GET",
-            "/compute/status",
-            None,
-        )
-        .await;
-        assert_eq!(st, StatusCode::NOT_FOUND);
-        assert_eq!(
-            body,
-            json!({"detail": "no compute status (not a compute node, or the compute daemon is not running)"})
-        );
-    }
-}
+#[path = "api_tests.rs"]
+pub(crate) mod tests;

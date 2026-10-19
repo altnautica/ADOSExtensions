@@ -133,7 +133,7 @@ const AGENT_SURFACE_CALLS = {
   "event.publish": [/events\s*\.\s*publish\s*\(/],
   "video.source.set": [/set_source\s*\(/],
   "vision.detection.publish": [/publish_box|vision\.detection/],
-  "mcp.expose": [/tools\s*\.\s*register\s*\(/],
+  "mcp.expose": [/tools\s*\.\s*(register|serve)\s*\(/],
   "mavlink.write": [/mavlink\s*\.\s*send\w*\s*\(/],
   "vision.frame.read": [/subscribe_frames/],
   "hardware.uart": [/serial\.Serial\b|serial_asyncio|serialport::|tokio_serial/],

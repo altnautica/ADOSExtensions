@@ -36,22 +36,25 @@ pub enum KeyframeTier {
     Full,
 }
 
-/// Where a keyframe's pose came from. Both produce the identical envelope, so
-/// nothing downstream forks; only the producer changed.
+/// Which pose provider produced a pose. Every provider produces the identical
+/// envelope, so nothing downstream forks; only the producer changed. The wire
+/// strings are the `/pose/<source>` channel names of a capture session.
 ///
-/// `Default` is [`PoseSource::LocalVio`]: the flight controller's fused pose is
-/// the floor every board has, so a decoder filling an absent field lands on the
-/// tier that is always present rather than claiming an offload that may not
-/// exist.
+/// `Default` is [`PoseSource::FcEkf`]: the flight controller's EKF is the
+/// floor every drone has, so a decoder filling an absent field lands on the
+/// provider that is always present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PoseSource {
-    /// Computed on-board by the drone's own VIO (a VIO-capable board).
+    /// The flight controller's EKF (attitude + local position).
     #[default]
-    LocalVio,
-    /// Computed on the compute node from a streamed image and returned on
-    /// [`super::ATLAS_POSE_OFFLOAD_TOPIC`] (an NPU-less board, first-class).
-    OffloadedSlam,
+    FcEkf,
+    /// On-device stereo-inertial visual odometry.
+    Vio,
+    /// On-device LiDAR odometry.
+    Lidar,
+    /// A recorded pose list played back (tests and simulation).
+    Replay,
 }
 
 /// Image encoding carried in a full keyframe.
@@ -317,19 +320,6 @@ impl KeyframeEnvelope {
     }
 }
 
-/// The pose the compute node returns to the drone on
-/// [`super::ATLAS_POSE_OFFLOAD_TOPIC`] after running SLAM on a streamed image.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OffloadedPose {
-    pub session_id: String,
-    pub kf_id: u64,
-    pub camera_id: String,
-    pub pose: Pose,
-    /// Always [`PoseSource::OffloadedSlam`] on this lane; carried for symmetry.
-    pub source: PoseSource,
-    pub ts_ms: i64,
-}
-
 /// Capture-session lifecycle state published on
 /// [`super::ATLAS_CAPTURE_STATE_TOPIC`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,9 +363,9 @@ pub struct CaptureStatus {
     /// the two shows the reconstructor a teleport.
     #[serde(default)]
     pub anchored: bool,
-    /// Which producer filled the pose the capture path is currently tagging
-    /// with, so a silent switch to offloaded SLAM is visible to the operator
-    /// rather than inferred.
+    /// Which provider produced the pose the capture path is currently tagging
+    /// with, so a switch of provider is visible to the operator rather than
+    /// inferred.
     #[serde(default)]
     pub pose_tier: PoseSource,
     /// Keyframes the capture path produced but the bus could not deliver (a
