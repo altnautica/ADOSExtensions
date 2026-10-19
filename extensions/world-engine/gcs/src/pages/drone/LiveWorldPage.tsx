@@ -23,6 +23,7 @@ import { translator } from "../../host/i18n";
 import { useAtlasControl } from "../../hooks/use-atlas-control";
 import { useCloudJobs } from "../../hooks/use-cloud-jobs";
 import { useDroneWorldModel } from "../../hooks/use-drone-world-model";
+import { useOutputFrame } from "../../hooks/use-output-frame";
 import { DEFAULT_RECONSTRUCTION_STEPS, qualityForSteps } from "../../lib/atlas/reconstruction-quality";
 import { useNow } from "../../lib/clock";
 import { cn } from "../../lib/utils";
@@ -76,6 +77,7 @@ export function LiveWorldPage() {
       (j) => j.status === "done" && j.outputUrl !== null,
     ) ?? null;
   const cloudArtifact = useCloudArtifact(cloudDone);
+  const localFrame = useOutputFrame(local.computeClient, local.output, local.outputs);
 
   const commandable = control.live;
   const reconstructAvailable = local.computeClient !== null && live.sessionId !== null;
@@ -104,7 +106,10 @@ export function LiveWorldPage() {
   const artifact = useLocal ? local.artifact : cloudArtifact;
   const viewerHint = useLocal ? local.viewerHint : cloudDone ? viewerHintOf(cloudDone.metadata) : null;
   const backend = useLocal ? local.backend : cloudDone ? backendOf(cloudDone.metadata) : null;
-  const hasWorld = artifact !== null;
+  // Cloud records predate the contract: no placement, the legacy frame. A
+  // local output waits for its placement sidecar before it is shown.
+  const frame = useLocal ? localFrame : "colmap";
+  const hasWorld = artifact !== null && frame !== undefined;
   // A paired but unreachable reconstructor reads distinctly from one that is
   // building; "no node" guidance shows only when nothing can reconstruct.
   const worldEmptyMessage =
@@ -199,8 +204,8 @@ export function LiveWorldPage() {
             )}
           </div>
           <div className="we:relative we:h-[420px]">
-            {hasWorld ? (
-              <WorldModelViewport viewer={viewer} artifact={artifact} backend={backend} />
+            {hasWorld && frame !== undefined ? (
+              <WorldModelViewport viewer={viewer} artifact={artifact} backend={backend} frame={frame} />
             ) : (
               <div className="we:absolute we:inset-0 we:flex we:items-center we:justify-center we:p-6">
                 <div className="we:text-center">

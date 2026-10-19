@@ -47,16 +47,16 @@ export function WorldModelViewport({
   viewer,
   artifact,
   backend = null,
-  frame = "colmap",
+  frame,
 }: {
   viewer: AtlasViewer;
   artifact: ArtifactSource | null;
   /** The reconstruction backend to name on the viewer, or null. */
   backend?: string | null;
-  /** The splat's frame. Defaults to the legacy COLMAP frame: an artifact
-   * without a contract placement is a legacy one, the same rule the cloud
-   * viewer applies to a `.ply` cloud. */
-  frame?: ArtifactFrame;
+  /** The splat's frame (see `useOutputFrame`): a placement, null for local
+   * ENU, or "colmap" for a legacy artifact without a placement. Required so
+   * no caller can silently fall into the wrong frame. */
+  frame: ArtifactFrame;
 }) {
   if (!artifact) return null;
   return (

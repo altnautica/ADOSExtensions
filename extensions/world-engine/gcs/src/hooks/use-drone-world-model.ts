@@ -20,8 +20,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { viewerForKind, type AtlasViewer } from "../components/atlas/viewer-types";
-import type { ComputeAgentClient } from "../lib/agent/compute-client";
+import { pickSplatOutput, viewerForKind, type AtlasViewer } from "../components/atlas/viewer-types";
+import type { ComputeAgentClient, ComputeOutput } from "../lib/agent/compute-client";
 import type { ArtifactSource } from "../lib/net/artifact-source";
 import { isComputeProfile } from "../lib/nodes/workstation-provisioning";
 import { useComputeJobs } from "./use-compute-jobs";
@@ -63,6 +63,10 @@ export interface DroneWorldModel {
   /** The reconstruction backend of the resolved artifact, or null when none
    * is resolved or the node names none. */
   backend: string | null;
+  /** The resolved compute output and its job's other outputs (for its
+   * placement sidecar), or null / [] when none is resolved. */
+  output: ComputeOutput | null;
+  outputs: ComputeOutput[];
   /** Completed reconstruction sessions on the node, newest-first (selector). */
   sessions: WorldModelSession[];
   /** The device id of the resolved reconstructor node, or null when none is
@@ -130,13 +134,13 @@ export function useDroneWorldModel({ sessionId, computeNodeId }: DroneWorldModel
     return match?.id ?? null;
   }, [completed, sessionId]);
 
-  // The target job's first output, tagged by job id so a session switch never
-  // surfaces the previous job's artifact.
+  // The target job's splat (else its first output), tagged by job id so a
+  // session switch never surfaces the previous job's artifact.
   const [art, setArt] = useState<{
     jobId: string;
-    source: ArtifactSource | null;
+    output: ComputeOutput;
+    outputs: ComputeOutput[];
     viewer: AtlasViewer;
-    backend: string | null;
   } | null>(null);
 
   useEffect(() => {
@@ -144,17 +148,9 @@ export function useDroneWorldModel({ sessionId, computeNodeId }: DroneWorldModel
     let cancelled = false;
     void client.getOutputs(targetJobId).then((outs) => {
       if (cancelled) return;
-      const first = (outs ?? [])[0];
-      setArt(
-        first
-          ? {
-              jobId: targetJobId,
-              source: first.source,
-              viewer: viewerForKind(first.kind),
-              backend: first.backend,
-            }
-          : null,
-      );
+      const all = outs ?? [];
+      const pick = pickSplatOutput(all) ?? all[0];
+      setArt(pick ? { jobId: targetJobId, output: pick, outputs: all, viewer: viewerForKind(pick.kind) } : null);
     });
     return () => {
       cancelled = true;
@@ -172,9 +168,11 @@ export function useDroneWorldModel({ sessionId, computeNodeId }: DroneWorldModel
   return {
     hasComputeNode: computeNodes.length > 0,
     status,
-    artifact: resolved?.source ?? null,
+    artifact: resolved?.output.source ?? null,
     viewerHint: resolved?.viewer ?? null,
-    backend: resolved?.backend ?? null,
+    backend: resolved?.output.backend ?? null,
+    output: resolved?.output ?? null,
+    outputs: resolved?.outputs ?? [],
     sessions,
     computeNodeDeviceId: targetNodeId,
     computeClient: client,

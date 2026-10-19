@@ -85,7 +85,7 @@ export function ForgeOutputs({ jobs, client }: { jobs: readonly ComputeJob[]; cl
       ? override.viewer
       : defaultViewer;
   const picked = pickArtifactForViewer(outputs, viewer);
-  const frame = useOutputFrame(client, picked);
+  const frame = useOutputFrame(client, picked, outputs);
   const showable = picked !== undefined && picked.source !== null && frame !== undefined;
 
   if (finished.length === 0) {

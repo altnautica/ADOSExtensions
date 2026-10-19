@@ -1,15 +1,15 @@
 /**
  * @module use-job-world
  * @description Assembles one reconstruction job's outputs into what the world
- * viewer shows: the splat (SPZ first, then the `.rad` LOD, then the raw PLY),
- * its placement sidecar, the collision mesh, the floorplan with its room
+ * viewer shows: the splat (the streamed `.rad` LOD first, then the SPZ, then
+ * the raw PLY), its placement sidecar (a `.rad` shares the SPZ's), the collision mesh, the floorplan with its room
  * hotspots, warehouse aisles, the LAZ point cloud, the tour bundle and the
  * dataset export.
  */
 
 import { useEffect, useState } from "react";
 
-import { pickSplatOutput } from "../components/atlas/viewer-types";
+import { pickSplatOutput, splatPlaceJson } from "../components/atlas/viewer-types";
 import type { WorldScene } from "../components/world/use-spark-scene";
 import type { ComputeAgentClient, ComputeOutput } from "../lib/agent/compute-client";
 import type { ArtifactSource } from "../lib/net/artifact-source";
@@ -39,10 +39,11 @@ export async function loadJobWorld(client: ComputeAgentClient, jobId: string): P
   const outputs = await client.getOutputs(jobId);
   if (!outputs) return null;
   const splatOut = pickSplatOutput(outputs);
+  const placeJson = splatPlaceJson(outputs, splatOut);
   const plan = byKind(outputs, "floorplan");
   const aisles = byKind(outputs, "aisles");
   const [placementRaw, planRaw, aislesRaw] = await Promise.all([
-    splatOut?.placeJson ? client.readJsonFile(jobId, splatOut.placeJson) : Promise.resolve(null),
+    placeJson ? client.readJsonFile(jobId, placeJson) : Promise.resolve(null),
     plan?.file ? client.readJsonFile(jobId, plan.file) : Promise.resolve(null),
     aisles?.file ? client.readJsonFile(jobId, aisles.file) : Promise.resolve(null),
   ]);

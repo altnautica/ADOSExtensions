@@ -1,5 +1,6 @@
 /**
- * Splat choice (SPZ before LOD before PLY), the legacy COLMAP frame rule,
+ * Splat choice (LOD before SPZ before PLY) and its placement sidecar, the
+ * output frame rule, the legacy COLMAP frame rule,
  * warehouse aisles, coverage bounds at warehouse scale, the capture poll
  * memory, walk key gating, and the measured rig-entry math.
  */
@@ -7,7 +8,9 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 
-import { pickArtifactForViewer, pickSplatOutput } from "../../../src/components/atlas/viewer-types";
+import { pickArtifactForViewer, pickSplatOutput, splatPlaceJson } from "../../../src/components/atlas/viewer-types";
+import { frameWithoutSidecar } from "../../../src/hooks/use-output-frame";
+import type { ComputeOutput } from "../../../src/lib/agent/compute-client";
 import { coverageBounds } from "../../../src/components/capture/CoverageMap";
 import { walkKeyApplies } from "../../../src/components/world/walk-controls";
 import { applyPoll, STALE_AFTER_MISSES } from "../../../src/hooks/use-capture";
@@ -24,18 +27,50 @@ import { aisleLinesViewer, coerceAisles } from "../../../src/lib/world/aisles";
 import { artifactToViewerMatrix } from "../../../src/lib/world/placement";
 
 describe("pickSplatOutput", () => {
-  it("prefers SPZ, then the RAD LOD, then the raw PLY, whatever the listing order", () => {
-    const outs = [
-      { kind: "splat", format: "ply", file: "scene.ply" },
-      { kind: "splat_lod", format: "rad", file: "scene-lod-0.rad" },
-      { kind: "splat", format: "spz", file: "scene.spz" },
-      { kind: "pointcloud", format: "laz", file: "cloud.laz" },
-    ];
-    expect(pickSplatOutput(outs)?.file).toBe("scene.spz");
-    expect(pickSplatOutput(outs.filter((o) => o.format !== "spz"))?.file).toBe("scene-lod-0.rad");
+  const outs = [
+    { kind: "splat", format: "ply", file: "scene.ply", placeJson: "scene.ply.place.json" },
+    { kind: "splat_lod", format: "rad", file: "scene-lod-0.rad", placeJson: null },
+    { kind: "splat", format: "spz", file: "scene.spz", placeJson: "scene.spz.place.json" },
+    { kind: "pointcloud", format: "laz", file: "cloud.laz", placeJson: "cloud.laz.place.json" },
+  ];
+
+  it("prefers the streamed RAD LOD, then SPZ, then the raw PLY, whatever the listing order", () => {
+    expect(pickSplatOutput(outs)?.file).toBe("scene-lod-0.rad");
+    expect(pickSplatOutput(outs.filter((o) => o.format !== "rad"))?.file).toBe("scene.spz");
     expect(pickArtifactForViewer([outs[0]!, outs[3]!], "splat")?.file).toBe("scene.ply");
     // No format field: the file extension decides.
     expect(pickSplatOutput([{ kind: "splat", file: "a.ply" }, { kind: "splat", file: "b.spz" }])?.file).toBe("b.spz");
+  });
+
+  it("gives a .rad the SPZ's placement sidecar (it has none of its own)", () => {
+    expect(splatPlaceJson(outs, outs[1])).toBe("scene.spz.place.json");
+    expect(splatPlaceJson(outs, outs[0])).toBe("scene.ply.place.json");
+    // A non-splat never borrows a splat's sidecar.
+    expect(splatPlaceJson([outs[1]!, { kind: "mesh", format: "glb", file: "m.glb", placeJson: null }], outs[1])).toBeNull();
+    expect(splatPlaceJson(outs, undefined)).toBeNull();
+  });
+});
+
+describe("frameWithoutSidecar", () => {
+  const out = (kind: string): ComputeOutput => ({
+    id: "o",
+    jobId: "j",
+    kind,
+    uri: "",
+    source: null,
+    backend: null,
+    meta: null,
+    file: null,
+    format: null,
+    sizeBytes: null,
+    placeJson: null,
+    createdMs: 0,
+  });
+
+  it("reads a named sidecar, treats a sidecar-less LOD as local ENU and anything else as legacy", () => {
+    expect(frameWithoutSidecar(out("splat_lod"), "scene.spz.place.json")).toBeUndefined();
+    expect(frameWithoutSidecar(out("splat_lod"), null)).toBeNull();
+    expect(frameWithoutSidecar(out("splat"), null)).toBe("colmap");
   });
 });
 

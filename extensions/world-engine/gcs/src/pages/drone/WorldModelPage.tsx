@@ -25,9 +25,12 @@ import { translator } from "../../host/i18n";
 import { useAtlasControl } from "../../hooks/use-atlas-control";
 import { useCloudJobs } from "../../hooks/use-cloud-jobs";
 import { useDroneWorldModel } from "../../hooks/use-drone-world-model";
+import { useOutputFrame } from "../../hooks/use-output-frame";
 import type { ArtifactSource } from "../../lib/net/artifact-source";
+import type { ArtifactFrame } from "../../lib/world/placement";
 import { useCloudArtifact } from "./use-cloud-artifact";
 import { WorldModelSetupView } from "./WorldModelSetupView";
+import { ViewerLoading } from "../../components/atlas/viewers/ViewerLoading";
 
 const t = translator("atlas");
 
@@ -48,6 +51,9 @@ export function WorldModelPage() {
   const latestDone = cloudJobs.find((j) => j.status === "done" && j.outputUrl !== null);
   const selectedJob = useLocal ? null : (cloudJobs.find((j) => j.id === cloudJobId) ?? latestDone ?? null);
   const cloudArtifact = useCloudArtifact(selectedJob);
+  const localFrame = useOutputFrame(local.computeClient, local.output, local.outputs);
+  // Cloud records predate the contract: no placement, the legacy frame.
+  const frame: ArtifactFrame | undefined = useLocal ? localFrame : "colmap";
 
   let artifact: ArtifactSource | null;
   let hint: AtlasViewer | null;
@@ -113,7 +119,11 @@ export function WorldModelPage() {
       </div>
       <div className="we:flex we:min-h-[320px] we:flex-1">
         <div className="we:relative we:flex-1">
-          <WorldModelViewport viewer={viewer} artifact={artifact} backend={backend} />
+          {frame === undefined ? (
+            <ViewerLoading label={t("worldModelHeading")} />
+          ) : (
+            <WorldModelViewport viewer={viewer} artifact={artifact} backend={backend} frame={frame} />
+          )}
         </div>
         {/* Which generation is on screen and what it actually contains: the
             viewer shows an artifact, only the descriptors say whether a

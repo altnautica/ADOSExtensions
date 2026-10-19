@@ -89,20 +89,36 @@ function splatFormat(o: { format?: string | null; file?: string | null; uri?: st
   return name.toLowerCase().split(".").pop() ?? "";
 }
 
-/** Splat format preference: compressed SPZ first (≈10× smaller than the raw
- * PLY), then the streamed `.rad` LOD, then the raw PLY. */
-const SPLAT_RANK = ["spz", "rad", "ply"];
+/** Splat format preference: the `.rad` level-of-detail file first (streamed,
+ * only the visible detail is fetched), then the compressed SPZ (≈10× smaller
+ * than the raw PLY), then the raw PLY. */
+const SPLAT_RANK = ["rad", "spz", "ply"];
+
+type SplatLike = { kind: string; format?: string | null; file?: string | null; placeJson?: string | null };
+
+const isSplat = (o: { kind: string }) => o.kind === "splat" || o.kind === "splat_lod";
 
 /** The best splat among a job's outputs (`splat` and `splat_lod` kinds). */
-export function pickSplatOutput<T extends { kind: string; format?: string | null; file?: string | null }>(
-  outputs: readonly T[],
-): T | undefined {
-  const splats = outputs.filter((o) => o.kind === "splat" || o.kind === "splat_lod");
+export function pickSplatOutput<T extends SplatLike>(outputs: readonly T[]): T | undefined {
   const rank = (o: T) => {
     const r = SPLAT_RANK.indexOf(splatFormat(o));
     return r < 0 ? SPLAT_RANK.length : r;
   };
-  return [...splats].sort((a, b) => rank(a) - rank(b))[0];
+  return outputs.filter(isSplat).sort((a, b) => rank(a) - rank(b))[0];
+}
+
+/**
+ * The placement sidecar for `picked`: its own `.place.json`, else, for a
+ * splat, the sidecar of a sibling splat of the same job (the `.rad` LOD file
+ * is built from the SPZ and shares its placement but carries no sidecar of
+ * its own), the SPZ's first. Null when the job names none.
+ */
+export function splatPlaceJson<T extends SplatLike>(outputs: readonly T[], picked: T | undefined): string | null {
+  if (!picked) return null;
+  if (picked.placeJson) return picked.placeJson;
+  if (!isSplat(picked)) return null;
+  const siblings = outputs.filter((o) => isSplat(o) && o.placeJson);
+  return (siblings.find((o) => splatFormat(o) === "spz") ?? siblings[0])?.placeJson ?? null;
 }
 
 /**

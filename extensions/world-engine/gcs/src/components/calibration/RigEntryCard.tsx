@@ -20,7 +20,7 @@ import {
   xyzRpyFromTransform,
   type Xyz,
 } from "../../lib/capture/rig-entry";
-import type { Rig } from "../../lib/contract/generated";
+import type { Rig, RigSensor } from "../../lib/contract/generated";
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/Toast";
 
@@ -51,33 +51,30 @@ function TripleInput({ label, value, onChange, unit }: { label: string; value: X
   );
 }
 
-export function RigEntryCard({
-  index,
+/** The editable values of one sensor. Mounted per sensor (keyed by its id) so
+ * picking another sensor starts from that sensor's stored values. */
+function SensorFields({
   target,
   rig,
+  sensor,
   device,
   onApplied,
 }: {
-  index: number;
   target: EntryTarget;
   rig: Rig;
+  sensor: RigSensor;
   device: CaptureClient;
   onApplied: () => void;
 }) {
   const { toast } = useToast();
-  const kind = target === "lidar_imu" ? "lidar" : "gnss";
-  const sensors = rig.sensors.filter((s) => s.kind === kind);
-  const [sensorId, setSensorId] = useState(sensors[0]?.id ?? "");
-  const sensor = sensors.find((s) => s.id === sensorId);
-  const current = sensor ? xyzRpyFromTransform(sensor.T_body_sensor) : { xyz: [0, 0, 0] as Xyz, rpy: [0, 0, 0] as Xyz };
+  const current = xyzRpyFromTransform(sensor.T_body_sensor);
   const [xyz, setXyz] = useState<Xyz>(
-    target === "gnss_lever_arm" ? ((sensor?.lever_arm_m as Xyz | undefined) ?? current.xyz) : current.xyz,
+    target === "gnss_lever_arm" ? ((sensor.lever_arm_m as Xyz | undefined) ?? current.xyz) : current.xyz,
   );
   const [rpy, setRpy] = useState<Xyz>(current.rpy);
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
-    if (!sensor) return;
     const version = manualCalibVersion(new Date());
     const next =
       target === "lidar_imu"
@@ -93,6 +90,35 @@ export function RigEntryCard({
   };
 
   return (
+    <>
+      <TripleInput label={target === "lidar_imu" ? t("translation") : t("leverArm")} value={xyz} onChange={setXyz} unit="m" />
+      {target === "lidar_imu" && <TripleInput label={t("rotation")} value={rpy} onChange={setRpy} unit="° (r, p, y)" />}
+      <Button size="sm" className="we:self-start" loading={busy} onClick={() => void save()}>
+        {t("saveToRig")}
+      </Button>
+    </>
+  );
+}
+
+export function RigEntryCard({
+  index,
+  target,
+  rig,
+  device,
+  onApplied,
+}: {
+  index: number;
+  target: EntryTarget;
+  rig: Rig;
+  device: CaptureClient;
+  onApplied: () => void;
+}) {
+  const kind = target === "lidar_imu" ? "lidar" : "gnss";
+  const sensors = rig.sensors.filter((s) => s.kind === kind);
+  const [sensorId, setSensorId] = useState(sensors[0]?.id ?? "");
+  const sensor = sensors.find((s) => s.id === sensorId) ?? sensors[0];
+
+  return (
     <li className="we:flex we:flex-col we:gap-2 we:border-t we:border-border-default we:pt-2" data-step={target}>
       <div className="we:flex we:items-center we:gap-2 we:text-xs">
         <Ruler size={12} className="we:text-text-tertiary" />
@@ -105,7 +131,7 @@ export function RigEntryCard({
       {sensors.length > 1 && (
         <select
           aria-label={t("sensor")}
-          value={sensorId}
+          value={sensor?.id ?? ""}
           onChange={(e) => setSensorId(e.target.value)}
           className="we:h-7 we:w-40 we:rounded we:border we:border-border-default we:bg-bg-primary we:px-1 we:text-xs"
         >
@@ -116,11 +142,9 @@ export function RigEntryCard({
           ))}
         </select>
       )}
-      <TripleInput label={target === "lidar_imu" ? t("translation") : t("leverArm")} value={xyz} onChange={setXyz} unit="m" />
-      {target === "lidar_imu" && <TripleInput label={t("rotation")} value={rpy} onChange={setRpy} unit="° (r, p, y)" />}
-      <Button size="sm" className="we:self-start" loading={busy} disabled={!sensor} onClick={() => void save()}>
-        {t("saveToRig")}
-      </Button>
+      {sensor && (
+        <SensorFields key={sensor.id} target={target} rig={rig} sensor={sensor} device={device} onApplied={onApplied} />
+      )}
     </li>
   );
 }
