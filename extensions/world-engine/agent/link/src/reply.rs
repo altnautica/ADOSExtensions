@@ -23,6 +23,8 @@ pub mod codes {
     pub const UNKNOWN_SESSION: &str = "E_UNKNOWN_SESSION";
     /// The session is still recording.
     pub const RECORDING: &str = "E_RECORDING";
+    /// The session was left unfinished (a crashed recorder): no manifest.
+    pub const NOT_FINISHED: &str = "E_NOT_FINISHED";
     /// The session is queued for upload or uploading.
     pub const UPLOADING: &str = "E_UPLOADING";
     /// The session has not been committed on a node.
@@ -44,6 +46,12 @@ pub mod codes {
     pub const WHEP_UNREACHABLE: &str = "E_WHEP_UNREACHABLE";
     pub const RIG_INVALID: &str = "E_RIG_INVALID";
     pub const RIG_UNREACHABLE: &str = "E_RIG_UNREACHABLE";
+    /// The plugin is not granted the host method's capability.
+    pub const CAPABILITY_DENIED: &str = "E_CAPABILITY_DENIED";
+    /// A host method failed for another reason.
+    pub const HOST: &str = "E_HOST";
+    /// A tool call did not finish inside the host's invoke window.
+    pub const TIMEOUT: &str = "E_TIMEOUT";
 }
 
 /// A refused route or tool call.

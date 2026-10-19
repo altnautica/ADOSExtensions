@@ -198,7 +198,7 @@ async fn a_dropped_chunk_resumes_from_what_the_node_holds() {
     }
     let base = serve(node.clone()).await;
     let plan = SessionPlan::read(dir.path()).unwrap();
-    let client = BulkClient::new(base, None, fast());
+    let client = BulkClient::new(base, None, fast(), None);
     let seen = Arc::new(Mutex::new(Vec::new()));
     let sink = seen.clone();
     let done = client
@@ -240,10 +240,21 @@ async fn an_already_committed_session_only_commits() {
     node.lock().unwrap().committed = true;
     let base = serve(node.clone()).await;
     let plan = SessionPlan::read(dir.path()).unwrap();
-    BulkClient::new(base, None, fast())
-        .upload_session("s-1", &plan, &|_| {})
-        .await
-        .unwrap();
+    // The URL names a host no resolver knows; the pin is the only way there.
+    let addr: std::net::SocketAddr = base.trim_start_matches("http://").parse().unwrap();
+    let pin = PinnedHost {
+        host: "node.invalid".into(),
+        addr,
+    };
+    BulkClient::new(
+        format!("http://node.invalid:{}", addr.port()),
+        None,
+        fast(),
+        Some(pin),
+    )
+    .upload_session("s-1", &plan, &|_| {})
+    .await
+    .unwrap();
     assert_eq!(node.lock().unwrap().log, ["POST manifest", "COMMIT"]);
 }
 
@@ -258,7 +269,7 @@ async fn a_commit_refusal_after_the_retry_pass_is_reported() {
         .insert("never-sent.bin".into(), vec![1]);
     let base = serve(node.clone()).await;
     let plan = SessionPlan::read(dir.path()).unwrap();
-    let err = BulkClient::new(base, None, fast())
+    let err = BulkClient::new(base, None, fast(), None)
         .upload_session("s-1", &plan, &|_| {})
         .await
         .unwrap_err();
@@ -278,10 +289,56 @@ async fn an_unreachable_node_gives_up_after_the_retry_budget() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     drop(listener);
-    let err = BulkClient::new(format!("http://{addr}"), None, fast())
+    let err = BulkClient::new(format!("http://{addr}"), None, fast(), None)
         .post_manifest("s-1", b"{}")
         .await
         .unwrap_err();
     assert!(matches!(err, BulkError::Unreachable(_)), "{err:?}");
     assert_eq!(err.code(), "E_NODE_UNREACHABLE");
+}
+
+#[tokio::test]
+async fn a_redirect_is_not_followed_with_the_credential() {
+    let hits = Arc::new(Mutex::new(0u32));
+    let counter = hits.clone();
+    let elsewhere = Router::new().fallback(move || {
+        let counter = counter.clone();
+        async move {
+            *counter.lock().unwrap() += 1;
+            StatusCode::OK
+        }
+    });
+    let other = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other_addr = other.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(other, elsewhere).await.unwrap() });
+    let target = format!("http://{other_addr}/steal");
+    let redirecting = Router::new().fallback(move || {
+        let target = target.clone();
+        async move { (StatusCode::TEMPORARY_REDIRECT, [(header::LOCATION, target)]) }
+    });
+    let node = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let node_addr = node.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(node, redirecting).await.unwrap() });
+
+    let err = BulkClient::new(
+        format!("http://{node_addr}"),
+        Some("secret".into()),
+        fast(),
+        None,
+    )
+    .post_manifest("s-1", b"{}")
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(err, BulkError::Refused { status: 307, .. }),
+        "{err:?}"
+    );
+    assert_eq!(*hits.lock().unwrap(), 0);
+
+    let err = crate::ComputeClient::new(format!("http://{node_addr}"), Some("secret".into()))
+        .job_status("j-1")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, crate::ClientError::Http(307, _)), "{err:?}");
+    assert_eq!(*hits.lock().unwrap(), 0);
 }

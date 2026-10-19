@@ -13,7 +13,16 @@ use parking_lot::Mutex;
 use rmpv::Value;
 use tokio::sync::Notify;
 
-use crate::host::{AuxCallback, Host};
+use crate::host::{AuxCallback, Host, WhepAnswer};
+
+/// A host error from a reply string: `capability_denied: <cap>` is the typed
+/// denial, anything else an RPC error.
+fn host_err(s: &str) -> ClientError {
+    match s.strip_prefix("capability_denied:") {
+        Some(cap) => ClientError::CapabilityDenied(cap.trim().to_string()),
+        None => ClientError::Rpc(s.to_string()),
+    }
+}
 
 /// Every call the link made, plus the replies it gets.
 pub struct FakeHost {
@@ -34,6 +43,15 @@ pub struct FakeHost {
     pub mdns: Mutex<HashMap<String, Vec<DiscoveredService>>>,
     /// Every service type browsed, in order.
     pub mdns_browsed: Mutex<Vec<String>>,
+    /// The `video.whep.offer` reply; every offer `(camera, sdp)` is recorded.
+    pub whep_reply: Mutex<Result<WhepAnswer, String>>,
+    pub whep_offers: Mutex<Vec<(String, String)>>,
+    /// The `video.whep.close` reply; every closed location is recorded.
+    pub whep_close_reply: Mutex<Result<(), String>>,
+    pub whep_closed: Mutex<Vec<String>>,
+    /// The `sensors.rig.write` reply; every rig sent is recorded.
+    pub rig_reply: Mutex<Result<(u16, serde_json::Value), String>>,
+    pub rigs: Mutex<Vec<serde_json::Value>>,
     changed: Notify,
 }
 
@@ -55,6 +73,12 @@ impl FakeHost {
             node_info: Mutex::default(),
             mdns: Mutex::default(),
             mdns_browsed: Mutex::default(),
+            whep_reply: Mutex::new(Err("whep_unavailable: not configured".into())),
+            whep_offers: Mutex::default(),
+            whep_close_reply: Mutex::new(Ok(())),
+            whep_closed: Mutex::default(),
+            rig_reply: Mutex::new(Err("rig_unavailable: not configured".into())),
+            rigs: Mutex::default(),
             changed: Notify::new(),
         })
     }
@@ -233,5 +257,32 @@ impl Host for FakeHost {
             .get(service_type)
             .cloned()
             .ok_or_else(|| ClientError::Rpc("not_available".into()))
+    }
+
+    async fn whep_offer(
+        &self,
+        camera_id: &str,
+        offer_sdp: &str,
+    ) -> Result<WhepAnswer, ClientError> {
+        self.whep_offers
+            .lock()
+            .push((camera_id.to_string(), offer_sdp.to_string()));
+        self.whep_reply.lock().clone().map_err(|e| host_err(&e))
+    }
+
+    async fn whep_close(&self, location: &str) -> Result<(), ClientError> {
+        self.whep_closed.lock().push(location.to_string());
+        self.whep_close_reply
+            .lock()
+            .clone()
+            .map_err(|e| host_err(&e))
+    }
+
+    async fn put_rig(
+        &self,
+        rig: &serde_json::Value,
+    ) -> Result<(u16, serde_json::Value), ClientError> {
+        self.rigs.lock().push(rig.clone());
+        self.rig_reply.lock().clone().map_err(|e| host_err(&e))
     }
 }

@@ -59,6 +59,22 @@ All notable changes to the World Engine extension.
   (`capture/basalt`, BSD-3, live socket input), KISS-ICP LiDAR odometry
   (`capture/python/kiss_icp_live`) and a replay provider. A Livox SDK2 driver
   (`capture/livox`) feeds LiDAR scans.
+- **WHEP preview and rig write through the agent.** `POST|DELETE
+  /atlas/capture/whep` and `PUT /atlas/rig` relay through the host methods
+  `video.whep.relay` and `sensors.rig.write`.
+- **Crashed sessions.** A `.recording` session the capture service does not
+  own and that is older than 120 s is listed as not finished; it can be
+  deleted with `?force=true` and is never uploaded (`E_NOT_FINISHED`).
+- **Session timebase.** A session on a non-host timebase starts only after a
+  clock sample (`E_CLOCK_NOT_READY`); a `host_monotonic` session never maps
+  its stamps. Exposure reports `applied: false` until the camera applies it and
+  uses the nearest flicker-safe value under the mode cap. A bad item is skipped
+  and counted; only a writer I/O error ends recording.
+- **LAN-only upload is pinned** to the checked address and never follows
+  redirects. MCP tools answer within 4 s. Job errors decode as objects.
+- **Release payloads**: `basalt-ados`, the Livox SDK2 library and `uv`
+  (x86_64-linux; aarch64-linux is a manual release step). The KISS-ICP
+  environment is synced on the device at the first LiDAR start.
 - **Capture quality and HUD**: blur, texture, mains flicker, coverage voxels,
   corridor degeneracy, storage and clock chips; the `capture_hud` display page;
   B1 / B2 passthrough presses start/stop and MARK.

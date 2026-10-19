@@ -1,13 +1,23 @@
 use super::*;
 
+/// Host time the tests read the chips at (every test frame is fresh).
+const NOW: u64 = 2_000_000_000;
+
 fn level(h: &[HealthView], id: &str) -> String {
     h.iter().find(|c| c.id == id).unwrap().level.clone()
+}
+
+fn recording() -> QualityMonitor {
+    QualityMonitor {
+        recording: true,
+        ..QualityMonitor::new()
+    }
 }
 
 #[test]
 fn chips_come_in_display_order_with_the_six_ids() {
     let mut m = QualityMonitor::new();
-    let ids: Vec<String> = m.health().into_iter().map(|c| c.id).collect();
+    let ids: Vec<String> = m.health(NOW).into_iter().map(|c| c.id).collect();
     assert_eq!(
         ids,
         ["blur", "texture", "flicker", "corridor", "storage", "clock"]
@@ -16,7 +26,7 @@ fn chips_come_in_display_order_with_the_six_ids() {
 
 #[test]
 fn blur_only_raises_after_it_holds_for_a_second() {
-    let mut m = QualityMonitor::new();
+    let mut m = recording();
     let blurred = FrameQuality {
         blur: 30.0,
         corners: 200,
@@ -24,9 +34,9 @@ fn blur_only_raises_after_it_holds_for_a_second() {
     };
     m.on_frame("cam_fl", 0, blurred);
     m.on_frame("cam_fl", 500_000_000, blurred);
-    assert_eq!(level(&m.health(), "blur"), "ok");
+    assert_eq!(level(&m.health(NOW), "blur"), "ok");
     m.on_frame("cam_fl", 1_000_000_000, blurred);
-    assert_eq!(level(&m.health(), "blur"), "warn");
+    assert_eq!(level(&m.health(NOW), "blur"), "warn");
     // A sharp frame clears it at once; the session flag stays raised.
     m.on_frame(
         "cam_fl",
@@ -37,7 +47,7 @@ fn blur_only_raises_after_it_holds_for_a_second() {
             mean: 100.0,
         },
     );
-    assert_eq!(level(&m.health(), "blur"), "ok");
+    assert_eq!(level(&m.health(NOW), "blur"), "ok");
     assert!(m.raised.blur);
 }
 
@@ -65,47 +75,47 @@ fn texture_reports_the_worst_camera() {
             },
         );
     }
-    let h = m.health();
+    let h = m.health(NOW);
     assert_eq!(level(&h, "texture"), "bad");
     assert_eq!(h[1].value, Some(10.0));
 }
 
 #[test]
 fn corridor_follows_the_degeneracy_ratio() {
-    let mut m = QualityMonitor::new();
+    let mut m = recording();
     m.on_pose_quality(Some(0.5), Some(140));
-    assert_eq!(level(&m.health(), "corridor"), "ok");
+    assert_eq!(level(&m.health(NOW), "corridor"), "ok");
     m.on_pose_quality(Some(0.1), None);
-    assert_eq!(level(&m.health(), "corridor"), "warn");
+    assert_eq!(level(&m.health(NOW), "corridor"), "warn");
     m.on_pose_quality(Some(0.02), None);
-    assert_eq!(level(&m.health(), "corridor"), "bad");
+    assert_eq!(level(&m.health(NOW), "corridor"), "bad");
     assert!(m.raised.corridor);
 }
 
 #[test]
 fn clock_and_storage_chips() {
     let mut m = QualityMonitor::new();
-    assert_eq!(level(&m.health(), "clock"), "bad", "no clock service");
+    assert_eq!(level(&m.health(NOW), "clock"), "bad", "no clock service");
     m.clock = ClockReading {
         connected: true,
         locked: true,
         sigma_ns: 420_000,
     };
-    let h = m.health();
+    let h = m.health(NOW);
     assert_eq!(level(&h, "clock"), "ok");
     assert_eq!(h[5].value, Some(0.42));
     m.clock.sigma_ns = 5_000_000;
-    assert_eq!(level(&m.health(), "clock"), "warn");
+    assert_eq!(level(&m.health(NOW), "clock"), "warn");
     m.storage = StorageReading {
         free_pct: Some(3.0),
         level: Level::Bad,
     };
-    assert_eq!(level(&m.health(), "storage"), "bad");
+    assert_eq!(level(&m.health(NOW), "storage"), "bad");
 }
 
 #[test]
 fn flicker_chip_from_the_frame_means() {
-    let mut m = QualityMonitor::new();
+    let mut m = recording();
     for i in 0..60u64 {
         let t = i as f64 / 30.0;
         let mean = 100.0 * (1.0 + 0.2 * (std::f64::consts::TAU * 10.0 * t).sin());
@@ -119,6 +129,59 @@ fn flicker_chip_from_the_frame_means() {
             },
         );
     }
-    assert_eq!(level(&m.health(), "flicker"), "bad");
+    assert_eq!(level(&m.health(NOW), "flicker"), "bad");
     assert!(m.raised.flicker);
+}
+
+#[test]
+fn issues_while_not_recording_raise_no_session_flag() {
+    let mut m = QualityMonitor::new();
+    let blurred = FrameQuality {
+        blur: 5.0,
+        corners: 5,
+        mean: 100.0,
+    };
+    for k in 0..15u64 {
+        m.on_frame("cam_fl", k * 100_000_000, blurred);
+    }
+    m.on_pose_quality(Some(0.01), None);
+    let h = m.health(1_400_000_000);
+    assert_eq!(level(&h, "blur"), "bad", "the chip still shows it");
+    assert_eq!(m.raised, SessionFlags::default());
+    m.recording = true;
+    m.on_frame("cam_fl", 1_500_000_000, blurred);
+    assert!(m.raised.blur && m.raised.texture);
+}
+
+#[test]
+fn a_silent_camera_leaves_the_chips() {
+    let mut m = QualityMonitor::new();
+    for k in 0..12u64 {
+        let t = k * 100_000_000;
+        m.on_frame(
+            "cam_fl",
+            t,
+            FrameQuality {
+                blur: 300.0,
+                corners: 5,
+                mean: 100.0,
+            },
+        );
+    }
+    for k in 0..50u64 {
+        m.on_frame(
+            "cam_fr",
+            k * 100_000_000,
+            FrameQuality {
+                blur: 300.0,
+                corners: 300,
+                mean: 100.0,
+            },
+        );
+    }
+    // cam_fl's last frame is at 1.1 s.
+    assert_eq!(level(&m.health(3_000_000_000), "texture"), "bad");
+    let h = m.health(3_200_000_000);
+    assert_eq!(level(&h, "texture"), "ok");
+    assert_eq!(h[1].value, Some(300.0));
 }

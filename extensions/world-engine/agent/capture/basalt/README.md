@@ -58,10 +58,23 @@ docker run --rm --platform linux/arm64 -v "$PWD":/src -w /src/extensions/world-e
   ubuntu:24.04 sh -c 'apt-get update && apt-get install -y build-essential cmake git curl zip unzip tar pkg-config ninja-build && ./build.sh --arch aarch64 --jobs 2'
 ```
 
-## Runtime path
+## Release payloads
 
 The extension payload installs the binary at `bin/<arch>-linux/basalt-ados`
-(`x86_64-linux`, `aarch64-linux`), beside `world-engine-capture`.
+(`x86_64-linux`, `aarch64-linux`), beside `world-engine-capture`, with its
+licence texts at `bin/<arch>-linux/LICENSE-basalt-ados.txt` (this
+directory's `LICENSE`, `upstream/LICENSE` and every vcpkg port's
+`copyright` file). The asset rows are in `scripts/world-engine-payloads.tsv`.
+
+- `x86_64-linux` is built by the release workflow's x86_64 leg with
+  `./build.sh --arch x86_64`.
+- `aarch64-linux` is a release step run before tagging until an aarch64
+  runner builds it: run `./build.sh --arch aarch64` on an aarch64 Linux host
+  (or the container above), upload `build/out/bin/aarch64-linux/basalt-ados`
+  as the release asset `world-engine-basalt-ados-aarch64-linux` and the
+  licence file as `world-engine-basalt-ados-LICENSES-aarch64-linux`, and add
+  their two rows to `scripts/world-engine-payloads.tsv`. Without them an
+  aarch64 node has no `basalt-ados` and so no `vio` pose provider.
 
 ## Command line
 

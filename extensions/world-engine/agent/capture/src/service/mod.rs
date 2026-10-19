@@ -157,6 +157,17 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     if let Some(fc) = &fc {
         fc.set_covariance(cfg.pose_prior.fc_covariance());
     }
+    // No session is open yet: a capture-active marker left by a crashed run
+    // would keep the FC at capture rates.
+    if let Some(m) = &paths.active_marker {
+        match std::fs::remove_file(m) {
+            Ok(()) => tracing::warn!(path = %m.display(), "stale_capture_active_marker_removed"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::warn!(path = %m.display(), error = %e, "capture_active_marker_remove_failed")
+            }
+        }
+    }
     let mut engine = Engine {
         keyframes: CaptureSession::with_pose_interval(
             cfg.capture.clone(),

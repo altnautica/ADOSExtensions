@@ -13,16 +13,20 @@
 //! * inv(T_body_lidar)` ([`supervise::world_from_body`]). Each restart starts
 //! a new world frame, so the [`PoseTrack`] is reset on every restart.
 //!
-//! Health: `Lost` while the child is down; `Degraded` for the first
+//! Health: `Lost` while the child is down (or its environment is being
+//! provisioned, see [`setup`]); `Degraded` for the first
 //! [`supervise::INIT_POSES`] poses of a run and whenever
 //! `quality().degeneracy_ratio` (`eig_min / eig_max`) is below
 //! [`supervise::DEGENERATE_RATIO`]; `Good` otherwise.
 
+pub mod setup;
 pub mod supervise;
 pub mod wire;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_setup;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -44,11 +48,15 @@ pub const SCAN_QUEUE_DEPTH: usize = 2;
 /// Config and socket file names inside `work_dir`.
 pub const CONFIG_FILE: &str = "kiss_icp_live.json";
 pub const SOCKET_FILE: &str = "kiss_icp_live.sock";
+/// The provisioned environment's directory inside `work_dir`.
+pub const ENV_DIR: &str = "env";
 
-/// How the `kiss_icp_live` project is started.
+/// How the `kiss_icp_live` project's interpreter is found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launcher {
-    /// `<uv> run --project <project_dir> --frozen --no-dev python -m kiss_icp_live`.
+    /// The `uv` binary: before the first run (and whenever the shipped lock
+    /// changes) `uv sync --frozen --no-dev` builds the environment in
+    /// `<work_dir>/env` ([`setup`]); the child is that environment's python.
     Uv(PathBuf),
     /// `<python> -m kiss_icp_live` with an interpreter that already has the
     /// project's dependencies.
@@ -58,12 +66,14 @@ pub enum Launcher {
 #[derive(Debug, Clone)]
 pub struct LidarPoseConfig {
     pub launcher: Launcher,
-    /// The `kiss_icp_live` uv project directory (holds `pyproject.toml` and
-    /// the `kiss_icp_live` package); the child runs with it as its cwd.
+    /// The `kiss_icp_live` uv project directory (holds `pyproject.toml`,
+    /// `uv.lock` and the `kiss_icp_live` package); the child runs with it as
+    /// its cwd. Only read.
     pub project_dir: PathBuf,
     pub rig: Rig,
     pub lidar_id: String,
-    /// Where the config and socket are written.
+    /// Where the config, socket and provisioned environment live; must be
+    /// writable and persistent (the plugin data dir).
     pub work_dir: PathBuf,
     /// KISS-ICP config ([`default_kiss_config`] when unsure).
     pub kiss: Value,
@@ -85,6 +95,7 @@ pub struct LidarCounters {
     pub scans_dropped: AtomicU64,
     pub scans_rejected: AtomicU64,
     pub restarts: AtomicU64,
+    pub setup_failures: AtomicU64,
 }
 
 /// Input drop and restart counts since spawn.
@@ -96,6 +107,9 @@ pub struct LidarStats {
     pub scans_rejected: u64,
     /// Child exits (each followed by a restart).
     pub restarts: u64,
+    /// Failed environment provisioning attempts (each retried after the
+    /// restart backoff).
+    pub setup_failures: u64,
 }
 
 /// KISS-ICP settings for a Mid-360-class sensor: 40 m range, 0.5 m minimum
@@ -137,24 +151,9 @@ impl LidarPose {
         let config = cfg.work_dir.join(CONFIG_FILE);
         let body = serde_json::to_vec_pretty(&cfg.kiss).expect("JSON values serialise");
         std::fs::write(&config, body).map_err(io_err(&config))?;
-        let (program, mut args): (PathBuf, Vec<String>) = match &cfg.launcher {
-            Launcher::Uv(uv) => (
-                uv.clone(),
-                vec![
-                    "run".into(),
-                    "--project".into(),
-                    cfg.project_dir.to_string_lossy().into_owned(),
-                    "--frozen".into(),
-                    "--no-dev".into(),
-                    "python".into(),
-                ],
-            ),
-            Launcher::Python(py) => (py.clone(), Vec::new()),
-        };
-        args.extend(["-m".into(), "kiss_icp_live".into()]);
         let spec = ChildSpec {
-            program,
-            args,
+            launcher: cfg.launcher.clone(),
+            env_dir: cfg.work_dir.join(ENV_DIR),
             cwd: cfg.project_dir.clone(),
             socket: cfg.work_dir.join(SOCKET_FILE),
             config,
@@ -179,6 +178,7 @@ impl LidarPose {
             scans_dropped: c.scans_dropped.load(Ordering::Relaxed),
             scans_rejected: c.scans_rejected.load(Ordering::Relaxed),
             restarts: c.restarts.load(Ordering::Relaxed),
+            setup_failures: c.setup_failures.load(Ordering::Relaxed),
         }
     }
 }

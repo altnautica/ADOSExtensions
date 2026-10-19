@@ -59,9 +59,13 @@ impl Engine {
     }
 
     fn map_imu(&self, batch: &mut ImuBatch) {
+        let tb = self.session.as_ref().map(|s| s.timebase);
         let sensors = self.sensors.lock();
         for s in &mut batch.samples {
-            s.t_ns = sensors.clock.to_session(s.t_ns);
+            s.t_ns = match tb {
+                Some(tb) => crate::clock::session_time(tb, &sensors.clock, s.t_ns),
+                None => sensors.clock.to_session(s.t_ns),
+            };
         }
     }
 
@@ -126,6 +130,7 @@ impl Engine {
         let mut out = Vec::new();
         self.pose.drain_new(&mut out);
         let q = self.pose.quality();
+        self.quality.recording = self.is_recording();
         self.quality
             .on_pose_quality(q.degeneracy_ratio, q.tracked_features);
         if out.is_empty() || self.recorder().is_none() {

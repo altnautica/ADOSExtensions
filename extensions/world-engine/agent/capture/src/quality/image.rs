@@ -109,7 +109,7 @@ const CIRCLE: [(i32, i32); 16] = [
     (-3, 1),
     (-3, 0),
     (-3, -1),
-    (-2, -3),
+    (-2, -2),
     (-1, -3),
 ];
 
@@ -220,12 +220,48 @@ mod tests {
 
     #[test]
     fn texture_counts_corners_and_a_plain_wall_has_none() {
-        let (w, h) = (640, 480);
-        let busy = quarter_luma(FrameFormat::Gray8, w, h, &checker(w, h, 32)).unwrap();
+        let (w, h): (u32, u32) = (640, 480);
+        // Isolated bright squares: every square corner is a FAST corner.
+        let blocks: Vec<u8> = (0..h)
+            .flat_map(|y| {
+                (0..w).map(move |x| {
+                    if (x / 32).is_multiple_of(2) && (y / 32).is_multiple_of(2) {
+                        230
+                    } else {
+                        20
+                    }
+                })
+            })
+            .collect();
+        let busy = quarter_luma(FrameFormat::Gray8, w, h, &blocks).unwrap();
         let wall = quarter_luma(FrameFormat::Gray8, w, h, &vec![200u8; (w * h) as usize]).unwrap();
         let n = fast_corners(&busy, FAST_THRESHOLD);
         assert!(n >= 60, "{n}");
         assert_eq!(fast_corners(&wall, FAST_THRESHOLD), 0);
+        // A checkerboard's X-junctions split the ring into short arcs; the
+        // true radius-3 circle finds none there.
+        let x = quarter_luma(FrameFormat::Gray8, w, h, &checker(w, h, 32)).unwrap();
+        assert!(fast_corners(&x, FAST_THRESHOLD) < n / 4);
+    }
+
+    #[test]
+    fn the_fast_circle_is_the_symmetric_radius_three_ring() {
+        let mut seen = std::collections::BTreeSet::new();
+        for &(dx, dy) in &CIRCLE {
+            let r2 = dx * dx + dy * dy;
+            assert!((8..=10).contains(&r2), "({dx},{dy}) is off the ring");
+            assert!(CIRCLE.contains(&(-dx, -dy)), "({dx},{dy}) has no mirror");
+            assert!(CIRCLE.contains(&(dx, -dy)), "({dx},{dy}) has no flip");
+            assert!(seen.insert((dx, dy)), "({dx},{dy}) repeats");
+        }
+        // Consecutive points are 8-neighbours, so a run is a contiguous arc.
+        for i in 0..16 {
+            let (a, b) = (CIRCLE[i], CIRCLE[(i + 1) % 16]);
+            assert!(
+                (a.0 - b.0).abs() <= 1 && (a.1 - b.1).abs() <= 1,
+                "{a:?} {b:?}"
+            );
+        }
     }
 
     #[test]

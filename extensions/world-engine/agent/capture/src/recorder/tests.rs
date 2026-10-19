@@ -235,3 +235,81 @@ fn a_dropped_recorder_leaves_recording_but_clears_the_active_marker() {
     assert!(sdir.join(".recording").exists());
     assert!(!marker.exists());
 }
+
+fn open(dir: &Path) -> Recorder {
+    let rig = rig();
+    Recorder::start(RecorderConfig {
+        root: dir.to_path_buf(),
+        manifest: manifest(&rig),
+        rig,
+        limits: SegmentLimits::default(),
+        encoding: ImageEncoding::Raw,
+        active_marker: None,
+    })
+    .unwrap()
+}
+
+fn image(t: u64, len: usize) -> Item {
+    Item::Image {
+        camera: "cam_fl".into(),
+        t_ns: t,
+        format: FrameFormat::Gray8,
+        width: 64,
+        height: 48,
+        pixels: vec![7; len],
+    }
+}
+
+fn wait_for(rec: &Recorder, done: impl Fn(&RecorderStats) -> bool) -> RecorderStats {
+    for _ in 0..200 {
+        let s = rec.stats();
+        if done(&s) {
+            return s;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    rec.stats()
+}
+
+#[test]
+fn a_bad_item_is_counted_and_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = open(dir.path());
+    assert!(rec.send(image(1_000_000_000, 10)), "short buffer");
+    assert!(rec.send(Item::Keyframe {
+        file: "../escape.jpg".into(),
+        jpeg: vec![0xff, 0xd8],
+    }));
+    assert!(rec.send(image(1_100_000_000, 64 * 48)));
+    let s = wait_for(&rec, |s| s.images.get("cam_fl") == Some(&1));
+    assert_eq!(s.bad_items.get("image"), Some(&1));
+    assert_eq!(s.bad_items.get("keyframe"), Some(&1));
+    assert_eq!(s.images.get("cam_fl"), Some(&1));
+    assert!(s.error.is_none(), "{:?}", s.error);
+    let rig = rig();
+    let op = Operator {
+        site: None,
+        floor: None,
+        rooms: vec![],
+    };
+    rec.finish(op, manifest(&rig).health).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_writer_io_error_ends_recording() {
+    let dir = tempfile::tempdir().unwrap();
+    let rec = open(dir.path());
+    // Make the segment directory unusable before the first segment opens.
+    let seg = rec.dir().join("segments");
+    let _ = fs::remove_dir_all(&seg);
+    fs::write(&seg, b"not a directory").unwrap();
+    assert!(rec.send(image(1_000_000_000, 64 * 48)));
+    let s = wait_for(&rec, |s| s.error.is_some());
+    assert!(s.error.is_some());
+    assert!(s.bad_items.is_empty());
+    assert!(rec.send(image(1_100_000_000, 64 * 48)));
+    let s = wait_for(&rec, |s| s.lost_after_error == 1);
+    assert_eq!(s.lost_after_error, 1);
+    assert_eq!(s.images.get("cam_fl"), None);
+}

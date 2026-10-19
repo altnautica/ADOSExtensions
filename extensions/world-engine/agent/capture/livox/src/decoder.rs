@@ -47,7 +47,10 @@ pub struct DecoderStats {
     pub crc_errors: u64,
     /// Packets whose `crc32` field was zero (accepted unchecked).
     pub crc_absent: u64,
+    /// Restarts of the point-stream clock filter.
     pub clock_resets: u64,
+    /// Restarts of the IMU-stream clock filter.
+    pub imu_clock_resets: u64,
     pub scans: u64,
     pub imu_samples: u64,
 }
@@ -60,10 +63,16 @@ pub enum DecodeError {
     Crc { field: u32, computed: u32 },
 }
 
-/// Decoder for one device (one clock).
+/// Decoder for one device.
+///
+/// Point and IMU packets arrive on separate UDP ports with their own
+/// transport delays, so each stream has its own clock filter: an IMU packet
+/// stamped earlier than the last point (or later than the next one) never
+/// touches the point filter or the open scan.
 #[derive(Debug)]
 pub struct Decoder {
-    clock: ClockMapper,
+    points_clock: ClockMapper,
+    imu_clock: ClockMapper,
     scans: ScanAssembler,
     stats: DecoderStats,
 }
@@ -71,7 +80,8 @@ pub struct Decoder {
 impl Decoder {
     pub fn new(cfg: DecoderConfig) -> Self {
         Self {
-            clock: ClockMapper::new(cfg.clock),
+            points_clock: ClockMapper::new(cfg.clock),
+            imu_clock: ClockMapper::new(cfg.clock),
             scans: ScanAssembler::new(cfg.period_ns),
             stats: DecoderStats::default(),
         }
@@ -81,8 +91,14 @@ impl Decoder {
         self.stats
     }
 
-    pub fn clock(&self) -> &ClockMapper {
-        &self.clock
+    /// The point stream's device-to-host clock.
+    pub fn points_clock(&self) -> &ClockMapper {
+        &self.points_clock
+    }
+
+    /// The IMU stream's device-to-host clock.
+    pub fn imu_clock(&self) -> &ClockMapper {
+        &self.imu_clock
     }
 
     /// Decode one packet received at host monotonic `host_rx_ns`, appending
@@ -111,9 +127,13 @@ impl Decoder {
         self.stats.packets += 1;
 
         let h = pkt.header;
-        let before = self.clock.offset_ns();
+        if h.data_type == DataType::Imu {
+            self.push_imu(&pkt, host_rx_ns, out);
+            return Ok(());
+        }
+        let before = self.points_clock.offset_ns();
         if self
-            .clock
+            .points_clock
             .observe(h.time_type, h.last_sample_ns(), host_rx_ns)
         {
             self.stats.clock_resets += 1;
@@ -124,31 +144,44 @@ impl Decoder {
                 None => self.scans.clear(),
             }
         }
-        let offset = self.clock.offset_ns().expect("observe leaves an estimate");
-
-        if h.data_type == DataType::Imu {
-            for s in pkt.imu() {
-                let dev = h.timestamp_ns.saturating_add(s.offset_ns);
-                self.stats.imu_samples += 1;
-                out.push(Event::Imu(ImuSample {
-                    t_ns: (dev as i128 + offset).clamp(0, u64::MAX as i128) as u64,
-                    device_t_ns: dev,
-                    time_type: h.time_type,
-                    gyro: s.gyro,
-                    accel: s.accel,
-                }));
-            }
-            return Ok(());
-        }
+        let offset = self
+            .points_clock
+            .offset_ns()
+            .expect("observe leaves an estimate");
         let mut scans = Vec::new();
         self.scans.push(&pkt, offset, &mut scans);
         self.emit(scans, out);
         Ok(())
     }
 
+    fn push_imu(&mut self, pkt: &Packet<'_>, host_rx_ns: u64, out: &mut Vec<Event>) {
+        let h = pkt.header;
+        if self
+            .imu_clock
+            .observe(h.time_type, h.last_sample_ns(), host_rx_ns)
+        {
+            self.stats.imu_clock_resets += 1;
+        }
+        let offset = self
+            .imu_clock
+            .offset_ns()
+            .expect("observe leaves an estimate");
+        for s in pkt.imu() {
+            let dev = h.timestamp_ns.saturating_add(s.offset_ns);
+            self.stats.imu_samples += 1;
+            out.push(Event::Imu(ImuSample {
+                t_ns: (dev as i128 + offset).clamp(0, u64::MAX as i128) as u64,
+                device_t_ns: dev,
+                time_type: h.time_type,
+                gyro: s.gyro,
+                accel: s.accel,
+            }));
+        }
+    }
+
     /// Close the open scan with the current clock estimate (stream end).
     pub fn flush(&mut self, out: &mut Vec<Event>) {
-        if let Some(o) = self.clock.offset_ns() {
+        if let Some(o) = self.points_clock.offset_ns() {
             self.flush_into(o, out);
         }
     }

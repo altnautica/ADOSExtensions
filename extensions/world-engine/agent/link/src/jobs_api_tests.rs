@@ -40,7 +40,19 @@ async fn serve_jobs(submitted: Submitted) -> String {
         .route(
             "/api/compute/jobs/:id",
             get(|UrlPath(id): UrlPath<String>| async move {
-                Json(json!({"id": id, "kind": "reconstruct", "state": "running", "stage": "train", "stage_progress": 0.42}))
+                let (state, stage, error) = match id.as_str() {
+                    "j-1" => ("completed", "done", Value::Null),
+                    "j-3" => (
+                        "failed",
+                        "failed",
+                        json!({"code": "E_TOOL_MISSING", "message": "colmap is not installed", "tool": "colmap"}),
+                    ),
+                    _ => ("running", "train", Value::Null),
+                };
+                Json(json!({"id": id, "kind": "reconstruct", "state": state, "progress": 0.5,
+                    "params": {"preset": "tour"}, "created_ms": 1, "updated_ms": 2,
+                    "stage": stage, "stage_progress": 0.42, "stages": [], "gpu": null,
+                    "eta_s": null, "tools": {"colmap": "4.2.1"}, "error": error}))
             }),
         )
         .route(
@@ -117,7 +129,8 @@ async fn a_reconstruct_is_submitted_to_the_paired_node() {
     assert_eq!(body["error"], "E_BAD_REQUEST");
 
     let status = api.job_status("j-1").await.unwrap();
-    assert_eq!(status["stage"], "train");
+    assert_eq!(status["stage"], "done");
+    assert_eq!(status["tools"]["colmap"], "4.2.1");
     assert_eq!(status["node"], json!(addr));
     let tour = api.tour_bundle("j-1").await.unwrap();
     assert_eq!(
@@ -125,6 +138,16 @@ async fn a_reconstruct_is_submitted_to_the_paired_node() {
         "http://192.168.1.50:8092/artifacts/j-1/tour.zip"
     );
     assert_eq!(tour["meta"]["rooms"], 3);
+
+    // Not finished, or failed with a structured error.
+    let failed = api.job_status("j-3").await.unwrap();
+    assert_eq!(failed["error"]["code"], "E_TOOL_MISSING");
+    assert_eq!(failed["error"]["tool"], "colmap");
+    assert_eq!(api.tour_bundle("j-2").await.unwrap_err().code, "E_NO_TOUR");
+    assert_eq!(
+        api.tour_bundle("j-3").await.unwrap_err().code,
+        "E_TOOL_MISSING"
+    );
 }
 
 #[tokio::test]
@@ -132,7 +155,7 @@ async fn without_a_node_the_submit_reports_it() {
     let dir = tempfile::tempdir().unwrap();
     let api = test_api(FakeHost::new(), &dir.path().join("none.sock"), dir.path());
     let err = api
-        .reconstruct("v-20261019T101500Z-0001", "preview")
+        .reconstruct("v-20261019T101500Z-0001", "preview", Some("rc-1".into()))
         .await
         .unwrap_err();
     assert_eq!(err.code, "E_NO_NODE");

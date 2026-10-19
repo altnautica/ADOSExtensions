@@ -39,6 +39,7 @@ mod bulk;
 mod bulk_plan;
 mod client;
 mod error;
+mod job_status;
 mod ladder;
 mod lan_http;
 mod loopback;
@@ -58,8 +59,9 @@ pub use bulk_plan::{
     BulkConfig, BulkError, Committed, PlanFile, SessionPlan, CHECKSUMS_FILE, MANIFEST_FILE,
     MAX_CHUNK_BYTES,
 };
-pub use client::{ClientError, ComputeClient};
+pub use client::{ClientError, ComputeClient, PinnedHost};
 pub use error::TransportError;
+pub use job_status::{JobError, JobGpu, JobStage, JobStatus};
 pub use ladder::BearerLadder;
 pub use lan_http::{atlas_event_router, LanHttpBearer};
 pub use loopback::LoopbackBearer;

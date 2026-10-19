@@ -13,6 +13,16 @@
 # Building aarch64 on an x86_64 host cross-compiles with
 # aarch64-linux-gnu-gcc/g++ (Debian/Ubuntu: g++-aarch64-linux-gnu); CC/CXX in
 # the environment override the compilers.
+#
+# Release: the x86_64-linux leg of the release workflow runs
+# `build-sdk2.sh --arch x86_64` and stages the two files as the assets named
+# in scripts/world-engine-payloads.tsv. aarch64-linux is a release step run
+# before tagging until a release leg builds it: run `build-sdk2.sh --arch
+# aarch64` (natively or with the cross compilers above), upload the library
+# as `world-engine-livox-sdk2-aarch64-linux.so` and the licence as
+# `world-engine-livox-sdk2-LICENSE-aarch64-linux`, and add their rows
+# (paths lib/aarch64-linux/..., arch aarch64-linux, profile visor) to the
+# payload table.
 set -euo pipefail
 
 TAG="v1.2.5"
@@ -31,7 +41,7 @@ while [ $# -gt 0 ]; do
     --out) shift; OUT="${1:?--out needs a directory}" ;;
     --src) shift; SRC="${1:?--src needs a directory}" ;;
     --jobs|-j) shift; JOBS="${1:?--jobs needs a number}" ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift

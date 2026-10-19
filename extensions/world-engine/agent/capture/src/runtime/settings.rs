@@ -61,7 +61,8 @@ impl Default for VioSettings {
 pub struct LidarSettings {
     /// The rig sensor id of the LiDAR.
     pub lidar_id: String,
-    /// The `uv` binary that runs the pinned odometry project.
+    /// The `uv` binary that provisions the pinned odometry project (relative
+    /// to the install directory; the release ships it as a payload).
     pub uv: String,
     /// The odometry project directory (relative to the install directory).
     pub project_dir: String,
@@ -77,7 +78,7 @@ impl Default for LidarSettings {
     fn default() -> Self {
         Self {
             lidar_id: "lidar0".into(),
-            uv: "uv".into(),
+            uv: format!("bin/{}-linux/uv", std::env::consts::ARCH),
             project_dir: "agent/capture/python/kiss_icp_live".into(),
             sdk_library: format!(
                 "lib/{}-linux/liblivox_lidar_sdk_shared.so",

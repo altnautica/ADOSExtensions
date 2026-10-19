@@ -182,6 +182,7 @@ mod tests {
                 exposure_us: Some(2000),
                 gain: Some(2.0),
                 mode: None,
+                applied: false,
             },
             storage: StorageView {
                 free_bytes: Some(812 << 30),

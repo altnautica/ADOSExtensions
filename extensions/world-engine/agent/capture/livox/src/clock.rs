@@ -10,8 +10,13 @@
 //! packet). A sliding window rather than an all-time minimum lets the
 //! estimate follow the drift between the two oscillators. The window resets
 //! when the device clock changes source (`time_type`) or jumps: a step of the
-//! device clock that the host clock did not take by more than
-//! [`ClockConfig::max_step_ns`].
+//! device clock, forwards or backwards, that the host clock did not take by
+//! more than [`ClockConfig::max_step_ns`]. A packet whose device time is a
+//! little older than the previous one (a reordered or late datagram) is an
+//! ordinary observation, not a jump.
+//!
+//! One mapper serves one packet stream: the point and IMU streams of a device
+//! travel on different UDP ports with different delays, so each gets its own.
 
 use std::collections::VecDeque;
 
@@ -70,7 +75,7 @@ impl ClockMapper {
         if let Some((h0, d0)) = self.last {
             let dh = host_rx_ns as i128 - h0 as i128;
             let dd = device_ns as i128 - d0 as i128;
-            if dd < 0 || (dd - dh).unsigned_abs() > u128::from(self.cfg.max_step_ns) {
+            if (dd - dh).unsigned_abs() > u128::from(self.cfg.max_step_ns) {
                 reset = true;
             }
         }
@@ -153,11 +158,22 @@ mod tests {
             Some(1_020 * MS as i128 - epoch as i128),
             "old offsets must not survive a source change"
         );
-        // Device clock steps backwards.
-        assert!(c.observe(TimeType::Ptp, epoch - MS, 1_030 * MS));
+        // Device clock steps backwards 1 s.
+        assert!(c.observe(TimeType::Ptp, epoch - 1_000 * MS, 1_030 * MS));
         // Device clock leaps forward 1 s while the host advanced 10 ms.
         assert!(c.observe(TimeType::Ptp, epoch + 1_000 * MS, 1_040 * MS));
         assert!(!c.observe(TimeType::Ptp, epoch + 1_010 * MS, 1_050 * MS));
         assert_eq!(c.resets(), 3);
+    }
+
+    #[test]
+    fn a_late_datagram_is_not_a_jump() {
+        let mut c = ClockMapper::new(ClockConfig::default());
+        c.observe(TimeType::PowerOn, 100 * MS, 1_100 * MS);
+        // Device time 3 ms older than the previous packet, received later.
+        assert!(!c.observe(TimeType::PowerOn, 97 * MS, 1_102 * MS));
+        assert!(!c.observe(TimeType::PowerOn, 110 * MS, 1_110 * MS));
+        assert_eq!(c.resets(), 0);
+        assert_eq!(c.offset_ns(), Some((1_000 * MS) as i128));
     }
 }

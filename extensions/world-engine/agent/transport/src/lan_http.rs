@@ -55,17 +55,8 @@ impl LanHttpBearer {
     /// none is installed, which only an unpaired node accepts), with a client
     /// that has connect + request timeouts so a hung peer fails the send.
     pub fn new(base_url: impl Into<String>, credential: Option<String>) -> Self {
-        // Install the process-default crypto provider first, or build() can
-        // panic "No provider set" under the workspace's no-provider rustls path.
-        ados_protocol::crypto::ensure_crypto_provider();
-        // build() only fails on a TLS-stack init error; `expect` keeps the
-        // timeout guarantee rather than silently degrading to a timeout-less
-        // default (which would let a hung peer park the send).
-        let client = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .expect("build atlas lan-http client");
+        // The credential header never follows a redirect to another host.
+        let client = crate::client::node_http(CONNECT_TIMEOUT, REQUEST_TIMEOUT, None);
         Self {
             client,
             base_url: base_url.into().trim_end_matches('/').to_string(),

@@ -70,7 +70,7 @@ pub fn pose_provider(
             Err(e) => fallback(e.to_string()),
         },
         (PoseSource::Lidar, Some(rig)) => match LidarPose::spawn(LidarPoseConfig {
-            launcher: Launcher::Uv(PathBuf::from(&cfg.lidar.uv)),
+            launcher: Launcher::Uv(install_path(&cfg.lidar.uv)),
             project_dir: install_path(&cfg.lidar.project_dir),
             rig: rig.clone(),
             lidar_id: cfg.lidar.lidar_id.clone(),

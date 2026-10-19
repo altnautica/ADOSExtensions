@@ -230,6 +230,7 @@ fn default_exposure() -> ExposureView {
         exposure_us: None,
         gain: None,
         mode: Some(ExposureMode::Walking),
+        applied: false,
     }
 }
 
@@ -398,6 +399,14 @@ impl AtlasRuntimeConfig {
             max_interval_ms: integer(values, KEY_MAX_INTERVAL_MS, defaults.max_interval_ms)?,
             max_keyframes: unsigned(values, KEY_MAX_KEYFRAMES, defaults.max_keyframes)?,
         };
+        let mains_hz = mains_hz(values)?;
+        // The configured exposure goes through the same flicker/cap rule as
+        // an operator request.
+        let exposure = crate::quality::flicker::settle_exposure(
+            ExposureView::default(),
+            typed(values, KEY_EXPOSURE, default_exposure())?,
+            mains_hz,
+        );
         Ok(Self {
             enabled: typed(values, KEY_ENABLED, false)?,
             device_id: device_id.to_string(),
@@ -417,8 +426,8 @@ impl AtlasRuntimeConfig {
             )?,
             record_on_start: typed(values, KEY_RECORD_ON_START, false)?,
             image_encoding: typed(values, KEY_IMAGE_ENCODING, ImageEncoding::Raw)?,
-            mains_hz: mains_hz(values)?,
-            exposure: typed(values, KEY_EXPOSURE, default_exposure())?,
+            mains_hz,
+            exposure,
             hud: typed(values, KEY_HUD, HudSettings::default())?,
             vio: typed(values, KEY_VIO, VioSettings::default())?,
             lidar: typed(values, KEY_LIDAR, LidarSettings::default())?,

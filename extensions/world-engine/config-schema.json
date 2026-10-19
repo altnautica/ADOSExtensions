@@ -371,8 +371,7 @@
           "default": "lidar0"
         },
         "uv": {
-          "type": "string",
-          "default": "uv"
+          "type": "string"
         },
         "project_dir": {
           "type": "string"

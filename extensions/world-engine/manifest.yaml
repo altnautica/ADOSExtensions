@@ -122,26 +122,53 @@ agent:
       size_bytes: 1
       arch_os: x86_64-windows
       profiles: [workstation, compute]
-    - path: bin/aarch64-linux/basalt-ados
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/basalt-ados-aarch64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: aarch64-linux
-      profiles: [drone, visor]
+    # Native capture helpers (x86_64-linux; aarch64-linux is a manual release
+    # step, see agent/capture/basalt/README.md) with their licence texts, and
+    # uv for the on-device KISS-ICP environment sync.
     - path: bin/x86_64-linux/basalt-ados
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/basalt-ados-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-basalt-ados-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
-    - path: lib/aarch64-linux/liblivox_lidar_sdk_shared.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/livox-sdk2-aarch64-linux.so"
+    - path: bin/x86_64-linux/LICENSE-basalt-ados.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-basalt-ados-LICENSES-x86_64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [drone, visor]
+    - path: lib/x86_64-linux/liblivox_lidar_sdk_shared.so
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-livox-sdk2-x86_64-linux.so"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [visor]
+    - path: lib/x86_64-linux/LICENSE-livox-sdk2.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-livox-sdk2-LICENSE-x86_64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [visor]
+    - path: bin/aarch64-linux/uv
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-uv-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [visor]
-    - path: lib/x86_64-linux/liblivox_lidar_sdk_shared.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/livox-sdk2-x86_64-linux.so"
+    - path: bin/x86_64-linux/uv
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-uv-x86_64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [visor]
+    - path: bin/aarch64-linux/LICENSE-uv.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-uv-LICENSE-aarch64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [visor]
+    - path: bin/x86_64-linux/LICENSE-uv.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.0.0/world-engine-uv-LICENSE-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
@@ -183,6 +210,9 @@ agent:
     - id: display.oled.page
     - id: button.subscribe
     - id: mcp.expose
+    # link: the agent WHEP preview relay and the rig write relay.
+    - id: video.whep.relay
+    - id: sensors.rig.write
   contributes:
     services:
       - name: capture

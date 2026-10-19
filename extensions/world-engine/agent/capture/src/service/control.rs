@@ -10,7 +10,7 @@ use super::Engine;
 use crate::clock::ClockSidecar;
 use crate::hud::HudAction;
 use crate::quality::coverage::Coverage;
-use crate::quality::flicker::quantise_exposure;
+use crate::quality::flicker::settle_exposure;
 use crate::recording::{ActiveSession, Phase, StartEnv};
 use crate::session::CaptureSession;
 
@@ -101,21 +101,7 @@ impl Engine {
     }
 
     fn set_exposure(&mut self, req: ExposureView) -> ExposureView {
-        let mode = req.mode.or(self.exposure.mode).unwrap_or_default();
-        let (exposure_us, gain) = match req.exposure_us {
-            Some(us) => {
-                let (e, g) =
-                    quantise_exposure(us, req.gain.unwrap_or(1.0), mode, self.cfg.mains_hz);
-                (Some(e), Some(g))
-            }
-            None => (self.exposure.exposure_us, req.gain.or(self.exposure.gain)),
-        };
-        self.exposure = ExposureView {
-            locked: req.locked,
-            exposure_us,
-            gain,
-            mode: Some(mode),
-        };
+        self.exposure = settle_exposure(self.exposure, req, self.cfg.mains_hz);
         self.exposure
     }
 
@@ -145,11 +131,22 @@ impl Engine {
         let now = crate::clock::mono_ns();
         let (t0, utc) = {
             let s = self.sensors.lock();
+            // A session never mixes timebases: a non-host one waits for its
+            // first bus sample instead of starting on the host clock.
+            if !crate::clock::timebase_ready(timebase, &s.clock) {
+                return Err(CtlReply::err(
+                    codes::CLOCK_NOT_READY,
+                    format!(
+                        "timebase {} has no clock sample yet",
+                        crate::clock::timebase_str(timebase)
+                    ),
+                ));
+            }
             let utc = s
                 .clock
                 .utc_at(now)
                 .or_else(|| (timebase == Timebase::HostMonotonic).then(crate::clock::realtime_ns));
-            (s.clock.to_session(now), utc)
+            (crate::clock::session_time(timebase, &s.clock, now), utc)
         };
         let env = StartEnv {
             device_id: &self.cfg.device_id,
@@ -182,6 +179,10 @@ impl Engine {
         self.keyframes.set_pose_tier(self.pose.source());
         self.rig = Some(rig);
         self.session = Some(s);
+        self.sensors
+            .lock()
+            .clock
+            .set_monotonic(timebase != Timebase::HostMonotonic);
         tracing::info!(session = %id, ?timebase, "capture_session_started");
         self.publish_status().await;
         Ok(id)
@@ -190,15 +191,35 @@ impl Engine {
     /// Close the open session on a blocking thread (checksums over a large
     /// session take a while); the state reads `closing` until it is done.
     pub(super) fn begin_close(&mut self) {
-        let Some(s) = self.session.take() else { return };
         let t_end = self.to_session(crate::clock::mono_ns());
+        let Some(s) = self.session.take() else { return };
+        self.sensors.lock().clock.set_monotonic(false);
         let flags = self.quality.raised;
+        let stats = s.recorder.stats();
+        let mut dropped_pct = self.dropped_pct();
+        let bad: u64 = stats.bad_items.values().sum();
+        if bad > 0 {
+            tracing::warn!(bad_items = ?stats.bad_items, "capture_session_skipped_items");
+        }
+        if let Some(err) = &stats.error {
+            let seen: u64 = self.cams.values().map(|c| c.frames).sum();
+            let written: u64 = stats.images.values().sum();
+            dropped_pct = dropped_pct.max(unwritten_pct(seen, written));
+            tracing::error!(
+                error = %err,
+                frames_seen = seen,
+                frames_written = written,
+                lost_after_error = stats.lost_after_error,
+                frames_dropped_pct = dropped_pct,
+                "capture_session_truncated"
+            );
+        }
         let health = SessionHealth {
             blur: flags.blur,
             texture: flags.texture,
             flicker: flags.flicker,
             corridor: flags.corridor,
-            frames_dropped_pct: self.dropped_pct(),
+            frames_dropped_pct: dropped_pct,
         };
         stop_and_bag(&mut self.keyframes);
         self.closing = Some(tokio::task::spawn_blocking(move || s.finish(t_end, health)));
@@ -230,5 +251,15 @@ impl Engine {
         } else {
             (100.0 * dropped as f64 / seen as f64).min(100.0)
         }
+    }
+}
+
+/// Frames seen but never written, percent of those seen (a session whose
+/// writer failed is truncated: everything after the failure is missing).
+pub(crate) fn unwritten_pct(seen: u64, written: u64) -> f64 {
+    if seen == 0 {
+        0.0
+    } else {
+        (100.0 * seen.saturating_sub(written) as f64 / seen as f64).min(100.0)
     }
 }

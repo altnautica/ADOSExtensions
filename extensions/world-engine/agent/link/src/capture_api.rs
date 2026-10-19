@@ -1,9 +1,8 @@
-//! The live capture session over the control socket, plus the two routes the
-//! sandbox cannot serve:
+//! The live capture session over the control socket:
 //!
 //! - `POST /atlas/capture/start` (body optional [`StartArgs`]) →
 //!   `{"ok":true,"session_id":".."}`; `409 E_STORAGE_FULL` /
-//!   `E_ALREADY_RECORDING`.
+//!   `E_ALREADY_RECORDING` / `E_CLOCK_NOT_READY`.
 //! - `POST /atlas/capture/{stop,pause,resume}` → the resulting state view
 //!   with `"ok": true`.
 //! - `POST /atlas/capture/mark` `{room, floor}` → `{"ok":true,"segment":n}`.
@@ -12,33 +11,26 @@
 //!   (storage free space from the capture-storage sidecar when readable).
 //! - `GET /atlas/capture/coverage`: the [`CoverageView`]; an empty grid
 //!   (`cell_m` 0) while the service is not running.
-//! - `PUT /atlas/capture/exposure` [`ExposureView`] → the applied exposure.
-//! - `POST|DELETE /atlas/capture/whep?camera=<id>`: 503
-//!   `E_WHEP_UNREACHABLE`. The agent's WHEP front (`/whep` on the agent's
-//!   HTTP port) and the media server's loopback WHEP listener are local
-//!   listeners, and the plugin host's nftables guard drops every packet a
-//!   plugin sends to a local address; no host method relays WHEP. A client
-//!   reaches the camera's preview at the agent's own `/whep?camera=<id>`.
-//! - `PUT /atlas/rig`: validated as a contract rig, then 503
-//!   `E_RIG_UNREACHABLE` for the same reason: the agent's REST surface
-//!   (`PUT /api/v1/sensors/rig`) is a local listener the guard closes and no
-//!   host method forwards to it. A client writes the rig at the agent route.
+//! - `PUT /atlas/capture/exposure` [`ExposureView`] → the exposure the
+//!   service reports, verbatim (`applied` says whether it reached the sensor).
+//!
+//! The WHEP and rig routes are in [`crate::device_api`].
 
 use axum::body::Bytes;
 use axum::extract::State;
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use world_engine_capture::storage::{read_sidecar, sidecar_path};
 use world_engine_protocol::capture_ctl::{
-    CaptureStateView, CoverageSummary, CoverageView, CtlRequest, ExposureView, FramesView,
-    MarkArgs, PoseView, StartArgs, StorageView,
+    CaptureStateView, CoverageView, CtlRequest, ExposureView, MarkArgs, PoseView, StartArgs,
+    StorageView,
 };
 
 use crate::api::DroneApi;
-use crate::reply::{codes, respond, ApiError};
+use crate::reply::{respond, ApiError};
+use crate::sessions::LiveSession;
 
 /// The capture routes.
 pub fn routes() -> Router<DroneApi> {
@@ -51,38 +43,20 @@ pub fn routes() -> Router<DroneApi> {
         .route("/atlas/capture/state", get(state))
         .route("/atlas/capture/coverage", get(coverage))
         .route("/atlas/capture/exposure", put(exposure))
-        .route("/atlas/capture/whep", post(whep).delete(whep))
-        .route("/atlas/capture/whep/*session", delete(whep))
-        .route("/atlas/rig", put(put_rig))
 }
 
 /// The view while no capture service runs: present, empty fields.
 pub fn idle_view(storage: StorageView) -> CaptureStateView {
     CaptureStateView {
         state: "idle".to_string(),
-        session_id: None,
-        started_at_ns: None,
-        duration_s: None,
-        site: None,
-        floor: 0,
-        room: None,
-        segment: None,
-        frames: FramesView::default(),
         pose: PoseView {
             source: "none".to_string(),
             health: "lost".to_string(),
-            tracked_features: None,
-            drift_hint_m: None,
+            ..PoseView::default()
         },
-        coverage: CoverageSummary::default(),
-        health: Vec::new(),
-        exposure: ExposureView {
-            locked: false,
-            exposure_us: None,
-            gain: None,
-            mode: None,
-        },
+        exposure: ExposureView::default(),
         storage,
+        ..CaptureStateView::default()
     }
 }
 
@@ -133,6 +107,22 @@ impl DroneApi {
                 Ok(serde_json::to_value(idle_view(sidecar_storage())).unwrap_or(Value::Null))
             }
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The session the capture service has open now (recording, paused or
+    /// closing), from its `state`.
+    pub async fn open_session(&self) -> LiveSession {
+        match self.control.request(&CtlRequest::State).await {
+            Ok(v) => {
+                let state = v.get("state").and_then(Value::as_str).unwrap_or("idle");
+                match v.get("session_id").and_then(Value::as_str) {
+                    Some(id) if state != "idle" => LiveSession::Open(id.to_string()),
+                    _ => LiveSession::None,
+                }
+            }
+            Err(e) if e.not_running() => LiveSession::None,
+            Err(_) => LiveSession::Unknown,
         }
     }
 }
@@ -193,28 +183,6 @@ async fn exposure(State(api): State<DroneApi>, body: Bytes) -> Response {
         ),
         Err(e) => ApiError::bad_request(e.to_string()).into_response(),
     }
-}
-
-async fn whep() -> Response {
-    ApiError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        codes::WHEP_UNREACHABLE,
-        "the extension sandbox cannot reach the agent's WHEP endpoint; use the agent's /whep?camera=<id>",
-    )
-    .into_response()
-}
-
-async fn put_rig(body: Bytes) -> Response {
-    if let Err(e) = serde_json::from_slice::<ados_capture_contract::Rig>(&body) {
-        return ApiError::new(StatusCode::BAD_REQUEST, codes::RIG_INVALID, e.to_string())
-            .into_response();
-    }
-    ApiError::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        codes::RIG_UNREACHABLE,
-        "the extension sandbox cannot reach the agent's REST surface; PUT the rig to /api/v1/sensors/rig",
-    )
-    .into_response()
 }
 
 #[cfg(test)]

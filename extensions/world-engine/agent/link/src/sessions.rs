@@ -13,8 +13,15 @@
 //! - `rooms` / `floors`: the operator room marks (`operator.rooms[]`) plus
 //!   `operator.floor`.
 //! - `timebase`, `anchor_source`: verbatim from the manifest.
+//!
+//! A crashed recorder leaves `.recording` behind. The marker is **stale** when
+//! the capture service does not report the session as its open one and the
+//! marker is older than [`STALE_AFTER`] (the recorder touches it every 30 s).
+//! A stale session is listed with `upload.state` `failed` and error
+//! `not_finished`, may be deleted with `force`, and is never uploaded.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use serde_json::Value;
@@ -23,7 +30,21 @@ use world_engine_capture::storage::{
     safe_session_id, MANIFEST_NAME, RECORDING_MARKER, UPLOADED_MARKER,
 };
 
-use crate::upload::UploadView;
+use crate::upload::{UploadState, UploadView};
+
+/// A `.recording` marker untouched this long may belong to a crashed recorder.
+pub const STALE_AFTER: Duration = Duration::from_secs(120);
+
+/// The session the capture service has open, as far as the link can tell.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LiveSession {
+    /// The service is not running, or runs with no session open.
+    None,
+    /// This session is recording, paused or closing.
+    Open(String),
+    /// The service did not answer; nothing is known.
+    Unknown,
+}
 
 /// One session directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +54,8 @@ pub struct SessionDir {
     pub recording: bool,
     pub uploaded: bool,
     pub finished: bool,
+    /// Time since `.recording` was last touched (when present).
+    pub marker_age: Option<Duration>,
 }
 
 impl SessionDir {
@@ -42,7 +65,11 @@ impl SessionDir {
             return None;
         }
         let path = root.join(id);
-        let recording = path.join(RECORDING_MARKER).exists();
+        let marker = std::fs::metadata(path.join(RECORDING_MARKER)).ok();
+        let recording = marker.is_some();
+        let marker_age = marker
+            .and_then(|m| m.modified().ok())
+            .map(|t| SystemTime::now().duration_since(t).unwrap_or_default());
         let finished = path.join(MANIFEST_NAME).is_file();
         (path.is_dir() && (recording || finished)).then(|| Self {
             id: id.to_string(),
@@ -50,7 +77,28 @@ impl SessionDir {
             path,
             recording,
             finished,
+            marker_age,
         })
+    }
+
+    /// Whether `.recording` was left by a recorder that is gone.
+    pub fn stale(&self, live: &LiveSession) -> bool {
+        let old = self.marker_age.is_some_and(|a| a > STALE_AFTER);
+        let not_open = match live {
+            LiveSession::None => true,
+            LiveSession::Open(id) => *id != self.id,
+            LiveSession::Unknown => false,
+        };
+        self.recording && old && not_open
+    }
+}
+
+/// The upload view of a crashed session.
+pub fn not_finished_view(size_bytes: u64) -> UploadView {
+    UploadView {
+        state: UploadState::Failed,
+        error: Some("not_finished".to_string()),
+        ..UploadView::idle(size_bytes)
     }
 }
 
@@ -192,14 +240,44 @@ pub fn row(dir: &SessionDir, upload: UploadView) -> SessionRow {
     }
 }
 
+/// Backdate `dir`'s `.recording` by `secs` (tests).
+#[cfg(test)]
+pub(crate) fn age_marker(dir: &Path, secs: u64) {
+    let f = std::fs::File::options()
+        .write(true)
+        .open(dir.join(RECORDING_MARKER))
+        .unwrap();
+    f.set_modified(SystemTime::now() - Duration::from_secs(secs))
+        .unwrap();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::upload::UploadState;
     use serde_json::json;
 
     fn idle(total: u64) -> UploadView {
         UploadView::idle(total)
+    }
+
+    #[test]
+    fn a_marker_is_stale_only_when_old_and_not_the_open_session() {
+        let root = tempfile::tempdir().unwrap();
+        let id = "visor-1-20261019T101500Z-3fa2";
+        let d = root.path().join(id);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join(RECORDING_MARKER), b"").unwrap();
+        let fresh = SessionDir::open(root.path(), id).unwrap();
+        assert!(!fresh.stale(&LiveSession::None));
+        age_marker(&d, 300);
+        let old = SessionDir::open(root.path(), id).unwrap();
+        assert!(old.stale(&LiveSession::None));
+        assert!(old.stale(&LiveSession::Open("other".into())));
+        assert!(!old.stale(&LiveSession::Open(id.into())));
+        assert!(!old.stale(&LiveSession::Unknown));
+        let v = serde_json::to_value(not_finished_view(9)).unwrap();
+        assert_eq!(v["state"], "failed");
+        assert_eq!(v["error"], "not_finished");
     }
 
     #[test]

@@ -12,8 +12,9 @@
 //! - `PUT /atlas/config`: patch the Atlas plugin config (enable, capture
 //!   profile, reconstruction steps, camera set). Nothing is restarted: the
 //!   capture service re-reads its config every 5 s.
-//! - The capture session ([`crate::capture_api`]), recorded sessions and
-//!   their upload ([`crate::sessions_api`]), reconstruction on the paired node
+//! - The capture session ([`crate::capture_api`]), the WHEP preview and rig
+//!   relays ([`crate::device_api`]), recorded sessions and their upload
+//!   ([`crate::sessions_api`]), reconstruction on the paired node
 //!   ([`crate::jobs_api`]) and the calibration store ([`crate::calib_api`]).
 //! - `GET /compute/status`: a drone has no compute heartbeat, so always the
 //!   not-a-compute-node 404.
@@ -42,7 +43,7 @@ use crate::forward::SharedForward;
 use crate::host::{config_json, Host};
 use crate::relay::{status_body, SharedSnapshot};
 use crate::upload::UploadManager;
-use crate::{calib_api, capture_api, jobs_api, sessions_api};
+use crate::{calib_api, capture_api, device_api, jobs_api, sessions_api};
 
 /// The capture profiles the capture service accepts.
 const VALID_CAPTURE_PROFILES: [&str; 4] = ["orbit", "lawnmower", "freeform", "inspection"];
@@ -85,6 +86,7 @@ pub fn drone_router(api: DroneApi) -> Router {
         .merge(sessions_api::routes())
         .merge(jobs_api::routes())
         .merge(calib_api::routes())
+        .merge(device_api::routes())
         .with_state(api)
         .merge(credentials::router(credentials))
 }

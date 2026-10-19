@@ -59,12 +59,16 @@ jobs:
             zig: true
             crates: world-engine-link world-engine-capture world-engine-node
             node_features: ""
+            uv_triple: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04
             arch_os: x86_64-linux
             target: x86_64-unknown-linux-musl
             zig: true
-            crates: world-engine-link world-engine-node
+            crates: world-engine-link world-engine-capture world-engine-node
             node_features: ""
+            # basalt-ados and the Livox SDK2 library build on this leg only.
+            native: true
+            uv_triple: x86_64-unknown-linux-musl
           # CoreML runs offload inference on the Apple GPU. ONNX Runtime is
           # loaded dynamically at start, so it is a host prerequisite, not a
           # payload.
@@ -142,6 +146,48 @@ jobs:
             cp "target/${TARGET}/release/${crate}" "payloads/${crate}-${ARCH_OS}"
             file "payloads/${crate}-${ARCH_OS}"
           done
+
+      - name: Build native capture payloads
+        if: matrix.native
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl zip unzip tar pkg-config ninja-build
+          git submodule update --init extensions/world-engine/agent/capture/basalt/upstream
+          C=extensions/world-engine/agent/capture
+          out="${RUNNER_TEMP}/native"
+          "$C/basalt/build.sh" --arch x86_64 --jobs 4 --out "$out"
+          "$C/livox/build-sdk2.sh" --arch x86_64 --jobs 4 --out "$out"
+          cp "$out/bin/x86_64-linux/basalt-ados" payloads/world-engine-basalt-ados-x86_64-linux
+          {
+            cat "$C/basalt/LICENSE"
+            printf '\n\n==== Basalt (upstream) ====\n\n'; cat "$C/basalt/upstream/LICENSE"
+            for f in "$C"/basalt/build/x86_64/vcpkg_installed/*/share/*/copyright; do
+              printf '\n\n==== %s ====\n\n' "$(basename "$(dirname "$f")")"; cat "$f"
+            done
+          } > payloads/world-engine-basalt-ados-LICENSES-x86_64-linux
+          cp "$out/lib/x86_64-linux/liblivox_lidar_sdk_shared.so" payloads/world-engine-livox-sdk2-x86_64-linux.so
+          cp "$out/lib/x86_64-linux/LICENSE-livox-sdk2.txt" payloads/world-engine-livox-sdk2-LICENSE-x86_64-linux
+          file payloads/world-engine-basalt-ados-x86_64-linux payloads/world-engine-livox-sdk2-x86_64-linux.so
+
+      - name: Stage uv (pinned, checksum-verified)
+        if: matrix.uv_triple != ''
+        env:
+          UV_TRIPLE: ${{ matrix.uv_triple }}
+          ARCH_OS: ${{ matrix.arch_os }}
+        run: |
+          set -euo pipefail
+          v=0.13.1
+          case "$UV_TRIPLE" in
+            x86_64-unknown-linux-musl)  sum=6c86040a8f045ab9adc9e3ec4cdafa03fd00e9a988ed2bf28971c7fc2d0debd0 ;;
+            aarch64-unknown-linux-musl) sum=345a8308e4d1835cdfaadf692836fd3137a6d45864773f05ad7bf59442b1ba16 ;;
+          esac
+          tgz="uv-${UV_TRIPLE}.tar.gz"
+          curl -fsSLo "${RUNNER_TEMP}/${tgz}" "https://github.com/astral-sh/uv/releases/download/${v}/${tgz}"
+          echo "${sum}  ${RUNNER_TEMP}/${tgz}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tgz}" -C "${RUNNER_TEMP}"
+          cp "${RUNNER_TEMP}/uv-${UV_TRIPLE}/uv" "payloads/world-engine-uv-${ARCH_OS}"
+          curl -fsSLo "payloads/world-engine-uv-LICENSE-${ARCH_OS}" "https://raw.githubusercontent.com/astral-sh/uv/${v}/LICENSE-MIT"
 
       - name: Hand the binaries to the release job
         uses: actions/upload-artifact@v4

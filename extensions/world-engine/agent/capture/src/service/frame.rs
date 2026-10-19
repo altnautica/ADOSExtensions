@@ -18,13 +18,27 @@ use crate::session::{FrameInput, PoseInput};
 const KF_IMU_WINDOW_NS: u64 = 200_000_000;
 
 impl Engine {
-    /// Session-timebase ns of host monotonic `host_ns`.
+    /// Session-timebase ns of host monotonic `host_ns`: the identity for a
+    /// `host_monotonic` session, the bus clock map otherwise (and with no
+    /// session open).
     pub(super) fn to_session(&self, host_ns: u64) -> u64 {
-        self.sensors.lock().clock.to_session(host_ns)
+        let sensors = self.sensors.lock();
+        let map = &sensors.clock;
+        match self.session_timebase() {
+            Some(tb) => crate::clock::session_time(tb, map, host_ns),
+            None => map.to_session(host_ns),
+        }
     }
 
     fn session_timebase(&self) -> Option<Timebase> {
         self.session.as_ref().map(|s| s.timebase)
+    }
+
+    /// Whether the open session is recording (not paused).
+    pub(super) fn is_recording(&self) -> bool {
+        self.session
+            .as_ref()
+            .is_some_and(|s| s.phase == Phase::Recording)
     }
 
     /// The frame's exposure instant on the session timebase, and the trigger
@@ -77,14 +91,12 @@ impl Engine {
         cam.last_ts_ns = Some(f.ts_ns);
         self.pose.feed_frame(&f);
         let host_t = f.ts_ns;
+        let recording = self.is_recording();
+        self.quality.recording = recording;
         if let Some(q) = quality::measure(f.format, f.width, f.height, &f.pixels) {
             self.quality.on_frame(&f.camera_id, host_t, q);
         }
         let est = self.pose.pose_at(host_t);
-        let recording = self
-            .session
-            .as_ref()
-            .is_some_and(|s| s.phase == Phase::Recording);
         if recording {
             if let Some(e) = &est {
                 self.observe_coverage(&f.camera_id, e);

@@ -32,6 +32,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
 use crate::bulk_plan::{BulkConfig, BulkError, Committed, PlanFile, SessionPlan, MAX_CHUNK_BYTES};
+use crate::client::{node_http, PinnedHost};
 
 /// The resume-offset header a `HEAD` answers with.
 const UPLOAD_OFFSET: &str = "upload-offset";
@@ -141,16 +142,17 @@ pub struct BulkClient {
 
 impl BulkClient {
     /// `base_url` is the node's LAN job-API base (`http://<lan-addr>:8092`);
-    /// `credential` the one it issued for the `sessions.upload` lane.
-    pub fn new(base_url: impl Into<String>, credential: Option<String>, cfg: BulkConfig) -> Self {
-        ados_protocol::crypto::ensure_crypto_provider();
-        let http = Client::builder()
-            .connect_timeout(cfg.connect_timeout)
-            .timeout(cfg.request_timeout)
-            .build()
-            .expect("build bulk upload http client");
+    /// `credential` the one it issued for the `sessions.upload` lane; `pin`
+    /// the vetted address every request connects to. Redirects are not
+    /// followed.
+    pub fn new(
+        base_url: impl Into<String>,
+        credential: Option<String>,
+        cfg: BulkConfig,
+        pin: Option<PinnedHost>,
+    ) -> Self {
         Self {
-            http,
+            http: node_http(cfg.connect_timeout, cfg.request_timeout, pin.as_ref()),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             credential,
             cfg,

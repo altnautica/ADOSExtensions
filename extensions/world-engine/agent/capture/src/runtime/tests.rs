@@ -32,6 +32,23 @@ fn no_keys_is_the_disabled_default() {
 }
 
 #[test]
+fn configured_exposure_is_quantised_and_capped() {
+    let v = values(&[(
+        KEY_EXPOSURE,
+        json!({"locked": true, "exposure_us": 9000, "mode": "slow"}),
+    )]);
+    let c = AtlasRuntimeConfig::from_values("d", &v).unwrap();
+    assert_eq!(c.exposure.exposure_us, Some(10_000));
+    assert!(!c.exposure.locked && !c.exposure.applied);
+    let v = values(&[(
+        KEY_EXPOSURE,
+        json!({"locked": false, "exposure_us": 9000, "mode": "walking"}),
+    )]);
+    let c = AtlasRuntimeConfig::from_values("d", &v).unwrap();
+    assert!(c.exposure.exposure_us.unwrap() <= 4_000);
+}
+
+#[test]
 fn full_key_set_loads() {
     let v = values(&[
         (KEY_ENABLED, json!(true)),

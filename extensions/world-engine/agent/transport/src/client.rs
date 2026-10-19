@@ -6,16 +6,24 @@
 //! the drone presents the credential that node issued it (installed by the
 //! owner) in the node-credential header. It never sends its own pairing key:
 //! that key is full authority over the drone and means nothing to the node.
+//!
+//! Every client that carries the node-credential header follows no redirect
+//! (a redirect would carry the credential to another host), and may be pinned
+//! to one checked address ([`PinnedHost`]) so its host name is not looked up
+//! again after the caller vetted it.
 
+use std::net::SocketAddr;
 use std::time::Duration;
 
-use reqwest::Client;
+use reqwest::{redirect, Client};
 use serde::Serialize;
 
 use world_engine_protocol::compute::{
-    CancelResponse, ComputeHeartbeat, ComputeJobKind, Dataset, JobRecord, Output, SubmitResponse,
+    CancelResponse, ComputeHeartbeat, ComputeJobKind, Dataset, Output, SubmitResponse,
 };
 use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
+
+use crate::job_status::JobStatus;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -68,6 +76,36 @@ fn encode_segment(s: &str) -> String {
     out
 }
 
+/// A node host name and the one address it is pinned to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinnedHost {
+    /// The host as it appears in the base URL.
+    pub host: String,
+    /// The vetted address every request connects to (the URL's port wins).
+    pub addr: SocketAddr,
+}
+
+/// An HTTP client for a node: the timeouts, no redirects, and the pin.
+pub(crate) fn node_http(connect: Duration, timeout: Duration, pin: Option<&PinnedHost>) -> Client {
+    // The workspace's reqwest is unified onto the no-provider rustls path, so
+    // building a Client tries to construct a default TLS config that needs a
+    // process-default crypto provider; install it first or build() panics
+    // ("No provider set"), non-deterministically under concurrent first
+    // builds.
+    ados_protocol::crypto::ensure_crypto_provider();
+    let mut builder = Client::builder()
+        .connect_timeout(connect)
+        .timeout(timeout)
+        .redirect(redirect::Policy::none());
+    if let Some(p) = pin {
+        builder = builder.resolve(&p.host, p.addr);
+    }
+    // build() only fails on a TLS-stack init error; `expect` keeps the
+    // timeout guarantee (a silent fall back to a timeout-less default would
+    // let a hung node park the caller — the exact thing the timeouts prevent).
+    builder.build().expect("build compute http client")
+}
+
 /// A client to one compute node's job API.
 pub struct ComputeClient {
     http: Client,
@@ -83,22 +121,17 @@ impl ComputeClient {
     /// request timeouts so a hung node fails the call rather than parking the
     /// caller.
     pub fn new(base_url: impl Into<String>, credential: Option<String>) -> Self {
-        // The workspace's reqwest is unified onto the no-provider rustls path, so
-        // building a Client tries to construct a default TLS config that needs a
-        // process-default crypto provider; install it first or build() panics
-        // ("No provider set"), non-deterministically under concurrent first
-        // builds.
-        ados_protocol::crypto::ensure_crypto_provider();
-        // build() only fails on a TLS-stack init error; `expect` keeps the
-        // timeout guarantee (a silent fall back to a timeout-less default would
-        // let a hung node park the caller — the exact thing the timeouts prevent).
-        let http = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
-            .build()
-            .expect("build compute http client");
+        Self::pinned(base_url, credential, None)
+    }
+
+    /// [`Self::new`] connecting only to `pin`'s address.
+    pub fn pinned(
+        base_url: impl Into<String>,
+        credential: Option<String>,
+        pin: Option<PinnedHost>,
+    ) -> Self {
         Self {
-            http,
+            http: node_http(CONNECT_TIMEOUT, REQUEST_TIMEOUT, pin.as_ref()),
             base_url: base_url.into().trim_end_matches('/').to_string(),
             credential,
         }
@@ -179,17 +212,10 @@ impl ComputeClient {
         .await
     }
 
-    /// Read a job's full status view as the node serves it (the record plus
-    /// the staged pipeline's `stage`, `stages`, `gpu`, `eta_s`, `tools` and a
-    /// structured `error`), undecoded.
-    pub async fn job_view(&self, id: &str) -> Result<serde_json::Value, ClientError> {
-        let seg = encode_segment(id);
-        self.send_json(self.http.get(self.url(&format!("/api/compute/jobs/{seg}"))))
-            .await
-    }
-
-    /// Read a job's status + progress.
-    pub async fn job_status(&self, id: &str) -> Result<JobRecord, ClientError> {
+    /// Read a job's status as the node serves it: the record plus the staged
+    /// pipeline's stage, stage rows, GPU, ETA, tool versions and structured
+    /// error.
+    pub async fn job_status(&self, id: &str) -> Result<JobStatus, ClientError> {
         let seg = encode_segment(id);
         self.send_json(self.http.get(self.url(&format!("/api/compute/jobs/{seg}"))))
             .await

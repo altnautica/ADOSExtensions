@@ -20,6 +20,7 @@ pub mod capture_api;
 pub mod compute_node;
 pub mod control;
 pub mod credentials;
+pub mod device_api;
 pub mod forward;
 pub mod host;
 pub mod jobs_api;

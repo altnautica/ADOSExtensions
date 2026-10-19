@@ -1,6 +1,7 @@
 import io
 import json
 import socket
+import threading
 
 import numpy as np
 import pytest
@@ -123,13 +124,24 @@ def test_serve_answers_each_scan_over_a_socket(tmp_path):
     assert cfg.mapping.voxel_size == 0.25 and live.normal_k == 6
     a, b = socket.socketpair()
     rng = np.random.default_rng(3)
-    with a, b:
-        for i in range(3):
-            pts = box_room(rng)
-            a.sendall(encode_scan(i * SCAN_NS, pts, np.linspace(0, SCAN_NS - 1, len(pts)).astype(np.uint32)))
+    frames = [
+        encode_scan(i * SCAN_NS, pts, np.linspace(0, SCAN_NS - 1, len(pts)).astype(np.uint32))
+        for i, pts in enumerate(box_room(rng) for _ in range(3))
+    ]
+
+    def send():
+        # ~0.2 MB per scan: more than a socket buffer, so the writer must not
+        # wait for the reader on the same thread.
+        for f in frames:
+            a.sendall(f)
         a.shutdown(socket.SHUT_WR)
+
+    with a, b:
+        sender = threading.Thread(target=send)
+        sender.start()
         with b.makefile("rb") as r, b.makefile("wb") as w:
             assert serve(r, w, LiveOdometry(cfg, live)) == 3
+        sender.join(timeout=10)
         b.shutdown(socket.SHUT_WR)
         lines = a.makefile("rb").read().decode().splitlines()
     assert len(lines) == 3

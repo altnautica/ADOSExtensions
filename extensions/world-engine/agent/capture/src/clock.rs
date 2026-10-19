@@ -81,6 +81,22 @@ pub fn timebase_str(t: Timebase) -> &'static str {
     }
 }
 
+/// Whether a session on `timebase` can open now: a non-host timebase needs
+/// at least one bus clock sample to map onto it.
+pub fn timebase_ready(timebase: Timebase, map: &ClockMap) -> bool {
+    timebase == Timebase::HostMonotonic || map.last().is_some()
+}
+
+/// Session-timebase ns of host monotonic `host_ns` for a session on
+/// `timebase`. A `host_monotonic` session is the identity for its whole life,
+/// whatever clock samples arrive meanwhile.
+pub fn session_time(timebase: Timebase, map: &ClockMap, host_ns: u64) -> u64 {
+    match timebase {
+        Timebase::HostMonotonic => host_ns,
+        _ => map.to_session(host_ns),
+    }
+}
+
 /// Maps host monotonic ns onto a session timebase from the two latest clock
 /// samples (offset + rate). With no sample the map is the identity, which is
 /// exact for `host_monotonic`.
@@ -88,6 +104,11 @@ pub fn timebase_str(t: Timebase) -> &'static str {
 pub struct ClockMap {
     prev: Option<ClockSample>,
     last: Option<ClockSample>,
+    /// While a session records, a sample that would move mapped time
+    /// backwards is refused.
+    monotonic: bool,
+    /// Samples refused by the monotonic guard.
+    pub rejected: u64,
 }
 
 impl ClockMap {
@@ -95,18 +116,30 @@ impl ClockMap {
         Self::default()
     }
 
+    /// Turn the monotonic guard on for a session's life, off after it.
+    pub fn set_monotonic(&mut self, on: bool) {
+        self.monotonic = on;
+    }
+
     /// Fold in one bus `clock` sample. A sample not newer on the host clock
-    /// than the last one is ignored.
-    pub fn observe(&mut self, s: ClockSample) {
+    /// than the last one is ignored, and so (while guarded) is one whose
+    /// session time at its own host instant is behind the current mapping.
+    /// Returns whether the sample was taken.
+    pub fn observe(&mut self, s: ClockSample) -> bool {
         if self
             .last
             .as_ref()
             .is_some_and(|l| s.host_mono_ns <= l.host_mono_ns)
         {
-            return;
+            return false;
+        }
+        if self.monotonic && self.last.is_some() && s.t_ns < self.to_session(s.host_mono_ns) {
+            self.rejected += 1;
+            return false;
         }
         self.prev = self.last.take();
         self.last = Some(s);
+        true
     }
 
     pub fn last(&self) -> Option<&ClockSample> {
@@ -183,6 +216,61 @@ mod tests {
         // A stale sample does not rewind the map.
         m.observe(sample(0, 1_500_000_000));
         assert_eq!(m.last().unwrap().host_mono_ns, 2_000_000_000);
+    }
+
+    #[test]
+    fn a_non_host_timebase_needs_a_sample() {
+        let mut m = ClockMap::new();
+        assert!(timebase_ready(Timebase::HostMonotonic, &m));
+        assert!(!timebase_ready(Timebase::Sim, &m));
+        assert!(!timebase_ready(Timebase::Gnss, &m));
+        m.observe(sample(0, 1_000));
+        assert!(timebase_ready(Timebase::Sim, &m));
+    }
+
+    #[test]
+    fn a_host_session_stays_identity_after_samples_arrive() {
+        let mut m = ClockMap::new();
+        assert_eq!(session_time(Timebase::HostMonotonic, &m, 7_000), 7_000);
+        m.observe(sample(50_000_000_000, 1_000_000_000));
+        m.observe(sample(51_000_000_000, 2_000_000_000));
+        assert_eq!(
+            session_time(Timebase::HostMonotonic, &m, 2_500_000_000),
+            2_500_000_000
+        );
+        assert_eq!(
+            session_time(Timebase::Sim, &m, 2_500_000_000),
+            51_500_000_000
+        );
+    }
+
+    #[test]
+    fn guarded_time_never_decreases_across_a_sample() {
+        let mut m = ClockMap::new();
+        m.set_monotonic(true);
+        assert!(m.observe(sample(10_000_000_000, 1_000_000_000)));
+        let mut prev = 0;
+        let mut host = 1_000_000_000;
+        // A reset of the source (t jumps back) and a forward step.
+        let arrivals = [
+            (1_500_000_000, sample(2_000_000_000, 1_500_000_000)),
+            (2_000_000_000, sample(11_000_000_100, 2_000_000_000)),
+        ];
+        for (at, s) in arrivals {
+            while host < at + 400_000_000 {
+                if host == at {
+                    m.observe(s);
+                }
+                let t = m.to_session(host);
+                assert!(t >= prev, "t {t} < {prev} at host {host}");
+                prev = t;
+                host += 100_000_000;
+            }
+        }
+        assert_eq!(m.rejected, 1);
+        // Unguarded (between sessions) a reset is taken.
+        m.set_monotonic(false);
+        assert!(m.observe(sample(0, 3_000_000_000)));
     }
 
     #[test]

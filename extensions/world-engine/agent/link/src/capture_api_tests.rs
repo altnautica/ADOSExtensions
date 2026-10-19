@@ -1,3 +1,5 @@
+use axum::http::StatusCode;
+
 use super::*;
 use crate::api::drone_router;
 use crate::api::tests::{call, test_api};
@@ -25,6 +27,9 @@ fn service(req: CtlRequest) -> CtlReply {
         CtlRequest::Start(args) if args.site.as_deref() == Some("busy") => {
             CtlReply::err(ctl_codes::ALREADY_RECORDING, "a session is recording")
         }
+        CtlRequest::Start(args) if args.site.as_deref() == Some("early") => {
+            CtlReply::err(ctl_codes::CLOCK_NOT_READY, "no clock sample yet")
+        }
         CtlRequest::Start(_) => {
             CtlReply::ok(json!({"session_id": "visor-1-20261019T101500Z-3fa2"}))
         }
@@ -33,7 +38,12 @@ fn service(req: CtlRequest) -> CtlReply {
         }
         CtlRequest::Mark(m) if m.room.is_empty() => CtlReply::err(ctl_codes::BAD_REQUEST, "room"),
         CtlRequest::Mark(_) => CtlReply::ok(json!({"segment": 3})),
-        CtlRequest::Exposure(e) => CtlReply::ok(e),
+        // Not applied to the sensor: unlocked, requested values echoed.
+        CtlRequest::Exposure(e) => CtlReply::ok(ExposureView {
+            locked: false,
+            applied: false,
+            ..e
+        }),
         CtlRequest::Coverage => CtlReply::ok(CoverageView {
             cell_m: 0.5,
             cells: vec![[0, 1, 4]],
@@ -116,12 +126,26 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
         Some(exp.clone()),
     )
     .await;
-    assert_eq!((st, body), (StatusCode::OK, exp));
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({"locked": false, "applied": false, "exposure_us": 4000, "gain": 2.0, "mode": "walking"})
+    );
     let sent: ExposureView = serde_json::from_value(
         serde_json::from_str::<Value>(recorded.lock().last().unwrap()).unwrap(),
     )
     .unwrap();
     assert_eq!(sent.mode, Some(ExposureMode::Walking));
+
+    let (st, body) = call(
+        app,
+        "POST",
+        "/atlas/capture/start",
+        Some(json!({"site": "early"})),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "E_CLOCK_NOT_READY");
 }
 
 #[tokio::test]
@@ -171,38 +195,4 @@ async fn without_the_service_state_is_an_idle_view_and_actions_are_unavailable()
     let (st, body) = call(app, "POST", "/atlas/capture/start", None).await;
     assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "E_CAPTURE_UNAVAILABLE");
-}
-
-#[tokio::test]
-async fn whep_and_the_rig_proxy_report_why_they_are_unreachable() {
-    let dir = tempfile::tempdir().unwrap();
-    let app = drone_router(test_api(
-        FakeHost::new(),
-        &dir.path().join("none.sock"),
-        dir.path(),
-    ));
-    for (method, uri) in [
-        ("POST", "/atlas/capture/whep?camera=cam_fl"),
-        ("DELETE", "/atlas/capture/whep?camera=cam_fl"),
-        ("DELETE", "/atlas/capture/whep/abc123?camera=cam_fl"),
-    ] {
-        let (st, body) = call(app.clone(), method, uri, None).await;
-        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{method} {uri}");
-        assert_eq!(body["error"], "E_WHEP_UNREACHABLE");
-    }
-    let (st, body) = call(
-        app.clone(),
-        "PUT",
-        "/atlas/rig",
-        Some(json!({"rig_id": "x"})),
-    )
-    .await;
-    assert_eq!(st, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], "E_RIG_INVALID");
-    let rig = json!({"contract": "ados.capture/1", "rig_id": "visor-01", "calib_version": "v1", "sensors": [
-        {"id": "imu0", "kind": "imu", "role": "nav", "T_body_sensor": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1], "time_offset_ns": 0}
-    ]});
-    let (st, body) = call(app, "PUT", "/atlas/rig", Some(rig)).await;
-    assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(body["error"], "E_RIG_UNREACHABLE");
 }

@@ -30,7 +30,9 @@
 #      comma-separated profile list, and `-` leaves the field unset (fetched on
 #      every arch / every profile). Blank lines and `#` comments are ignored.
 #   2. Stages the extension tree without the Rust sources, keeping the runtime
-#      helper scripts under agent/python/, and without any payload path.
+#      helper scripts under agent/python/ and the uv projects under
+#      agent/capture/python/ (sources, pyproject.toml, uv.lock; no .venv), and
+#      without any payload path.
 #   3. Writes each payload's source, sha256 and size_bytes into the STAGED
 #      manifest's agent.payloads block (the source manifest is never touched).
 #   4. Refuses to pack when a `bin:` reference names no `binaries` entry, when
@@ -194,7 +196,9 @@ else
   # Payload paths are fetched at install and may not also ship in the archive
   # (the host refuses a payload that would overwrite an archive file), so each
   # one is excluded by its anchored path. The Rust crate sources never ship;
-  # agent/python/ holds helper scripts the binaries run, so it does.
+  # agent/python/ holds helper scripts the binaries run and
+  # agent/capture/python/ the uv projects the capture service syncs on first
+  # start, so both do.
   payload_excludes=()
   while read -r payload_path; do
     payload_excludes+=(--exclude "/${payload_path}")

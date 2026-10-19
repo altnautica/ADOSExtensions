@@ -15,7 +15,7 @@ const T_BODY_LIDAR: [f64; 16] = [
     0.0, -1.0, 0.0, 0.1, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.2, 0.0, 0.0, 0.0, 1.0,
 ];
 
-fn rig() -> Rig {
+pub(super) fn rig() -> Rig {
     serde_json::from_value(json!({
         "contract": "ados.capture/1",
         "rig_id": "test",
@@ -37,7 +37,7 @@ fn pose_line(t_ns: u64, t_w_l: [f64; 16], eig: [f64; 3], n: u32) -> String {
     json!({ "t_ns": t_ns, "T_w_l": t_w_l, "eig": eig, "n": n }).to_string()
 }
 
-fn scan(t_ns: u64, n: usize) -> LidarScan {
+pub(super) fn scan(t_ns: u64, n: usize) -> LidarScan {
     LidarScan {
         sensor_id: "mid360".into(),
         t_ns,
@@ -127,7 +127,7 @@ fn health_follows_init_and_degeneracy() {
     assert_eq!(track.quality().degeneracy_ratio, Some(0.0025));
 }
 
-fn config(dir: &Path, lidar_id: &str) -> LidarPoseConfig {
+pub(super) fn config(dir: &Path, lidar_id: &str) -> LidarPoseConfig {
     LidarPoseConfig {
         launcher: Launcher::Python("python3".into()),
         project_dir: dir.to_path_buf(),
@@ -151,7 +151,7 @@ async fn spawn_rejects_unknown_or_non_lidar_sensors() {
 
 /// A stand-in `kiss_icp_live`: answers each scan with `T_w_l` = 0.1 m per
 /// scan along LiDAR x and fixed eigenvalues, then exits after five scans.
-const FAKE_MAIN: &str = r#"
+pub(super) const FAKE_MAIN: &str = r#"
 import json, socket, struct, sys
 a = sys.argv[1:]
 sock_path, cfg = a[a.index("--socket") + 1], a[a.index("--config") + 1]

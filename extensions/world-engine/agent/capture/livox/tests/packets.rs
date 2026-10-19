@@ -242,6 +242,21 @@ fn high_packet(ts: u64, interval_ns: u64, points: &[(i32, i32, i32)]) -> Vec<u8>
     b
 }
 
+/// A one-sample IMU packet stamped `ts`.
+fn imu_packet(ts: u64) -> Vec<u8> {
+    let mut b = vec![0u8; 36];
+    b[1..3].copy_from_slice(&60u16.to_le_bytes());
+    b[5..7].copy_from_slice(&1u16.to_le_bytes());
+    b[10] = 0;
+    b[28..36].copy_from_slice(&ts.to_le_bytes());
+    for v in [0.0f32, 0.0, 0.1, 0.0, 0.0, 1.0] {
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    let crc = crc32(&b[28..]);
+    b[24..28].copy_from_slice(&crc.to_le_bytes());
+    b
+}
+
 fn scans(out: &[Event]) -> Vec<&ados_livox::Scan> {
     out.iter()
         .filter_map(|e| match e {
@@ -351,4 +366,61 @@ fn imu_packets_become_host_timed_samples() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn interleaved_imu_never_cuts_or_remaps_scans() {
+    const MS: u64 = 1_000_000;
+    const US: u64 = 1_000;
+    let mut d = Decoder::new(DecoderConfig::default());
+    let mut out = Vec::new();
+    // Points as in `scans_split_at_period_boundaries_across_packets`: 1 ms
+    // transport delay. IMU every 5 ms on its own port, received 0.3 ms after
+    // each point packet but stamped 4 ms before that packet's first point,
+    // so every IMU stamp is older than the last point seen and its apparent
+    // delay (9.3 ms) differs from the points' (1 ms). One IMU packet carries
+    // a stamp a full second off, which restarts the IMU filter only.
+    let mut dev = 5_022 * MS;
+    let mut k = 0;
+    while dev < 5_300 * MS {
+        let pkt = high_packet(dev, 4 * MS, &[(1000, 0, 0); 5]);
+        d.push(&pkt, dev + 4 * MS + 5_000 * MS + MS, &mut out)
+            .unwrap();
+        let imu_dev = if k == 20 {
+            dev - 1_000 * MS
+        } else {
+            dev - 4 * MS
+        };
+        let imu_rx = dev + 4 * MS + 5_000 * MS + MS + 300 * US;
+        d.push(&imu_packet(imu_dev), imu_rx, &mut out).unwrap();
+        k += 1;
+        dev += 5 * MS;
+    }
+    d.flush(&mut out);
+
+    let s = scans(&out);
+    assert_eq!(s.len(), 4);
+    assert_eq!(
+        s.iter().map(|s| s.len()).collect::<Vec<_>>(),
+        [78, 100, 100, 2]
+    );
+    for scan in &s {
+        assert_eq!(scan.t_ns, scan.device_t_ns + 5_001 * MS);
+    }
+    let st = d.stats();
+    assert_eq!(st.clock_resets, 0);
+    assert_eq!(st.imu_clock_resets, 2, "jump away and back");
+    assert_eq!(st.imu_samples, k as u64);
+    // IMU host times come from the IMU stream's own offset: received 5 s +
+    // 9.3 ms after its stamp.
+    let imu: Vec<_> = out
+        .iter()
+        .filter_map(|e| match e {
+            Event::Imu(i) => Some(i),
+            Event::Scan(_) => None,
+        })
+        .collect();
+    let last = imu.last().unwrap();
+    assert_eq!(last.t_ns, last.device_t_ns + 5_009 * MS + 300 * US);
+    assert_eq!(d.points_clock().offset_ns(), Some((5_001 * MS) as i128));
 }

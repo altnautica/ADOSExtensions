@@ -35,12 +35,18 @@ pub mod codes {
     pub const BAD_REQUEST: &str = "E_BAD_REQUEST";
     pub const NO_RIG: &str = "E_NO_RIG";
     pub const RECORDER: &str = "E_RECORDER";
+    /// The clock service names a non-host timebase but no clock sample has
+    /// arrived on the sensor bus yet.
+    pub const CLOCK_NOT_READY: &str = "E_CLOCK_NOT_READY";
 }
 
 /// The HTTP status a refusal code maps to.
 pub fn http_status(code: &str) -> u16 {
     match code {
-        codes::STORAGE_FULL | codes::ALREADY_RECORDING | codes::NOT_RECORDING => 409,
+        codes::STORAGE_FULL
+        | codes::ALREADY_RECORDING
+        | codes::NOT_RECORDING
+        | codes::CLOCK_NOT_READY => 409,
         codes::BAD_REQUEST | codes::NO_RIG => 400,
         _ => 500,
     }
@@ -86,7 +92,9 @@ pub enum ExposureMode {
     Short,
 }
 
-/// `exposure` in the state and the `PUT .../exposure` body/reply.
+/// `exposure` in the state and the `PUT .../exposure` body/reply. `applied`
+/// is true only once the camera has taken the values; until then the
+/// requested (quantised) values are echoed with `applied: false`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExposureView {
     pub locked: bool,
@@ -96,6 +104,8 @@ pub struct ExposureView {
     pub gain: Option<f32>,
     #[serde(default)]
     pub mode: Option<ExposureMode>,
+    #[serde(default)]
+    pub applied: bool,
 }
 
 /// A control request.
@@ -253,6 +263,18 @@ mod tests {
     fn refusals_map_to_http_statuses() {
         assert_eq!(http_status(codes::STORAGE_FULL), 409);
         assert_eq!(http_status(codes::BAD_REQUEST), 400);
+        assert_eq!(http_status(codes::CLOCK_NOT_READY), 409);
+    }
+
+    #[test]
+    fn exposure_applied_defaults_false() {
+        let v: ExposureView = serde_json::from_value(json!({"locked": true})).unwrap();
+        assert!(!v.applied);
+        assert_eq!(serde_json::to_value(v).unwrap()["applied"], false);
+    }
+
+    #[test]
+    fn refusal_body_carries_the_code() {
         let e = serde_json::to_value(CtlReply::err(codes::STORAGE_FULL, "full")).unwrap();
         assert_eq!(e["error"], "E_STORAGE_FULL");
         assert_eq!(e["ok"], false);

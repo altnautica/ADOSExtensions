@@ -51,6 +51,9 @@ pub struct SensorState {
     pub clock: ClockMap,
     pub frames: u64,
     pub decode_errors: u64,
+    /// Events folded into the state but not forwarded to the capture loop
+    /// because its queue was full (the loop did not record them).
+    pub dropped_forward: u64,
 }
 
 impl SensorState {
@@ -80,7 +83,9 @@ impl SensorState {
                     ring.pop_front();
                 }
             }
-            BusEvent::Clock(s) => self.clock.observe(*s),
+            BusEvent::Clock(s) => {
+                self.clock.observe(*s);
+            }
             BusEvent::Gnss { .. } => {}
         }
     }
@@ -186,7 +191,9 @@ pub async fn run_ingest(
                 Ok(frame) => match decode(&frame) {
                     Ok(Some(ev)) => {
                         state.lock().apply(&ev);
-                        let _ = tx.try_send(ev);
+                        if tx.try_send(ev).is_err() {
+                            state.lock().dropped_forward += 1;
+                        }
                     }
                     Ok(None) => {}
                     Err(_) => state.lock().decode_errors += 1,

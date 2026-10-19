@@ -108,11 +108,32 @@ pub struct RecorderStats {
     pub images: HashMap<String, u64>,
     pub dropped: HashMap<String, u64>,
     pub dropped_other: u64,
+    /// Items skipped because they could not be recorded (short buffer,
+    /// encode failure, bad keyframe name), per kind (`image`, `keyframe`).
+    pub bad_items: HashMap<&'static str, u64>,
+    /// Items not written because the session writer had already failed.
+    pub lost_after_error: u64,
     pub bytes: u64,
     /// Bytes per second over the last measurement.
     pub write_bps: f64,
-    /// The first write error; the session stops recording once set.
+    /// The first session-writer I/O error; the session stops recording once
+    /// set.
     pub error: Option<String>,
+}
+
+/// Why one item was not written.
+#[derive(Debug)]
+enum WriteFail {
+    /// The item itself is unusable; skip it and carry on.
+    Bad(&'static str, anyhow::Error),
+    /// The session writer failed; the recording cannot continue.
+    Io(anyhow::Error),
+}
+
+impl From<ados_capture_contract::Error> for WriteFail {
+    fn from(e: ados_capture_contract::Error) -> Self {
+        Self::Io(e.into())
+    }
 }
 
 /// Start parameters.
@@ -145,11 +166,6 @@ impl Recorder {
         let dir = writer.dir().to_path_buf();
         File::create(dir.join(crate::storage::RECORDING_MARKER))?;
         fs::create_dir_all(dir.join("keyframes"))?;
-        if let Some(m) = &cfg.active_marker {
-            if let Err(e) = File::create(m) {
-                tracing::warn!(path = %m.display(), error = %e, "capture_active_marker_failed");
-            }
-        }
         let stats = Arc::new(Mutex::new(RecorderStats::default()));
         let (tx, rx) = mpsc::sync_channel(QUEUE);
         let thread_stats = stats.clone();
@@ -169,6 +185,13 @@ impl Recorder {
                     thread_pending,
                 )
             })?;
+        // The capture-active marker comes last so no failure above leaves
+        // it behind.
+        if let Some(m) = &cfg.active_marker {
+            if let Err(e) = File::create(m) {
+                tracing::warn!(path = %m.display(), error = %e, "capture_active_marker_failed");
+            }
+        }
         Ok(Self {
             tx,
             stats,
@@ -320,11 +343,19 @@ fn write_loop(
             pending_images.fetch_sub(1, Ordering::Relaxed);
         }
         if stats.lock().error.is_some() {
+            stats.lock().lost_after_error += 1;
             continue;
         }
-        if let Err(e) = write_item(&mut w, &dir, item, encoding, &stats) {
-            tracing::error!(error = %e, "capture_record_failed");
-            stats.lock().error = Some(e.to_string());
+        match write_item(&mut w, &dir, item, encoding, &stats) {
+            Ok(()) => {}
+            Err(WriteFail::Bad(kind, e)) => {
+                tracing::warn!(kind, error = %e, "capture_record_item_skipped");
+                *stats.lock().bad_items.entry(kind).or_default() += 1;
+            }
+            Err(WriteFail::Io(e)) => {
+                tracing::error!(error = %e, "capture_record_failed");
+                stats.lock().error = Some(e.to_string());
+            }
         }
     }
 }
@@ -335,7 +366,7 @@ fn write_item(
     item: Item,
     encoding: ImageEncoding,
     stats: &Mutex<RecorderStats>,
-) -> anyhow::Result<()> {
+) -> Result<(), WriteFail> {
     match item {
         Item::Image {
             camera,
@@ -346,7 +377,9 @@ fn write_item(
             pixels,
         } => {
             let topic = topics::cam_image(&camera);
-            match convert::image(&camera, t_ns, format, width, height, pixels, encoding)? {
+            let msg = convert::image(&camera, t_ns, format, width, height, pixels, encoding)
+                .map_err(|e| WriteFail::Bad("image", e))?;
+            match msg {
                 ImageMsg::Raw(m) => w.write_proto(&topic, t_ns, &m)?,
                 ImageMsg::Compressed(m) => w.write_proto(&topic, t_ns, &m)?,
             }
@@ -374,9 +407,15 @@ fn write_item(
         Item::Health { t_ns, json } => w.write_json(topics::HEALTH, t_ns, &json)?,
         Item::Keyframe { file, jpeg } => {
             if !crate::storage::safe_session_id(file.trim_end_matches(".jpg")) {
-                anyhow::bail!("bad keyframe file name `{file}`");
+                return Err(WriteFail::Bad(
+                    "keyframe",
+                    anyhow::anyhow!("bad keyframe file name `{file}`"),
+                ));
             }
-            fs::write(dir.join("keyframes").join(file), jpeg)?;
+            // A keyframe preview is outside the session log; a failed write
+            // loses that preview only.
+            fs::write(dir.join("keyframes").join(file), jpeg)
+                .map_err(|e| WriteFail::Bad("keyframe", e.into()))?;
         }
         Item::Finish { .. } => unreachable!("handled by the loop"),
     }

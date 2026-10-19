@@ -1,14 +1,17 @@
 //! Running `kiss_icp_live` as a supervised child.
 //!
-//! One run: bind the socket, spawn the child, accept its connection, then
-//! write the queued scan frames into it while a task turns the JSON lines it
-//! writes back into [`PoseTrack`] estimates. Scans queued before the child
-//! connects are discarded. When the child exits (or its socket closes) the
-//! track is reset and marked lost, and the next run starts after a backoff
-//! that doubles from [`MIN_BACKOFF`] to [`MAX_BACKOFF`] and returns to the
-//! minimum after a run of at least [`HEALTHY_RUN`].
+//! Before each run the interpreter is resolved: a fixed python, or the
+//! environment [`super::setup`] provisions with uv (a no-op while it is
+//! current). One run: bind the socket, spawn the child, accept its
+//! connection, then write the queued scan frames into it while a task turns
+//! the JSON lines it writes back into [`PoseTrack`] estimates. Scans queued
+//! before the child connects are discarded. When the child exits (or its
+//! socket closes), or provisioning fails, the track is reset and marked lost,
+//! and the next attempt starts after a backoff that doubles from
+//! [`MIN_BACKOFF`] to [`MAX_BACKOFF`] and returns to the minimum after a run
+//! of at least [`HEALTHY_RUN`].
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -21,8 +24,9 @@ use tokio::process::Command;
 use tokio::sync::mpsc;
 use world_engine_protocol::atlas::{PoseSource, VioHealth};
 
+use super::setup::{ensure_env, SetupError};
 use super::wire::{parse_line, ChildPose};
-use super::LidarCounters;
+use super::{Launcher, LidarCounters};
 use crate::pose::{diagonal_cov, se3, PoseEstimate, PoseQuality, PoseTrack};
 
 pub const MIN_BACKOFF: Duration = Duration::from_secs(1);
@@ -37,17 +41,28 @@ pub const DEGENERATE_RATIO: f64 = 0.05;
 /// How long the result reader may keep draining after the child exits.
 const DRAIN: Duration = Duration::from_secs(1);
 
-/// The child's command line and the extrinsics its output is mapped with.
+/// The child's launch and the extrinsics its output is mapped with.
 #[derive(Debug, Clone)]
 pub struct ChildSpec {
-    pub program: PathBuf,
-    /// Arguments before `--socket <path> --config <path>`.
-    pub args: Vec<String>,
+    pub launcher: Launcher,
+    /// Where a uv launcher provisions the environment.
+    pub env_dir: PathBuf,
+    /// The project directory; the child's cwd.
     pub cwd: PathBuf,
     pub socket: PathBuf,
     pub config: PathBuf,
     /// Row-major `T_body_lidar`.
     pub t_body_lidar: [f64; 16],
+}
+
+impl ChildSpec {
+    /// The interpreter that runs `-m kiss_icp_live`.
+    pub async fn interpreter(&self) -> Result<PathBuf, SetupError> {
+        match &self.launcher {
+            Launcher::Python(py) => Ok(py.clone()),
+            Launcher::Uv(uv) => ensure_env(uv, &self.cwd, &self.env_dir).await,
+        }
+    }
 }
 
 /// Nominal covariance by health: KISS-ICP reports none.
@@ -134,8 +149,18 @@ pub async fn supervise(
     let mut backoff = MIN_BACKOFF;
     loop {
         mark_down(&track);
+        let python = match spec.interpreter().await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(error = %e, "kiss_icp_live environment setup failed");
+                counters.setup_failures.fetch_add(1, Ordering::Relaxed);
+                idle(&mut rx, backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+                continue;
+            }
+        };
         let started = Instant::now();
-        match run_once(&spec, &mut rx, &track).await {
+        match run_once(&spec, &python, &mut rx, &track).await {
             Ok(status) => tracing::warn!(%status, "kiss_icp_live exited"),
             Err(e) => tracing::warn!(error = %e, "kiss_icp_live failed"),
         }
@@ -144,16 +169,21 @@ pub async fn supervise(
         if started.elapsed() >= HEALTHY_RUN {
             backoff = MIN_BACKOFF;
         }
-        // Scans queued while the child is down would be stale: discard them.
-        let wait = tokio::time::sleep(backoff);
-        tokio::pin!(wait);
-        loop {
-            tokio::select! {
-                _ = &mut wait => break,
-                Some(_) = rx.recv() => {}
-            }
-        }
+        idle(&mut rx, backoff).await;
         backoff = (backoff * 2).min(MAX_BACKOFF);
+    }
+}
+
+/// Wait out `backoff`, discarding the scans that arrive meanwhile (they would
+/// be stale by the time a child reads them).
+async fn idle(rx: &mut mpsc::Receiver<Vec<u8>>, backoff: Duration) {
+    let wait = tokio::time::sleep(backoff);
+    tokio::pin!(wait);
+    loop {
+        tokio::select! {
+            _ = &mut wait => break,
+            Some(_) = rx.recv() => {}
+        }
     }
 }
 
@@ -186,13 +216,14 @@ async fn send(conn: &mut Option<OwnedWriteHalf>, msg: &[u8]) -> bool {
 
 async fn run_once(
     spec: &ChildSpec,
+    python: &Path,
     rx: &mut mpsc::Receiver<Vec<u8>>,
     track: &Arc<PoseTrack>,
 ) -> std::io::Result<ExitStatus> {
     let _ = std::fs::remove_file(&spec.socket);
     let listener = UnixListener::bind(&spec.socket)?;
-    let mut child = Command::new(&spec.program)
-        .args(&spec.args)
+    let mut child = Command::new(python)
+        .args(["-m", "kiss_icp_live"])
         .arg("--socket")
         .arg(&spec.socket)
         .arg("--config")

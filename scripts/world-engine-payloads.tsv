@@ -11,10 +11,31 @@
 world-engine-link-aarch64-linux     bin/aarch64-linux/world-engine-link     aarch64-linux  -
 world-engine-link-x86_64-linux      bin/x86_64-linux/world-engine-link      x86_64-linux   -
 world-engine-link-aarch64-macos     bin/aarch64-macos/world-engine-link     aarch64-macos  -
-world-engine-capture-aarch64-linux  bin/aarch64-linux/world-engine-capture  aarch64-linux  drone
+world-engine-capture-aarch64-linux  bin/aarch64-linux/world-engine-capture  aarch64-linux  drone,visor
+world-engine-capture-x86_64-linux   bin/x86_64-linux/world-engine-capture   x86_64-linux   drone,visor
 world-engine-node-aarch64-linux     bin/aarch64-linux/world-engine-node     aarch64-linux  workstation,compute
 world-engine-node-x86_64-linux      bin/x86_64-linux/world-engine-node      x86_64-linux   workstation,compute
 world-engine-node-aarch64-macos     bin/aarch64-macos/world-engine-node     aarch64-macos  workstation,compute
+# Native helpers of the capture service, built on the x86_64-linux release leg
+# by the pinned upstream build scripts (glibc, Ubuntu 24.04 runner):
+#   extensions/world-engine/agent/capture/basalt/build.sh --arch x86_64 --out <dir>
+#     -> <dir>/bin/x86_64-linux/basalt-ados; its licence file is Basalt's and
+#        basalt-ados's BSD-3 texts plus every vcpkg port's copyright file.
+#   extensions/world-engine/agent/capture/livox/build-sdk2.sh --arch x86_64 --out <dir>
+#     -> <dir>/lib/x86_64-linux/{liblivox_lidar_sdk_shared.so,LICENSE-livox-sdk2.txt}
+# aarch64-linux rows are added once that build is part of the release (see
+# agent/capture/basalt/README.md and livox/build-sdk2.sh).
+world-engine-basalt-ados-x86_64-linux          bin/x86_64-linux/basalt-ados                   x86_64-linux  drone,visor
+world-engine-basalt-ados-LICENSES-x86_64-linux bin/x86_64-linux/LICENSE-basalt-ados.txt       x86_64-linux  drone,visor
+world-engine-livox-sdk2-x86_64-linux.so        lib/x86_64-linux/liblivox_lidar_sdk_shared.so  x86_64-linux  visor
+world-engine-livox-sdk2-LICENSE-x86_64-linux   lib/x86_64-linux/LICENSE-livox-sdk2.txt        x86_64-linux  visor
+# uv runs the on-device `uv sync --frozen` of the KISS-ICP odometry
+# environment; the release workflow stages the pinned, checksum-verified
+# musl build and its MIT licence.
+world-engine-uv-aarch64-linux                  bin/aarch64-linux/uv                           aarch64-linux visor
+world-engine-uv-x86_64-linux                   bin/x86_64-linux/uv                            x86_64-linux  visor
+world-engine-uv-LICENSE-aarch64-linux          bin/aarch64-linux/LICENSE-uv.txt               aarch64-linux visor
+world-engine-uv-LICENSE-x86_64-linux           bin/x86_64-linux/LICENSE-uv.txt                x86_64-linux  visor
 # The Rerun web viewer's wasm, served to the GCS half as a plugin asset. Every
 # profile serves the GCS module, so every node fetches it.
 re_viewer_bg.wasm                   gcs/assets/re_viewer_bg.wasm            -              -

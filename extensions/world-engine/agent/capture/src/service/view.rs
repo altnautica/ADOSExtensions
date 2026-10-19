@@ -11,6 +11,7 @@ use crate::recording::Phase;
 impl Engine {
     pub(crate) fn state_view(&mut self) -> CaptureStateView {
         let now = crate::clock::mono_ns();
+        self.quality.recording = self.is_recording();
         let state = match (&self.session, &self.closing) {
             (Some(s), _) if s.phase == Phase::Recording => "recording",
             (Some(_), _) => "paused",
@@ -75,7 +76,7 @@ impl Engine {
             },
             pose,
             coverage: self.coverage.summary(),
-            health: self.quality.health(),
+            health: self.quality.health(now),
             exposure: self.exposure,
             storage: StorageView {
                 free_bytes: free,

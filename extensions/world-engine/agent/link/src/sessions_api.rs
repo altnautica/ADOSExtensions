@@ -2,13 +2,15 @@
 //!
 //! - `GET /atlas/sessions` → `{"sessions":[row...]}` (rows per
 //!   [`crate::sessions`], newest first); `[]` while the capture root is
-//!   unknown.
+//!   unknown. A crashed session (stale `.recording`) is listed with
+//!   `uploaded: false` and `upload` `{state: "failed", error: "not_finished"}`.
 //! - `POST /atlas/sessions/{id}/upload` → `{"ok":true}`: queue it for the
-//!   paired node (`409 E_RECORDING` while it records).
+//!   paired node (`409 E_RECORDING` while it records, `409 E_NOT_FINISHED`
+//!   for a crashed session).
 //! - `DELETE /atlas/sessions/{id}[?force=true]` → `{"ok":true}`: refused with
 //!   `409 E_RECORDING` while it records, `409 E_UPLOADING` while queued or
 //!   uploading, and `409 E_NOT_UPLOADED` before the node committed it unless
-//!   `force=true`.
+//!   `force=true` (which also removes a crashed session).
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -20,7 +22,7 @@ use serde_json::{json, Value};
 
 use crate::api::DroneApi;
 use crate::reply::{codes, respond, ApiError};
-use crate::sessions::{row, scan, SessionDir, SessionRow};
+use crate::sessions::{not_finished_view, row, scan, LiveSession, SessionDir, SessionRow};
 use crate::upload::{no_storage, unknown_session};
 
 pub fn routes() -> Router<DroneApi> {
@@ -36,13 +38,27 @@ impl DroneApi {
         let Some(root) = self.uploads.root() else {
             return Ok(json!({ "sessions": [] }));
         };
+        let dirs = tokio::task::spawn_blocking(move || scan(&root))
+            .await
+            .map_err(ApiError::io)?;
+        // The control socket is asked only when a marker could be stale.
+        let live = if dirs.iter().any(|d| d.stale(&LiveSession::None)) {
+            self.open_session().await
+        } else {
+            LiveSession::None
+        };
         let uploads = self.uploads.clone();
         let rows = tokio::task::spawn_blocking(move || {
-            let mut rows: Vec<SessionRow> = scan(&root)
+            let mut rows: Vec<SessionRow> = dirs
                 .iter()
                 .map(|dir| {
                     let size = crate::sessions::dir_size(&dir.path);
-                    row(dir, uploads.view(dir, size))
+                    let view = if dir.stale(&live) {
+                        not_finished_view(size)
+                    } else {
+                        uploads.view(dir, size)
+                    };
+                    row(dir, view)
                 })
                 .collect();
             rows.sort_by(|a, b| {
@@ -56,8 +72,9 @@ impl DroneApi {
     }
 
     /// Queue a session for upload.
-    pub fn session_upload(&self, id: &str) -> Result<Value, ApiError> {
-        self.uploads.request(id)?;
+    pub async fn session_upload(&self, id: &str) -> Result<Value, ApiError> {
+        let live = self.open_session().await;
+        self.uploads.request(id, &live)?;
         Ok(json!({ "ok": true }))
     }
 
@@ -67,7 +84,7 @@ impl DroneApi {
         let dir = SessionDir::open(&root, id).ok_or_else(|| unknown_session(id))?;
         let conflict =
             |code: &str, detail: &str| Err(ApiError::new(StatusCode::CONFLICT, code, detail));
-        if dir.recording {
+        if dir.recording && !dir.stale(&self.open_session().await) {
             return conflict(codes::RECORDING, "the session is still recording");
         }
         if self.uploads.busy(id) {
@@ -95,7 +112,7 @@ async fn list(State(api): State<DroneApi>) -> Response {
 }
 
 async fn upload(State(api): State<DroneApi>, Path(id): Path<String>) -> Response {
-    respond(api.session_upload(&id))
+    respond(api.session_upload(&id).await)
 }
 
 #[derive(Debug, Default, Deserialize)]

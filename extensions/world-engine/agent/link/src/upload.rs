@@ -30,10 +30,10 @@ use world_engine_transport::{BulkClient, BulkConfig, SessionPlan};
 use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{CredentialStore, SESSION_UPLOAD_LANE};
 use crate::host::{config_bool, Host};
-use crate::lan_node::{node_label, resolve_lan};
+use crate::lan_node::resolve_lan;
 use crate::power::PowerWatch;
 use crate::reply::{codes, ApiError};
-use crate::sessions::{scan, SessionDir};
+use crate::sessions::{scan, LiveSession, SessionDir};
 use crate::sleep_or_shutdown;
 
 /// Where session directories live: the capture root as the sandbox sees it.
@@ -173,16 +173,24 @@ impl UploadManager {
         self.inner.wake.notify_one();
     }
 
-    /// `POST /atlas/sessions/{id}/upload`: queue a finished session.
-    pub fn request(&self, id: &str) -> Result<(), ApiError> {
+    /// `POST /atlas/sessions/{id}/upload`: queue a finished session. `live`
+    /// is the capture service's open session, which tells a crashed session
+    /// (`409 E_NOT_FINISHED`) from one still recording (`409 E_RECORDING`).
+    pub fn request(&self, id: &str, live: &LiveSession) -> Result<(), ApiError> {
         let root = self.root().ok_or_else(no_storage)?;
         let dir = SessionDir::open(&root, id).ok_or_else(|| unknown_session(id))?;
-        if dir.recording || !dir.finished {
+        if dir.stale(live) {
+            return Err(not_finished());
+        }
+        if dir.recording {
             return Err(ApiError::new(
                 StatusCode::CONFLICT,
                 codes::RECORDING,
                 "the session is still recording",
             ));
+        }
+        if !dir.finished {
+            return Err(not_finished());
         }
         if !dir.uploaded {
             let size = crate::sessions::dir_size(&dir.path);
@@ -202,7 +210,10 @@ impl UploadManager {
         let fail = |node: Option<String>, e: ApiError| (node, e.tool_message());
         let root = self.root().ok_or_else(|| fail(None, no_storage()))?;
         let dir = SessionDir::open(&root, id).ok_or_else(|| fail(None, unknown_session(id)))?;
-        if dir.recording || !dir.finished {
+        if !dir.finished {
+            return Err((None, not_finished().tool_message()));
+        }
+        if dir.recording {
             return Err((
                 None,
                 format!("{}: the session is still recording", codes::RECORDING),
@@ -217,7 +228,7 @@ impl UploadManager {
         let node = resolve_lan(i.host.as_ref(), &i.credentials, &SESSION_UPLOAD_LANE)
             .await
             .map_err(|e| fail(None, e))?;
-        let label = node_label(&node);
+        let label = node.label();
         let credential = node.credential(&i.credentials, &SESSION_UPLOAD_LANE);
         self.update(id, |j| {
             j.view.state = UploadState::Uploading;
@@ -225,7 +236,7 @@ impl UploadManager {
             j.view.node = Some(label.clone());
             j.view.error = None;
         });
-        let client = BulkClient::new(node.base_url(), credential, i.cfg.clone());
+        let client = BulkClient::new(node.base_url(), credential, i.cfg.clone(), Some(node.pin));
         let this = self.clone();
         let sid = id.to_string();
         let progress = move |n: u64| this.update(&sid, |j| j.view.bytes_sent = n);
@@ -376,6 +387,14 @@ pub fn unknown_session(id: &str) -> ApiError {
         StatusCode::NOT_FOUND,
         codes::UNKNOWN_SESSION,
         format!("no session `{id}`"),
+    )
+}
+
+pub fn not_finished() -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        codes::NOT_FINISHED,
+        "the session was left unfinished by its recorder (no manifest)",
     )
 }
 

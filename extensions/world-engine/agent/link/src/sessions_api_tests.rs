@@ -122,3 +122,79 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     assert_eq!(st, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "E_UNKNOWN_SESSION");
 }
+
+#[tokio::test]
+async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_with_force() {
+    use crate::control::tests::fake_control_socket;
+    use crate::sessions::age_marker;
+    use world_engine_protocol::capture_ctl::{CaptureStateView, CtlReply};
+
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("atlas-control.sock");
+    let open = "live-20261019T120000Z-0002";
+    fake_control_socket(&sock, move |_| {
+        CtlReply::ok(CaptureStateView {
+            state: "recording".into(),
+            session_id: Some(open.into()),
+            ..CaptureStateView::default()
+        })
+    });
+    let app = drone_router(test_api(FakeHost::new(), &sock, dir.path()));
+    let root = dir.path().join("sessions");
+    for id in ["dead-20261019T100000Z-0001", open] {
+        std::fs::create_dir_all(root.join(id)).unwrap();
+        std::fs::write(root.join(id).join(RECORDING_MARKER), b"").unwrap();
+        age_marker(&root.join(id), 600);
+    }
+
+    let (_, body) = call(app.clone(), "GET", "/atlas/sessions", None).await;
+    let rows = body["sessions"].as_array().unwrap();
+    let dead = rows
+        .iter()
+        .find(|r| r["session_id"] == "dead-20261019T100000Z-0001")
+        .unwrap();
+    assert_eq!(dead["uploaded"], false);
+    assert_eq!(dead["upload"]["state"], "failed");
+    assert_eq!(dead["upload"]["error"], "not_finished");
+    // The capture service's open session is not stale, however old its marker.
+    let live = rows.iter().find(|r| r["session_id"] == open).unwrap();
+    assert_eq!(live["upload"]["state"], "idle");
+
+    let (st, body) = call(
+        app.clone(),
+        "POST",
+        "/atlas/sessions/dead-20261019T100000Z-0001/upload",
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "E_NOT_FINISHED");
+    let (st, body) = call(
+        app.clone(),
+        "DELETE",
+        "/atlas/sessions/dead-20261019T100000Z-0001",
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "E_NOT_UPLOADED");
+    let (st, _) = call(
+        app.clone(),
+        "DELETE",
+        "/atlas/sessions/dead-20261019T100000Z-0001?force=true",
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(!root.join("dead-20261019T100000Z-0001").exists());
+
+    let (st, body) = call(
+        app,
+        "DELETE",
+        &format!("/atlas/sessions/{open}?force=true"),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "E_RECORDING");
+}

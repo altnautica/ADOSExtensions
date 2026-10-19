@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 
-use world_engine_protocol::capture_ctl::ExposureMode;
+use world_engine_protocol::capture_ctl::{ExposureMode, ExposureView};
 
 /// Window of the mean-intensity series.
 pub const WINDOW_NS: u64 = 2_000_000_000;
@@ -116,29 +116,56 @@ pub const SHORT_EXPOSURE_US: u32 = 2_000;
 pub const MAX_GAIN: f32 = 16.0;
 
 /// The flicker-safe `(exposure_us, gain)` closest to a requested pair,
-/// keeping `exposure × gain` where the gain range allows.
+/// keeping `exposure × gain` where the gain range allows. The safe values
+/// under the mode cap are anything up to [`SHORT_EXPOSURE_US`] and whole
+/// flicker periods; the nearest one to the (capped) request wins, the
+/// shorter on a tie.
 pub fn quantise_exposure(
     req_us: u32,
     req_gain: f32,
     mode: ExposureMode,
     mains_hz: u32,
 ) -> (u32, f32) {
-    let period = flicker_period_us(mains_hz);
-    let cap = exposure_cap_us(mode);
-    let wanted = req_us.clamp(1, cap.max(1));
+    let period = flicker_period_us(mains_hz).max(1);
+    let cap = exposure_cap_us(mode).max(1);
+    let wanted = req_us.clamp(1, cap);
     let product = req_us.max(1) as f64 * req_gain.max(1.0) as f64;
     let exposure = if wanted <= SHORT_EXPOSURE_US {
         wanted
     } else {
-        let multiple = (wanted / period) * period;
-        if multiple >= period {
-            multiple
-        } else {
-            SHORT_EXPOSURE_US
-        }
+        let below = (wanted / period) * period;
+        let above = below + period;
+        [SHORT_EXPOSURE_US.min(cap), below, above]
+            .into_iter()
+            .filter(|&c| c > 0 && c <= cap)
+            .min_by_key(|&c| (c.abs_diff(wanted), c))
+            .unwrap_or(SHORT_EXPOSURE_US.min(cap))
     };
     let gain = ((product / exposure as f64) as f32).clamp(1.0, MAX_GAIN);
     (exposure, gain)
+}
+
+/// Fold an exposure request into the current view: missing fields keep
+/// their current values and the result is re-quantised against the
+/// (possibly new) mode cap. The camera control path does not exist yet, so
+/// the view is never `locked` or `applied`; the values are what was asked.
+pub fn settle_exposure(cur: ExposureView, req: ExposureView, mains_hz: u32) -> ExposureView {
+    let mode = req.mode.or(cur.mode).unwrap_or_default();
+    let gain = req.gain.or(cur.gain);
+    let (exposure_us, gain) = match req.exposure_us.or(cur.exposure_us) {
+        Some(us) => {
+            let (e, g) = quantise_exposure(us, gain.unwrap_or(1.0), mode, mains_hz);
+            (Some(e), Some(g))
+        }
+        None => (None, gain),
+    };
+    ExposureView {
+        locked: false,
+        exposure_us,
+        gain,
+        mode: Some(mode),
+        applied: false,
+    }
 }
 
 #[cfg(test)]
@@ -188,9 +215,18 @@ mod tests {
         let (e, g) = quantise_exposure(12_000, 1.0, ExposureMode::Slow, 50);
         assert_eq!(e, 10_000);
         assert!((g - 1.2).abs() < 1e-6);
-        // 7 ms in slow mode is under one period: back to 2 ms.
+        // 7 ms in slow mode: 10 ms is nearer than 2 ms.
         assert_eq!(
             quantise_exposure(7_000, 1.0, ExposureMode::Slow, 50).0,
+            10_000
+        );
+        // 9 ms slow → 10 ms, not 2 ms.
+        let (e, g) = quantise_exposure(9_000, 1.0, ExposureMode::Slow, 50);
+        assert_eq!(e, 10_000);
+        assert_eq!(g, 1.0);
+        // 5 ms is under one period: the nearest safe value is 2 ms.
+        assert_eq!(
+            quantise_exposure(5_000, 1.0, ExposureMode::Slow, 50).0,
             2_000
         );
         // Short mode never exceeds 2 ms; gain is capped.
@@ -208,5 +244,32 @@ mod tests {
             quantise_exposure(9_000, 1.0, ExposureMode::Slow, 60).0,
             8_333
         );
+    }
+
+    #[test]
+    fn a_mode_change_alone_reapplies_the_cap() {
+        let slow = settle_exposure(
+            ExposureView::default(),
+            ExposureView {
+                locked: true,
+                exposure_us: Some(10_000),
+                mode: Some(ExposureMode::Slow),
+                ..Default::default()
+            },
+            50,
+        );
+        assert_eq!(slow.exposure_us, Some(10_000));
+        assert!(!slow.locked && !slow.applied);
+        let walking = settle_exposure(
+            slow,
+            ExposureView {
+                mode: Some(ExposureMode::Walking),
+                ..Default::default()
+            },
+            50,
+        );
+        assert!(walking.exposure_us.unwrap() <= 4_000, "{walking:?}");
+        assert_eq!(walking.gain, Some(5.0));
+        assert_eq!(walking.mode, Some(ExposureMode::Walking));
     }
 }

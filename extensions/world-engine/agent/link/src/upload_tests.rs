@@ -172,7 +172,7 @@ async fn the_marker_is_written_only_after_the_commit_ack() {
     tokio::spawn(m.clone().run(rx));
 
     // A refused commit leaves no marker and a failed row.
-    m.request(id).unwrap();
+    m.request(id, &LiveSession::None).unwrap();
     let dir = SessionDir::open(root.path(), id).unwrap();
     let v = settle(&m, &dir).await;
     assert_eq!(v.state, UploadState::Failed);
@@ -186,7 +186,7 @@ async fn the_marker_is_written_only_after_the_commit_ack() {
 
     // Accepted: the marker follows the ACK.
     node.lock().commit_ok = true;
-    m.request(id).unwrap();
+    m.request(id, &LiveSession::None).unwrap();
     let v = settle(&m, &dir).await;
     assert_eq!(v.state, UploadState::Committed, "{v:?}");
     assert_eq!(v.bytes_sent, v.bytes_total);
@@ -204,8 +204,29 @@ async fn recording_and_unknown_sessions_are_refused() {
     let dir = finished_session(root.path(), id);
     std::fs::write(dir.join(RECORDING_MARKER), b"").unwrap();
     let m = manager(FakeHost::new(), root.path());
-    assert_eq!(m.request(id).unwrap_err().code, codes::RECORDING);
-    assert_eq!(m.request("nope").unwrap_err().code, codes::UNKNOWN_SESSION);
+    let none = LiveSession::None;
+    assert_eq!(m.request(id, &none).unwrap_err().code, codes::RECORDING);
+    assert_eq!(
+        m.request("nope", &none).unwrap_err().code,
+        codes::UNKNOWN_SESSION
+    );
+    // Left by a crashed recorder: not finished, never uploaded.
+    let crashed = "drone-2-20261019T101500Z-0002";
+    let c = root.path().join(crashed);
+    std::fs::create_dir_all(&c).unwrap();
+    std::fs::write(c.join(RECORDING_MARKER), b"").unwrap();
+    crate::sessions::age_marker(&c, 600);
+    assert_eq!(
+        m.request(crashed, &none).unwrap_err().code,
+        codes::NOT_FINISHED
+    );
+    // The capture service's open session is recording.
+    assert_eq!(
+        m.request(id, &LiveSession::Open(id.into()))
+            .unwrap_err()
+            .code,
+        codes::RECORDING
+    );
     assert!(!m.busy(id));
 }
 

@@ -33,6 +33,8 @@ pub const CORRIDOR_WARN: f64 = 0.15;
 pub const CORRIDOR_BAD: f64 = 0.05;
 /// Clock sigma over which the clock chip warns, ns.
 pub const CLOCK_WARN_SIGMA_NS: i64 = 1_000_000;
+/// A camera with no frame for this long is left out of the chips.
+pub const CAMERA_STALE_NS: u64 = 2_000_000_000;
 
 /// One frame's measures.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,6 +79,8 @@ impl Held {
 #[derive(Debug, Default)]
 struct CameraQuality {
     last: Option<FrameQuality>,
+    /// Host ns of the last frame measured.
+    last_t_ns: u64,
     blur_warn: Held,
     blur_bad: Held,
     tex_warn: Held,
@@ -128,6 +132,9 @@ pub struct QualityMonitor {
     pub clock: ClockReading,
     /// Raised at any point of the session (the manifest's health flags).
     pub raised: SessionFlags,
+    /// Whether a session is recording; conditions seen while idle or paused
+    /// show on the chips but raise no session flag.
+    pub recording: bool,
 }
 
 /// The manifest's session health flags.
@@ -148,6 +155,7 @@ impl QualityMonitor {
     pub fn on_frame(&mut self, camera: &str, t_ns: u64, q: FrameQuality) {
         let c = self.cameras.entry(camera.to_string()).or_default();
         c.last = Some(q);
+        c.last_t_ns = t_ns;
         c.flicker.push(t_ns, q.mean);
         let blur = if c.blur_bad.update(q.blur < BLUR_BAD, t_ns) {
             Level::Bad
@@ -164,15 +172,17 @@ impl QualityMonitor {
             Level::Ok
         };
         c.levels = (blur, tex);
-        self.raised.blur |= blur != Level::Ok;
-        self.raised.texture |= tex != Level::Ok;
+        if self.recording {
+            self.raised.blur |= blur != Level::Ok;
+            self.raised.texture |= tex != Level::Ok;
+        }
     }
 
     /// The pose provider's quality, for the corridor chip.
     pub fn on_pose_quality(&mut self, degeneracy: Option<f64>, tracked: Option<u32>) {
         self.degeneracy = degeneracy;
         self.tracked_features = tracked;
-        if degeneracy.is_some_and(|r| r < CORRIDOR_WARN) {
+        if self.recording && degeneracy.is_some_and(|r| r < CORRIDOR_WARN) {
             self.raised.corridor = true;
         }
     }
@@ -181,25 +191,29 @@ impl QualityMonitor {
         self.tracked_features
     }
 
-    /// The six chips, in display order. A chip covering cameras reports the
-    /// worst camera.
-    pub fn health(&mut self) -> Vec<HealthView> {
+    /// The six chips, in display order, at host `now_ns`. A chip covering
+    /// cameras reports the worst camera that delivered a frame within
+    /// [`CAMERA_STALE_NS`].
+    pub fn health(&mut self, now_ns: u64) -> Vec<HealthView> {
+        let live: Vec<&CameraQuality> = self
+            .cameras
+            .values()
+            .filter(|c| now_ns.saturating_sub(c.last_t_ns) <= CAMERA_STALE_NS)
+            .collect();
         let worst = |f: &dyn Fn(&CameraQuality) -> Level| {
-            self.cameras.values().map(f).max().unwrap_or(Level::Ok)
+            live.iter().map(|c| f(c)).max().unwrap_or(Level::Ok)
         };
         let blur_level = worst(&|c| c.levels.0);
         let tex_level = worst(&|c| c.levels.1);
         let min_of = |f: &dyn Fn(&FrameQuality) -> f64| {
-            self.cameras
-                .values()
+            live.iter()
                 .filter_map(|c| c.last.as_ref().map(f))
                 .reduce(f64::min)
         };
         let blur_v = min_of(&|q| q.blur);
         let tex_v = min_of(&|q| q.corners as f64);
-        let flicker_v = self
-            .cameras
-            .values()
+        let flicker_v = live
+            .iter()
             .filter_map(|c| c.flicker.amplitude_pct())
             .reduce(f64::max);
         let flicker_level = match flicker_v {
@@ -207,7 +221,9 @@ impl QualityMonitor {
             Some(v) if v >= FLICKER_WARN_PCT => Level::Warn,
             _ => Level::Ok,
         };
-        self.raised.flicker |= flicker_level != Level::Ok;
+        if self.recording {
+            self.raised.flicker |= flicker_level != Level::Ok;
+        }
         let corridor_level = match self.degeneracy {
             Some(r) if r < CORRIDOR_BAD => Level::Bad,
             Some(r) if r < CORRIDOR_WARN => Level::Warn,

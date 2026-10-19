@@ -18,6 +18,14 @@ pub type AuxCallback = Arc<dyn Fn(u8, Vec<u8>) + Send + Sync>;
 /// A callback for one vehicle-state snapshot (the agent's state map).
 pub type StateCallback = Arc<dyn Fn(Value) + Send + Sync>;
 
+/// A WHEP answer the agent relayed: the SDP and the opaque session location
+/// to close it with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WhepAnswer {
+    pub sdp: String,
+    pub location: Option<String>,
+}
+
 /// The config scope every link write lands in (the host falls back to the
 /// global scope on a node with no bound drone id).
 const CONFIG_SCOPE: &str = "drone";
@@ -59,6 +67,19 @@ pub trait Host: Send + Sync + 'static {
         service_type: &str,
         window: Duration,
     ) -> Result<Vec<DiscoveredService>, ClientError>;
+    /// `video.whep.offer` (cap `video.whep.relay`): relay a WHEP offer to the
+    /// agent's own WHEP endpoint for `camera_id`'s preview leg.
+    async fn whep_offer(&self, camera_id: &str, offer_sdp: &str)
+        -> Result<WhepAnswer, ClientError>;
+    /// `video.whep.close` (cap `video.whep.relay`): tear a WHEP session down
+    /// at the location its offer returned.
+    async fn whep_close(&self, location: &str) -> Result<(), ClientError>;
+    /// `sensors.rig.write` (cap `sensors.rig.write`): relay a rig document to
+    /// core `PUT /api/v1/sensors/rig`; the core status and JSON body.
+    async fn put_rig(
+        &self,
+        rig: &serde_json::Value,
+    ) -> Result<(u16, serde_json::Value), ClientError>;
 }
 
 #[async_trait::async_trait]
@@ -119,6 +140,29 @@ impl Host for PluginContext {
         window: Duration,
     ) -> Result<Vec<DiscoveredService>, ClientError> {
         self.mdns.browse(service_type, window).await
+    }
+
+    async fn whep_offer(
+        &self,
+        camera_id: &str,
+        offer_sdp: &str,
+    ) -> Result<WhepAnswer, ClientError> {
+        let a = self.video.whep_offer(camera_id, offer_sdp).await?;
+        Ok(WhepAnswer {
+            sdp: a.sdp,
+            location: a.location,
+        })
+    }
+
+    async fn whep_close(&self, location: &str) -> Result<(), ClientError> {
+        self.video.whep_close(location).await
+    }
+
+    async fn put_rig(
+        &self,
+        rig: &serde_json::Value,
+    ) -> Result<(u16, serde_json::Value), ClientError> {
+        self.sensors.put_rig(rig).await
     }
 }
 
