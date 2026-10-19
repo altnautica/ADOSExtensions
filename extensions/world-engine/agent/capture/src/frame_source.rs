@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 pub struct CapturedFrame {
     pub camera_id: String,
+    /// Capture time in unix milliseconds.
     pub ts_ms: i64,
     pub width: u32,
     pub height: u32,
@@ -36,13 +37,25 @@ impl From<Frame> for CapturedFrame {
         let d = frame.descriptor;
         Self {
             camera_id: d.camera_id,
-            ts_ms: d.ts_ms,
+            ts_ms: unix_ms_of_mono(d.ts_ns),
             width: d.width,
             height: d.height,
             format: d.format,
             pixels: frame.pixels,
         }
     }
+}
+
+/// Unix milliseconds of a host-monotonic instant. The frame descriptor stamps
+/// the host monotonic clock; the capture record carries unix time, so the
+/// frame's age on the monotonic clock is subtracted from the wall clock now.
+fn unix_ms_of_mono(ts_ns: u64) -> i64 {
+    let age_ms = (crate::pose_source::mono_ns() - ts_ns as i64).max(0) / 1_000_000;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    now_ms - age_ms
 }
 
 /// The frame source the capture loop runs with.
@@ -228,5 +241,16 @@ mod tests {
         assert_eq!(s.next().await.unwrap().ts_ms, 100);
         assert_eq!(s.next().await.unwrap().ts_ms, 200);
         assert!(s.next().await.is_none(), "exhausted");
+    }
+
+    #[test]
+    fn monotonic_stamp_maps_to_unix_now_minus_its_age() {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        let ts_ns = (crate::pose_source::mono_ns() - 2_000_000_000) as u64;
+        let unix = unix_ms_of_mono(ts_ns);
+        assert!((unix - (now - 2_000)).abs() < 500, "{unix} vs {now}");
     }
 }

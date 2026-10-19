@@ -64,7 +64,8 @@ impl GrayImage {
 }
 
 /// Convert a resolved shared-bus frame to a grayscale image, or `None`
-/// when the pixel buffer is empty or too short for the declared format.
+/// when the pixel buffer is empty or too short for the declared format, or
+/// the format is a Bayer mosaic (not demosaiced on this path).
 pub fn frame_to_gray(frame: &Frame) -> Option<GrayImage> {
     let w = frame.descriptor.width;
     let h = frame.descriptor.height;
@@ -73,7 +74,7 @@ pub fn frame_to_gray(frame: &Frame) -> Option<GrayImage> {
     }
     let px = w as usize * h as usize;
     match frame.descriptor.format {
-        FrameFormat::Nv12 | FrameFormat::Yuv420p => {
+        FrameFormat::Nv12 | FrameFormat::Yuv420p | FrameFormat::Gray8 => {
             // The luma plane is the first width*height bytes.
             if frame.pixels.len() < px {
                 return None;
@@ -103,6 +104,19 @@ pub fn frame_to_gray(frame: &Frame) -> Option<GrayImage> {
                 data,
             })
         }
+        FrameFormat::Gray16 => {
+            if frame.pixels.len() < px * 2 {
+                return None;
+            }
+            // Little-endian 16-bit: the high byte is the 8-bit intensity.
+            let data = frame.pixels[1..px * 2].iter().step_by(2).copied().collect();
+            Some(GrayImage {
+                width: w,
+                height: h,
+                data,
+            })
+        }
+        FrameFormat::BayerRggb8 | FrameFormat::BayerRggb16 => None,
     }
 }
 
@@ -117,7 +131,11 @@ mod tests {
                 v: FRAMEBUS_DESCRIPTOR_VERSION,
                 camera_id: "uvc-0".into(),
                 frame_id: 1,
-                ts_ms: 0,
+                ts_ns: 0,
+                ts_sensor_ns: None,
+                exposure_ns: None,
+                trigger_seq: None,
+                timebase: ados_protocol::framebus::TIMEBASE_HOST,
                 width: w,
                 height: h,
                 format,
@@ -153,6 +171,16 @@ mod tests {
     fn truncated_buffer_is_none() {
         let f = frame(FrameFormat::Rgb24, 4, 4, vec![0u8; 10]);
         assert!(frame_to_gray(&f).is_none());
+    }
+
+    #[test]
+    fn gray_formats_convert_and_bayer_is_none() {
+        let g8 = frame_to_gray(&frame(FrameFormat::Gray8, 2, 1, vec![7, 9])).unwrap();
+        assert_eq!(g8.data, vec![7, 9]);
+        let g16 = frame(FrameFormat::Gray16, 2, 1, vec![0xFF, 0x10, 0x00, 0x80]);
+        assert_eq!(frame_to_gray(&g16).unwrap().data, vec![0x10, 0x80]);
+        let bayer = frame(FrameFormat::BayerRggb8, 2, 2, vec![0u8; 4]);
+        assert!(frame_to_gray(&bayer).is_none());
     }
 
     #[test]

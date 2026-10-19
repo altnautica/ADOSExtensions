@@ -15,7 +15,8 @@ const JPEG_QUALITY: u8 = 90;
 
 /// Encode one raw ring frame as JPEG bytes. The frame is converted to packed
 /// RGB8 first (a no-op for `Rgb24`, a BT.601 YUV→RGB conversion for the 4:2:0
-/// formats), then JPEG-encoded.
+/// formats, a channel replication for grayscale), then JPEG-encoded. A Bayer
+/// mosaic is refused: demosaicing is not done on this path.
 pub fn encode_keyframe_jpeg(
     width: u32,
     height: u32,
@@ -53,6 +54,16 @@ fn to_rgb8(width: u32, height: u32, format: FrameFormat, data: &[u8]) -> anyhow:
         FrameFormat::Rgb24 => Ok(data[..w * h * 3].to_vec()),
         FrameFormat::Nv12 => Ok(nv12_to_rgb8(w, h, data)),
         FrameFormat::Yuv420p => Ok(yuv420p_to_rgb8(w, h, data)),
+        FrameFormat::Gray8 => Ok(data[..w * h].iter().flat_map(|&g| [g, g, g]).collect()),
+        // Little-endian 16-bit: the high byte is the 8-bit intensity.
+        FrameFormat::Gray16 => Ok(data[1..w * h * 2]
+            .iter()
+            .step_by(2)
+            .flat_map(|&g| [g, g, g])
+            .collect()),
+        FrameFormat::BayerRggb8 | FrameFormat::BayerRggb16 => {
+            anyhow::bail!("{format:?} keyframes are not supported (no demosaic on this path)")
+        }
     }
 }
 
@@ -163,6 +174,20 @@ mod tests {
                 "neutral grey"
             );
         }
+    }
+
+    #[test]
+    fn grayscale_is_replicated_and_bayer_is_refused() {
+        assert_eq!(
+            to_rgb8(2, 1, FrameFormat::Gray8, &[10, 200]).unwrap(),
+            vec![10, 10, 10, 200, 200, 200]
+        );
+        assert_eq!(
+            to_rgb8(1, 1, FrameFormat::Gray16, &[0x34, 0x12]).unwrap(),
+            vec![0x12, 0x12, 0x12]
+        );
+        let bayer = vec![0u8; FrameFormat::BayerRggb8.frame_bytes(4, 4)];
+        assert!(encode_keyframe_jpeg(4, 4, FrameFormat::BayerRggb8, &bayer).is_err());
     }
 
     #[test]

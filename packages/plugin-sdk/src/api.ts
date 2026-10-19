@@ -106,7 +106,9 @@ export interface PerceptionDetectionBatch {
   cameraId: string;
   /** Monotonic frame counter for the stream. */
   frameId: number;
-  /** Capture timestamp of the frame, epoch milliseconds. */
+  /** Capture timestamp of the frame: the drone host's monotonic clock in
+   *  milliseconds (detection wire v3), comparable only to other stamps from
+   *  the same host, not to epoch time. */
   tsMs: number;
   /** Resolution the detection coordinates are expressed in. */
   frameWidth: number;
