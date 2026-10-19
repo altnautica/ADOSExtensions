@@ -6,6 +6,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_capture_contract::{GeoAnchor, GeoAnchorDatum, GeoAnchorSource};
 use ados_protocol::frame::PLUGIN_MAX_FRAME;
 use ados_protocol::framebus::FrameFormat;
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
@@ -16,8 +17,8 @@ use world_engine_capture::{
     PoseProvider, PoseSample, ReplayPose, SelectionParams, SyntheticFrameSource,
 };
 use world_engine_protocol::atlas::{
-    AtlasEvent, CameraRole, CaptureStatus, GlobalAnchor, ImageEncoding, KeyframeEnvelope, Pose,
-    PoseDescriptor, PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+    AtlasEvent, CameraRole, CaptureStatus, ImageEncoding, KeyframeEnvelope, Pose, PoseDescriptor,
+    PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
     PLUGIN_ATLAS_POSE_TOPIC,
 };
 
@@ -31,11 +32,13 @@ fn pose_at(x: f64, ts_ms: i64) -> PoseSample {
             t: [x, 0.0, 0.0],
             cov: None,
         },
-        anchor: Some(GlobalAnchor {
-            lat: 12.97,
-            lon: 77.59,
-            alt_m: 920.0,
-            yaw_rad: 0.0,
+        anchor: Some(GeoAnchor {
+            lat_deg: 12.97,
+            lon_deg: 77.59,
+            h_ellipsoid_m: 920.0,
+            geoid_undulation_m: 0.0,
+            datum: GeoAnchorDatum::Wgs84,
+            source: GeoAnchorSource::GnssMean,
         }),
         source: PoseSource::LocalVio,
         ts_ms,
@@ -170,7 +173,7 @@ async fn sitl_capture_emits_keyframes_pose_and_state_end_to_end() {
         // The keyframe carries a real JPEG (SOI marker), proving the encode ran.
         assert_eq!(&kf.image.bytes[..2], &[0xFF, 0xD8], "keyframe is a JPEG");
         // Derived intrinsics: principal point centred, positive focal length.
-        assert!(kf.camera.k[0] > 0.0);
+        assert!(kf.camera.fx > 0.0);
     }
 
     // Every frame contributed a pose to the live stream (>= 3 keyframes' frames;
@@ -471,37 +474,28 @@ async fn every_keyframe_carries_the_inputs_a_reconstructor_needs() {
     let (keyframes, _) = run_and_collect(poses, 60_000, Duration::from_millis(1200)).await;
     assert!(!keyframes.is_empty(), "the rig captured");
 
-    // The replay provider stamps every pose's arrival up front, so by the time
-    // the loop reaches later frames those poses are genuinely tens of ms old.
-    // That is exactly what the residual is for, and it is the reason this test
-    // validates against an explicit budget instead of the default one: the
-    // harness's own pose staleness is real and must not be papered over.
-    let harness_budget = KeyframeBudget {
-        max_pairing_residual_ms: 5_000.0,
-        ..KeyframeBudget::default()
-    };
     for kf in &keyframes {
         assert_eq!(
             kf.pose_cov.len(),
             world_engine_protocol::atlas::POSE_COV_LEN,
             "the reconstructor's position-prior sigma must ride the envelope"
         );
-        assert!(kf.global_anchor.is_some(), "the world frame is resolved");
+        assert!(kf.anchor.is_some(), "the world frame is resolved");
+        assert_eq!(
+            kf.time.timebase,
+            ados_capture_contract::Timebase::HostMonotonic,
+            "a host-stamped frame names the host's monotonic clock as its timebase"
+        );
         assert!(
-            kf.time.ts_monotonic_ns > 0,
+            kf.time.t_exposure_mid_ns > 0,
             "the frame carries its own monotonic exposure stamp"
         );
         assert!(
-            kf.time.pose_pairing_residual_ms.is_finite() && kf.time.pose_pairing_residual_ms >= 0.0,
-            "the frame-to-pose pairing cost is measured, not assumed: {}",
-            kf.time.pose_pairing_residual_ms
-        );
-        assert!(
-            kf.validate_with(&harness_budget).is_ok(),
+            kf.validate().is_ok(),
             "a captured keyframe must be usable: {:?}",
-            kf.validate_with(&harness_budget)
+            kf.validate()
         );
-        // This platform has no PPS-disciplined clock, so the offset uncertainty
+        // This platform has no disciplined clock, so the timebase uncertainty
         // is honestly reported as unmeasured rather than claimed as exact.
         assert!(
             !kf.clock_is_disciplined(),
@@ -509,20 +503,17 @@ async fn every_keyframe_carries_the_inputs_a_reconstructor_needs() {
         );
         assert_eq!(
             kf.time.trigger_seq, None,
-            "no CAMERA_TRIGGER lane is wired, so no exact pairing is claimed"
+            "no trigger lane is wired, so no exact exposure time is claimed"
         );
     }
 
-    // The other direction: the residual actually GATES. A frame whose pose was
-    // interpolated 120 ms from its exposure instant is refused under the default
-    // budget, which is the whole point of measuring it.
-    let mut skewed = keyframes[0].clone();
-    skewed.time.pose_pairing_residual_ms = 120.0;
+    // The other direction: a strict (disciplined-clock) consumer refuses these
+    // frames, which is the whole point of reporting the sigma.
     assert!(
         matches!(
-            skewed.validate(),
-            Err(world_engine_protocol::atlas::KeyframeReject::PairingResidual { .. })
+            keyframes[0].validate_with(&KeyframeBudget::strict()),
+            Err(world_engine_protocol::atlas::KeyframeReject::TimeSigma { .. })
         ),
-        "a 120 ms frame-to-pose skew must be refused, not reconstructed from"
+        "an unmeasured clock must not pass a strict budget"
     );
 }

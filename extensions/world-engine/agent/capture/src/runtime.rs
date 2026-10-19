@@ -14,10 +14,10 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use ados_capture_contract::{CameraModel, CameraModelModel};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
-use world_engine_protocol::atlas::{CameraIntrinsics, Distortion};
 
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 
@@ -71,38 +71,46 @@ pub fn select_pose_tier(cfg: PoseTierConfig, npu_present: bool, compute_paired: 
     }
 }
 
-/// A per-camera intrinsics override. When a camera has been calibrated the
-/// operator supplies these so reconstruction is metric; absent, the service
-/// derives an uncalibrated pinhole from the frame size and the field of view.
+/// A per-camera intrinsics override in the capture contract's camera-model
+/// form (frame size comes from the frames themselves). When a camera has been
+/// calibrated the operator supplies these so reconstruction is metric; absent,
+/// the service derives an uncalibrated pinhole from the frame size and the
+/// field of view.
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct IntrinsicsOverride {
+    #[serde(default = "pinhole")]
+    pub model: CameraModelModel,
     pub fx: f64,
     pub fy: f64,
     pub cx: f64,
     pub cy: f64,
+    /// Coefficients in the model's order: none for `pinhole`, `k1, k2, p1, p2,
+    /// k3` for `opencv`, `k1..k4` for `opencv_fisheye` and `kb4`.
     #[serde(default)]
-    pub distortion_model: Option<String>,
+    pub dist: Vec<f64>,
+    /// Rolling-shutter readout time; 0 is a global shutter.
     #[serde(default)]
-    pub distortion_params: Vec<f64>,
+    pub readout_ns: u64,
+}
+
+fn pinhole() -> CameraModelModel {
+    CameraModelModel::Pinhole
 }
 
 impl IntrinsicsOverride {
-    fn to_intrinsics(&self) -> CameraIntrinsics {
-        CameraIntrinsics {
-            k: [self.fx, 0.0, self.cx, 0.0, self.fy, self.cy, 0.0, 0.0, 1.0],
-            distortion: Distortion {
-                model: self
-                    .distortion_model
-                    .clone()
-                    .unwrap_or_else(|| "radtan".to_string()),
-                params: if self.distortion_params.is_empty() {
-                    vec![0.0, 0.0, 0.0, 0.0]
-                } else {
-                    self.distortion_params.clone()
-                },
-            },
+    fn to_camera_model(&self, width: u32, height: u32) -> CameraModel {
+        CameraModel {
+            model: self.model,
+            width,
+            height,
+            fx: self.fx,
+            fy: self.fy,
+            cx: self.cx,
+            cy: self.cy,
+            dist: self.dist.clone(),
             // An operator-supplied override IS the calibration.
             calibrated: true,
+            readout_ns: self.readout_ns,
         }
     }
 }
@@ -116,18 +124,22 @@ impl IntrinsicsOverride {
 /// reconstruction — scaled, and bent at the frame edges — and nothing else in
 /// the output says so. Labelling the guess is what lets the operator surface
 /// badge it and the reconstructor treat it as an estimate.
-pub fn default_intrinsics(width: u32, height: u32, hfov_deg: f64) -> CameraIntrinsics {
+pub fn default_intrinsics(width: u32, height: u32, hfov_deg: f64) -> CameraModel {
     let w = width.max(1) as f64;
     let h = height.max(1) as f64;
     let hfov = hfov_deg.clamp(1.0, 179.0).to_radians();
     let fx = (w / 2.0) / (hfov / 2.0).tan();
-    CameraIntrinsics {
-        k: [fx, 0.0, w / 2.0, 0.0, fx, h / 2.0, 0.0, 0.0, 1.0],
-        distortion: Distortion {
-            model: "radtan".to_string(),
-            params: vec![0.0, 0.0, 0.0, 0.0],
-        },
+    CameraModel {
+        model: CameraModelModel::Pinhole,
+        width: width.max(1),
+        height: height.max(1),
+        fx,
+        fy: fx,
+        cx: w / 2.0,
+        cy: h / 2.0,
+        dist: Vec::new(),
         calibrated: false,
+        readout_ns: 0,
     }
 }
 
@@ -331,6 +343,28 @@ fn typed<T: DeserializeOwned>(
     }
 }
 
+/// The per-camera intrinsics overrides, refusing one whose `dist` length does
+/// not match its model (a misread coefficient bends the reconstruction).
+fn intrinsics(
+    values: &BTreeMap<String, Value>,
+) -> Result<HashMap<String, IntrinsicsOverride>, ConfigError> {
+    let map: HashMap<String, IntrinsicsOverride> = typed(values, KEY_INTRINSICS, HashMap::new())?;
+    for (id, o) in &map {
+        let want = CameraModel::expected_dist_len(o.model);
+        if o.dist.len() != want {
+            return Err(ConfigError {
+                key: KEY_INTRINSICS,
+                reason: format!(
+                    "camera `{id}`: model {} takes {want} distortion coefficients, got {}",
+                    o.model,
+                    o.dist.len()
+                ),
+            });
+        }
+    }
+    Ok(map)
+}
+
 /// An integer at `key`, accepting an integral float (a JSON editor may store
 /// `2000` as `2000.0`), or `default` when absent.
 fn integer(
@@ -394,7 +428,7 @@ impl AtlasRuntimeConfig {
             },
             pose_tier: typed(values, KEY_POSE_TIER, PoseTierConfig::Auto)?,
             hfov_deg: typed(values, KEY_HFOV_DEG, default_hfov_deg())?,
-            intrinsics: typed(values, KEY_INTRINSICS, HashMap::new())?,
+            intrinsics: intrinsics(values)?,
             pose_prior: typed(values, KEY_POSE_PRIOR, PosePrior::default())?,
             pose_max_age_ms: integer(values, KEY_POSE_MAX_AGE_MS, default_pose_max_age_ms())?,
             pose_publish_interval_ms: integer(
@@ -405,11 +439,12 @@ impl AtlasRuntimeConfig {
         })
     }
 
-    /// Intrinsics for a camera: the configured override if present, else an
-    /// uncalibrated pinhole derived from the frame size and the field of view.
-    pub fn intrinsics_for(&self, camera_id: &str, width: u32, height: u32) -> CameraIntrinsics {
+    /// The camera model for a camera: the configured override if present, else
+    /// an uncalibrated pinhole derived from the frame size and the field of
+    /// view.
+    pub fn intrinsics_for(&self, camera_id: &str, width: u32, height: u32) -> CameraModel {
         match self.intrinsics.get(camera_id) {
-            Some(o) => o.to_intrinsics(),
+            Some(o) => o.to_camera_model(width, height),
             None => default_intrinsics(width, height, self.hfov_deg),
         }
     }
@@ -488,8 +523,9 @@ mod tests {
         assert!((c.pose_prior.gnss_uere_m - 2.5).abs() < 1e-12);
         // The configured intrinsics override is used for `front`.
         let k = c.intrinsics_for("front", 1280, 720);
-        assert!((k.k[0] - 900.0).abs() < 1e-9);
-        assert!((k.k[2] - 640.0).abs() < 1e-9);
+        assert!((k.fx - 900.0).abs() < 1e-9);
+        assert!((k.cx - 640.0).abs() < 1e-9);
+        assert_eq!((k.width, k.height), (1280, 720));
         assert!(k.calibrated);
         // An uncalibrated camera falls back to the derived pinhole.
         assert!(!c.intrinsics_for("down", 1280, 720).calibrated);
@@ -568,11 +604,33 @@ mod tests {
     #[test]
     fn derived_intrinsics_centre_the_principal_point() {
         let k = default_intrinsics(1280, 720, 70.0);
-        assert!((k.k[2] - 640.0).abs() < 1e-9, "cx at centre");
-        assert!((k.k[5] - 360.0).abs() < 1e-9, "cy at centre");
-        assert!(k.k[0] > 0.0, "positive focal length");
-        // fx == fy (square pixels) and bottom row is [0,0,1].
-        assert!((k.k[0] - k.k[4]).abs() < 1e-9);
-        assert_eq!(k.k[8], 1.0);
+        assert!((k.cx - 640.0).abs() < 1e-9, "cx at centre");
+        assert!((k.cy - 360.0).abs() < 1e-9, "cy at centre");
+        assert!(k.fx > 0.0, "positive focal length");
+        // fx == fy (square pixels), a pinhole with no distortion, frame size kept.
+        assert!((k.fx - k.fy).abs() < 1e-9);
+        assert_eq!(k.model, CameraModelModel::Pinhole);
+        assert!(k.dist.is_empty());
+        assert_eq!((k.width, k.height), (1280, 720));
+    }
+
+    #[test]
+    fn an_override_with_the_wrong_coefficient_count_is_refused() {
+        let v = values(&[(
+            KEY_INTRINSICS,
+            json!({"front": {"model": "opencv", "fx": 900.0, "fy": 900.0, "cx": 640.0,
+                             "cy": 360.0, "dist": [0.1, 0.0, 0.0, 0.0]}}),
+        )]);
+        let err = AtlasRuntimeConfig::from_values("", &v).unwrap_err();
+        assert_eq!(err.key, KEY_INTRINSICS);
+        let ok = values(&[(
+            KEY_INTRINSICS,
+            json!({"front": {"model": "kb4", "fx": 700.0, "fy": 700.0, "cx": 640.0,
+                             "cy": 360.0, "dist": [0.01, 0.0, 0.0, 0.0]}}),
+        )]);
+        let c = AtlasRuntimeConfig::from_values("", &ok).unwrap();
+        let m = c.intrinsics_for("front", 1280, 720);
+        assert_eq!(m.model, CameraModelModel::Kb4);
+        assert_eq!(m.dist.len(), 4);
     }
 }

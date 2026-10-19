@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://altnautica.com/schemas/ados-capture/1/transforms_ext.schema.json",
+  "title": "TransformsJson",
+  "description": "Nerfstudio-style `transforms.json` with the ADOS extension: `contract`, `ados_anchor` and a per-frame `t_ns`. Intrinsics follow the Nerfstudio field names and may be set globally or per frame. `transform_matrix` is camera-to-world in the OpenGL camera convention Nerfstudio uses, world = local ENU at `ados_anchor`.",
+  "type": "object",
+  "required": ["contract", "ados_anchor", "frames"],
+  "properties": {
+    "contract": { "$ref": "manifest.schema.json#/$defs/ContractId" },
+    "ados_anchor": {
+      "anyOf": [{ "$ref": "geo_anchor.schema.json" }, { "type": "null" }]
+    },
+    "camera_model": { "type": "string", "enum": ["OPENCV", "OPENCV_FISHEYE", "PINHOLE"] },
+    "fl_x": { "type": "number" },
+    "fl_y": { "type": "number" },
+    "cx": { "type": "number" },
+    "cy": { "type": "number" },
+    "w": { "type": "integer", "format": "uint32" },
+    "h": { "type": "integer", "format": "uint32" },
+    "k1": { "type": "number" },
+    "k2": { "type": "number" },
+    "k3": { "type": "number" },
+    "k4": { "type": "number" },
+    "p1": { "type": "number" },
+    "p2": { "type": "number" },
+    "frames": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TransformsFrame" }
+    }
+  },
+  "$defs": {
+    "TransformsFrame": {
+      "type": "object",
+      "required": ["file_path", "transform_matrix", "t_ns"],
+      "properties": {
+        "file_path": { "type": "string" },
+        "transform_matrix": {
+          "description": "4x4 camera-to-world, outer array = rows.",
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "t_ns": {
+          "description": "Mid-exposure time on the session timebase, nanoseconds.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "camera_id": { "description": "Rig sensor id that took the frame.", "type": "string" },
+        "mask_path": { "type": "string" },
+        "fl_x": { "type": "number" },
+        "fl_y": { "type": "number" },
+        "cx": { "type": "number" },
+        "cy": { "type": "number" },
+        "w": { "type": "integer", "format": "uint32" },
+        "h": { "type": "integer", "format": "uint32" },
+        "k1": { "type": "number" },
+        "k2": { "type": "number" },
+        "k3": { "type": "number" },
+        "k4": { "type": "number" },
+        "p1": { "type": "number" },
+        "p2": { "type": "number" }
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "anchor": {
+    "datum": "WGS84",
+    "geoid_undulation_m": -86.4,
+    "h_ellipsoid_m": 834.6,
+    "lat_deg": 12.9716,
+    "lon_deg": 77.5946,
+    "source": "sim"
+  },
+  "contract": "ados.capture/1",
+  "device_id": "sim-1",
+  "health": {
+    "blur": false,
+    "corridor": false,
+    "flicker": false,
+    "frames_dropped_pct": 0.0,
+    "texture": false
+  },
+  "operator": {
+    "rooms": []
+  },
+  "profile": "sim",
+  "rig": {
+    "calib_version": "1",
+    "rig_id": "tiny-rig"
+  },
+  "segments": [
+    {
+      "bytes": 22197,
+      "file": "segments/000000.mcap",
+      "t_end_ns": 1050000000,
+      "t_start_ns": 1000000000
+    }
+  ],
+  "session_id": "sim-1-20261019T000000Z-0001",
+  "sigma_ns": 0,
+  "t0_ns": 1000000000,
+  "timebase": "sim",
+  "utc_at_t0_ns": null
+}

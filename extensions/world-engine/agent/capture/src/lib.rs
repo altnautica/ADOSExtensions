@@ -51,8 +51,8 @@ pub use frame_source::{
     AtlasFrameSource, CapturedFrame, EngineFrameSource, FrameRouter, SyntheticFrameSource,
 };
 pub use pose_source::{
-    build_pose_provider, clock_offset_ns, diagonal_cov, euler_to_rotation, geodetic_to_enu,
-    mono_ms, mono_ns, HybridPose, OffloadPose, PoseProvider, PoseSample, ReplayPose, TelemetryPose,
+    build_pose_provider, diagonal_cov, euler_to_rotation, geodetic_to_enu, mono_ms, mono_ns,
+    HybridPose, OffloadPose, PoseProvider, PoseSample, ReplayPose, TelemetryPose,
     TelemetryPoseFeed,
 };
 pub use publish::AtlasPublisher;
@@ -64,13 +64,12 @@ pub use service::{new_session_id, run_capture_loop};
 
 // Re-export the shared wire contract so callers get one import surface.
 pub use world_engine_protocol::atlas::{
-    CameraIntrinsics, CameraRole, CaptureState, CaptureStatus, Distortion, GlobalAnchor,
-    ImageEncoding, ImuSample, KeyframeBudget, KeyframeEnvelope, KeyframeFlags, KeyframeImage,
-    KeyframeReject, KeyframeTier, MeshDescriptor, OccupancyDescriptor, OccupancyField,
-    PointCloudDescriptor, Pose, PoseDescriptor, PoseSource, SplatDescriptor, TimeAlignment,
-    VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_POSE_OFFLOAD_TOPIC, PLUGIN_ATLAS_MESH_TOPIC,
-    PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_POSE_TOPIC,
-    PLUGIN_ATLAS_SPLAT_TOPIC,
+    CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
+    KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, MeshDescriptor,
+    OccupancyDescriptor, OccupancyField, PointCloudDescriptor, Pose, PoseDescriptor, PoseSource,
+    SplatDescriptor, TimeAlignment, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_POSE_OFFLOAD_TOPIC,
+    PLUGIN_ATLAS_MESH_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+    PLUGIN_ATLAS_POSE_TOPIC, PLUGIN_ATLAS_SPLAT_TOPIC,
 };
 
 /// Errors from the Atlas capture core. The frame-by-frame capture path is

@@ -1,0 +1,17 @@
+# Foxglove message schemas, vendored unchanged with their MIT licence (LICENSE).
+upstream_repo = "https://github.com/foxglove/foxglove-sdk"
+upstream_path = "schemas/proto/foxglove"
+upstream_commit = "a9da17b2ccfc399119e99c4dac25dada9e442228"
+files = [
+  "Color.proto",
+  "CompressedImage.proto",
+  "KeyValuePair.proto",
+  "LocationFix.proto",
+  "PackedElementField.proto",
+  "PointCloud.proto",
+  "Pose.proto",
+  "PoseInFrame.proto",
+  "Quaternion.proto",
+  "RawImage.proto",
+  "Vector3.proto",
+]

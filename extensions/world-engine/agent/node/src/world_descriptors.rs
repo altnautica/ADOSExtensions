@@ -31,6 +31,7 @@
 
 use std::path::{Path, PathBuf};
 
+use ados_capture_contract::Placement;
 use world_engine_protocol::atlas::{
     Generation, MeshDescriptor, OccupancyDescriptor, OccupancyField, PointCloudDescriptor,
     SplatDescriptor,
@@ -334,7 +335,8 @@ impl WorldDescriptorSet {
     }
 }
 
-/// Map one completed job's outputs to shared-data descriptors.
+/// Map one completed job's outputs to shared-data descriptors, each stating
+/// `placement` (where the generation's coordinates sit in the world).
 ///
 /// Every count and bound is read from the real artifact — a `gaussian_count`
 /// comes from the backend's own metadata or from parsing the `.ply`, never from
@@ -342,6 +344,7 @@ impl WorldDescriptorSet {
 pub fn derive_descriptors(
     session_id: &str,
     generation: Generation,
+    placement: &Placement,
     outputs: &[Output],
     work_root: &Path,
 ) -> WorldDescriptorSet {
@@ -352,6 +355,7 @@ pub fn derive_descriptors(
                 set.splat = Some(SplatDescriptor {
                     session_id: session_id.to_string(),
                     generation,
+                    placement: placement.clone(),
                     gaussian_count: meta_u64(out, "gaussian_count")
                         .or_else(|| ply_point_count(out, work_root))
                         .unwrap_or(0),
@@ -367,6 +371,7 @@ pub fn derive_descriptors(
                 set.pointcloud = Some(PointCloudDescriptor {
                     session_id: session_id.to_string(),
                     generation,
+                    placement: placement.clone(),
                     point_count: meta_u64(out, "point_count")
                         .unwrap_or_else(|| points.as_ref().map(|p| p.len() as u64).unwrap_or(0)),
                     bounds: points.as_deref().map(bounds_of).unwrap_or([0.0; 6]),
@@ -380,6 +385,7 @@ pub fn derive_descriptors(
                 set.mesh = Some(MeshDescriptor {
                     session_id: session_id.to_string(),
                     generation,
+                    placement: placement.clone(),
                     vertex_count: meta_u64(out, "vertex_count").unwrap_or(0),
                     face_count: meta_u64(out, "face_count").unwrap_or(0),
                     url: Some(out.uri.clone()),
@@ -401,6 +407,7 @@ pub fn derive_descriptors(
 pub fn derive_occupancy(
     session_id: &str,
     generation: Generation,
+    placement: &Placement,
     outputs: &[Output],
     work_root: &Path,
     job_id: &str,
@@ -448,6 +455,7 @@ pub fn derive_occupancy(
         OccupancyDescriptor {
             session_id: session_id.to_string(),
             generation,
+            placement: placement.clone(),
             origin: grid.origin,
             resolution_m: grid.resolution_m,
             dims: grid.dims,
@@ -681,7 +689,8 @@ mod tests {
                 serde_json::json!({"vertex_count": 8_000, "face_count": 16_000}),
             ),
         ];
-        let set = derive_descriptors("atlas-drone-1-1000", 7, &outputs, dir.path());
+        let placement = Placement::identity(None);
+        let set = derive_descriptors("atlas-drone-1-1000", 7, &placement, &outputs, dir.path());
         assert!(!set.is_empty());
 
         let cloud = set.pointcloud.expect("a point cloud descriptor");
@@ -709,6 +718,10 @@ mod tests {
         let mesh = set.mesh.expect("a mesh descriptor");
         assert_eq!(mesh.vertex_count, 8_000);
         assert_eq!(mesh.face_count, 16_000);
+        // Every artifact of the generation states the same placement.
+        assert_eq!(mesh.placement, placement);
+        assert_eq!(splat.placement, placement);
+        assert_eq!(cloud.placement, placement);
     }
 
     #[test]
@@ -723,6 +736,7 @@ mod tests {
         let occ = derive_occupancy(
             "sess-x",
             1,
+            &Placement::identity(None),
             &outputs,
             dir.path(),
             "job-1",
@@ -734,7 +748,9 @@ mod tests {
             "no geometry means no planning input, never an empty free-space grid"
         );
         // And a generation with no outputs at all yields an empty set.
-        assert!(derive_descriptors("sess-x", 1, &[], dir.path()).is_empty());
+        assert!(
+            derive_descriptors("sess-x", 1, &Placement::identity(None), &[], dir.path()).is_empty()
+        );
     }
 
     #[test]
@@ -753,6 +769,7 @@ mod tests {
         let (desc, grid) = derive_occupancy(
             "sess-esdf",
             3,
+            &Placement::identity(None),
             &outputs,
             dir.path(),
             "job-7",

@@ -34,7 +34,7 @@ import {
 
 describe("envelope version", () => {
   it("matches the version the golden producer frames carry", () => {
-    expect(ATLAS_ENVELOPE_VERSION).toBe(1);
+    expect(ATLAS_ENVELOPE_VERSION).toBe(2);
   });
 });
 
@@ -43,7 +43,7 @@ describe("decodeAtlasEvent", () => {
     const result = decodeAtlasEvent(hexBytes(GOLDEN_EVENT_HEX));
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.event.v).toBe(1);
+    expect(result.event.v).toBe(2);
     expect(result.event.topic).toBe(PLUGIN_ATLAS_SPLAT_TOPIC);
     expect(result.event.deviceId).toBe("drone-1");
     // The payload must be byte-identical to the standalone descriptor frame,
@@ -69,14 +69,14 @@ describe("decodeAtlasEvent", () => {
       PLUGIN_ATLAS_SPLAT_TOPIC,
       "drone-1",
       hexBytes(GOLDEN_SPLAT_HEX),
-      2,
+      3,
     );
     const result = decodeAtlasEvent(frame);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("version");
-    expect(result.version).toBe(2);
-    expect(result.detail).toContain("this build speaks 1");
+    expect(result.version).toBe(3);
+    expect(result.detail).toContain("this build speaks 2");
   });
 
   it("separates a malformed frame from a well-formed non-envelope", () => {
@@ -94,13 +94,13 @@ describe("decodeAtlasEvent", () => {
     // v + topic + payload as a string instead of a byte array.
     const result = decodeAtlasEvent(
       hexBytes(
-        "83a17601a5746f706963b9706c7567696e2e776f726c642d656e67696e652e73706c6174a77061796c6f6164a26869",
+        "83a17602a5746f706963b9706c7567696e2e776f726c642d656e67696e652e73706c6174a77061796c6f6164a26869",
       ),
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toBe("shape");
-      expect(result.version).toBe(1);
+      expect(result.version).toBe(2);
     }
   });
 });

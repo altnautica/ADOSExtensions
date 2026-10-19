@@ -15,6 +15,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_capture_contract::Timebase;
 use ados_offload::{FreshnessGate, GateState};
 use ados_protocol::shutdown::Shutdown;
 use tokio::sync::mpsc;
@@ -25,7 +26,7 @@ use world_engine_protocol::atlas::{
 use crate::control::AtlasControlCmd;
 use crate::encode::encode_keyframe_jpeg;
 use crate::frame_source::{AtlasFrameSource, CapturedFrame};
-use crate::pose_source::{clock_offset_ns, mono_ns, PoseProvider, PoseSample};
+use crate::pose_source::{mono_ns, PoseProvider, PoseSample};
 use crate::publish::AtlasPublisher;
 use crate::runtime::AtlasRuntimeConfig;
 use crate::session::{CaptureSession, FrameInput, PoseInput};
@@ -326,27 +327,22 @@ async fn handle_control(
     }
 }
 
-/// Build the [`TimeAlignment`] for a frame paired with `ps`.
+/// Build the [`TimeAlignment`] for a frame stamped on this host.
 ///
-/// `ts_monotonic_ns` is this host's monotonic instant for the frame,
-/// `clock_offset_ns` lets a consumer rederive the wall stamp from it, and the
-/// residual is the REAL measured gap between the frame and the pose it was
-/// paired with, on the one clock where that subtraction means something.
+/// The frame's instant is this host's monotonic clock (`host_monotonic`), the
+/// only stamp immune to a wall-clock step mid-flight; `sigma_ns` is the
+/// operator-stated uncertainty of that clock (`-1` = unmeasured).
 ///
-/// `trigger_seq` is deliberately `None`: pairing a frame to a pose by the
-/// flight controller's `CAMERA_TRIGGER.seq` requires the FC to be publishing
-/// that message and the camera to be hardware-triggered from it, and neither is
-/// wired on this platform. Claiming a sequence we did not join on would assert
-/// an exact pairing where an interpolated one happened, so the field stays
-/// absent and the residual carries the honest cost.
-fn time_alignment(frame_mono_ns: i64, ps: &PoseSample, sigma_ns: i64) -> TimeAlignment {
-    let residual_ns = frame_mono_ns - ps.arrival_mono_ns;
+/// `trigger_seq` is deliberately `None`: joining a frame to a hardware camera
+/// trigger needs a trigger source (flight controller or sensor hub) wired to
+/// the camera, and none is on this path. Claiming a sequence we did not join on
+/// would assert an exact exposure time where a host stamp is all there is.
+fn time_alignment(frame_mono_ns: i64, sigma_ns: i64) -> TimeAlignment {
     TimeAlignment {
-        ts_monotonic_ns: frame_mono_ns,
-        clock_offset_ns: clock_offset_ns(),
-        clock_offset_sigma_ns: sigma_ns,
+        t_exposure_mid_ns: u64::try_from(frame_mono_ns).unwrap_or(0),
+        timebase: Timebase::HostMonotonic,
+        sigma_ns,
         trigger_seq: None,
-        pose_pairing_residual_ms: residual_ns as f64 / 1_000_000.0,
     }
 }
 
@@ -429,9 +425,7 @@ async fn process_frame(
                 return;
             }
         };
-        // Compute the alignment before the sample's fields move into the frame
-        // input; the alignment reads the pose's arrival instant, not its pose.
-        let time = time_alignment(frame_mono_ns, &ps, runtime.pose_prior.clock_offset_sigma_ns);
+        let time = time_alignment(frame_mono_ns, runtime.pose_prior.clock_offset_sigma_ns);
         let fi = FrameInput {
             image: KeyframeImage {
                 encoding: ImageEncoding::Jpeg,
@@ -444,7 +438,7 @@ async fn process_frame(
             pose_cov: ps.cov,
             pose_source: ps.source,
             time,
-            global_anchor: ps.anchor,
+            anchor: ps.anchor,
             imu_window: Vec::new(),
         };
         if let Some(out) = session.on_frame(&f.camera_id, fi, f.ts_ms) {
@@ -481,7 +475,7 @@ async fn publish_pose_only(
 ) {
     let input = PoseInput {
         pose: ps.pose.clone(),
-        global_anchor: ps.anchor,
+        anchor: ps.anchor.clone(),
     };
     if let Some(pd) = session.on_pose_only(camera_id, input, ts_ms) {
         publisher.publish_pose(&pd).await;

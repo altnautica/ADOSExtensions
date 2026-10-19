@@ -38,7 +38,7 @@ describe("decodeMsgpack against producer frames", () => {
     const map = asMsgpackMap(decodeMsgpack(hexBytes(GOLDEN_EVENT_HEX)));
     const payload = map?.payload;
     expect(Array.isArray(payload)).toBe(true);
-    expect((payload as unknown[]).length).toBe(216);
+    expect((payload as unknown[]).length).toBe(504);
     // Every element is a plain integer in byte range; a `bin` reader would have
     // produced a Uint8Array and a `bin`-only decoder would have thrown.
     expect(payload).not.toBeInstanceOf(Uint8Array);

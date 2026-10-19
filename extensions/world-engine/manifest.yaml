@@ -41,7 +41,7 @@ agent:
   runtime: rust
   isolation: subprocess
   entrypoint: "bin:world-engine-link"
-  target_profiles: [drone, ground-station, workstation, compute]
+  target_profiles: [drone, ground-station, workstation, compute, visor]
   resources:
     class: heavy
     max_ram_mb: 16384
@@ -86,7 +86,7 @@ agent:
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
-      profiles: [drone]
+      profiles: [drone, visor]
     - path: bin/aarch64-linux/world-engine-node
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v1.0.1/world-engine-node-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -138,7 +138,7 @@ agent:
     services:
       - name: capture
         command: "bin:world-engine-capture com.altnautica.world-engine"
-        profiles: [drone]
+        profiles: [drone, visor]
       - name: node
         command: "bin:world-engine-node com.altnautica.world-engine"
         profiles: [workstation, compute]

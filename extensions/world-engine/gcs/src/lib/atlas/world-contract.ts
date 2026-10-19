@@ -117,7 +117,7 @@ export function bearerKeyframesDegraded(bearer: string | null): boolean {
 // --- Envelope --------------------------------------------------------------
 
 /** The on-wire envelope version this build speaks. */
-export const ATLAS_ENVELOPE_VERSION = 1;
+export const ATLAS_ENVELOPE_VERSION = 2;
 
 /** One framed message off the atlas bus / world-descriptor stream. */
 export interface AtlasEvent {

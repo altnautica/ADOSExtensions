@@ -122,7 +122,7 @@ export interface PluginParameterContribution {
  * `agent.target_profiles`, the GCS `PluginTargetProfile`, and the Convex
  * `gcsContributes[].profile` validator all accept exactly these four.
  */
-export type NodeProfile = "drone" | "ground-station" | "workstation" | "compute";
+export type NodeProfile = "drone" | "ground-station" | "workstation" | "compute" | "visor";
 
 /**
  * One `gcs.contributes.tabs[]` entry: a detail tab the plugin mounts on a

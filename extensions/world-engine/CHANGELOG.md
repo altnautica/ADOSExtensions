@@ -2,6 +2,28 @@
 
 All notable changes to the World Engine extension.
 
+## [Unreleased]
+
+### Added
+
+- **Capture contract `ados.capture/1`.** MIT schema files under `contract/`
+  (JSON Schemas, protobuf messages, golden fixtures including a tiny MCAP
+  session), the `ados-capture-contract` crate generated from them with an MCAP
+  session writer and reader, and generated TypeScript types for the GCS half.
+- The capture service and link run on the `visor` profile.
+
+### Changed
+
+- **Atlas envelope version 2.** Keyframes carry the contract camera model,
+  geo anchor, a timebase-stamped exposure time and IMU samples with `t_ns` and
+  `seq`; every artifact descriptor carries a placement. Version 1 frames are
+  refused.
+- `atlas.intrinsics.<camera>` takes the contract camera model: `model`
+  (`pinhole`, `opencv`, `opencv_fisheye`, `kb4`), `fx`, `fy`, `cx`, `cy`,
+  `dist`, `readout_ns`.
+- Compute-node datasets are written as the contract `transforms.json`, with
+  the session anchor and per-frame exposure times.
+
 ## [1.0.1]
 
 ### Changed

@@ -60,7 +60,8 @@ impl Mode {
     /// The mode for a node profile string.
     pub fn from_profile(profile: &str) -> Self {
         match profile {
-            "drone" => Self::Drone,
+            // A Visor runs the same capture service and forwards like a drone.
+            "drone" | "visor" => Self::Drone,
             "ground-station" | "ground_station" => Self::GroundStation,
             other => Self::Passive(other.to_string()),
         }

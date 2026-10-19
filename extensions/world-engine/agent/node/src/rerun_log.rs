@@ -94,7 +94,7 @@ pub fn log_keyframe(kf: &KeyframeEnvelope) -> Vec<RerunLogEntry> {
             entity_path: cam.clone(),
             timeline_ms: t,
             archetype: RerunArchetype::Pinhole {
-                image_from_camera: kf.camera.k,
+                image_from_camera: kf.camera.k_matrix(),
                 width: kf.image.width,
                 height: kf.image.height,
             },
@@ -118,18 +118,22 @@ pub fn log_keyframe(kf: &KeyframeEnvelope) -> Vec<RerunLogEntry> {
         },
     ];
 
+    // IMU samples share the frame's timebase, so each lands on the wall-clock
+    // timeline at its offset from the frame's exposure.
+    let imu_ms = |t_ns: u64| t + (t_ns as i64 - kf.time.t_exposure_mid_ns as i64) / 1_000_000;
     for sample in &kf.imu_window {
-        for (axis, value) in ["x", "y", "z"].iter().zip(sample.accel) {
+        let at = imu_ms(sample.t_ns);
+        for (axis, value) in ["x", "y", "z"].iter().zip(sample.accel.iter().copied()) {
             entries.push(RerunLogEntry {
                 entity_path: format!("world/imu/accel/{axis}"),
-                timeline_ms: sample.t_ms,
+                timeline_ms: at,
                 archetype: RerunArchetype::Scalar { value },
             });
         }
-        for (axis, value) in ["x", "y", "z"].iter().zip(sample.gyro) {
+        for (axis, value) in ["x", "y", "z"].iter().zip(sample.gyro.iter().copied()) {
             entries.push(RerunLogEntry {
                 entity_path: format!("world/imu/gyro/{axis}"),
-                timeline_ms: sample.t_ms,
+                timeline_ms: at,
                 archetype: RerunArchetype::Scalar { value },
             });
         }
@@ -265,9 +269,10 @@ impl RerunRecording {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ados_capture_contract::v1::ImuSample;
+    use ados_capture_contract::{CameraModel, CameraModelModel, Placement, Timebase};
     use world_engine_protocol::atlas::{
-        CameraIntrinsics, CameraRole, Distortion, ImuSample, KeyframeFlags, KeyframeImage,
-        KeyframeTier, Pose, PoseSource,
+        CameraRole, KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseSource, TimeAlignment,
     };
 
     fn keyframe() -> KeyframeEnvelope {
@@ -284,13 +289,17 @@ mod tests {
                 height: 720,
                 bytes: vec![],
             },
-            camera: CameraIntrinsics {
+            camera: CameraModel {
+                model: CameraModelModel::Pinhole,
+                width: 1280,
+                height: 720,
+                fx: 900.0,
+                fy: 900.0,
+                cx: 640.0,
+                cy: 360.0,
+                dist: vec![],
                 calibrated: true,
-                k: [900.0, 0.0, 640.0, 0.0, 900.0, 360.0, 0.0, 0.0, 1.0],
-                distortion: Distortion {
-                    model: "radtan".into(),
-                    params: vec![],
-                },
+                readout_ns: 0,
             },
             pose: Pose {
                 r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -299,12 +308,19 @@ mod tests {
             },
             pose_cov: vec![0.0009; world_engine_protocol::atlas::POSE_COV_LEN],
             pose_source: PoseSource::LocalVio,
-            time: world_engine_protocol::atlas::TimeAlignment::unmeasured(),
-            global_anchor: None,
+            time: TimeAlignment {
+                t_exposure_mid_ns: 7_000_000_000,
+                timebase: Timebase::HostMonotonic,
+                sigma_ns: -1,
+                trigger_seq: None,
+            },
+            anchor: None,
             imu_window: vec![ImuSample {
-                t_ms: 999,
-                gyro: [0.1, 0.2, 0.3],
-                accel: [0.0, 0.0, 9.81],
+                t_ns: 6_999_000_000,
+                seq: 0,
+                gyro: vec![0.1, 0.2, 0.3],
+                accel: vec![0.0, 0.0, 9.81],
+                temp_c: None,
             }],
             flags: KeyframeFlags::default(),
         }
@@ -346,6 +362,7 @@ mod tests {
             .find(|e| e.entity_path == "world/imu/accel/z")
             .unwrap();
         assert_eq!(az.archetype, RerunArchetype::Scalar { value: 9.81 });
+        // The sample is 1 ms before the exposure, so 1 ms before the frame stamp.
         assert_eq!(az.timeline_ms, 999);
     }
 
@@ -369,6 +386,7 @@ mod tests {
             &SplatDescriptor {
                 session_id: "sess-test".into(),
                 generation: 1,
+                placement: Placement::identity(None),
                 gaussian_count: 5,
                 step: 50,
                 manifest_url: None,
@@ -392,6 +410,7 @@ mod tests {
             &PointCloudDescriptor {
                 session_id: "sess-test".into(),
                 generation: 1,
+                placement: Placement::identity(None),
                 point_count: 9,
                 bounds: [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0],
                 shm_name: None,
@@ -414,6 +433,7 @@ mod tests {
             &MeshDescriptor {
                 session_id: "sess-test".into(),
                 generation: 1,
+                placement: Placement::identity(None),
                 vertex_count: 1,
                 face_count: 2,
                 url: None,
@@ -434,6 +454,7 @@ mod tests {
             &OccupancyDescriptor {
                 session_id: "sess-test".into(),
                 generation: 1,
+                placement: Placement::identity(None),
                 field: world_engine_protocol::atlas::OccupancyField::Esdf,
                 truncation_m: 4.0,
                 url: None,
@@ -480,6 +501,7 @@ mod tests {
             &SplatDescriptor {
                 session_id: "sess-test".into(),
                 generation: 1,
+                placement: Placement::identity(None),
                 gaussian_count: 1200,
                 step: 50,
                 manifest_url: None,

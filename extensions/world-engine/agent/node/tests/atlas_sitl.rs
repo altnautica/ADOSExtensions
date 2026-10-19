@@ -10,6 +10,10 @@
 
 use std::sync::Arc;
 
+use ados_capture_contract::v1::ImuSample;
+use ados_capture_contract::{
+    CameraModel, CameraModelModel, GeoAnchor, GeoAnchorDatum, GeoAnchorSource, Placement,
+};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 use world_engine_node::{
@@ -18,10 +22,10 @@ use world_engine_node::{
     Scheduler,
 };
 use world_engine_protocol::atlas::{
-    CameraIntrinsics, CameraRole, CaptureState, CaptureStatus, Distortion, GlobalAnchor,
-    ImageEncoding, ImuSample, KeyframeEnvelope, KeyframeFlags, KeyframeImage, KeyframeTier, Pose,
-    PoseSource, SplatDescriptor, TimeAlignment, VioHealth, ATLAS_CAPTURE_STATE_TOPIC,
-    ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_SPLAT_TOPIC, POSE_COV_LEN,
+    CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeEnvelope, KeyframeFlags,
+    KeyframeImage, KeyframeTier, Pose, PoseSource, SplatDescriptor, TimeAlignment, VioHealth,
+    ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+    PLUGIN_ATLAS_SPLAT_TOPIC, POSE_COV_LEN,
 };
 use world_engine_protocol::compute::{
     ComputeJobKind, ComputeJobState, ComputeRole, SlaveDescriptor,
@@ -270,13 +274,17 @@ fn keyframe_env(session_id: &str, camera_id: &str, kf_id: u64) -> KeyframeEnvelo
             height: 720,
             bytes: vec![],
         },
-        camera: CameraIntrinsics {
+        camera: CameraModel {
+            model: CameraModelModel::Pinhole,
+            width: 1280,
+            height: 720,
+            fx: 900.0,
+            fy: 900.0,
+            cx: 640.0,
+            cy: 360.0,
+            dist: vec![],
             calibrated: true,
-            k: [900.0, 0.0, 640.0, 0.0, 900.0, 360.0, 0.0, 0.0, 1.0],
-            distortion: Distortion {
-                model: "radtan".into(),
-                params: vec![],
-            },
+            readout_ns: 0,
         },
         pose: Pose {
             r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -286,16 +294,20 @@ fn keyframe_env(session_id: &str, camera_id: &str, kf_id: u64) -> KeyframeEnvelo
         pose_cov: vec![0.0009; POSE_COV_LEN],
         pose_source: PoseSource::LocalVio,
         time: TimeAlignment::unmeasured(),
-        global_anchor: Some(GlobalAnchor {
-            lat: 12.97,
-            lon: 77.59,
-            alt_m: 920.0,
-            yaw_rad: 0.0,
+        anchor: Some(GeoAnchor {
+            lat_deg: 12.97,
+            lon_deg: 77.59,
+            h_ellipsoid_m: 920.0,
+            geoid_undulation_m: 0.0,
+            datum: GeoAnchorDatum::Wgs84,
+            source: GeoAnchorSource::GnssMean,
         }),
         imu_window: vec![ImuSample {
-            t_ms: 999,
-            gyro: [0.1, 0.2, 0.3],
-            accel: [0.0, 0.0, 9.81],
+            t_ns: 0,
+            seq: 0,
+            gyro: vec![0.1, 0.2, 0.3],
+            accel: vec![0.0, 0.0, 9.81],
+            temp_c: None,
         }],
         flags: KeyframeFlags::default(),
     }
@@ -332,6 +344,7 @@ async fn g1_rerun_recording_maps_keyframes_for_the_gcs_viewer() {
         &SplatDescriptor {
             session_id: "g0".into(),
             generation: 1,
+            placement: Placement::identity(None),
             manifest_url: None,
             lod_levels: 0,
             gaussian_count: 4800,
@@ -777,16 +790,25 @@ async fn the_world_model_is_consumable_as_a_planning_input_over_the_shared_data_
 
     // The descriptors are derived from the real artifact, stamped with the
     // capture session and the generation a viewer diffs on.
-    let set = derive_descriptors("g0", 4, &outputs, dir.path());
+    let placement = Placement::identity(None);
+    let set = derive_descriptors("g0", 4, &placement, &outputs, dir.path());
     let cloud = set.pointcloud.expect("a point-cloud descriptor");
     assert_eq!(cloud.session_id, "g0");
     assert_eq!(cloud.generation, 4);
     assert_eq!(cloud.point_count, 3, "the count is measured, not guessed");
 
     // And the planning input: an ESDF, not a voxel dump.
-    let (occ, grid) = derive_occupancy("g0", 4, &outputs, dir.path(), "recon-g0", "http://node")
-        .unwrap()
-        .expect("real geometry yields a planning input");
+    let (occ, grid) = derive_occupancy(
+        "g0",
+        4,
+        &placement,
+        &outputs,
+        dir.path(),
+        "recon-g0",
+        "http://node",
+    )
+    .unwrap()
+    .expect("real geometry yields a planning input");
     assert_eq!(occ.field, OccupancyField::Esdf);
     assert!(occ.truncation_m > 0.0);
     assert_eq!(grid.voxel_count(), grid.distances.len());

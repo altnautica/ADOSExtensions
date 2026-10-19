@@ -1,0 +1,46 @@
+{
+  "contract": "ados.capture/1",
+  "ados_anchor": {
+    "lat_deg": 12.9716,
+    "lon_deg": 77.5946,
+    "h_ellipsoid_m": 834.6,
+    "geoid_undulation_m": -86.4,
+    "datum": "WGS84",
+    "source": "rtk_fixed"
+  },
+  "camera_model": "OPENCV",
+  "fl_x": 1100.0,
+  "fl_y": 1100.0,
+  "cx": 958.5,
+  "cy": 601.25,
+  "w": 1920,
+  "h": 1200,
+  "k1": -0.21,
+  "k2": 0.05,
+  "p1": 0.0002,
+  "p2": -0.0003,
+  "frames": [
+    {
+      "file_path": "images/front_right/000000.png",
+      "transform_matrix": [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 1.5],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "t_ns": 1050000000,
+      "camera_id": "front_right"
+    },
+    {
+      "file_path": "images/front_right/000001.png",
+      "transform_matrix": [
+        [1.0, 0.0, 0.0, 0.5],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 1.5],
+        [0.0, 0.0, 0.0, 1.0]
+      ],
+      "t_ns": 1100000000,
+      "camera_id": "front_right"
+    }
+  ]
+}

@@ -10,12 +10,13 @@
 
 use crate::config::CaptureConfig;
 use crate::selector::KeyframeSelector;
+use ados_capture_contract::v1::ImuSample;
+use ados_capture_contract::{CameraModel, GeoAnchor};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use world_engine_protocol::atlas::{
-    CameraIntrinsics, CaptureState, CaptureStatus, GlobalAnchor, ImuSample, KeyframeEnvelope,
-    KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseDescriptor, PoseSource, TimeAlignment,
-    VioHealth,
+    CaptureState, CaptureStatus, KeyframeEnvelope, KeyframeFlags, KeyframeImage, KeyframeTier,
+    Pose, PoseDescriptor, PoseSource, TimeAlignment, VioHealth,
 };
 
 /// How many recent accepted frames the ingest rate is measured over.
@@ -29,7 +30,7 @@ const INGEST_STALE: Duration = Duration::from_secs(2);
 #[derive(Debug, Clone)]
 pub struct FrameInput {
     pub image: KeyframeImage,
-    pub camera: CameraIntrinsics,
+    pub camera: CameraModel,
     pub pose: Pose,
     /// Row-major 6x6 covariance of `pose`. Empty when the producer could state
     /// none, which makes the keyframe fail
@@ -37,9 +38,9 @@ pub struct FrameInput {
     /// downstream rather than silently reconstructing without a prior sigma.
     pub pose_cov: Vec<f64>,
     pub pose_source: PoseSource,
-    /// How well this frame and its pose are time-paired.
+    /// When the frame was exposed, on which timebase.
     pub time: TimeAlignment,
-    pub global_anchor: Option<GlobalAnchor>,
+    pub anchor: Option<GeoAnchor>,
     pub imu_window: Vec<ImuSample>,
 }
 
@@ -51,7 +52,7 @@ pub struct FrameInput {
 #[derive(Debug, Clone)]
 pub struct PoseInput {
     pub pose: Pose,
-    pub global_anchor: Option<GlobalAnchor>,
+    pub anchor: Option<GeoAnchor>,
 }
 
 /// The result of ingesting one frame: a pose descriptor for the live pose
@@ -298,7 +299,7 @@ impl CaptureSession {
         if !self.accept_frame(camera_id, ts_ms) {
             return None;
         }
-        self.due_pose(input.pose, input.global_anchor, ts_ms)
+        self.due_pose(input.pose, input.anchor, ts_ms)
     }
 
     /// Whether this frame is accepted for ingest, recording it in the rate
@@ -335,7 +336,7 @@ impl CaptureSession {
     fn due_pose(
         &mut self,
         pose: Pose,
-        anchor: Option<GlobalAnchor>,
+        anchor: Option<GeoAnchor>,
         ts_ms: i64,
     ) -> Option<PoseDescriptor> {
         let due = match self.last_pose_pub_ms {
@@ -403,7 +404,7 @@ impl CaptureSession {
                 pose_cov: frame.pose_cov,
                 pose_source: frame.pose_source,
                 time: frame.time,
-                global_anchor: frame.global_anchor,
+                anchor: frame.anchor.clone(),
                 imu_window: frame.imu_window,
                 flags: KeyframeFlags {
                     is_session_start: is_first,
@@ -416,7 +417,7 @@ impl CaptureSession {
             None
         };
 
-        let pose = self.due_pose(frame.pose, frame.global_anchor, ts_ms);
+        let pose = self.due_pose(frame.pose, frame.anchor, ts_ms);
         Some(CaptureOutput { pose, keyframe })
     }
 
@@ -446,7 +447,8 @@ impl CaptureSession {
 mod tests {
     use super::*;
     use crate::config::{CameraConfig, CaptureProfile, SelectionParams};
-    use world_engine_protocol::atlas::{CameraRole, Distortion, ImageEncoding};
+    use ados_capture_contract::{CameraModelModel, GeoAnchorDatum, GeoAnchorSource};
+    use world_engine_protocol::atlas::{CameraRole, ImageEncoding};
 
     fn cam(id: &str, role: CameraRole, enabled: bool) -> CameraConfig {
         CameraConfig {
@@ -465,12 +467,14 @@ mod tests {
         }
     }
 
-    fn anchor() -> GlobalAnchor {
-        GlobalAnchor {
-            lat: 12.97,
-            lon: 77.59,
-            alt_m: 920.0,
-            yaw_rad: 0.0,
+    fn anchor() -> GeoAnchor {
+        GeoAnchor {
+            lat_deg: 12.97,
+            lon_deg: 77.59,
+            h_ellipsoid_m: 920.0,
+            geoid_undulation_m: 0.0,
+            datum: GeoAnchorDatum::Wgs84,
+            source: GeoAnchorSource::GnssMean,
         }
     }
 
@@ -482,13 +486,17 @@ mod tests {
                 height: 720,
                 bytes: vec![0xAB; 8],
             },
-            camera: CameraIntrinsics {
-                k: [900.0, 0.0, 640.0, 0.0, 900.0, 360.0, 0.0, 0.0, 1.0],
-                distortion: Distortion {
-                    model: "radtan".into(),
-                    params: vec![0.0, 0.0, 0.0, 0.0],
-                },
+            camera: CameraModel {
+                model: CameraModelModel::Opencv,
+                width: 1280,
+                height: 720,
+                fx: 900.0,
+                fy: 900.0,
+                cx: 640.0,
+                cy: 360.0,
+                dist: vec![0.0; 5],
                 calibrated: true,
+                readout_ns: 0,
             },
             pose: Pose {
                 r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -498,11 +506,13 @@ mod tests {
             pose_cov: vec![0.25; 36],
             pose_source: PoseSource::LocalVio,
             time: TimeAlignment::unmeasured(),
-            global_anchor: Some(anchor()),
+            anchor: Some(anchor()),
             imu_window: vec![ImuSample {
-                t_ms: 1,
-                gyro: [0.0, 0.0, 0.0],
-                accel: [0.0, 0.0, 9.81],
+                t_ns: 1_000_000,
+                seq: 0,
+                gyro: vec![0.0, 0.0, 0.0],
+                accel: vec![0.0, 0.0, 9.81],
+                temp_c: None,
             }],
         }
     }
@@ -514,7 +524,7 @@ mod tests {
                 t,
                 cov: None,
             },
-            global_anchor: Some(anchor()),
+            anchor: Some(anchor()),
         }
     }
 

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.mjs",
+    "gen:contract": "node scripts/gen-contract.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },
@@ -18,6 +19,7 @@
     "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@bufbuild/buf": "1.74.0",
     "@tailwindcss/cli": "^4.2.0",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.0",
@@ -25,9 +27,11 @@
     "@types/three": "^0.183.1",
     "esbuild": "^0.24.0",
     "happy-dom": "^15.7.4",
+    "json-schema-to-typescript": "16.0.0",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "tailwindcss": "^4.2.0",
+    "ts-proto": "2.18.0",
     "typescript": "^5.6.3",
     "vitest": "^2.1.4"
   }

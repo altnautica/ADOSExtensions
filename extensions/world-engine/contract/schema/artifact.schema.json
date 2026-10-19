@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://altnautica.com/schemas/ados-capture/1/artifact.schema.json",
+  "title": "ArtifactDescriptor",
+  "description": "Artifact descriptor, stored next to the artifact as `<file>.place.json`. The placement fields have the meaning defined by placement.schema.json.",
+  "type": "object",
+  "required": [
+    "contract", "kind", "file", "format", "sha256", "anchor", "R_enu_artifact",
+    "t_enu_artifact", "scale", "generation", "source_session"
+  ],
+  "properties": {
+    "contract": { "$ref": "manifest.schema.json#/$defs/ContractId" },
+    "kind": {
+      "type": "string",
+      "enum": ["splat", "mesh", "pointcloud", "occupancy", "trajectory"]
+    },
+    "file": { "description": "Artifact path relative to this descriptor.", "type": "string", "minLength": 1 },
+    "format": {
+      "description": "`laz` is LAZ 1.4; `copc` is reserved for COPC-ordered files.",
+      "type": "string",
+      "enum": ["ply", "spz", "glb", "copc", "laz", "esdf"]
+    },
+    "sha256": { "description": "Lowercase hex SHA-256 of the artifact file.", "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "anchor": {
+      "anyOf": [{ "$ref": "geo_anchor.schema.json" }, { "type": "null" }]
+    },
+    "R_enu_artifact": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 9,
+      "maxItems": 9
+    },
+    "t_enu_artifact": {
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "scale": { "type": "number", "exclusiveMinimum": 0 },
+    "generation": {
+      "description": "Increments on every re-reconstruction of the same source.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "source_session": { "description": "`session_id` the artifact was reconstructed from.", "type": "string" }
+  }
+}

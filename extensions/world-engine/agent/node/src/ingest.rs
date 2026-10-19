@@ -110,9 +110,9 @@ pub struct AtlasIngest {
     /// inheriting an undisciplined clock.
     keyframes_undisciplined_clock: u64,
     /// What a keyframe must satisfy to enter a dataset. Defaults to
-    /// [`KeyframeBudget::default`]: covariance, pairing residual and anchor are
-    /// gated hard; the clock-offset sigma is carried and reported rather than
-    /// gated, because a node without a PPS-disciplined clock honestly reports it
+    /// [`KeyframeBudget::default`]: covariance and anchor are gated hard; the
+    /// timebase sigma is carried and reported rather than gated, because a node
+    /// without a disciplined clock honestly reports it
     /// unmeasured and rejecting every frame there would yield zero
     /// reconstructions with no operator-visible cause.
     budget: KeyframeBudget,
@@ -600,9 +600,12 @@ pub fn submit_reconstruct_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ados_capture_contract::{
+        CameraModel, CameraModelModel, GeoAnchor, GeoAnchorDatum, GeoAnchorSource,
+    };
     use world_engine_protocol::atlas::{
-        CameraIntrinsics, CameraRole, Distortion, ImageEncoding, KeyframeFlags, KeyframeImage,
-        KeyframeTier, Pose, PoseSource, VioHealth,
+        CameraRole, ImageEncoding, KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseSource,
+        VioHealth,
     };
 
     fn real_keyframe_event(session: &str, kf_id: u64) -> AtlasEvent {
@@ -619,13 +622,17 @@ mod tests {
                 height: 720,
                 bytes: vec![0xFF, 0xD8, 0xFF, kf_id as u8],
             },
-            camera: CameraIntrinsics {
-                k: [900.0, 0.0, 640.0, 0.0, 900.0, 360.0, 0.0, 0.0, 1.0],
-                distortion: Distortion {
-                    model: "radtan".into(),
-                    params: vec![0.0, 0.0, 0.0, 0.0],
-                },
+            camera: CameraModel {
+                model: CameraModelModel::Pinhole,
+                width: 1280,
+                height: 720,
+                fx: 900.0,
+                fy: 900.0,
+                cx: 640.0,
+                cy: 360.0,
+                dist: vec![],
                 calibrated: true,
+                readout_ns: 0,
             },
             pose: Pose {
                 r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
@@ -635,11 +642,13 @@ mod tests {
             pose_cov: vec![0.0009; world_engine_protocol::atlas::POSE_COV_LEN],
             pose_source: PoseSource::LocalVio,
             time: world_engine_protocol::atlas::TimeAlignment::unmeasured(),
-            global_anchor: Some(world_engine_protocol::atlas::GlobalAnchor {
-                lat: 12.97,
-                lon: 77.59,
-                alt_m: 920.0,
-                yaw_rad: 0.0,
+            anchor: Some(GeoAnchor {
+                lat_deg: 12.97,
+                lon_deg: 77.59,
+                h_ellipsoid_m: 920.0,
+                geoid_undulation_m: 0.0,
+                datum: GeoAnchorDatum::Wgs84,
+                source: GeoAnchorSource::GnssMean,
             }),
             imu_window: Vec::new(),
             flags: KeyframeFlags::default(),

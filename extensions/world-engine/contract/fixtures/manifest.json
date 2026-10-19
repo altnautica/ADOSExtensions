@@ -1,0 +1,24 @@
+{
+  "contract": "ados.capture/1",
+  "session_id": "visor-1-20261019T101500Z-3fa2",
+  "device_id": "visor-1",
+  "profile": "visor",
+  "timebase": "hub_freerun",
+  "t0_ns": 1000000000,
+  "utc_at_t0_ns": null,
+  "sigma_ns": 400000,
+  "anchor": null,
+  "rig": { "rig_id": "visor-pro-a", "calib_version": "2026-10-19.1" },
+  "operator": {
+    "site": "Example warehouse",
+    "floor": 0,
+    "rooms": [
+      { "name": "dock", "floor": 0, "t_start_ns": 1000000000, "t_end_ns": 61000000000 },
+      { "name": "aisle 1", "floor": 0, "t_start_ns": 61000000000, "t_end_ns": 181000000000 }
+    ]
+  },
+  "segments": [
+    { "file": "segments/000000.mcap", "t_start_ns": 1000000000, "t_end_ns": 181000000000, "bytes": 2147483648 }
+  ],
+  "health": { "blur": false, "texture": true, "flicker": false, "corridor": false, "frames_dropped_pct": 0.2 }
+}

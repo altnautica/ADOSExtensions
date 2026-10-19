@@ -1,0 +1,67 @@
+{
+  "calib_version": "1",
+  "contract": "ados.capture/1",
+  "rig_id": "tiny-rig",
+  "sensors": [
+    {
+      "camera": {
+        "calibrated": false,
+        "cx": 32.0,
+        "cy": 24.0,
+        "dist": [],
+        "fx": 50.0,
+        "fy": 50.0,
+        "height": 48,
+        "model": "pinhole",
+        "readout_ns": 0,
+        "width": 64
+      },
+      "id": "cam0",
+      "kind": "camera",
+      "role": "front_left",
+      "T_body_sensor": [
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        -1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "time_offset_ns": 0
+    },
+    {
+      "id": "imu0",
+      "kind": "imu",
+      "role": "nav",
+      "T_body_sensor": [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "time_offset_ns": 0
+    }
+  ]
+}

@@ -781,8 +781,25 @@ async fn worker_loop(
                 // from a private pipeline ending in a viewer into a consumable
                 // data product: a plugin, a planner, or the GCS reads the
                 // descriptors and pulls only the artifact it needs.
-                publish_world_generation(&world, &job, &result.outputs, &work_root, &public_base)
-                    .await;
+                // The reconstruction sits in the frame of its keyframe poses: the
+                // ENU frame at the dataset's anchor, or a local frame without one.
+                let placement = ados_capture_contract::Placement::identity(match &input {
+                    PreparedInput::Reconstruct(dataset) => dataset
+                        .meta
+                        .get("input_path")
+                        .and_then(|v| v.as_str())
+                        .and_then(|p| world_engine_node::dataset_anchor(std::path::Path::new(p))),
+                    _ => None,
+                });
+                publish_world_generation(
+                    &world,
+                    &job,
+                    &result.outputs,
+                    &work_root,
+                    &public_base,
+                    &placement,
+                )
+                .await;
                 let outcome = {
                     let engine = state.lock().await;
                     engine.scheduler().finalize(&job, result, now_ms())
@@ -819,6 +836,7 @@ async fn publish_world_generation(
     outputs: &[world_engine_node::Output],
     work_root: &std::path::Path,
     public_base: &str,
+    placement: &ados_capture_contract::Placement,
 ) {
     // A reconstruct job always carries its capture session; without one there is
     // nothing to attribute a world model to.
@@ -839,18 +857,19 @@ async fn publish_world_generation(
         .unwrap_or(0);
 
     let mut set: WorldDescriptorSet =
-        derive_descriptors(session_id, generation, outputs, work_root);
+        derive_descriptors(session_id, generation, placement, outputs, work_root);
     // The ESDF is a real distance transform over the reconstruction, so it runs
     // off the async runtime like the backend does.
-    let (sid, outs, wr, jid, pb) = (
+    let (sid, outs, wr, jid, pb, pl) = (
         session_id.to_string(),
         outputs.to_vec(),
         work_root.to_path_buf(),
         job.id.clone(),
         public_base.to_string(),
+        placement.clone(),
     );
     match tokio::task::spawn_blocking(move || {
-        derive_occupancy(&sid, generation, &outs, &wr, &jid, &pb)
+        derive_occupancy(&sid, generation, &pl, &outs, &wr, &jid, &pb)
     })
     .await
     {

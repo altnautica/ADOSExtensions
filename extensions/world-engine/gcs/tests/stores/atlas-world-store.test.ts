@@ -112,12 +112,12 @@ describe("refusals leave the world model ABSENT, not empty", () => {
         PLUGIN_ATLAS_SPLAT_TOPIC,
         DRONE,
         hexBytes(GOLDEN_SPLAT_HEX),
-        2,
+        3,
       ),
     );
     const w = world();
     expect(w.versionRejectedFrames).toBe(1);
-    expect(w.rejectedVersion).toBe(2);
+    expect(w.rejectedVersion).toBe(3);
     expect(w.generation).toBeNull();
     expect(w.acceptedDescriptors).toBe(0);
   });

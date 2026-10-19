@@ -132,17 +132,18 @@
     "atlas.intrinsics": {
       "type": "object",
       "title": "Calibrated intrinsics",
-      "description": "Per-camera calibrated pinhole, keyed by camera id. A camera absent here uses a pinhole derived from the frame size and the field of view.",
+      "description": "Per-camera calibrated camera model, keyed by camera id. dist holds no coefficients for pinhole, k1 k2 p1 p2 k3 for opencv, and k1..k4 for opencv_fisheye and kb4. A camera absent here uses a pinhole derived from the frame size and the field of view.",
       "default": {},
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "model": { "type": "string", "enum": ["pinhole", "opencv", "opencv_fisheye", "kb4"], "default": "pinhole" },
           "fx": { "type": "number" },
           "fy": { "type": "number" },
           "cx": { "type": "number" },
           "cy": { "type": "number" },
-          "distortion_model": { "type": ["string", "null"], "default": null },
-          "distortion_params": { "type": "array", "items": { "type": "number" }, "default": [] }
+          "dist": { "type": "array", "items": { "type": "number" }, "default": [] },
+          "readout_ns": { "type": "integer", "minimum": 0, "default": 0 }
         },
         "required": ["fx", "fy", "cx", "cy"],
         "additionalProperties": false

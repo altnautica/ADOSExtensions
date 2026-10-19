@@ -22,22 +22,21 @@
 //! drift-correct the aircraft's world frame with a wrong pose.
 
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 // `parking_lot::Mutex` rather than `std::sync::Mutex`: every one of these
 // critical sections is a pointer-sized read or write with no error path, so a
 // poisoning result to unwrap adds nothing but noise at the call site. No guard
 // is ever held across an `.await` here.
 use parking_lot::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ados_capture_contract::{GeoAnchor, GeoAnchorDatum, GeoAnchorSource};
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
 use ados_protocol::state::STATE_V2_MAX_FRAME;
 use ados_sdk::{ClientError, EventCallback, PluginContext};
 use tokio::task::JoinHandle;
-use world_engine_protocol::atlas::{
-    GlobalAnchor, OffloadedPose, Pose, PoseSource, VioHealth, POSE_COV_LEN,
-};
+use world_engine_protocol::atlas::{OffloadedPose, Pose, PoseSource, VioHealth, POSE_COV_LEN};
 
 use crate::runtime::{AtlasRuntimeConfig, PosePrior, PoseTier};
 
@@ -45,7 +44,7 @@ use crate::runtime::{AtlasRuntimeConfig, PosePrior, PoseTier};
 #[derive(Debug, Clone, PartialEq)]
 pub struct PoseSample {
     pub pose: Pose,
-    pub anchor: Option<GlobalAnchor>,
+    pub anchor: Option<GeoAnchor>,
     pub source: PoseSource,
     /// Wall-clock milliseconds this sample refers to. For a local sample this
     /// is the read time; for an offloaded one it is the REMOTE node's stamp. Use
@@ -76,31 +75,22 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// Process-monotonic nanoseconds, anchored on first use.
+/// This host's `CLOCK_MONOTONIC`, in nanoseconds.
 ///
 /// `CLOCK_MONOTONIC` cannot be stepped, so this is the only age measurement
 /// that survives a wall-clock correction mid-flight (chrony stepping the clock,
 /// or a GNSS time fix landing after boot). Every freshness and precedence
-/// decision in this module reads it; nothing crossing a process boundary does,
-/// because a monotonic instant is meaningless on another host.
+/// decision in this module reads it, and a keyframe stamped on the
+/// `host_monotonic` timebase carries it; it is meaningless on another host.
 pub fn mono_ns() -> i64 {
-    static ANCHOR: LazyLock<Instant> = LazyLock::new(Instant::now);
-    ANCHOR.elapsed().as_nanos() as i64
+    let ts = nix::time::clock_gettime(nix::time::ClockId::CLOCK_MONOTONIC)
+        .expect("CLOCK_MONOTONIC is always readable");
+    ts.tv_sec() * 1_000_000_000 + ts.tv_nsec()
 }
 
-/// Process-monotonic milliseconds (see [`mono_ns`]).
+/// [`mono_ns`] in milliseconds.
 pub fn mono_ms() -> i64 {
     mono_ns() / 1_000_000
-}
-
-/// The current wall-clock-minus-monotonic offset, in nanoseconds, so a
-/// consumer can reproduce a keyframe's `ts_unix_ms` from its `ts_monotonic_ns`.
-pub fn clock_offset_ns() -> i64 {
-    let realtime_ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as i64)
-        .unwrap_or(0);
-    realtime_ns.saturating_sub(mono_ns())
 }
 
 /// Row-major 3x3 rotation from aerospace euler angles (radians): yaw about Z,
@@ -127,11 +117,11 @@ pub fn euler_to_rotation(roll: f64, pitch: f64, yaw: f64) -> [f64; 9] {
 /// Local east-north-up offset (metres) of a geodetic point from the session
 /// anchor, via the equirectangular approximation (accurate over the hundreds of
 /// metres a single capture spans). Up is the home-relative altitude directly.
-pub fn geodetic_to_enu(lat: f64, lon: f64, alt_rel: f64, anchor: &GlobalAnchor) -> [f64; 3] {
+pub fn geodetic_to_enu(lat: f64, lon: f64, alt_rel: f64, anchor: &GeoAnchor) -> [f64; 3] {
     const R_EARTH: f64 = 6_378_137.0;
-    let dlat = (lat - anchor.lat).to_radians();
-    let dlon = (lon - anchor.lon).to_radians();
-    let east = dlon * anchor.lat.to_radians().cos() * R_EARTH;
+    let dlat = (lat - anchor.lat_deg).to_radians();
+    let dlon = (lon - anchor.lon_deg).to_radians();
+    let east = dlon * anchor.lat_deg.to_radians().cos() * R_EARTH;
     let north = dlat * R_EARTH;
     [east, north, alt_rel]
 }
@@ -143,7 +133,7 @@ type Shared = Arc<Mutex<Option<PoseSample>>>;
 struct FeedState {
     /// The session anchor, fixed on the first fix and reused so every pose is
     /// in one consistent local frame.
-    anchor: Arc<Mutex<Option<GlobalAnchor>>>,
+    anchor: Arc<Mutex<Option<GeoAnchor>>>,
     /// The stated uncertainty the current capture run poses with.
     prior: PosePrior,
     latest: Option<PoseSample>,
@@ -246,7 +236,7 @@ pub fn diagonal_cov(position_sigma_m: f64, orientation_sigma_rad: f64) -> Vec<f6
 /// (`position_age_ms` null or absent) carries no pose at all.
 fn parse_state_pose(
     v: &serde_json::Value,
-    anchor: &Arc<Mutex<Option<GlobalAnchor>>>,
+    anchor: &Arc<Mutex<Option<GeoAnchor>>>,
     prior: &PosePrior,
 ) -> Option<PoseSample> {
     let position_age_ms = v.get("position_age_ms")?.as_u64()?;
@@ -280,17 +270,22 @@ fn parse_state_pose(
         .and_then(|x| x.as_f64())
         .filter(|d| d.is_finite() && *d > 0.0);
 
-    // Fix the anchor once, on the first 3D fix at a real position.
+    // Fix the anchor once, on the first 3D fix at a real position. The vehicle
+    // state carries the flight controller's MSL altitude only; with no geoid
+    // model on this path the undulation is recorded as 0, so `h_ellipsoid_m`
+    // holds that MSL height and `geoid_undulation_m: 0` says so.
     let mut anchor_guard = anchor.lock();
     if anchor_guard.is_none() && fix >= 3 && (lat != 0.0 || lon != 0.0) {
-        *anchor_guard = Some(GlobalAnchor {
-            lat,
-            lon,
-            alt_m: alt_msl,
-            yaw_rad: yaw,
+        *anchor_guard = Some(GeoAnchor {
+            lat_deg: lat,
+            lon_deg: lon,
+            h_ellipsoid_m: alt_msl,
+            geoid_undulation_m: 0.0,
+            datum: GeoAnchorDatum::Wgs84,
+            source: GeoAnchorSource::GnssMean,
         });
     }
-    let anchor_now = *anchor_guard;
+    let anchor_now = anchor_guard.clone();
     drop(anchor_guard);
 
     let t = match &anchor_now {
@@ -525,11 +520,13 @@ mod tests {
 
     #[test]
     fn enu_offset_is_metric_and_zero_at_anchor() {
-        let a = GlobalAnchor {
-            lat: 12.97,
-            lon: 77.59,
-            alt_m: 900.0,
-            yaw_rad: 0.0,
+        let a = GeoAnchor {
+            lat_deg: 12.97,
+            lon_deg: 77.59,
+            h_ellipsoid_m: 900.0,
+            geoid_undulation_m: 0.0,
+            datum: GeoAnchorDatum::Wgs84,
+            source: GeoAnchorSource::GnssMean,
         };
         assert_eq!(geodetic_to_enu(12.97, 77.59, 5.0, &a), [0.0, 0.0, 5.0]);
         // ~0.001 deg north is ~111 m.
@@ -639,7 +636,8 @@ mod tests {
         feed.on_state(rmpv::ext::to_value(&snapshot).unwrap());
         let s = pose.latest().expect("a pose from the delivered state");
         let anchor = s.anchor.expect("anchored on the delivered 3D fix");
-        assert!((anchor.yaw_rad - 0.5).abs() < 1e-9);
+        assert_eq!((anchor.lat_deg, anchor.lon_deg), (12.97, 77.59));
+        assert_eq!(anchor.h_ellipsoid_m, 900.0);
         assert_eq!(s.source, PoseSource::LocalVio);
         // A newer state with no decoded position says there is no current pose;
         // the cache never holds the old one forward.
@@ -705,17 +703,9 @@ mod tests {
     }
 
     #[test]
-    fn the_monotonic_clock_advances_and_the_offset_reconstructs_wall_time() {
+    fn the_monotonic_clock_advances() {
         let a = mono_ns();
         let b = mono_ns();
         assert!(b >= a, "monotonic never goes backwards");
-        // ts_unix_ms is derived as (mono + offset); the derivation must land on
-        // the real wall clock, which is what a consumer on another host relies on.
-        let derived_ms = (mono_ns() + clock_offset_ns()) / 1_000_000;
-        assert!(
-            (derived_ms - now_ms()).abs() < 100,
-            "derived {derived_ms} vs wall {}",
-            now_ms()
-        );
     }
 }

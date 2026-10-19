@@ -1,0 +1,61 @@
+{
+  "contract": "ados.capture/1",
+  "rig_id": "visor-pro-a",
+  "calib_version": "2026-10-19.1",
+  "sensors": [
+    {
+      "id": "front_left",
+      "kind": "camera",
+      "role": "front_left",
+      "T_body_sensor": [0.0, 0.0, 1.0, 0.08, -1.0, 0.0, 0.0, 0.05, 0.0, -1.0, 0.0, 0.02, 0.0, 0.0, 0.0, 1.0],
+      "camera": {
+        "model": "kb4",
+        "width": 1920,
+        "height": 1200,
+        "fx": 760.0,
+        "fy": 760.0,
+        "cx": 960.0,
+        "cy": 600.0,
+        "dist": [0.012, -0.004, 0.0007, -0.0001],
+        "calibrated": true,
+        "readout_ns": 0
+      },
+      "time_offset_ns": 0
+    },
+    {
+      "id": "front_right",
+      "kind": "camera",
+      "role": "front_right",
+      "T_body_sensor": [0.0, 0.0, 1.0, 0.08, -1.0, 0.0, 0.0, -0.05, 0.0, -1.0, 0.0, 0.02, 0.0, 0.0, 0.0, 1.0],
+      "camera": {
+        "model": "opencv",
+        "width": 1920,
+        "height": 1200,
+        "fx": 1100.0,
+        "fy": 1100.0,
+        "cx": 958.5,
+        "cy": 601.25,
+        "dist": [-0.21, 0.05, 0.0002, -0.0003, 0.0],
+        "calibrated": false,
+        "readout_ns": 0
+      },
+      "time_offset_ns": -1200
+    },
+    {
+      "id": "hub_imu",
+      "kind": "imu",
+      "role": "nav",
+      "T_body_sensor": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+      "imu_noise": { "gyro_nd": 0.00028, "accel_nd": 0.0014, "gyro_rw": 0.000004, "accel_rw": 0.00008 },
+      "time_offset_ns": 0
+    },
+    {
+      "id": "gnss",
+      "kind": "gnss",
+      "role": "up",
+      "T_body_sensor": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+      "time_offset_ns": 0,
+      "lever_arm_m": [0.0, 0.0, 0.18]
+    }
+  ]
+}

@@ -266,6 +266,7 @@ mod tests {
         let splat = SplatDescriptor {
             session_id: "atlas-drone-1-1000".into(),
             generation: 7,
+            placement: ados_capture_contract::Placement::identity(None),
             gaussian_count: 1_250_000,
             step: 30_000,
             url: Some("http://node.example/artifacts/s/g7/scene.spz".into()),

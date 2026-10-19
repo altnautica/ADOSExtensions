@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://altnautica.com/schemas/ados-capture/1/placement.schema.json",
+  "title": "Placement",
+  "description": "Where an artifact sits in the world: p_enu = scale * R_enu_artifact * p_artifact + t_enu_artifact, in the local ENU frame at `anchor`.",
+  "type": "object",
+  "required": ["anchor", "R_enu_artifact", "t_enu_artifact", "scale"],
+  "properties": {
+    "anchor": {
+      "description": "ENU origin; null for an artifact in a local frame.",
+      "anyOf": [{ "$ref": "geo_anchor.schema.json" }, { "type": "null" }]
+    },
+    "R_enu_artifact": {
+      "description": "Row-major 3x3 rotation, any proper rotation including an axis permutation.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 9,
+      "maxItems": 9
+    },
+    "t_enu_artifact": {
+      "description": "Translation, metres.",
+      "type": "array",
+      "items": { "type": "number" },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "scale": {
+      "description": "Uniform scale from artifact units to metres.",
+      "type": "number",
+      "exclusiveMinimum": 0
+    }
+  }
+}

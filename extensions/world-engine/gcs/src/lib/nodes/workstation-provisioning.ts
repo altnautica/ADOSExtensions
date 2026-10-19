@@ -50,6 +50,7 @@ export function isComputeProfile(profile: InlineNodeSummary["profile"]): boolean
 export function lanesForPeer(profile: InlineNodeSummary["profile"]): readonly NodeLane[] | null {
   switch (profile) {
     case "drone":
+    case "visor":
       return DRONE_LANES;
     case "ground-station":
       return GROUND_STATION_LANES;

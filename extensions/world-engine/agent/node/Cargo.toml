@@ -23,6 +23,7 @@ path = "src/main.rs"
 
 [dependencies]
 world-engine-protocol = { path = "../protocol" }
+ados-capture-contract = { workspace = true }
 # The Atlas event receiver, the world-model WebSocket fan-out, the compute-node
 # service type and TXT record, and the compute client the offload tests drive.
 world-engine-transport = { path = "../transport" }

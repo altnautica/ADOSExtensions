@@ -17,6 +17,7 @@ name = "world_engine_protocol"
 path = "src/lib.rs"
 
 [dependencies]
+ados-capture-contract = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }

@@ -1,0 +1,2 @@
+# Golden files are hashed byte for byte (checksums.b3); never convert line endings.
+fixtures/** -text

@@ -42,4 +42,5 @@ reqwest = { workspace = true, features = ["json"] }
 tokio-tungstenite = { workspace = true }
 
 [dev-dependencies]
+ados-capture-contract = { workspace = true }
 tempfile = { workspace = true }

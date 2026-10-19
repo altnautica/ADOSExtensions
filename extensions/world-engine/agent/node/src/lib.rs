@@ -68,7 +68,7 @@ pub use jobs_sync::{
     build_atlas_jobs, put_accepted, AtlasJob, AtlasJobEntry, JobsCloudSync, PendingRecord,
     JOBS_COLLECTION,
 };
-pub use keyframe_persister::{dataset_id_for, KeyframePersister};
+pub use keyframe_persister::{dataset_anchor, dataset_id_for, KeyframePersister};
 pub use lanes::{lane_router, AtlasLanes, LaneRoutes};
 pub use node_credentials::{
     CredentialError, IssuedCredential, MintedCredential, NodeCredentialStore,

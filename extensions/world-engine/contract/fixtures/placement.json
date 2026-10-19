@@ -1,0 +1,13 @@
+{
+  "anchor": {
+    "lat_deg": 12.9716,
+    "lon_deg": 77.5946,
+    "h_ellipsoid_m": 834.6,
+    "geoid_undulation_m": -86.4,
+    "datum": "WGS84",
+    "source": "gnss_mean"
+  },
+  "R_enu_artifact": [1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0],
+  "t_enu_artifact": [12.5, -3.25, 0.4],
+  "scale": 1.0
+}
