@@ -97,9 +97,9 @@ fn check_id(doc: &Value, pointer: &str, file: &str) -> Result<(), String> {
 }
 
 /// Check a session's `manifest.json` and `rig.json`: both must validate
-/// against the contract schemas, and the manifest `device_id`, the rig
-/// `rig_id`, `calib_version` and every `sensors[].id` must pass
-/// [`is_safe_id`]. The error names the file and the offending fields.
+/// against the contract schemas, and the ids later used as path segments
+/// (the rig `rig_id` and every `sensors[].id`) must pass [`is_safe_id`].
+/// The error names the file and the offending field.
 pub fn validate_session_docs(manifest: &[u8], rig: &[u8]) -> Result<(), String> {
     let validators = validators()?;
     let manifest = parse(manifest, "manifest.json")?;
@@ -107,9 +107,7 @@ pub fn validate_session_docs(manifest: &[u8], rig: &[u8]) -> Result<(), String> 
     check_schema(&validators.manifest, &manifest, "manifest.json")?;
     check_schema(&validators.rig, &rig, "rig.json")?;
 
-    check_id(&manifest, "/device_id", "manifest.json")?;
     check_id(&rig, "/rig_id", "rig.json")?;
-    check_id(&rig, "/calib_version", "rig.json")?;
     let sensors = rig
         .get("sensors")
         .and_then(Value::as_array)

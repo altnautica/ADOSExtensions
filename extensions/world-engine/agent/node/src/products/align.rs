@@ -26,7 +26,12 @@ const TRIM_MEDIANS: f64 = 3.0;
 const TRIM_DECAY: f64 = 0.8;
 /// Convergence: mean motion of the used points in one iteration (m).
 const CONVERGED_M: f64 = 1e-5;
-const MAX_ITERATIONS: u32 = 50;
+pub(super) const MAX_ITERATIONS: u32 = 50;
+/// Yaw search: candidate headings about Z, the voxel edge of the heavily
+/// thinned moving cloud and the ICP iterations each candidate gets.
+const YAW_STEP_DEG: u32 = 10;
+const COARSE_VOXEL_M: f64 = 0.5;
+const COARSE_ITERATIONS: u32 = 8;
 
 /// Row-major 4×4 identity.
 pub const IDENTITY_4X4: [f64; 16] = [
@@ -124,9 +129,10 @@ fn principal_eigenvector(mut a: [[f64; 4]; 4]) -> [f64; 4] {
     std::array::from_fn(|i| v[i][best])
 }
 
-/// Least-squares rigid transform taking `src[i]` onto `dst[i]` (Horn's
-/// closed form with unit quaternions).
-fn horn(src: &[[f64; 3]], dst: &[[f64; 3]]) -> [f64; 16] {
+/// Least-squares rigid transform (row-major 4×4) taking `src[i]` onto
+/// `dst[i]` (Horn's closed form with unit quaternions). Needs at least three
+/// non-collinear pairs; fewer give an undetermined or non-finite result.
+pub fn horn(src: &[[f64; 3]], dst: &[[f64; 3]]) -> [f64; 16] {
     let n = src.len() as f64;
     let mean = |pts: &[[f64; 3]]| -> [f64; 3] {
         let mut s = [0.0; 3];
@@ -217,9 +223,80 @@ fn trim_cutoff(pairs: &[([f64; 3], usize, f64)], floor: f64) -> (f64, f64) {
 pub fn align(a: &PointCloud, b: &PointCloud, init: [f64; 16]) -> AlignResult {
     let moving = voxel_representatives(&b.points, ALIGN_VOXEL_M);
     match kd_tree(&a.points) {
-        Some(tree) => icp(&tree, &a.points, &moving, init),
+        Some(tree) => icp(&tree, &a.points, &moving, init, MAX_ITERATIONS),
         None => unaligned(init),
     }
+}
+
+/// Registers `b` onto `a` without a prior pose, for gravity-aligned (Z up)
+/// clouds whose relative heading is unknown: see [`yaw_search`].
+pub fn align_global(a: &PointCloud, b: &PointCloud) -> AlignResult {
+    match kd_tree(&a.points) {
+        Some(tree) => yaw_search(&tree, &a.points, &b.points),
+        None => unaligned(IDENTITY_4X4),
+    }
+}
+
+/// Global search over the heading: from identity and from every
+/// [`YAW_STEP_DEG`] rotation of `b` about Z around its centroid placed on
+/// `a`'s centroid, a short ICP ([`COARSE_ITERATIONS`]) of `b` thinned to
+/// [`COARSE_VOXEL_M`] voxels; the candidate with the best fitness (then the
+/// lowest residual) seeds the full [`align`] ICP. `tree` indexes `a`.
+pub(super) fn yaw_search(
+    tree: &ImmutableKdTree<f64, 3>,
+    a: &[[f64; 3]],
+    b: &[[f64; 3]],
+) -> AlignResult {
+    let coarse = voxel_representatives(b, COARSE_VOXEL_M);
+    let (ca, cb) = (centroid(a), centroid(b));
+    let headings = (0..360).step_by(YAW_STEP_DEG as usize).map(|deg| {
+        let (s, c) = (deg as f64).to_radians().sin_cos();
+        // T = translate(ca) · Rz · translate(-cb)
+        let rcb = [c * cb[0] - s * cb[1], s * cb[0] + c * cb[1], cb[2]];
+        [
+            c,
+            -s,
+            0.0,
+            ca[0] - rcb[0],
+            s,
+            c,
+            0.0,
+            ca[1] - rcb[1],
+            0.0,
+            0.0,
+            1.0,
+            ca[2] - rcb[2],
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ]
+    });
+    let best = std::iter::once(IDENTITY_4X4)
+        .chain(headings)
+        .map(|start| icp(tree, a, &coarse, start, COARSE_ITERATIONS))
+        .reduce(|x, y| {
+            let y_better = y.fitness > x.fitness || (y.fitness == x.fitness && y.rmse_m < x.rmse_m);
+            if y_better {
+                y
+            } else {
+                x
+            }
+        })
+        .expect("at least the identity candidate");
+    let moving = voxel_representatives(b, ALIGN_VOXEL_M);
+    icp(tree, a, &moving, best.transform, MAX_ITERATIONS)
+}
+
+/// Mean of the points (origin when empty).
+pub(super) fn centroid(points: &[[f64; 3]]) -> [f64; 3] {
+    let mut s = [0.0; 3];
+    for p in points {
+        for k in 0..3 {
+            s[k] += p[k];
+        }
+    }
+    s.map(|v| v / points.len().max(1) as f64)
 }
 
 /// One input point per occupied `voxel_m` cube: the one nearest the voxel's
@@ -278,6 +355,7 @@ pub(super) fn icp(
     a: &[[f64; 3]],
     moving: &[[f64; 3]],
     init: [f64; 16],
+    max_iterations: u32,
 ) -> AlignResult {
     if moving.is_empty() {
         return unaligned(init);
@@ -285,7 +363,7 @@ pub(super) fn icp(
     let mut t = init;
     let mut iterations = 0;
     let (mut src, mut dst) = (Vec::new(), Vec::new());
-    while iterations < MAX_ITERATIONS {
+    while iterations < max_iterations {
         let pairs = correspond(tree, moving, &t);
         let floor = MAX_PAIR_M * TRIM_DECAY.powi(iterations as i32);
         let (cut, trim) = trim_cutoff(&pairs, floor);

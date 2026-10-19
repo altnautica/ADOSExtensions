@@ -285,6 +285,12 @@ impl StandInRunner {
                 for f in ["cameras.txt", "images.txt", "points3D.txt"] {
                     fs::copy(input.join(f), out.join(f)).map_err(io)?;
                 }
+                // COLMAP 4 rig files, when the input model has them.
+                for f in ["rigs.txt", "frames.txt"] {
+                    if input.join(f).is_file() {
+                        fs::copy(input.join(f), out.join(f)).map_err(io)?;
+                    }
+                }
                 Ok(())
             }
             _ => Ok(()),

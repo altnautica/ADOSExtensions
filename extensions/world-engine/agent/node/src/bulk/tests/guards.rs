@@ -70,13 +70,26 @@ async fn unsafe_rig_ids_fail_commit() {
         rig["sensors"][0]["id"] = json!(bad);
         assert_invalid(&manifest, &bytes(&rig), &format!("sensor {bad:?}")).await;
     }
-    // Ids the schema leaves unconstrained are still held to the id rule.
-    for field in ["rig_id", "calib_version"] {
-        for bad in ["../x", "a/b", "TINY", ""] {
-            let mut rig = doc("rig.json");
-            rig[field] = json!(bad);
-            assert_invalid(&manifest, &bytes(&rig), &format!("{field} {bad:?}")).await;
-        }
+    // The schema leaves `rig_id` free; it names folders, so the id rule holds.
+    for bad in ["../x", "a/b", "TINY", ""] {
+        let mut rig = doc("rig.json");
+        rig["rig_id"] = json!(bad);
+        assert_invalid(&manifest, &bytes(&rig), &format!("rig_id {bad:?}")).await;
+    }
+}
+
+#[tokio::test]
+async fn real_device_and_calibration_ids_pass() {
+    let mut manifest = doc(MANIFEST_FILE);
+    manifest["device_id"] = json!("we-20261019T101500Z-r7");
+    let manifest = bytes(&manifest);
+    for calib in ["1+camera_imu-20261019T101500Z", "2026-10-19.1"] {
+        let mut rig = doc("rig.json");
+        rig["calib_version"] = json!(calib);
+        validate_session_docs(&manifest, &bytes(&rig)).unwrap();
+        let h = commit_docs(&manifest, &bytes(&rig)).await;
+        let reply = h.commit().await;
+        assert_eq!(reply.status, StatusCode::OK, "{calib}: {}", reply.json);
     }
 }
 
@@ -87,8 +100,8 @@ async fn schema_invalid_manifest_fails_commit() {
     manifest["timebase"] = json!("wall_clock");
     assert_invalid(&bytes(&manifest), &rig, "timebase").await;
     let mut manifest = doc(MANIFEST_FILE);
-    manifest["device_id"] = json!("../sim");
-    assert_invalid(&bytes(&manifest), &rig, "device_id").await;
+    manifest["device_id"] = json!("");
+    assert_invalid(&bytes(&manifest), &rig, "empty device_id").await;
     let mut manifest = doc(MANIFEST_FILE);
     manifest["segments"][0]["file"] = json!("segments/../x.mcap");
     assert_invalid(&bytes(&manifest), &rig, "segment file").await;
@@ -171,4 +184,50 @@ async fn put_below_free_floor_is_refused() {
         h.put_whole("x.bin", &[0u8; 10]).await.status,
         StatusCode::OK
     );
+}
+
+/// A declared (`Content-Range`) whole-file PUT to session `id`.
+fn ranged_put(id: &str, rel: &str, data: &[u8]) -> Request<Body> {
+    Request::builder()
+        .method(Method::PUT)
+        .uri(format!("/api/compute/sessions/{id}/files/{rel}"))
+        .header(
+            header::CONTENT_RANGE,
+            format!("bytes 0-{}/{}", data.len() - 1, data.len()),
+        )
+        .body(Body::from(data.to_vec()))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn concurrent_puts_cannot_jointly_exceed_the_cap() {
+    const OTHER: &str = "sim-1-20261019T000000Z-0002";
+    let mut other = doc(MANIFEST_FILE);
+    other["session_id"] = json!(OTHER);
+    let other = bytes(&other);
+    let docs = (fixture(MANIFEST_FILE).len() + other.len()) as u64;
+    let h = limited(Some(docs + 100), 0, None);
+    assert_eq!(h.post_manifest().await.status, StatusCode::CREATED);
+    assert_eq!(
+        h.post_manifest_to(OTHER, other).await.status,
+        StatusCode::CREATED
+    );
+    for _ in 0..8 {
+        let (a, b) = tokio::join!(
+            h.call(ranged_put(ID, "x.bin", &[0u8; 60])),
+            h.call(ranged_put(OTHER, "x.bin", &[0u8; 60])),
+        );
+        let full = [&a, &b]
+            .iter()
+            .filter(|r| r.status == StatusCode::INSUFFICIENT_STORAGE)
+            .count();
+        let stored = [&a, &b]
+            .iter()
+            .filter(|r| r.status == StatusCode::OK)
+            .count();
+        assert_eq!((full, stored), (1, 1), "{} / {}", a.json, b.json);
+        for id in [ID, OTHER] {
+            let _ = std::fs::remove_file(h.store.session_dir(id).join("x.bin"));
+        }
+    }
 }

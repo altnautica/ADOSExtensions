@@ -1,15 +1,12 @@
 use ados_capture_contract::{GeoAnchor, GeoAnchorDatum, GeoAnchorSource};
 
 use super::super::align::{align, apply, compose, invert, voxel_representatives, IDENTITY_4X4};
-use super::super::change::{align_and_compare, AlignInit};
+use super::super::change::{align_and_compare, AlignInit, ChangeResult};
 use super::super::geo::{anchor_transform, enu_offset, enu_rotation};
 use super::super::geom::Rng;
 use super::super::{PointCloud, ProductError};
 use super::jitter;
 
-/// Stratified sampling cell: one random point per cell, so any surface
-/// point has a sample within the cell diagonal (4.2 cm).
-const SPACING: f64 = 0.03;
 const BOX_SIZE: f64 = 0.5;
 
 fn anchor(lat_deg: f64, lon_deg: f64, h_ellipsoid_m: f64) -> GeoAnchor {
@@ -23,62 +20,98 @@ fn anchor(lat_deg: f64, lon_deg: f64, h_ellipsoid_m: f64) -> GeoAnchor {
     }
 }
 
-/// Stratified random samples of the rectangle `o + s·u + t·v`,
-/// `s ∈ [0, lu]`, `t ∈ [0, lv]` (an irregular pattern, like a real scan).
-fn patch(
-    out: &mut Vec<[f64; 3]>,
-    rng: &mut Rng,
-    o: [f64; 3],
-    u: [f64; 3],
-    v: [f64; 3],
-    lu: f64,
-    lv: f64,
-) {
-    let (nu, nv) = (
-        (lu / SPACING).round().max(1.0),
-        (lv / SPACING).round().max(1.0),
-    );
-    for i in 0..nu as usize {
-        for j in 0..nv as usize {
-            let s = (i as f64 + 0.5 + jitter(rng, 0.5)) * lu / nu;
-            let t = (j as f64 + 0.5 + jitter(rng, 0.5)) * lv / nv;
-            out.push(std::array::from_fn(|k| o[k] + s * u[k] + t * v[k]));
-        }
-    }
-}
-
 const X: [f64; 3] = [1.0, 0.0, 0.0];
 const Y: [f64; 3] = [0.0, 1.0, 0.0];
 const Z: [f64; 3] = [0.0, 0.0, 1.0];
 
-/// Sides and top of a box standing on the floor at `min`.
-fn open_box(out: &mut Vec<[f64; 3]>, rng: &mut Rng, min: [f64; 3], size: [f64; 3]) {
-    let [x, y, z] = min;
-    let [sx, sy, sz] = size;
-    patch(out, rng, [x, y, z], X, Z, sx, sz);
-    patch(out, rng, [x, y + sy, z], X, Z, sx, sz);
-    patch(out, rng, [x, y, z], Y, Z, sy, sz);
-    patch(out, rng, [x + sx, y, z], Y, Z, sy, sz);
-    patch(out, rng, [x, y, z + sz], X, Y, sx, sy);
+/// Synthetic scan: stratified random samples (one per `spacing` cell, an
+/// irregular pattern like a real scan) of planar surfaces.
+struct Scan {
+    rng: Rng,
+    spacing: f64,
+    points: Vec<[f64; 3]>,
+}
+
+impl Scan {
+    fn new(seed: u64, spacing: f64) -> Self {
+        Self {
+            rng: Rng::new(seed),
+            spacing,
+            points: Vec::new(),
+        }
+    }
+
+    /// The rectangle `o + s·u + t·v`, `s ∈ [0, lu]`, `t ∈ [0, lv]`.
+    fn patch(&mut self, o: [f64; 3], u: [f64; 3], v: [f64; 3], lu: f64, lv: f64) {
+        let n = |l: f64| (l / self.spacing).round().max(1.0);
+        let (nu, nv) = (n(lu), n(lv));
+        for i in 0..nu as usize {
+            for j in 0..nv as usize {
+                let s = (i as f64 + 0.5 + jitter(&mut self.rng, 0.5)) * lu / nu;
+                let t = (j as f64 + 0.5 + jitter(&mut self.rng, 0.5)) * lv / nv;
+                self.points
+                    .push(std::array::from_fn(|k| o[k] + s * u[k] + t * v[k]));
+            }
+        }
+    }
+
+    /// Sides and top of a box standing on the floor at `min`; returns its
+    /// point count.
+    fn open_box(&mut self, min: [f64; 3], size: [f64; 3]) -> usize {
+        let before = self.points.len();
+        let [x, y, z] = min;
+        let [sx, sy, sz] = size;
+        self.patch([x, y, z], X, Z, sx, sz);
+        self.patch([x, y + sy, z], X, Z, sx, sz);
+        self.patch([x, y, z], Y, Z, sy, sz);
+        self.patch([x + sx, y, z], Y, Z, sy, sz);
+        self.patch([x, y, z + sz], X, Y, sx, sy);
+        self.points.len() - before
+    }
 }
 
 /// A 3.5 × 2.5 m room (floor and 1.2 m of wall), a cabinet, a table top and
-/// a 0.5 m box at `box_xy`, sampled with `seed`; returns the cloud and the
-/// box's point count.
+/// a 0.5 m box at `box_xy`, sampled every 3 cm with `seed`; returns the cloud
+/// and the box's point count.
 fn room(box_xy: [f64; 2], seed: u64) -> (Vec<[f64; 3]>, usize) {
-    let rng = &mut Rng::new(seed);
-    let mut p = Vec::new();
-    patch(&mut p, rng, [0.0; 3], X, Y, 3.5, 2.5);
-    patch(&mut p, rng, [0.0; 3], X, Z, 3.5, 1.2);
-    patch(&mut p, rng, [0.0, 2.5, 0.0], X, Z, 3.5, 1.2);
-    patch(&mut p, rng, [0.0; 3], Y, Z, 2.5, 1.2);
-    patch(&mut p, rng, [3.5, 0.0, 0.0], Y, Z, 2.5, 1.2);
-    open_box(&mut p, rng, [2.5, 0.2, 0.0], [0.7, 0.4, 1.0]);
-    patch(&mut p, rng, [1.4, 1.5, 0.75], X, Y, 0.8, 0.5);
-    let before = p.len();
-    open_box(&mut p, rng, [box_xy[0], box_xy[1], 0.0], [BOX_SIZE; 3]);
-    let n_box = p.len() - before;
-    (p, n_box)
+    let mut s = Scan::new(seed, 0.03);
+    s.patch([0.0; 3], X, Y, 3.5, 2.5);
+    s.patch([0.0; 3], X, Z, 3.5, 1.2);
+    s.patch([0.0, 2.5, 0.0], X, Z, 3.5, 1.2);
+    s.patch([0.0; 3], Y, Z, 2.5, 1.2);
+    s.patch([3.5, 0.0, 0.0], Y, Z, 2.5, 1.2);
+    s.open_box([2.5, 0.2, 0.0], [0.7, 0.4, 1.0]);
+    s.patch([1.4, 1.5, 0.75], X, Y, 0.8, 0.5);
+    let n_box = s.open_box([box_xy[0], box_xy[1], 0.0], [BOX_SIZE; 3]);
+    (s.points, n_box)
+}
+
+/// A pallet with goods stacked 1.5 m high.
+const PALLET: [f64; 3] = [1.2, 1.0, 1.5];
+
+/// A 14 × 9 m warehouse sampled every 15 cm: floor, 1.5 m walls with a
+/// doorway in the east wall, four rack rows of different lengths, an office
+/// block and a pallet at `pallet_xy`; returns the cloud and the pallet's
+/// point count.
+fn warehouse(pallet_xy: [f64; 2], seed: u64) -> (Vec<[f64; 3]>, usize) {
+    let mut s = Scan::new(seed, 0.15);
+    s.patch([0.0; 3], X, Y, 14.0, 9.0);
+    s.patch([0.0; 3], X, Z, 14.0, 1.5);
+    s.patch([0.0, 9.0, 0.0], X, Z, 14.0, 1.5);
+    s.patch([0.0; 3], Y, Z, 9.0, 1.5);
+    s.patch([14.0, 0.0, 0.0], Y, Z, 3.0, 1.5);
+    s.patch([14.0, 6.0, 0.0], Y, Z, 3.0, 1.5);
+    for (y, x0, len) in [
+        (1.5, 2.0, 8.0),
+        (3.5, 2.0, 10.0),
+        (5.5, 3.0, 6.0),
+        (7.0, 2.0, 9.0),
+    ] {
+        s.open_box([x0, y, 0.0], [len, 1.0, 2.0]);
+    }
+    s.open_box([11.5, 7.0, 0.0], [2.0, 1.8, 2.5]);
+    let n_pallet = s.open_box([pallet_xy[0], pallet_xy[1], 0.0], PALLET);
+    (s.points, n_pallet)
 }
 
 fn rz(deg: f64, t: [f64; 3]) -> [f64; 16] {
@@ -198,21 +231,31 @@ fn local_clouds_register_and_isolate_the_moved_box() {
 
     let s = &res.summary;
     let al = s.alignment.as_ref().expect("alignment recorded");
-    assert_eq!(al.init, AlignInit::Identity);
+    assert_eq!(al.init, AlignInit::YawSearch);
     assert_eq!(al.transform, fit.transform);
-    // Changed points sit on the moved box (in a's frame) and cover its
-    // faces clear of the floor.
-    let (lo, hi) = (
-        [NEW_BOX[0] - 0.05, NEW_BOX[1] - 0.05, 0.0],
-        [
-            NEW_BOX[0] + BOX_SIZE + 0.05,
-            NEW_BOX[1] + BOX_SIZE + 0.05,
-            BOX_SIZE + 0.05,
-        ],
-    );
+    assert_change_is_the_box(&res, NEW_BOX, [BOX_SIZE; 3], n_box, 0.05);
+
+    let json = serde_json::to_value(s).unwrap();
+    assert_eq!(json["alignment"]["init"], "yaw_search");
+    assert_eq!(json["alignment"]["transform"].as_array().unwrap().len(), 16);
+}
+
+/// Every changed point (at least `threshold` from `a`) sits on the box at
+/// `xy` of `size` (in `a`'s frame), and they cover most of its `n` points
+/// (all but the band near the floor).
+fn assert_change_is_the_box(
+    res: &ChangeResult,
+    xy: [f64; 2],
+    size: [f64; 3],
+    n: usize,
+    threshold: f64,
+) {
+    let m = 0.05;
+    let lo = [xy[0] - m, xy[1] - m, 0.0];
+    let hi = [xy[0] + size[0] + m, xy[1] + size[1] + m, size[2] + m];
     let mut changed = 0;
     for (p, &d) in res.cloud.points.iter().zip(&res.distances) {
-        if d >= 0.05 {
+        if d as f64 >= threshold {
             changed += 1;
             assert!(
                 (0..3).all(|k| p[k] >= lo[k] && p[k] <= hi[k]),
@@ -220,12 +263,40 @@ fn local_clouds_register_and_isolate_the_moved_box() {
             );
         }
     }
-    assert_eq!(changed, s.points_changed);
-    assert!(changed as f64 >= 0.8 * n_box as f64, "{changed} of {n_box}");
+    assert_eq!(changed, res.summary.points_changed);
+    assert!(changed as f64 >= 0.8 * n as f64, "{changed} of {n}");
+}
 
-    let json = serde_json::to_value(s).unwrap();
-    assert_eq!(json["alignment"]["init"], "identity");
-    assert_eq!(json["alignment"]["transform"].as_array().unwrap().len(), 16);
+#[test]
+fn warehouse_with_large_yaw_is_found_by_the_heading_search() {
+    // Both pallet spots stand clear (≥ 0.5 m) of every other surface.
+    let (old, new) = ([12.5, 5.0], [10.0, 5.0]);
+    let (pa, _) = warehouse(old, 1);
+    let a = cloud(pa, &IDENTITY_4X4);
+    let t_b_a = rz(37.0, [5.0, -2.0, 0.0]);
+    let (pb, n_pallet) = warehouse(new, 2);
+    let b = cloud(pb, &t_b_a);
+    let started = std::time::Instant::now();
+    let (res, fit) = align_and_compare(&a, None, &b, None, 0.25).unwrap();
+    let elapsed = started.elapsed();
+    let truth = invert(&t_b_a);
+    // Offset judged at the warehouse centre.
+    let centre = apply(&t_b_a, &[7.0, 4.5, 1.0]);
+    let (angle, dt) = error(&fit.transform, &truth, centre);
+    assert!(
+        angle < 0.2 && dt < 0.02,
+        "angle {angle}° offset {dt} m {fit:?} in {elapsed:?}"
+    );
+    // Sparse sampling: a share of the points sit just beyond the 10 cm
+    // fitness radius from the other scan.
+    assert!(fit.fitness > 0.8, "{fit:?}");
+    assert_eq!(
+        res.summary.alignment.as_ref().unwrap().init,
+        AlignInit::YawSearch
+    );
+    // 15 cm sampling: two scans of one surface sit up to ~20 cm apart, so
+    // the change threshold is 25 cm.
+    assert_change_is_the_box(&res, new, PALLET, n_pallet, 0.25);
 }
 
 #[test]

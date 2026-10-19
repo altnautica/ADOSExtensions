@@ -306,7 +306,9 @@ fn read_points3d(txt: &Path) -> Result<Vec<Point>, StageError> {
 /// Merge the chunk text models `(chunk id, txt dir)` into `out_txt`: cameras
 /// renumbered, images deduplicated by name (the first chunk's pose wins; the
 /// later copy's observations of kept points join it as extra 2D points),
-/// and from each chunk only the points inside its core.
+/// and from each chunk only the points inside its core. The COLMAP 4 rig
+/// files are written as well: one single-camera rig per camera (rig id =
+/// camera id) and one frame per image (frame id = image id).
 pub fn merge_models(
     models: &[(usize, PathBuf)],
     plan: &ChunkPlan,
@@ -378,6 +380,23 @@ pub fn merge_models(
 
     fs::create_dir_all(out_txt)?;
     fs::write(out_txt.join("cameras.txt"), cameras)?;
+    let mut s = String::from("# RIG_ID, NUM_SENSORS, REF_SENSOR_TYPE, REF_SENSOR_ID, SENSORS[]\n");
+    for cam in 1..=n_cameras {
+        let _ = writeln!(s, "{cam} 1 CAMERA {cam}");
+    }
+    fs::write(out_txt.join("rigs.txt"), s)?;
+    let mut s = String::from(
+        "# FRAME_ID, RIG_ID, RIG_FROM_WORLD[QW, QX, QY, QZ, TX, TY, TZ], NUM_DATA_IDS, DATA_IDS[]\n",
+    );
+    for img in &images {
+        let (q, t) = (img.q, img.t);
+        let _ = writeln!(
+            s,
+            "{} {} {} {} {} {} {} {} {} 1 CAMERA {} {}",
+            img.id, img.camera, q[0], q[1], q[2], q[3], t[0], t[1], t[2], img.camera, img.id
+        );
+    }
+    fs::write(out_txt.join("frames.txt"), s)?;
     let mut s = String::from(
         "# IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME\n# POINTS2D[] as (X, Y, POINT3D_ID)\n",
     );

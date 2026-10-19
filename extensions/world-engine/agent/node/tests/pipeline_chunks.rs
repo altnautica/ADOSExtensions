@@ -345,7 +345,13 @@ async fn a_large_posed_warehouse_reconstructs_in_chunks() {
             .join("txt/points3D.txt")
             .is_file());
     }
-    assert!(job_dir.join("dataset/sparse/0").is_dir());
+    let sparse = job_dir.join("dataset/sparse/0");
+    assert!(sparse.is_dir());
+    for f in ["sfm/txt/rigs.txt", "sfm/txt/frames.txt"] {
+        assert!(job_dir.join(f).is_file(), "{f}");
+    }
+    // The stand-in converter copies the text model through.
+    assert!(sparse.join("rigs.txt").is_file() && sparse.join("frames.txt").is_file());
     let converted = runner
         .runs_of("colmap")
         .iter()

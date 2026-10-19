@@ -60,6 +60,7 @@ pub struct SessionStore {
     root: PathBuf,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     limits: storage::Limits,
+    ledger: storage::Ledger,
 }
 
 impl SessionStore {
@@ -70,6 +71,7 @@ impl SessionStore {
             root,
             locks: Mutex::new(HashMap::new()),
             limits: storage::Limits::default(),
+            ledger: storage::Ledger::default(),
         }
     }
 
@@ -132,9 +134,19 @@ impl SessionStore {
             .find(|name| name != id && name.eq_ignore_ascii_case(id))
     }
 
-    /// Bytes an upload may still add before a storage limit is hit.
-    pub(crate) fn headroom(&self) -> std::io::Result<u64> {
-        self.limits.headroom(&self.root)
+    /// Reserve storage for an upload into `part` (currently `start` bytes
+    /// long): `want` bytes, or when undeclared as many as the limits allow up
+    /// to `cap`. `Ok(Err(headroom))` when `want` does not fit. The grant is
+    /// released when the returned reservation drops.
+    pub(crate) fn reserve(
+        &self,
+        part: PathBuf,
+        start: u64,
+        want: Option<u64>,
+        cap: u64,
+    ) -> std::io::Result<Result<storage::Reservation, u64>> {
+        self.limits
+            .reserve(&self.ledger, &self.root, part, start, want, cap)
     }
 
     /// The async mutex serializing every mutation of session `id`, keyed by

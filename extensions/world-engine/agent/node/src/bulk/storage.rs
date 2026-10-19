@@ -1,10 +1,12 @@
 //! Storage limits of the upload lane: a cap on the bytes held across every
-//! session and a floor of free space left on the store's volume.
+//! session and a floor of free space left on the store's volume. Uploads
+//! reserve their bytes through one store-wide ledger, so concurrent uploads
+//! to different sessions cannot jointly overrun a limit.
 
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// Free space left on the volume by default, 5 GiB.
 pub const DEFAULT_MIN_FREE_BYTES: u64 = 5 << 30;
@@ -31,8 +33,9 @@ impl Default for Limits {
 }
 
 impl Limits {
-    /// Bytes the store may still accept under `root`.
-    pub(crate) fn headroom(&self, root: &Path) -> io::Result<u64> {
+    /// Bytes the store may still accept under `root`, less `outstanding`
+    /// bytes already granted to uploads but not yet on disk.
+    fn headroom(&self, root: &Path, outstanding: u64) -> io::Result<u64> {
         let mut room = u64::MAX;
         if let Some(max) = self.max_total_bytes {
             room = room.min(max.saturating_sub(tree_bytes(root)?));
@@ -40,7 +43,97 @@ impl Limits {
         if let Some(free) = (self.free_space)(root) {
             room = room.min(free.saturating_sub(self.min_free_bytes));
         }
-        Ok(room)
+        Ok(room.saturating_sub(outstanding))
+    }
+
+    /// Grant an upload into `part` (currently `start` bytes long) `want`
+    /// bytes, or when undeclared as many as the limits allow up to `cap`.
+    /// `Ok(Err(headroom))` when `want` does not fit. Grants are made one at a
+    /// time under the ledger lock and count every in-flight upload's
+    /// not-yet-written bytes.
+    pub(crate) fn reserve(
+        &self,
+        ledger: &Ledger,
+        root: &Path,
+        part: PathBuf,
+        start: u64,
+        want: Option<u64>,
+        cap: u64,
+    ) -> io::Result<Result<Reservation, u64>> {
+        let mut state = lock(&ledger.state);
+        // In-flight bytes first, disk usage second: a write landing in between
+        // is then counted twice (conservative), never missed.
+        let outstanding: u64 = state.pending.iter().map(Pending::outstanding).sum();
+        let headroom = self.headroom(root, outstanding)?;
+        let amount = match want {
+            Some(n) if n > headroom => return Ok(Err(headroom)),
+            Some(n) => n,
+            None => headroom.min(cap),
+        };
+        state.next += 1;
+        let key = state.next;
+        state.pending.push(Pending {
+            key,
+            part,
+            start,
+            amount,
+        });
+        Ok(Ok(Reservation {
+            state: ledger.state.clone(),
+            key,
+            amount,
+        }))
+    }
+}
+
+/// Uploads in flight and the bytes each was granted.
+#[derive(Default)]
+pub(crate) struct Ledger {
+    state: Arc<Mutex<LedgerState>>,
+}
+
+#[derive(Default)]
+struct LedgerState {
+    next: u64,
+    pending: Vec<Pending>,
+}
+
+struct Pending {
+    key: u64,
+    part: PathBuf,
+    start: u64,
+    amount: u64,
+}
+
+impl Pending {
+    /// Granted bytes not yet written to the partial file.
+    fn outstanding(&self) -> u64 {
+        let len = fs::metadata(&self.part).map_or(0, |m| m.len());
+        self.amount.saturating_sub(len.saturating_sub(self.start))
+    }
+}
+
+fn lock(state: &Mutex<LedgerState>) -> MutexGuard<'_, LedgerState> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Bytes granted to one upload; released when dropped.
+pub(crate) struct Reservation {
+    state: Arc<Mutex<LedgerState>>,
+    key: u64,
+    amount: u64,
+}
+
+impl Reservation {
+    /// The granted byte count.
+    pub(crate) fn amount(&self) -> u64 {
+        self.amount
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        lock(&self.state).pending.retain(|p| p.key != self.key);
     }
 }
 
@@ -122,8 +215,35 @@ mod tests {
             min_free_bytes: 1000,
             free_space: Arc::new(move |_: &Path| Some(free)),
         };
-        assert_eq!(limits(Some(400), 10_000).headroom(dir.path()).unwrap(), 250);
-        assert_eq!(limits(Some(400), 1100).headroom(dir.path()).unwrap(), 100);
-        assert_eq!(limits(None, 500).headroom(dir.path()).unwrap(), 0);
+        let headroom = |l: Limits, out| l.headroom(dir.path(), out).unwrap();
+        assert_eq!(headroom(limits(Some(400), 10_000), 0), 250);
+        assert_eq!(headroom(limits(Some(400), 1100), 0), 100);
+        assert_eq!(headroom(limits(Some(400), 1100), 30), 70);
+        assert_eq!(headroom(limits(None, 500), 0), 0);
+    }
+
+    #[test]
+    fn reservations_hold_bytes_until_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let limits = Limits {
+            max_total_bytes: Some(100),
+            min_free_bytes: 0,
+            free_space: Arc::new(|_: &Path| None),
+        };
+        let ledger = Ledger::default();
+        let part = dir.path().join("a.part");
+        let reserve = |rel: &str, want| {
+            limits
+                .reserve(&ledger, dir.path(), dir.path().join(rel), 0, want, 1000)
+                .unwrap()
+        };
+        let first = reserve("a.part", Some(60)).unwrap();
+        assert_eq!(reserve("b.part", Some(41)).err(), Some(40));
+        // Bytes already written count once: on disk, not as outstanding.
+        fs::write(&part, [0u8; 30]).unwrap();
+        assert_eq!(reserve("b.part", Some(41)).err(), Some(40));
+        assert_eq!(reserve("b.part", None).unwrap().amount(), 40);
+        drop(first);
+        assert_eq!(reserve("b.part", None).unwrap().amount(), 70);
     }
 }

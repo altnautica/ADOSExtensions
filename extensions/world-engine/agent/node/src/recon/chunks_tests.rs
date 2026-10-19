@@ -216,3 +216,66 @@ fn chunk_models_merge_with_shared_images_once() {
     let poses = crate::recon::colmap::read_image_poses(&out).unwrap();
     assert_eq!(poses.len(), 3);
 }
+
+#[test]
+fn the_merged_model_carries_one_rig_per_camera_and_one_frame_per_image() {
+    let p = plan(&line((0..40).map(f64::from)), 20, 5.0).expect("chunked");
+    let dir = tempfile::tempdir().unwrap();
+    let mut models = Vec::new();
+    for (id, (fx, x)) in [(50, -10.0), (51, -30.0)].into_iter().enumerate() {
+        let d = dir.path().join(id.to_string());
+        std::fs::create_dir_all(&d).unwrap();
+        let cams = format!("1 PINHOLE 64 48 {fx} {fx} 32 24\n");
+        std::fs::write(d.join("cameras.txt"), cams).unwrap();
+        let imgs =
+            format!("1 1 0 0 0 {x} 0 0 1 cam0/{id}a.png\n\n2 0 0 0 1 {x} 1 0 1 cam0/{id}b.png\n\n");
+        std::fs::write(d.join("images.txt"), imgs).unwrap();
+        std::fs::write(d.join("points3D.txt"), "").unwrap();
+        models.push((id, d));
+    }
+    let out = dir.path().join("txt");
+    merge_models(&models, &p, &out).unwrap();
+    let data = |f: &str| -> Vec<Vec<String>> {
+        std::fs::read_to_string(out.join(f))
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+            .map(|l| l.split_whitespace().map(str::to_string).collect())
+            .collect()
+    };
+    let cams: Vec<String> = data("cameras.txt")
+        .into_iter()
+        .map(|v| v[0].clone())
+        .collect();
+    let rigs = data("rigs.txt");
+    assert_eq!(rigs.len(), cams.len());
+    for (r, c) in rigs.iter().zip(&cams) {
+        assert_eq!(r, &[c.as_str(), "1", "CAMERA", c.as_str()]);
+    }
+    // images.txt alternates header and 2D-point lines.
+    let images: Vec<Vec<String>> = std::fs::read_to_string(out.join("images.txt"))
+        .unwrap()
+        .lines()
+        .filter(|l| !l.starts_with('#'))
+        .step_by(2)
+        .map(|l| l.split_whitespace().map(str::to_string).collect())
+        .collect();
+    let frames = data("frames.txt");
+    assert_eq!((images.len(), frames.len()), (4, 4));
+    for (f, img) in frames.iter().zip(&images) {
+        // FRAME_ID RIG_ID pose[7] 1 CAMERA CAMERA_ID IMAGE_ID
+        assert_eq!(f.len(), 13, "{f:?}");
+        assert_eq!(f[0], img[0]);
+        assert_eq!(f[1], img[8]);
+        assert_eq!(f[2..9], img[1..8], "the rig pose is the camera pose");
+        assert_eq!(
+            f[9..],
+            [
+                String::from("1"),
+                "CAMERA".into(),
+                img[8].clone(),
+                img[0].clone()
+            ]
+        );
+    }
+}

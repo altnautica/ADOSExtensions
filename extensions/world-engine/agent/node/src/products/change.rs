@@ -7,7 +7,8 @@ use kiddo::{ImmutableKdTree, SquaredEuclidean};
 use serde::{Deserialize, Serialize};
 
 use super::align::{
-    apply, icp, kd_tree, unaligned, voxel_representatives, AlignResult, ALIGN_VOXEL_M, IDENTITY_4X4,
+    apply, icp, kd_tree, unaligned, voxel_representatives, yaw_search, AlignResult, ALIGN_VOXEL_M,
+    IDENTITY_4X4, MAX_ITERATIONS,
 };
 use super::cloud::PointCloud;
 use super::geo::anchor_transform;
@@ -45,12 +46,12 @@ pub struct ChangeSummary {
 
 /// Start of the registration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum AlignInit {
     /// Both clouds anchored: the exact WGS-84 relation of the anchors.
     Anchor,
-    /// At least one local frame: identity (and a centroid-matched start).
-    Identity,
+    /// At least one local frame: global heading search about Z.
+    YawSearch,
 }
 
 /// Registration recorded in the change summary.
@@ -162,16 +163,6 @@ fn measure(
     }
 }
 
-fn centroid(cloud: &PointCloud) -> [f64; 3] {
-    let mut s = [0.0; 3];
-    for p in &cloud.points {
-        for k in 0..3 {
-            s[k] += p[k];
-        }
-    }
-    s.map(|v| v / cloud.points.len().max(1) as f64)
-}
-
 fn describe(anchor: Option<&GeoAnchor>) -> String {
     match anchor {
         Some(g) => format!(
@@ -184,8 +175,8 @@ fn describe(anchor: Option<&GeoAnchor>) -> String {
 
 /// Registers `b` into `a`'s frame, then [`compare`]s them. The registration
 /// starts from the anchors' WGS-84 relation when both clouds are anchored,
-/// else from identity and from a centroid-matched start (the better fit
-/// wins). The returned cloud is `b` in `a`'s frame.
+/// else from a global heading search about Z (see
+/// [`super::align::align_global`]). The returned cloud is `b` in `a`'s frame.
 ///
 /// Refuses with [`ProductError::FramesUnrelated`] when the final fitness is
 /// below [`MIN_FITNESS`] (or [`MIN_FITNESS_UNANCHORED`] when only one cloud
@@ -198,25 +189,24 @@ pub fn align_and_compare(
     threshold_m: f64,
 ) -> Result<(ChangeResult, AlignResult), ProductError> {
     let tree = kd_tree(&a.points);
-    let moving = voxel_representatives(&b.points, ALIGN_VOXEL_M);
-    let run = |init: [f64; 16]| match &tree {
-        Some(tree) => icp(tree, &a.points, &moving, init),
-        None => unaligned(init),
-    };
-    let (init, fit) = match (anchor_a, anchor_b) {
-        (Some(ga), Some(gb)) => (AlignInit::Anchor, run(anchor_transform(ga, gb))),
-        _ => {
-            let (ca, cb) = (centroid(a), centroid(b));
-            let mut shifted = IDENTITY_4X4;
-            for k in 0..3 {
-                shifted[4 * k + 3] = ca[k] - cb[k];
-            }
-            let direct = run(IDENTITY_4X4);
-            let matched = run(shifted);
-            let better = matched.fitness > direct.fitness
-                || (matched.fitness == direct.fitness && matched.rmse_m < direct.rmse_m);
-            (AlignInit::Identity, if better { matched } else { direct })
+    let fit = match (&tree, anchor_a, anchor_b) {
+        (None, ..) => unaligned(IDENTITY_4X4),
+        (Some(tree), Some(ga), Some(gb)) => {
+            let moving = voxel_representatives(&b.points, ALIGN_VOXEL_M);
+            icp(
+                tree,
+                &a.points,
+                &moving,
+                anchor_transform(ga, gb),
+                MAX_ITERATIONS,
+            )
         }
+        (Some(tree), ..) => yaw_search(tree, &a.points, &b.points),
+    };
+    let init = if anchor_a.is_some() && anchor_b.is_some() {
+        AlignInit::Anchor
+    } else {
+        AlignInit::YawSearch
     };
     let min_fitness = if anchor_a.is_some() != anchor_b.is_some() {
         MIN_FITNESS_UNANCHORED
