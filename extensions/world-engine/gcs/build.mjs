@@ -67,13 +67,24 @@ await build({
   logLevel: "warning",
 });
 
+// Run the CLI's JS entry through this Node binary: `node_modules/.bin/tailwindcss`
+// is a POSIX shell shim that Windows cannot spawn directly.
 const tailwind = spawnSync(
-  join(here, "node_modules/.bin/tailwindcss"),
-  ["-i", join(here, "src/styles.css"), "-o", join(here, "plugin.css"), "--minify"],
+  process.execPath,
+  [
+    join(here, "node_modules/@tailwindcss/cli/dist/index.mjs"),
+    "-i",
+    join(here, "src/styles.css"),
+    "-o",
+    join(here, "plugin.css"),
+    "--minify",
+  ],
   { cwd: here, stdio: "inherit" },
 );
 if (tailwind.status !== 0) {
-  throw new Error(`tailwindcss exited with ${tailwind.status}`);
+  throw new Error(
+    `tailwindcss exited with ${tailwind.status}${tailwind.error ? `: ${tailwind.error.message}` : ""}`,
+  );
 }
 
 // The package exports no `./package.json`; resolve its ESM entry instead.
