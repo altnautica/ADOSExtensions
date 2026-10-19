@@ -31,7 +31,7 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.103.4"
+  ados_version: ">=0.104.0"
   gcs_version: ">=0.58.0"
   supported_boards: ["*"]
 
