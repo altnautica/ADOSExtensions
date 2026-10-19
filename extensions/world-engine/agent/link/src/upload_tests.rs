@@ -244,3 +244,40 @@ async fn auto_upload_queues_only_finished_unuploaded_sessions() {
     // Already queued: not queued twice.
     assert_eq!(m.enqueue_pending(), 0);
 }
+
+#[tokio::test]
+async fn auto_jobs_wait_while_the_gate_is_closed_and_operator_jobs_do_not() {
+    let root = tempfile::tempdir().unwrap();
+    let auto_id = "a-20261019T101500Z-0001";
+    let op_id = "b-20261019T101500Z-0002";
+    let auto_dir = finished_session(root.path(), auto_id);
+    finished_session(root.path(), op_id);
+    let node: SharedNode = Arc::default();
+    node.lock().commit_ok = true;
+    node.lock().marker = auto_dir.join(UPLOADED_MARKER);
+    let addr = serve_node(node.clone()).await;
+    let host = FakeHost::new();
+    host.set_config(PIN_KEY, json!(addr));
+    let m = manager(host, root.path());
+    let (_stop, rx) = watch::channel(false);
+    tokio::spawn(m.clone().run(rx));
+
+    // The backlog is queued while the gate was open, then the device turns busy.
+    m.set_auto_gate(false);
+    assert_eq!(m.enqueue_pending(), 2);
+    // An operator request runs regardless of the gate.
+    m.request(op_id, &LiveSession::None).unwrap();
+    let op = SessionDir::open(root.path(), op_id).unwrap();
+    assert_eq!(settle(&m, &op).await.state, UploadState::Committed);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let a = SessionDir::open(root.path(), auto_id).unwrap();
+    assert_eq!(
+        m.view(&a, 0).state,
+        UploadState::Queued,
+        "auto job waits for the gate"
+    );
+    assert!(!auto_dir.join(UPLOADED_MARKER).exists());
+
+    m.set_auto_gate(true);
+    assert_eq!(settle(&m, &a).await.state, UploadState::Committed);
+}

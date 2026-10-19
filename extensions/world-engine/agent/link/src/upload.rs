@@ -41,8 +41,9 @@ pub type RootFn = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 /// The plugin config key that turns auto-upload on.
 pub const AUTO_UPLOAD_KEY: &str = "atlas.auto_upload";
-/// How often the auto-upload gate is evaluated.
-const AUTO_INTERVAL: Duration = Duration::from_secs(30);
+/// How often the auto-upload gate is evaluated. Auto-queued uploads pause
+/// within this of the device becoming busy (armed, recording, discharging).
+const AUTO_INTERVAL: Duration = Duration::from_secs(10);
 /// A failed session is not auto-enqueued again before this.
 const AUTO_RETRY_AFTER: Duration = Duration::from_secs(600);
 
@@ -81,6 +82,8 @@ impl UploadView {
 struct Job {
     view: UploadView,
     failed_at: Option<Instant>,
+    /// Queued by auto-upload: runs only while the auto gate is open.
+    auto: bool,
 }
 
 struct Inner {
@@ -91,6 +94,10 @@ struct Inner {
     jobs: Mutex<HashMap<String, Job>>,
     queue: Mutex<VecDeque<String>>,
     wake: Notify,
+    /// The auto-upload gate as last evaluated (idle or charging, not
+    /// recording, a paired node). Auto-queued jobs wait while it is closed and
+    /// a running one stops (it resumes from the node's offset later).
+    gate: watch::Sender<bool>,
 }
 
 /// The upload queue and its progress; cheap to clone.
@@ -115,6 +122,7 @@ impl UploadManager {
                 jobs: Mutex::default(),
                 queue: Mutex::default(),
                 wake: Notify::new(),
+                gate: watch::channel(false).0,
             }),
         }
     }
@@ -152,17 +160,26 @@ impl UploadManager {
         self.inner.jobs.lock().remove(id);
     }
 
-    /// Queue `id` (a no-op while it is already queued or uploading).
+    /// Queue `id` at the operator's request (a no-op while it is already
+    /// queued or uploading, except that an auto job becomes an operator job).
     pub fn enqueue(&self, id: &str, size_bytes: u64) {
+        self.enqueue_as(id, size_bytes, false);
+    }
+
+    fn enqueue_as(&self, id: &str, size_bytes: u64, auto: bool) {
         {
             let mut jobs = self.inner.jobs.lock();
             let job = jobs.entry(id.to_string()).or_insert_with(|| Job {
                 view: UploadView::idle(size_bytes),
                 failed_at: None,
+                auto,
             });
             if matches!(job.view.state, UploadState::Queued | UploadState::Uploading) {
+                job.auto &= auto;
+                self.inner.wake.notify_one();
                 return;
             }
+            job.auto = auto;
             job.view = UploadView {
                 state: UploadState::Queued,
                 ..UploadView::idle(size_bytes)
@@ -261,13 +278,32 @@ impl UploadManager {
         Ok(label)
     }
 
+    fn is_auto(&self, id: &str) -> bool {
+        self.inner.jobs.lock().get(id).is_some_and(|j| j.auto)
+    }
+
+    /// The next runnable job: the first operator job, or the first auto job
+    /// while the gate is open.
+    fn next_runnable(&self) -> Option<String> {
+        let open = *self.inner.gate.borrow();
+        let mut q = self.inner.queue.lock();
+        let at = q.iter().position(|id| open || !self.is_auto(id))?;
+        q.remove(at)
+    }
+
+    /// Open or close the auto-upload gate (the auto loop, and tests).
+    pub fn set_auto_gate(&self, open: bool) {
+        self.inner.gate.send_replace(open);
+    }
+
     /// Run queued uploads, one at a time, until shutdown.
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
+        let mut gate = self.inner.gate.subscribe();
         loop {
-            let next = self.inner.queue.lock().pop_front();
-            let Some(id) = next else {
+            let Some(id) = self.next_runnable() else {
                 tokio::select! {
                     _ = self.inner.wake.notified() => {}
+                    _ = gate.changed() => {}
                     r = shutdown.changed() => {
                         if r.is_err() || *shutdown.borrow() {
                             return;
@@ -276,9 +312,26 @@ impl UploadManager {
                 }
                 continue;
             };
-            tracing::info!(session = %id, "session upload starting");
+            let auto = self.is_auto(&id);
+            tracing::info!(session = %id, auto, "session upload starting");
+            let mut stop_gate = self.inner.gate.subscribe();
+            let gate_closed = async {
+                if auto {
+                    let _ = stop_gate.wait_for(|open| !*open).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
             let result = tokio::select! {
                 r = self.upload(&id) => r,
+                _ = gate_closed => {
+                    // The device became busy: put the session back at the head
+                    // of the queue; the next run resumes from the node's offset.
+                    tracing::info!(session = %id, "auto upload paused: device busy");
+                    self.update(&id, |j| j.view.state = UploadState::Queued);
+                    self.inner.queue.lock().push_front(id);
+                    continue;
+                }
                 _ = shutdown.wait_for(|s| *s) => return,
             };
             match result {
@@ -346,7 +399,7 @@ impl UploadManager {
                 .and_then(|j| j.failed_at)
                 .is_some_and(|t| t.elapsed() < AUTO_RETRY_AFTER);
             if !recent_failure {
-                self.enqueue(&dir.id, crate::sessions::dir_size(&dir.path));
+                self.enqueue_as(&dir.id, crate::sessions::dir_size(&dir.path), true);
                 n += 1;
             }
         }
@@ -364,7 +417,9 @@ impl UploadManager {
             if sleep_or_shutdown(&mut shutdown, AUTO_INTERVAL).await {
                 return;
             }
-            if self.auto_gate(&control, &power).await {
+            let open = self.auto_gate(&control, &power).await;
+            self.set_auto_gate(open);
+            if open {
                 let n = self.enqueue_pending();
                 if n > 0 {
                     tracing::info!(sessions = n, "auto-upload queued sessions");

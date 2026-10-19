@@ -36,7 +36,12 @@ pub struct ComputeNode {
 impl ComputeNode {
     /// `host:port`.
     pub fn addr(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+        // An IPv6 literal is bracketed so the port is not read as a group.
+        if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
     }
 
     /// The job-API base URL.
@@ -263,5 +268,17 @@ mod tests {
             split_host_port("[fe80::1]:9000", 8092),
             Some(("fe80::1".into(), 9000))
         );
+    }
+
+    #[test]
+    fn ipv6_hosts_are_bracketed() {
+        let n = |host: &str| ComputeNode {
+            host: host.into(),
+            port: 8092,
+            device_id: None,
+        };
+        assert_eq!(n("fd00::5").base_url(), "http://[fd00::5]:8092");
+        assert_eq!(n("[fd00::5]").addr(), "[fd00::5]:8092");
+        assert_eq!(n("192.168.1.50").addr(), "192.168.1.50:8092");
     }
 }

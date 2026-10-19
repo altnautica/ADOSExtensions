@@ -70,6 +70,9 @@ All notable changes to the World Engine extension.
   its stamps. Exposure reports `applied: false` until the camera applies it and
   uses the nearest flicker-safe value under the mode cap. A bad item is skipped
   and counted; only a writer I/O error ends recording.
+- Auto-queued uploads run only while the auto gate (idle or charging, not
+  recording) stays open and pause, to resume from the node's offset, when it
+  closes; operator uploads are not gated. IPv6 node addresses are bracketed.
 - **LAN-only upload is pinned** to the checked address and never follows
   redirects. MCP tools answer within 4 s. Job errors decode as objects.
 - **Release payloads**: `basalt-ados`, the Livox SDK2 library and `uv`
