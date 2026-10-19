@@ -1,0 +1,33 @@
+/* The tour viewer reuses the extension's `we:`-prefixed utilities and supplies
+   the theme variables Mission Control would otherwise provide (dark theme). */
+@import "../src/styles.css";
+
+@source "./";
+
+:root {
+  --alt-bg-primary: #0b0d10;
+  --alt-bg-secondary: #12151a;
+  --alt-bg-tertiary: #1b2027;
+  --alt-text-primary: #f1f5f9;
+  --alt-text-secondary: #cbd5e1;
+  --alt-text-tertiary: #8b95a5;
+  --alt-accent-primary: #38bdf8;
+  --alt-accent-primary-hover: #7dd3fc;
+  --alt-accent-foreground: #0b0d10;
+  --alt-border-default: #2a313b;
+  --alt-border-strong: #3b4552;
+  --alt-status-success: #22c55e;
+  --alt-status-warning: #f59e0b;
+  --alt-status-error: #ef4444;
+  --alt-on-status: #0b0d10;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--alt-bg-primary);
+  color: var(--alt-text-primary);
+  font-family: "Inter", system-ui, sans-serif;
+}

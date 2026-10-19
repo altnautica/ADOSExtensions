@@ -104,7 +104,7 @@ export function LiveWorldPage() {
   const artifact = useLocal ? local.artifact : cloudArtifact;
   const viewerHint = useLocal ? local.viewerHint : cloudDone ? viewerHintOf(cloudDone.metadata) : null;
   const backend = useLocal ? local.backend : cloudDone ? backendOf(cloudDone.metadata) : null;
-  const hasWorld = artifact !== null || backend !== null;
+  const hasWorld = artifact !== null;
   // A paired but unreachable reconstructor reads distinctly from one that is
   // building; "no node" guidance shows only when nothing can reconstruct.
   const worldEmptyMessage =

@@ -84,9 +84,7 @@ export function ForgeOutputs({ jobs, client }: { jobs: readonly ComputeJob[]; cl
       ? override.viewer
       : defaultViewer;
   const picked = pickArtifactForViewer(outputs, viewer);
-  // A placeholder artifact has no readable source but still badges its
-  // backend; an output with neither has nothing to show.
-  const showable = picked !== undefined && (picked.source !== null || picked.backend !== null);
+  const showable = picked !== undefined && picked.source !== null;
 
   if (finished.length === 0) {
     return <div className="we:text-[11px] we:text-text-tertiary we:text-center we:py-8">{t("forgeNoOutputs")}</div>;

@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-import { SENTINEL_ORIGIN, serveAtSentinel } from "../../../src/lib/net/sentinel-fetch";
+import { SENTINEL_ORIGIN, honourRange, serveAtSentinel } from "../../../src/lib/net/sentinel-fetch";
 
 type Fetch = typeof globalThis.fetch;
 
@@ -119,5 +119,23 @@ describe("serveAtSentinel", () => {
     expect(globalThis.fetch).toBe(outer);
     expect(await (await globalThis.fetch(again.url)).text()).toBe("again");
     again.release();
+  });
+});
+
+describe("honourRange", () => {
+  it("cuts the requested bytes from a full 200 answer", async () => {
+    const res = await honourRange(new Response(new Uint8Array([0, 1, 2, 3, 4, 5])), "bytes=2-4");
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Range")).toBe("bytes 2-4/6");
+    expect(Array.from(new Uint8Array(await res.arrayBuffer()))).toEqual([2, 3, 4]);
+  });
+
+  it("passes a 206, an open-ended range end and a rangeless request through correctly", async () => {
+    const partial = new Response("x", { status: 206 });
+    expect(await honourRange(partial, "bytes=0-0")).toBe(partial);
+    const tail = await honourRange(new Response(new Uint8Array([9, 8, 7])), "bytes=1-");
+    expect(Array.from(new Uint8Array(await tail.arrayBuffer()))).toEqual([8, 7]);
+    const plain = new Response("abc");
+    expect(await honourRange(plain, null)).toBe(plain);
   });
 });

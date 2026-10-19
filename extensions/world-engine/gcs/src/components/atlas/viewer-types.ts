@@ -3,9 +3,9 @@
  * @description The Atlas World Model viewer registry. The operator switches
  * between viewers on the same world (a `viewer` parameter). Rerun is the
  * first-class default world viewer + live-stream surface; the splat viewer
- * plays photoreal gaussian splats
- * (the one thing Rerun does not render natively); the cloud viewer renders a dense point
- * cloud (`.ply`) on three.js. The LOD viewer is the cloud viewer that survives
+ * (Spark) plays photoreal gaussian splats (`.spz`, `.ply`, or a streamed `.rad`
+ * level-of-detail file), the one thing Rerun does not render natively; the
+ * cloud viewer renders a dense point cloud (`.ply` / `.laz`) on three.js. The LOD viewer is the cloud viewer that survives
  * very large clouds — it decimates a multi-million-point `.ply` to a point
  * budget (a single-level voxel-grid pass) so the retained buffer never
  * exhausts memory, the gap the plain cloud viewer has. Out-of-core octree
@@ -68,6 +68,7 @@ export function backendOf(metadata: unknown): string | null {
 export function viewerForKind(kind: string): AtlasViewer {
   switch (kind) {
     case "splat":
+    case "splat_lod":
       return "splat";
     case "cloud":
     case "ply":
@@ -94,7 +95,9 @@ export function pickArtifactForViewer<T extends { kind: string }>(
   viewer: AtlasViewer,
 ): T | undefined {
   if (viewer === "rerun") return outputs.find((o) => o.kind === "rerun");
-  if (viewer === "splat") return outputs.find((o) => o.kind === "splat");
-  // cloud / lod → a dense point-cloud `.ply`
+  if (viewer === "splat") {
+    return outputs.find((o) => o.kind === "splat_lod") ?? outputs.find((o) => o.kind === "splat");
+  }
+  // cloud / lod → a dense point cloud
   return outputs.find((o) => CLOUD_KINDS.includes(o.kind));
 }

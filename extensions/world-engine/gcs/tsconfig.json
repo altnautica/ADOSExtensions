@@ -14,5 +14,5 @@
     "resolveJsonModule": true,
     "lib": ["ESNext", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/**/*", "tests/**/*", "../locales/*.json"]
+  "include": ["src/**/*", "tests/**/*", "tour-viewer/**/*", "../locales/*.json"]
 }

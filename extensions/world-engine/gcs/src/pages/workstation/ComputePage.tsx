@@ -14,6 +14,7 @@ import { CalmState } from "./CalmState";
 import { DroneAccessPanel } from "./DroneAccessPanel";
 import { ForgeOutputs } from "./ForgeOutputs";
 import { JobsPanel } from "./JobsPanel";
+import { PipelinePanel } from "./PipelinePanel";
 import { SegmentedPane } from "./SegmentedPane";
 
 const t = translator("atlas");
@@ -32,6 +33,7 @@ export function ComputePage() {
       ariaLabel={t("computePaneLabel")}
       segments={[
         { id: "jobs", label: t("forgeJobs"), render: () => <JobsPanel deviceId={deviceId} /> },
+        { id: "pipeline", label: t("pipelineSegment"), render: () => <PipelinePanel deviceId={deviceId} /> },
         { id: "viewer", label: t("viewerGroupLabel"), render: () => <WorkstationViewer deviceId={deviceId} /> },
         { id: "access", label: t("droneAccess.segment"), render: () => <DroneAccessPanel deviceId={deviceId} /> },
       ]}

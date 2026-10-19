@@ -79,9 +79,7 @@ export function WorldModelPage() {
   }
 
   const viewer = override && override.key === selectedValue ? override.viewer : (hint ?? DEFAULT_ATLAS_VIEWER);
-  // A resolved local output with nothing to read (a placeholder) still opens
-  // the viewer so its honesty badge shows.
-  const hasReconstruction = artifact !== null || (useLocal && local.status === "ready" && backend !== null);
+  const hasReconstruction = artifact !== null;
 
   if (!hasReconstruction) {
     return (

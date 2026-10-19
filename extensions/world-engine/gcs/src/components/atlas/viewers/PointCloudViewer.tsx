@@ -1,6 +1,7 @@
 /**
  * @module atlas/viewers/PointCloudViewer
- * @description Renders a dense point cloud (`.ply`) with three.js — the repo's
+ * @description Renders a dense point cloud (`.ply`, or a reconstruction's
+ * LAZ 1.4 `.laz` decoded with loaders.gl) with three.js — the repo's
  * own `three` 0.183, NOT `@pnext/three-loader`, whose Potree build pins an older
  * three and so cannot be added. The renderer + the PLY load run in an in-effect
  * dynamic import (never in the static graph / SSR / a test render). On unmount or
@@ -25,6 +26,7 @@ import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js
 import { ViewerError } from "./ViewerError";
 import { ViewerLoading } from "./ViewerLoading";
 import { orientCloudToYUp } from "./coordinate-frame";
+import { decodeLaz } from "./cloud-laz";
 import { followCanvasSize, frameCloud } from "./cloud-view";
 import {
   fetchArrayBufferWithProgress,
@@ -85,9 +87,19 @@ export function PointCloudViewer({ source }: { source: ArtifactSource }) {
           },
         });
         if (disposed) return;
-        const geom = new PLYLoader().parse(buffer);
-        // COLMAP Y-down world frame → viewer Y-up (before the framing sphere).
-        orientCloudToYUp(geom);
+        let geom: BufferGeometry;
+        if (/\.la[sz]$/i.test(source.name)) {
+          // A LAZ cloud is local ENU, already mapped to viewer axes.
+          const cloud = await decodeLaz(buffer);
+          if (disposed) return;
+          geom = new THREE.BufferGeometry();
+          geom.setAttribute("position", new THREE.BufferAttribute(cloud.positions, 3));
+          if (cloud.colors) geom.setAttribute("color", new THREE.BufferAttribute(cloud.colors, 3));
+        } else {
+          geom = new PLYLoader().parse(buffer);
+          // COLMAP Y-down world frame → viewer Y-up (before the framing sphere).
+          orientCloudToYUp(geom);
+        }
         geom.computeBoundingSphere();
         geometry = geom;
 

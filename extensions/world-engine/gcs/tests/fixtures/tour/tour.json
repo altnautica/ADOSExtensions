@@ -1,0 +1,32 @@
+{
+  "contract": "ados.capture/1",
+  "title": "Sample flat",
+  "splat": "scene.spz",
+  "lod": null,
+  "mesh": null,
+  "floorplan": "floorplan.json",
+  "anchor": null,
+  "placement": null,
+  "rooms": [
+    {
+      "name": "Living",
+      "floor": 0,
+      "hotspot": [
+        1.75,
+        2,
+        1.6
+      ],
+      "still": null
+    },
+    {
+      "name": "Bedroom",
+      "floor": 0,
+      "hotspot": [
+        4.75,
+        2,
+        1.6
+      ],
+      "still": null
+    }
+  ]
+}

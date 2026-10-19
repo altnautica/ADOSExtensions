@@ -13,6 +13,7 @@ import type { InlineAgentApi } from "@altnautica/plugin-sdk/inline";
 import type { ComputeGpuInfo } from "../../stores/compute-store";
 import { artifactSource, type ArtifactSource } from "../net/artifact-source";
 import { requestJson, type JsonReply } from "./plugin-http";
+import { coerceJobError, coerceJobPipeline, type JobError, type JobPipeline } from "./job-pipeline";
 
 /** The compute node's own listener port, where drones reach its job API and
  * streams directly (the GCS goes through the host instead). */
@@ -63,8 +64,12 @@ export interface ComputeJob {
   progress: number;
   /** Where the finished artifact can be fetched, or null until done. */
   resultRef: string | null;
-  /** Failure detail when `state` is "failed". */
+  /** Failure detail when `state` is "failed" (the node's message). */
   error: string | null;
+  /** The node's structured error (`E_TOOL_MISSING` with its tool, ...). */
+  errorInfo: JobError | null;
+  /** The staged reconstruction pipeline, or null for a job without stages. */
+  pipeline: JobPipeline | null;
   /** The capturing session a reconstruct job belongs to (lifted from the job's
    * params by the engine), or null for a job that carries none (an offload job,
    * or a reconstruct job from an agent before the session was tagged). Lets the
@@ -95,17 +100,20 @@ export interface ComputeOutput {
    * null for a placeholder with nothing to read. */
   source: ArtifactSource | null;
   /** The concrete reconstruction backend that produced this artifact, lifted
-   * from `meta.backend`: `"mock"` is a deterministic placeholder (a node with no
-   * GPU / no real backend installed) and is NEVER a real world model; a real
-   * backend is `"brush"` / `"msplat"` / `"nerfstudio"` / `"colmap"`. `null` when
-   * a pre-field agent advertises none. Drives the reconstruction-honesty badge
-   * so an operator never mistakes a mock splat for a real reconstruction
-   * (no fabricated reading). */
+   * from `meta.backend` (`"brush"` / `"gsplat"` / `"msplat"` / `"colmap"`),
+   * or null when the node advertises none. */
   backend: string | null;
   /** The raw backend result metadata (`gaussian_count`, `backend`, …) served on
    * the output, or null when absent — kept so a surface can read further detail
    * without a second fetch. */
   meta: Record<string, unknown> | null;
+  /** The file name in the job's output directory, or null. */
+  file: string | null;
+  /** The artifact format (`spz`, `rad`, `glb`, `laz`, `json`, `zip`, ...). */
+  format: string | null;
+  sizeBytes: number | null;
+  /** The output-relative name of the artifact's `.place.json` sidecar, or null. */
+  placeJson: string | null;
   createdMs: number;
 }
 
@@ -164,7 +172,9 @@ function coerceJob(raw: unknown): ComputeJob | null {
     state: str(e.state),
     progress: num(e.progress),
     resultRef: strOrNull(e.result_ref),
-    error: strOrNull(e.error),
+    error: coerceJobError(e.error)?.message ?? null,
+    errorInfo: coerceJobError(e.error),
+    pipeline: coerceJobPipeline(e),
     sessionId: strOrNull(e.session_id),
     steps:
       params && typeof params.steps === "number" && params.steps > 0
@@ -184,34 +194,20 @@ function coerceOutput(raw: unknown): ComputeOutput | null {
     e.meta && typeof e.meta === "object" && !Array.isArray(e.meta)
       ? (e.meta as Record<string, unknown>)
       : null;
-  // The honest backend rides `meta.backend`. Fall back to the `mock://` uri
-  // scheme so a pre-field agent (no `meta.backend`) that still emits a
-  // placeholder artifact is caught by the honesty badge (defense-in-depth).
-  const metaBackend =
-    typeof meta?.backend === "string" && meta.backend.length > 0
-      ? meta.backend
-      : null;
-  const backend = metaBackend ?? (e.uri.startsWith("mock://") ? "mock" : null);
   return {
     id: e.id,
     jobId: str(e.job_id),
     kind: str(e.kind),
     uri: e.uri,
     source: null,
-    backend,
+    backend: typeof meta?.backend === "string" && meta.backend.length > 0 ? meta.backend : null,
     meta,
+    file: strOrNull(e.file),
+    format: strOrNull(e.format),
+    sizeBytes: typeof e.size_bytes === "number" ? e.size_bytes : null,
+    placeJson: strOrNull(e.place_json),
     createdMs: num(e.created_ms),
   };
-}
-
-/**
- * Whether a compute output is a placeholder (mock) reconstruction rather than a
- * real world model — true when the honest backend is `"mock"` OR the artifact
- * uri uses the `mock://` scheme (the pre-field-agent fallback). An operator must
- * never mistake a placeholder splat for a real reconstruction (no fabricated reading).
- */
-export function isPlaceholderArtifact(o: ComputeOutput): boolean {
-  return o.backend === "mock" || o.uri.startsWith("mock://");
 }
 
 function coerceDataset(raw: unknown): ComputeDataset | null {
@@ -280,13 +276,58 @@ export class ComputeAgentClient {
     );
     if (body === null) return null;
     if (!Array.isArray(body)) return [];
-    const node = { deviceId: this.deviceId, agent: this.agent };
     return body.flatMap((o) => {
       const out = coerceOutput(o);
       if (!out) return [];
-      out.source = isPlaceholderArtifact(out) ? null : artifactSource(out.uri, node);
+      out.source = out.file
+        ? this.fileSource(out.jobId || id, out.file)
+        : artifactSource(out.uri, { deviceId: this.deviceId, agent: this.agent });
       return [out];
     });
+  }
+
+  /** A file in a job's output directory (`jobs/{id}/files/{rel}`), read
+   * through this node's extension server. */
+  fileSource(jobId: string, rel: string): ArtifactSource {
+    const path = `api/compute/jobs/${encodeURIComponent(jobId)}/files/${rel
+      .split("/")
+      .map(encodeURIComponent)
+      .join("/")}`;
+    return {
+      key: `${this.deviceId}:${jobId}:${rel}`,
+      name: rel.slice(rel.lastIndexOf("/") + 1),
+      fetch: (signal, init) => this.agent.fetch(path, { ...init, signal }),
+      sibling: (name) => this.fileSource(jobId, `${rel.slice(0, rel.lastIndexOf("/") + 1)}${name}`),
+    };
+  }
+
+  /** A JSON file from a job's output directory, or null when it is absent. */
+  async readJsonFile(jobId: string, rel: string): Promise<unknown | null> {
+    try {
+      const res = await this.fileSource(jobId, rel).fetch(AbortSignal.timeout(15_000));
+      return res.ok ? await res.json() : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Distance on a job's reconstructed mesh (local ENU metres). `point` snaps
+   * each end to the nearest surface; `ray` casts from `a` along direction `b`
+   * and measures to the first hit. Null when the node cannot answer.
+   */
+  async measure(
+    jobId: string,
+    a: [number, number, number],
+    b: [number, number, number],
+    mode: "point" | "ray" = "point",
+  ): Promise<{ distanceM: number; aHit: number[] | null; bHit: number[] | null } | null> {
+    const body = await this.jobRequest("measure", "POST", { job_id: jobId, a, b, mode });
+    if (!body || typeof body !== "object") return null;
+    const e = body as Record<string, unknown>;
+    if (typeof e.distance_m !== "number") return null;
+    const hit = (v: unknown) => (Array.isArray(v) && v.length === 3 ? (v as number[]) : null);
+    return { distanceM: e.distance_m, aHit: hit(e.a_hit), bHit: hit(e.b_hit) };
   }
 
   /** Submit a job. Returns the assigned id + initial state, or `null` on failure. */
@@ -303,6 +344,28 @@ export class ComputeAgentClient {
     const e = body as Record<string, unknown>;
     if (typeof e.job_id !== "string") return null;
     return { jobId: e.job_id, state: str(e.state) };
+  }
+
+  /**
+   * Submit a staged job (`reconstruct {session_id, preset}`, `change {a, b}`,
+   * `calibrate {session_id, target}`) with its fields at the top level of the
+   * body. A refusal carries the node's error code (`E_TOOL_MISSING`, ...).
+   */
+  async submit(
+    kind: string,
+    fields: Record<string, unknown>,
+  ): Promise<{ ok: true; jobId: string } | { ok: false; code: string; message: string }> {
+    const r = await this.jobCall("jobs", "POST", { ...fields, kind });
+    if (!r) return { ok: false, code: "transport_error", message: "The compute node did not answer." };
+    const e = r.json && typeof r.json === "object" ? (r.json as Record<string, unknown>) : {};
+    if (r.status >= 200 && r.status < 300 && typeof e.job_id === "string") return { ok: true, jobId: e.job_id };
+    // `{error: {code, message, tool}}` or the flat `{error: "E_...", tool, detail}`.
+    const err =
+      typeof e.error === "string"
+        ? { code: e.error, message: strOrNull(e.detail) ?? e.error, tool: strOrNull(e.tool) }
+        : coerceJobError(e.error);
+    const code = err?.code ?? `http_${r.status}`;
+    return { ok: false, code, message: err?.tool ? `${err.message} (${err.tool})` : (err?.message ?? code) };
   }
 
   /** Request cancellation of a queued / running job. Returns whether it took. */

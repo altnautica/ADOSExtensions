@@ -21,6 +21,9 @@ import { AtlasRelayPage } from "./pages/ground-station/AtlasRelayPage";
 import { OffloadPage } from "./pages/offload/OffloadPage";
 import { ComputePage } from "./pages/workstation/ComputePage";
 import { OverviewPage } from "./pages/workstation/OverviewPage";
+import { CalibrationPage } from "./pages/visor/CalibrationPage";
+import { CapturePage } from "./pages/visor/CapturePage";
+import { SessionsPage } from "./pages/visor/SessionsPage";
 
 /** Every page this module contributes, by manifest id. */
 export const PAGES: Record<string, ComponentType> = {
@@ -31,6 +34,9 @@ export const PAGES: Record<string, ComponentType> = {
   "atlas-relay": AtlasRelayPage,
   overview: OverviewPage,
   compute: ComputePage,
+  capture: CapturePage,
+  sessions: SessionsPage,
+  calibration: CalibrationPage,
 };
 
 const t = translator("worldEngine");

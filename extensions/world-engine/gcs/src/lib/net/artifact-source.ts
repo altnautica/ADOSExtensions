@@ -20,7 +20,11 @@ export interface ArtifactSource {
   key: string;
   /** The artifact's file name; its extension names the format. */
   name: string;
-  fetch(signal: AbortSignal): Promise<Response>;
+  /** Read the bytes; `init` may carry headers (a `Range`). */
+  fetch(signal: AbortSignal, init?: RequestInit): Promise<Response>;
+  /** A file next to this one (a level-of-detail chunk), when the store can
+   * address siblings. */
+  sibling?(name: string): ArtifactSource;
 }
 
 /** Pull the stable `artifacts/<relpath>` segment out of a stored artifact URL,
@@ -58,9 +62,21 @@ export function artifactSource(
     return {
       key: `${node.deviceId}:${rel}`,
       name: fileName(rel),
-      fetch: (signal) => node.agent.fetch(rel, { signal }),
+      fetch: (signal, init) => node.agent.fetch(rel, { ...init, signal }),
     };
   }
   if (!/^https?:\/\//i.test(uri)) return null;
-  return { key: uri, name: fileName(uri), fetch: (signal) => fetch(uri, { signal }) };
+  return { key: uri, name: fileName(uri), fetch: (signal, init) => fetch(uri, { ...init, signal }) };
+}
+
+/** A source read straight from `url` (resolved against the page), whose
+ * siblings are the files next to it: the static tour bundle. */
+export function urlSource(url: string): ArtifactSource {
+  const abs = new URL(url, globalThis.location?.href ?? "http://localhost/").href;
+  return {
+    key: abs,
+    name: fileName(abs),
+    fetch: (signal, init) => fetch(abs, { ...init, signal }),
+    sibling: (name) => urlSource(new URL(name, abs).href),
+  };
 }

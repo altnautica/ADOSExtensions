@@ -56,15 +56,12 @@ export interface DroneWorldModel {
    * empty state. */
   hasComputeNode: boolean;
   status: WorldModelStatus;
-  /** The resolved artifact when `status === "ready"`, else null. Null in the
-   * ready state too when the output is a placeholder with nothing to read
-   * (`backend === "mock"`), so the honesty badge still shows. */
+  /** The resolved artifact when `status === "ready"`, else null. */
   artifact: ArtifactSource | null;
   /** Viewer derived from the artifact kind when ready, else null. */
   viewerHint: AtlasViewer | null;
-  /** The concrete reconstruction backend of the resolved artifact (`"mock"` =
-   * placeholder, else the real backend name), or null when none is resolved.
-   * Drives the reconstruction-honesty badge. */
+  /** The reconstruction backend of the resolved artifact, or null when none
+   * is resolved or the node names none. */
   backend: string | null;
   /** Completed reconstruction sessions on the node, newest-first (selector). */
   sessions: WorldModelSession[];
