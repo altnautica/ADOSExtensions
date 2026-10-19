@@ -1,8 +1,8 @@
 """Build a triangle mesh from a trained splat.
 
 With gsplat kernels available ("tsdf"): render expected depth from the splat
-at every training view, fuse into an Open3D scalable TSDF volume and extract
-the surface. Without them ("poisson"): screened Poisson reconstruction over the
+at every training view, fuse into an Open3D tensor VoxelBlockGrid TSDF and
+extract the surface. Without them ("poisson"): screened Poisson reconstruction over the
 splat centres with normals oriented towards the nearest camera, trimming the
 lowest-density 5 % of vertices. Both end with quadric decimation to
 --max-tris and write <out>/mesh.ply (binary) and <out>/mesh.glb, world frame.
@@ -19,6 +19,8 @@ import numpy as np
 import common
 
 MAX_RENDER_SIDE = 1280
+BLOCK_RESOLUTION = 16
+BLOCK_COUNT = 10_000  # initial hash capacity; the grid grows past it
 POISSON_DEPTH = 9
 DENSITY_TRIM = 0.05
 MIN_OPACITY = 0.1
@@ -35,16 +37,52 @@ def parse_args(argv=None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def tsdf_mesh(args, splat, views):
-    import open3d as o3d
+class TsdfFuser:
+    """TSDF fusion of depth + colour views into a sparse voxel block grid."""
 
+    def __init__(self, voxel: float):
+        import open3d as o3d
+        import open3d.core as o3c
+
+        self.o3d, self.o3c = o3d, o3c
+        self.device = o3c.Device("CUDA:0" if o3c.cuda.is_available() else "CPU:0")
+        self.grid = o3d.t.geometry.VoxelBlockGrid(
+            attr_names=("tsdf", "weight", "color"),
+            attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),
+            attr_channels=((1), (1), (3)),
+            voxel_size=voxel,
+            block_resolution=BLOCK_RESOLUTION,
+            block_count=BLOCK_COUNT,
+            device=self.device,
+        )
+        self.voxel = voxel
+        self.used = 0
+
+    def integrate(self, rgb: np.ndarray, depth: np.ndarray, K: np.ndarray, w2c: np.ndarray) -> bool:
+        """rgb HxWx3 float 0..1, depth HxW metres (0 = none). False when the view has too little depth."""
+        o3d, o3c = self.o3d, self.o3c
+        valid = depth[depth > 0]
+        if valid.size < 100:
+            return False
+        # Open3D keeps depth strictly below depth_max; the voxel margin keeps a
+        # view whose depths sit at the cut (a fronto-parallel plane) from losing them all.
+        depth_max = float(np.percentile(valid, 98)) + self.voxel
+        depth_t = o3d.t.geometry.Image(o3c.Tensor(np.ascontiguousarray(depth, np.float32))).to(self.device)
+        color_t = o3d.t.geometry.Image(o3c.Tensor(np.ascontiguousarray(rgb, np.float32))).to(self.device)
+        K_t = o3c.Tensor(np.asarray(K, np.float64))
+        w2c_t = o3c.Tensor(np.asarray(w2c, np.float64))
+        blocks = self.grid.compute_unique_block_coordinates(depth_t, K_t, w2c_t, 1.0, depth_max)
+        self.grid.integrate(blocks, depth_t, color_t, K_t, w2c_t, 1.0, depth_max)
+        self.used += 1
+        return True
+
+    def mesh(self):
+        return self.grid.extract_triangle_mesh(weight_threshold=1.0).cpu().to_legacy()
+
+
+def tsdf_mesh(args, splat, views):
     renderer = common.SplatRenderer(splat)
-    vol = o3d.pipelines.integration.ScalableTSDFVolume(
-        voxel_length=args.voxel,
-        sdf_trunc=4 * args.voxel,
-        color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8,
-    )
-    used = 0
+    fuser = TsdfFuser(args.voxel)
     for i, v in enumerate(views):
         s = min(1.0, MAX_RENDER_SIDE / max(v.width, v.height))
         w, h = max(1, round(v.width * s)), max(1, round(v.height * s))
@@ -53,25 +91,12 @@ def tsdf_mesh(args, splat, views):
         K[1, :] *= h / v.height
         rgb, depth, alpha = renderer.render(v.w2c, K, w, h, "RGB+ED")
         depth = np.where((alpha > 0.5) & np.isfinite(depth), depth, 0.0).astype(np.float32)
-        valid = depth[depth > 0]
-        if valid.size < 100:
-            continue
-        trunc = float(np.percentile(valid, 98))
-        rgbd = o3d.geometry.RGBDImage.create_from_color_and_depth(
-            o3d.geometry.Image(np.ascontiguousarray((rgb * 255).astype(np.uint8))),
-            o3d.geometry.Image(depth),
-            depth_scale=1.0,
-            depth_trunc=trunc,
-            convert_rgb_to_intensity=False,
-        )
-        intr = o3d.camera.PinholeCameraIntrinsic(w, h, K[0, 0], K[1, 1], K[0, 2], K[1, 2])
-        vol.integrate(rgbd, intr, v.w2c)
-        used += 1
+        fuser.integrate(np.clip(rgb, 0.0, 1.0), depth, K, v.w2c)
         common.progress(0.05 + 0.75 * (i + 1) / len(views), f"fused view {i + 1}/{len(views)}")
-    if used == 0:
+    if fuser.used == 0:
         raise RuntimeError("no view rendered usable depth")
     common.progress(0.82, "extracting surface")
-    return vol.extract_triangle_mesh()
+    return fuser.mesh()
 
 
 def poisson_mesh(args, splat, views):

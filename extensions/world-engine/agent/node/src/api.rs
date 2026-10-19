@@ -157,7 +157,7 @@ struct SubmitRequest {
 }
 
 /// The top-level fields a staged submission may carry.
-const STAGED_FIELDS: [&str; 7] = [
+const STAGED_FIELDS: [&str; 8] = [
     "session_id",
     "preset",
     "a",
@@ -165,6 +165,7 @@ const STAGED_FIELDS: [&str; 7] = [
     "target",
     "board",
     "chunk_frames",
+    "glim_odometry",
 ];
 
 /// The node status: the engine heartbeat (role / cluster / queue / active

@@ -36,6 +36,9 @@ pub struct FrameRecord {
     pub cy: f64,
     pub model: CameraModelModel,
     pub dist: Vec<f64>,
+    /// The intrinsics come from a calibration (bundle adjustment keeps them).
+    #[serde(default)]
+    pub calibrated: bool,
 }
 
 /// One operator room with the body trajectory recorded inside it.
@@ -191,6 +194,7 @@ pub fn run(
                     cy: model.cy,
                     model: model.model,
                     dist: model.dist.clone(),
+                    calibrated: model.calibrated,
                 },
                 decoded.blur_score(),
             ));

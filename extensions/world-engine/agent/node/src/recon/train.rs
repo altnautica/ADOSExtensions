@@ -53,7 +53,7 @@ pub fn run_script(
         .args(args);
     let mut done = None;
     let mut failure = None;
-    runner.run(&inv, &mut |line| {
+    let ran = runner.run(&inv, &mut |line| {
         let Ok(ev) = serde_json::from_str::<Event>(line.trim()) else {
             return;
         };
@@ -67,10 +67,16 @@ pub fn run_script(
             "error" => failure = ev.message,
             _ => {}
         }
-    })?;
+    });
+    // The script's own error event names the cause; the exit status alone
+    // carries only the output tail.
     if let Some(msg) = failure {
-        return Err(StageError::tool_failed("gsplat_train", msg));
+        return Err(StageError::tool_failed(
+            "gsplat_train",
+            format!("{script}: {msg}"),
+        ));
     }
+    ran?;
     done.ok_or_else(|| {
         StageError::tool_failed("gsplat_train", format!("{script} reported no result"))
     })
@@ -111,28 +117,44 @@ pub fn brush(
         .arg(train_dir)
         .args(["--export-name", "splat.ply"]);
     inv.env.push(("RUST_LOG".into(), "info".into()));
-    let mut gaussians = 0u64;
     runner.run(&inv, &mut |line| {
-        let n = crate::parse_gaussian_count(line);
-        if n > 0 {
-            gaussians = n;
-        }
         if let Some(step) = parse_step(line) {
             progress((step as f32 / steps as f32).min(1.0));
         }
     })?;
-    if !train_dir.join("splat.ply").is_file() {
+    let splat = train_dir.join("splat.ply");
+    if !splat.is_file() {
         return Err(StageError::tool_failed("brush", "no splat.ply exported"));
     }
     Ok(TrainSummary {
         trainer: "brush".into(),
         steps,
         max_splats,
-        gaussians: (gaussians > 0).then_some(gaussians),
+        // The exported file is the authoritative count: Brush's log reports
+        // counts only while it densifies.
+        gaussians: ply_vertex_count(&splat),
         psnr: None,
         ut: false,
         fallback_reason: reason.map(str::to_string),
     })
+}
+
+/// The `element vertex N` count of a PLY header.
+pub fn ply_vertex_count(path: &Path) -> Option<u64> {
+    use std::io::BufRead;
+    let f = fs::File::open(path).ok()?;
+    for line in std::io::BufReader::new(f).split(b'\n').take(256) {
+        let line = line.ok()?;
+        let line = String::from_utf8_lossy(&line);
+        let line = line.trim();
+        if line == "end_header" {
+            return None;
+        }
+        if let Some(n) = line.strip_prefix("element vertex ") {
+            return n.trim().parse().ok();
+        }
+    }
+    None
 }
 
 /// Whether the gsplat kernels run on this node (`common.py --probe`). The
@@ -341,6 +363,10 @@ pub fn mesh(
             ));
         }
     }
+    // The script may run in WSL and report paths in its own form; the files
+    // are at known places in the job, so only the facts are kept.
+    let mut done = done;
+    done.retain(|k, _| !matches!(k.as_str(), "ply" | "glb" | "mesh" | "path"));
     Ok(serde_json::Value::Object(done))
 }
 
@@ -380,6 +406,22 @@ mod tests {
         assert_eq!(max_splats_for(1_000_000, Some(16384)), 2_000_000);
         assert_eq!(max_splats_for(1_000_000, None), 1_000_000);
         assert_eq!(max_splats_for(1_000_000, Some(512)), 100_000);
+    }
+
+    #[test]
+    fn ply_header_vertex_counts_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("s.ply");
+        let mut bytes = b"ply\nformat binary_little_endian 1.0\nelement vertex 7244\nproperty float x\nend_header\n".to_vec();
+        bytes.extend_from_slice(&[0u8; 16]);
+        fs::write(&p, bytes).unwrap();
+        assert_eq!(ply_vertex_count(&p), Some(7244));
+        fs::write(&p, "ply\nend_header\n").unwrap();
+        assert_eq!(ply_vertex_count(&p), None);
+        assert_eq!(
+            parse_step("[INFO brush_cli] Refine iter 201, 1621 splats."),
+            Some(201)
+        );
     }
 
     #[test]

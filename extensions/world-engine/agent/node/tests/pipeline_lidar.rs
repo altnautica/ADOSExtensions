@@ -1,7 +1,9 @@
 //! A LiDAR session with operator rooms through the `tour` preset on a node
-//! whose gsplat kernels do not run (stand-in runner, feature `mock`): depth is
+//! whose gsplat kernels do not run (stand-in runner, feature `mock`): GLIM
+//! poses the keyframes (aligned onto the recorded track) before SfM, depth is
 //! computed before the masks so the mirror/glass pass runs, Brush stands in
-//! for gsplat at full length, and the tour ships with no hero stills.
+//! for gsplat at full length, and the tour ships with no hero stills. Without
+//! GLIM the job fails at start with `E_TOOL_MISSING`.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -10,6 +12,7 @@ use std::time::Duration;
 use ados_capture_contract::foxglove::{
     PackedElementField, PointCloud, Pose, PoseInFrame, Quaternion, RawImage, Vector3,
 };
+use ados_capture_contract::v1::{ImuBatch, ImuSample};
 use ados_capture_contract::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -73,6 +76,7 @@ fn rig() -> Rig {
         sensors: vec![
             cam,
             sensor("lidar0", RigSensorKind::Lidar, RigSensorRole::Up, IDENTITY),
+            sensor("imu0", RigSensorKind::Imu, RigSensorRole::Nav, IDENTITY),
         ],
     }
 }
@@ -178,6 +182,17 @@ fn build_session(root: &Path) -> PathBuf {
             data,
         };
         w.write_proto(&topics::cam_image("cam0"), t, &img).unwrap();
+        let samples = (0..10u64)
+            .map(|k| ImuSample {
+                t_ns: t + k * 10_000_000,
+                seq: i * 10 + k,
+                gyro: vec![0.0, 0.0, 0.0],
+                accel: vec![0.0, 0.0, 9.81],
+                temp_c: None,
+            })
+            .collect();
+        w.write_proto(&topics::imu("imu0"), t, &ImuBatch { samples })
+            .unwrap();
         if i % 5 == 0 {
             let field = |name: &str, offset: u32| PackedElementField {
                 name: name.into(),
@@ -240,22 +255,18 @@ async fn json(
     serde_json::from_slice(&b).unwrap_or(serde_json::Value::Null)
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = build_session(&dir.path().join("src"));
+/// Upload the session, submit a `tour` reconstruction with `runner` and wait
+/// for it to finish. Returns the job view and the job directory.
+async fn run_job(dir: &Path, runner: &StandInRunner) -> (serde_json::Value, PathBuf) {
+    let src = build_session(&dir.join("src"));
     let sid = src.file_name().unwrap().to_string_lossy().into_owned();
-    let work = dir.path().join("work");
-    let sessions = dir.path().join("sessions");
+    let work = dir.join("work");
+    let sessions = dir.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
-    let viewer = dir.path().join("viewer");
+    let viewer = dir.join("viewer");
     std::fs::create_dir_all(&viewer).unwrap();
     std::fs::write(viewer.join("index.html"), "<html></html>").unwrap();
 
-    let runner = StandInRunner {
-        missing: vec!["gsplat_kernels".into()],
-        ..Default::default()
-    };
     let scheduler = Scheduler::new(
         JobStore::open_in_memory().unwrap(),
         Arc::new(MockReconstructor),
@@ -266,7 +277,7 @@ async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
     let shared: Arc<dyn ToolRunner> = Arc::new(runner.clone());
     engine.set_runner(shared.clone());
     let state: ApiState = Arc::new(Mutex::new(engine));
-    let auth = auth(dir.path());
+    let auth = auth(dir);
     let hook: CommitHook = Arc::new(|_| Ok(()));
     let router = build_router(state.clone(), auth.clone())
         .merge(job_files_router(auth.clone(), work.clone()))
@@ -334,7 +345,75 @@ async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    (done, work.join("jobs").join(&job))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = StandInRunner {
+        missing: vec!["gsplat_kernels".into()],
+        ..Default::default()
+    };
+    let (done, job_dir) = run_job(dir.path(), &runner).await;
     assert_eq!(done["state"], "completed", "{done}");
+
+    // GLIM ran over the exported bag with the IMU, its trajectory was aligned
+    // onto the recorded track, and COLMAP triangulated against those poses.
+    let sfm = &done["stages"][1]["detail"];
+    assert_eq!(sfm["glim"]["used"], true, "{sfm}");
+    assert_eq!(sfm["glim"]["odometry"], "cpu", "{sfm}");
+    assert!(sfm["glim"].get("rejected").is_none(), "{sfm}");
+    assert_eq!(sfm["glim"]["trajectory_poses"], 6, "{sfm}");
+    assert!(
+        sfm["glim"]["align_rmse_m"].as_f64().unwrap() < 1e-6,
+        "{sfm}"
+    );
+    assert_eq!(sfm["method"], "known_poses", "{sfm}");
+    assert!(runner
+        .runs_of("glim")
+        .iter()
+        .any(|i| i.args_lossy().iter().any(|a| a == "glim_rosbag")));
+    let glim = job_dir.join("glim");
+    let meta = std::fs::read_to_string(glim.join("bag/metadata.yaml")).unwrap();
+    assert!(
+        meta.contains("name: /imu\n") && meta.contains("message_count: 300\n"),
+        "{meta}"
+    );
+    let ros: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(glim.join("config/config_ros.json")).unwrap())
+            .unwrap();
+    assert_eq!(ros["glim_ros"]["imu_topic"], "/imu");
+    let global: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(glim.join("config/config.json")).unwrap()).unwrap();
+    assert_eq!(
+        global["global"]["config_odometry"],
+        "config_odometry_cpu.json"
+    );
+    // Frames after the last sweep (+50 ms) keep their recorded pose; all sit
+    // on the walk either way.
+    let frames: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(job_dir.join("dataset/frames.json")).unwrap())
+            .unwrap();
+    let late = frames
+        .iter()
+        .filter(|f| f["t_ns"].as_u64().unwrap() > T0 + 2_550_000_000)
+        .count();
+    assert!(late > 0, "{frames:?}");
+    assert_eq!(sfm["glim"]["frames_recorded"], late, "{sfm}");
+    assert_eq!(sfm["glim"]["frames_dropped"], 0, "{sfm}");
+    assert_eq!(
+        sfm["glim"]["frames_glim"].as_u64().unwrap() as usize + late,
+        frames.len()
+    );
+    for f in &frames {
+        let i = (f["t_ns"].as_u64().unwrap() - T0) / 100_000_000;
+        let t = f["T_world_cam"].as_array().expect("posed");
+        let want = body_at(i);
+        for (k, idx) in [3, 7, 11].into_iter().enumerate() {
+            assert!((t[idx].as_f64().unwrap() - want[k]).abs() < 1e-5, "{f}");
+        }
+    }
 
     // Depth ran before the masks, so the mirror/glass pass ran with LiDAR.
     let prep = &done["stages"][0]["detail"];
@@ -353,7 +432,6 @@ async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
         .expect("masks.py ran");
     let args = mask_run.args_lossy();
     assert!(args.iter().any(|a| a == "--depths") && args.iter().any(|a| a == "--lidar"));
-    let job_dir = work.join("jobs").join(&job);
     let mask_files = std::fs::read_dir(job_dir.join("dataset/masks/cam0"))
         .unwrap()
         .count();
@@ -384,4 +462,18 @@ async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
         .runs_of("gsplat_train")
         .iter()
         .any(|i| i.args_lossy().iter().any(|a| a.ends_with("stills.py"))));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lidar_session_without_glim_fails_with_tool_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = StandInRunner {
+        missing: vec!["glim".into()],
+        ..Default::default()
+    };
+    let (done, _) = run_job(dir.path(), &runner).await;
+    assert_eq!(done["state"], "failed", "{done}");
+    assert_eq!(done["error"]["code"], "E_TOOL_MISSING", "{done}");
+    assert_eq!(done["error"]["tool"], "glim", "{done}");
+    assert!(runner.runs_of("colmap").is_empty());
 }

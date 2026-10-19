@@ -9,7 +9,8 @@ use ados_capture_contract::{CameraModelModel, RigSensorKind, SessionReader};
 use super::preset::{stage_weight, CALIBRATE_STAGES, CHANGE_STAGES, RECONSTRUCT_STAGES};
 use super::products_stage::{self, ArtifactOut, ProductsInput, OUTPUTS_FILE};
 use super::{
-    check_tools, chunks, job_dir, prepare, sfm, train, Preset, StageError, StagedJob, ToolRunner,
+    check_tools, chunks, glim, job_dir, prepare, sfm, train, Preset, StageError, StagedJob,
+    ToolRunner,
 };
 use crate::products::{change, cloud};
 use crate::store_stages::{StageRow, StageState};
@@ -139,12 +140,14 @@ pub fn run_staged(
             preset,
             generation,
             chunk_frames,
+            glim_odometry,
         } => reconstruct(
             &dir,
             session_id,
             session_dir,
             *preset,
             *chunk_frames,
+            *glim_odometry,
             *generation,
             ctx,
         ),
@@ -157,12 +160,14 @@ pub fn run_staged(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn reconstruct(
     dir: &Path,
     session_id: &str,
     session_dir: &Path,
     preset: Preset,
     chunk_frames: Option<usize>,
+    glim_odometry: glim::GlimOdometry,
     generation: u32,
     ctx: &RunCtx<'_>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
@@ -174,6 +179,10 @@ fn reconstruct(
         dir.join("session-rig.json"),
         serde_json::to_vec_pretty(reader.rig())?,
     )?;
+    // A LiDAR session's poses come from GLIM, so it must be installed.
+    if glim::rig_has_lidar(reader.rig()) {
+        glim::check_available(ctx.runner, dir)?;
+    }
     let dataset = dir.join("dataset");
 
     let prep = stages.run("prepare", |p| {
@@ -205,26 +214,48 @@ fn reconstruct(
 
     let sfm_dir = dir.join("sfm");
     let sfm_detail = stages.run("sfm", |p| {
-        let fixed = prior.as_deref() == Some("lidar");
+        // A LiDAR session takes its poses from the LiDAR-inertial trajectory
+        // (aligned onto the recorded pose track) and keeps them fixed; a
+        // rejected trajectory leaves the recorded poses as they were.
+        let share = if has_lidar { 0.3 } else { 0.0 };
+        let glim = match has_lidar {
+            true => Some(glim::run(
+                ctx.runner,
+                &reader,
+                dir,
+                &dataset,
+                glim_odometry,
+                &mut |f| p(share * f),
+            )?),
+            false => None,
+        };
+        let p = &mut |f: f32| p(share + (1.0 - share) * f);
+        let fixed = glim.as_ref().is_some_and(|g| g.used) || prior.as_deref() == Some("lidar");
         // A posed warehouse session larger than one chunk runs per chunk.
         let plan = match preset {
             Preset::Warehouse => chunks::plan_dataset(&dataset, chunk_frames)?,
             _ => None,
         };
-        if let Some(plan) = plan {
-            return chunks::run_sfm(ctx.runner, &dataset, &sfm_dir, &plan, fixed, true, p);
+        let mut detail = match plan {
+            Some(plan) => chunks::run_sfm(ctx.runner, &dataset, &sfm_dir, &plan, fixed, true, p)?,
+            None => {
+                let refine = preset != Preset::Preview;
+                let s = sfm::run(
+                    ctx.runner,
+                    &dataset,
+                    &sfm_dir,
+                    fixed,
+                    refine,
+                    spec.hierarchical,
+                    p,
+                )?;
+                serde_json::to_value(s)?
+            }
+        };
+        if let Some(g) = glim {
+            detail["glim"] = serde_json::to_value(g)?;
         }
-        let refine = preset != Preset::Preview;
-        let s = sfm::run(
-            ctx.runner,
-            &dataset,
-            &sfm_dir,
-            fixed,
-            refine,
-            spec.hierarchical,
-            p,
-        )?;
-        Ok(serde_json::to_value(s)?)
+        Ok(detail)
     })?;
     let world_frame = sfm_detail["world_frame"].as_bool().unwrap_or(false);
     let chunk_plan = match sfm_detail["chunks"].is_array() {

@@ -20,9 +20,10 @@ use super::export::{frame_from_message, Frame};
 use super::visit;
 use crate::recon::StageError;
 
-const TIME_DEF: &str = "MSG: builtin_interfaces/Time\nint32 sec\nuint32 nanosec\n";
-const HEADER_DEF: &str = "MSG: std_msgs/Header\nbuiltin_interfaces/Time stamp\nstring frame_id\n";
-const SEP: &str =
+pub(crate) const TIME_DEF: &str = "MSG: builtin_interfaces/Time\nint32 sec\nuint32 nanosec\n";
+pub(crate) const HEADER_DEF: &str =
+    "MSG: std_msgs/Header\nbuiltin_interfaces/Time stamp\nstring frame_id\n";
+pub(crate) const SEP: &str =
     "================================================================================\n";
 
 fn image_def() -> String {
@@ -31,7 +32,7 @@ fn image_def() -> String {
     )
 }
 
-fn cloud_def() -> String {
+pub(crate) fn cloud_def() -> String {
     format!(
         "std_msgs/Header header\nuint32 height\nuint32 width\nPointField[] fields\nbool is_bigendian\nuint32 point_step\nuint32 row_step\nuint8[] data\nbool is_dense\n{SEP}{HEADER_DEF}{SEP}{TIME_DEF}{SEP}MSG: sensor_msgs/PointField\nuint8 INT8=1\nuint8 UINT8=2\nuint8 INT16=3\nuint8 UINT16=4\nuint8 INT32=5\nuint8 UINT32=6\nuint8 FLOAT32=7\nuint8 FLOAT64=8\nstring name\nuint32 offset\nuint8 datatype\nuint32 count\n"
     )
@@ -63,6 +64,11 @@ impl Cdr {
 
     pub fn i32(&mut self, v: i32) {
         self.align(4);
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+
+    pub fn f64(&mut self, v: f64) {
+        self.align(8);
         self.0.extend_from_slice(&v.to_le_bytes());
     }
 
@@ -202,7 +208,7 @@ pub struct BagExport {
     pub clouds: u64,
 }
 
-fn mcap_err(e: mcap::McapError) -> StageError {
+pub(crate) fn mcap_err(e: mcap::McapError) -> StageError {
     StageError::io(format!("mcap: {e}"))
 }
 
@@ -280,18 +286,39 @@ pub fn export_ros2_bag(
     drop(w);
     let total = n.images + n.clouds;
     let (start, dur) = if total == 0 { (0, 0) } else { (t0, t1 - t0) };
-    let topic = |name: &str, ty: &str, count: u64| {
-        format!(
-            "    - topic_metadata:\n        name: {name}\n        type: {ty}\n        serialization_format: cdr\n        offered_qos_profiles: \"\"\n      message_count: {count}\n"
-        )
-    };
-    let metadata = format!(
-        "rosbag2_bagfile_information:\n  version: 5\n  storage_identifier: mcap\n  duration:\n    nanoseconds: {dur}\n  starting_time:\n    nanoseconds_since_epoch: {start}\n  message_count: {total}\n  topics_with_message_counts:\n{}{}  compression_format: \"\"\n  compression_mode: \"\"\n  relative_file_paths:\n    - {file}\n  files:\n    - path: {file}\n      starting_time:\n        nanoseconds_since_epoch: {start}\n      duration:\n        nanoseconds: {dur}\n      message_count: {total}\n",
-        topic(DVLC_IMAGE_TOPIC, "sensor_msgs/msg/Image", n.images),
-        topic(DVLC_POINTS_TOPIC, "sensor_msgs/msg/PointCloud2", n.clouds),
+    let metadata = bag_metadata(
+        &file,
+        start,
+        dur,
+        &[
+            (DVLC_IMAGE_TOPIC, "sensor_msgs/msg/Image", n.images),
+            (DVLC_POINTS_TOPIC, "sensor_msgs/msg/PointCloud2", n.clouds),
+        ],
     );
     fs::write(bag_dir.join("metadata.yaml"), metadata)?;
     Ok(n)
+}
+
+/// `metadata.yaml` of a one-file MCAP bag: `(topic, type, message count)` per
+/// topic, the bag's first message time and duration in nanoseconds.
+pub(crate) fn bag_metadata(
+    file: &str,
+    start: u64,
+    dur: u64,
+    topics: &[(&str, &str, u64)],
+) -> String {
+    let total: u64 = topics.iter().map(|t| t.2).sum();
+    let listed: String = topics
+        .iter()
+        .map(|(name, ty, count)| {
+            format!(
+                "    - topic_metadata:\n        name: {name}\n        type: {ty}\n        serialization_format: cdr\n        offered_qos_profiles: \"\"\n      message_count: {count}\n"
+            )
+        })
+        .collect();
+    format!(
+        "rosbag2_bagfile_information:\n  version: 5\n  storage_identifier: mcap\n  duration:\n    nanoseconds: {dur}\n  starting_time:\n    nanoseconds_since_epoch: {start}\n  message_count: {total}\n  topics_with_message_count:\n{listed}  compression_format: \"\"\n  compression_mode: \"\"\n  relative_file_paths:\n    - {file}\n  files:\n    - path: {file}\n      starting_time:\n        nanoseconds_since_epoch: {start}\n      duration:\n        nanoseconds: {dur}\n      message_count: {total}\n"
+    )
 }
 
 #[cfg(test)]

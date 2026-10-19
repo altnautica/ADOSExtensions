@@ -99,6 +99,9 @@ pub fn run(
     fs::create_dir_all(&model0)?;
     let posed = frames.iter().filter(|f| f.t_world_cam.is_some()).count();
     let use_priors = posed >= 3 && posed as f64 >= MIN_POSED_SHARE * frames.len() as f64;
+    // Calibrated intrinsics are kept: refining focal length against nearly
+    // fixed poses can trade it for scene scale along one axis.
+    let calibrated = !frames.is_empty() && frames.iter().all(|f| f.calibrated);
     let method = if use_priors {
         let ids = colmap::read_db_ids(&db)?;
         let known = sfm_dir.join("known");
@@ -122,16 +125,22 @@ pub fn run(
         )?;
         progress(0.75);
         if refine && !fixed_poses {
-            runner.run(
-                &ToolInvocation::new("colmap", sfm_dir)
-                    .arg("bundle_adjuster")
-                    .arg("--input_path")
-                    .arg(&model0)
-                    .arg("--output_path")
-                    .arg(&model0)
-                    .args(["--BundleAdjustment.refine_principal_point", "0"]),
-                &mut |_| {},
-            )?;
+            let mut ba = ToolInvocation::new("colmap", sfm_dir)
+                .arg("bundle_adjuster")
+                .arg("--input_path")
+                .arg(&model0)
+                .arg("--output_path")
+                .arg(&model0)
+                .args(["--BundleAdjustment.refine_principal_point", "0"]);
+            if calibrated {
+                ba = ba.args([
+                    "--BundleAdjustment.refine_focal_length",
+                    "0",
+                    "--BundleAdjustment.refine_extra_params",
+                    "0",
+                ]);
+            }
+            runner.run(&ba, &mut |_| {})?;
         }
         "known_poses"
     } else {
@@ -142,17 +151,23 @@ pub fn run(
         } else {
             "mapper"
         };
-        runner.run(
-            &ToolInvocation::new("colmap", sfm_dir)
-                .arg(mapper)
-                .arg("--database_path")
-                .arg(&db)
-                .arg("--image_path")
-                .arg(&images)
-                .arg("--output_path")
-                .arg(&mapped),
-            &mut |_| {},
-        )?;
+        let mut map = ToolInvocation::new("colmap", sfm_dir)
+            .arg(mapper)
+            .arg("--database_path")
+            .arg(&db)
+            .arg("--image_path")
+            .arg(&images)
+            .arg("--output_path")
+            .arg(&mapped);
+        if calibrated && mapper == "mapper" {
+            map = map.args([
+                "--Mapper.ba_refine_focal_length",
+                "0",
+                "--Mapper.ba_refine_extra_params",
+                "0",
+            ]);
+        }
+        runner.run(&map, &mut |_| {})?;
         let best = largest_model(&mapped)?;
         for entry in fs::read_dir(&best)? {
             let e = entry?;
@@ -203,4 +218,80 @@ fn largest_model(mapped: &Path) -> Result<std::path::PathBuf, StageError> {
     }
     best.map(|(_, p)| p)
         .ok_or_else(|| StageError::tool_failed("colmap", "the mapper produced no model"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recon::geom;
+    use crate::recon::stand_in::StandInRunner;
+    use ados_capture_contract::CameraModelModel;
+
+    fn frames(calibrated: bool) -> Vec<FrameRecord> {
+        (0..4)
+            .map(|i| FrameRecord {
+                name: format!("cam0/{i}.png"),
+                camera_id: "cam0".into(),
+                t_ns: i,
+                t_world_cam: Some(geom::from_quat_trans(
+                    [1.0, 0.0, 0.0, 0.0],
+                    [i as f64 * 0.3, 0.0, 0.0],
+                )),
+                width: 64,
+                height: 48,
+                fx: 40.0,
+                fy: 40.0,
+                cx: 32.0,
+                cy: 24.0,
+                model: CameraModelModel::Pinhole,
+                dist: vec![],
+                calibrated,
+            })
+            .collect()
+    }
+
+    fn ba_args(calibrated: bool) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let dataset = dir.path().join("dataset");
+        fs::create_dir_all(dataset.join("images/cam0")).unwrap();
+        fs::write(
+            dataset.join("frames.json"),
+            serde_json::to_vec(&frames(calibrated)).unwrap(),
+        )
+        .unwrap();
+        let runner = StandInRunner::default();
+        run(
+            &runner,
+            &dataset,
+            &dir.path().join("sfm"),
+            false,
+            true,
+            false,
+            &mut |_| {},
+        )
+        .unwrap();
+        runner
+            .runs_of("colmap")
+            .into_iter()
+            .find(|i| i.args_lossy().first().map(String::as_str) == Some("bundle_adjuster"))
+            .expect("bundle adjustment ran")
+            .args_lossy()
+    }
+
+    #[test]
+    fn calibrated_intrinsics_stay_fixed_in_bundle_adjustment() {
+        let fixed = ba_args(true);
+        let pos = fixed
+            .iter()
+            .position(|a| a == "--BundleAdjustment.refine_focal_length")
+            .expect("focal length pinned");
+        assert_eq!(fixed[pos + 1], "0");
+        assert!(fixed
+            .iter()
+            .any(|a| a == "--BundleAdjustment.refine_extra_params"));
+        let free = ba_args(false);
+        assert!(!free
+            .iter()
+            .any(|a| a == "--BundleAdjustment.refine_focal_length"));
+    }
 }

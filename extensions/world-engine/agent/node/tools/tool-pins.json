@@ -81,7 +81,11 @@
       "license": "Apache-2.0",
       "kind": "uv",
       "project": "python/gsplat_train",
-      "probe": ["python", "common.py", "--probe"]
+      "probe": ["python", "common.py", "--probe"],
+      "wsl": {
+        "note": "Windows nodes run the scripts with this interpreter inside the WSL distribution when it exists (torch cu128 and gsplat built for the local GPU); fetch-tools.ps1 -Only gsplat-wsl adds the project's other dependencies to it",
+        "python": "/opt/ados-recon/gsplat-venv/bin/python"
+      }
     },
     "kalibr": {
       "version": "1f60227442d2",
@@ -89,6 +93,7 @@
       "kind": "docker",
       "note": "upstream publishes no image; built locally from the pinned commit's Dockerfile",
       "image": "local/kalibr:1f60227442d2",
+      "image_id": "sha256:f0fbefa1c83af2296a4616e4ac27b96e0750ffba4b532d1a6c02ebcc5dac5df2",
       "build": {
         "repo": "https://github.com/ethz-asl/kalibr",
         "commit": "1f60227442d25e36365ef5f72cd80b9666d73467",

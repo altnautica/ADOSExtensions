@@ -9,16 +9,23 @@
   uv      : uv sync --project <node>/<project>
   docker  : docker pull <image> (or docker build from a pinned commit), only when
             docker is reachable (natively or inside the WSL distribution)
+  gsplat-wsl (Windows): adds the gsplat_train project's dependencies other than
+            torch, torchvision and gsplat to the prebuilt WSL environment named
+            by the pin's "wsl.python" (uv pip install, run inside WSL)
   Every installed tool is probed afterwards and reported OK or FAIL.
+  Commands inside WSL run through `wsl --exec`, which passes arguments to the
+  program without a shell.
 
 .EXAMPLE
   ./fetch-tools.ps1 -List
   ./fetch-tools.ps1 -Tool colmap,brush
   ./fetch-tools.ps1 -Tool splat-transform -Force
+  ./fetch-tools.ps1 -Only gsplat-wsl
 #>
 [CmdletBinding()]
 param(
     [switch]$List,
+    [Alias('Only')]
     [string[]]$Tool,
     [switch]$Force,
     [string]$ToolsDir
@@ -52,6 +59,20 @@ function Get-PlatformKey {
 $Platform = Get-PlatformKey
 $IsWin = $Platform.EndsWith('-windows')
 
+# Every installable item: the pinned tools, plus on Windows the WSL variant of
+# the gsplat environment when the pins name one.
+$Tools = [ordered]@{}
+foreach ($prop in $Pins.tools.PSObject.Properties) { $Tools[$prop.Name] = $prop.Value }
+$GsplatPin = $Pins.tools.PSObject.Properties['gsplat_train']
+if ($IsWin -and $GsplatPin -and $GsplatPin.Value.PSObject.Properties['wsl']) {
+    $Tools['gsplat-wsl'] = [pscustomobject]@{
+        version = $GsplatPin.Value.version; kind = 'wsl-env'
+        project = $GsplatPin.Value.project; python = $GsplatPin.Value.wsl.python
+        # The pin's probe runs the interpreter itself: drop its leading `python`.
+        probe = @($GsplatPin.Value.probe | Select-Object -Skip 1)
+    }
+}
+
 function Get-Prop($obj, [string]$name) {
     if ($null -eq $obj) { return $null }
     $p = $obj.PSObject.Properties[$name]
@@ -79,6 +100,21 @@ function Find-Uv {
     return $null
 }
 
+function Test-Wsl {
+    return ($IsWin -and [bool](Get-Command wsl -ErrorAction SilentlyContinue))
+}
+
+# `D:\a\b` -> `/mnt/d/a/b` (the node's tools::wsl_path).
+function ConvertTo-WslPath([string]$path) {
+    $p = $path -replace '^\\\\\?\\', '' -replace '\\', '/'
+    if ($p -match '^([A-Za-z]):/*(.*)$') {
+        $rest = $Matches[2]
+        if ($rest) { return "/mnt/$($Matches[1].ToLower())/$rest" }
+        return "/mnt/$($Matches[1].ToLower())"
+    }
+    return $p
+}
+
 # Returns the command prefix that reaches a docker daemon, or $null.
 $script:DockerCmd = $false
 function Get-DockerCmd {
@@ -88,9 +124,9 @@ function Get-DockerCmd {
         & docker version *> $null
         if ($LASTEXITCODE -eq 0) { $script:DockerCmd = @('docker'); return $script:DockerCmd }
     }
-    if ($IsWin -and (Get-Command wsl -ErrorAction SilentlyContinue)) {
-        & wsl -d $WslDistro -- docker version *> $null
-        if ($LASTEXITCODE -eq 0) { $script:DockerCmd = @('wsl', '-d', $WslDistro, '--', 'docker') }
+    if (Test-Wsl) {
+        & wsl -d $WslDistro --exec docker version *> $null
+        if ($LASTEXITCODE -eq 0) { $script:DockerCmd = @('wsl', '-d', $WslDistro, '--exec', 'docker') }
     }
     return $script:DockerCmd
 }
@@ -111,12 +147,46 @@ function Get-DockerRef($pin) {
     return (Get-Prop $pin 'image')
 }
 
+# uv inside the WSL distribution.
+$WslUv = '/usr/local/bin/uv'
+
+function Test-WslPython($pin) {
+    if (-not (Test-Wsl)) { return $false }
+    & wsl -d $WslDistro --exec test -x $pin.python *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Get-ReqName([string]$req) { return ([regex]::Match($req, '^[A-Za-z0-9_.-]+')).Value.ToLower() }
+
+# The uv project's dependencies (runtime + dev group) minus the packages the
+# WSL environment was built with, and its dependency overrides.
+function Get-WslEnvRequirements($pin) {
+    $toml = Get-Content -Raw -Path (Join-Path (Join-Path $NodeDir $pin.project) 'pyproject.toml')
+    $lists = @{}
+    foreach ($key in @('dependencies', 'dev', 'override-dependencies')) {
+        $m = [regex]::Match($toml, "(?ms)^$key\s*=\s*\[(.*?)^\]")
+        $lists[$key] = @(if ($m.Success) { [regex]::Matches($m.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value } })
+    }
+    $prebuilt = @('torch', 'torchvision', 'gsplat')
+    return [pscustomobject]@{
+        Requirements = @(($lists['dependencies'] + $lists['dev']) | Where-Object { $prebuilt -notcontains (Get-ReqName $_) })
+        Overrides = $lists['override-dependencies']
+        Prebuilt = $prebuilt
+    }
+}
+
 function Test-Installed([string]$name, $pin) {
     switch ($pin.kind) {
         'uv' { return (Test-Path (Join-Path (Join-Path $NodeDir $pin.project) '.venv')) }
         'docker' {
             if (-not (Get-DockerCmd)) { return $null }
             return (Invoke-Docker @('image', 'inspect', (Get-DockerRef $pin)) -Quiet)
+        }
+        'wsl-env' {
+            if (-not (Test-WslPython $pin)) { return $null }
+            $dists = @((Get-WslEnvRequirements $pin).Requirements | ForEach-Object { Get-ReqName $_ })
+            & wsl -d $WslDistro --exec $pin.python -c 'import importlib.metadata as m, sys; [m.version(n) for n in sys.argv[1:]]' @dists *> $null
+            return ($LASTEXITCODE -eq 0)
         }
         default {
             $bin = Get-BinPath $name $pin
@@ -132,6 +202,7 @@ function Get-PlatformLabel($pin) {
         'npm' { return 'any (node)' }
         'uv' { return 'any (uv)' }
         'cargo' { return 'any (cargo)' }
+        'wsl-env' { return "WSL $WslDistro" }
         default {
             if (Get-PlatformPin $pin) { return $Platform }
             return "$Platform unavailable"
@@ -140,14 +211,17 @@ function Get-PlatformLabel($pin) {
 }
 
 function Show-List {
-    $rows = foreach ($prop in $Pins.tools.PSObject.Properties) {
-        $pin = $prop.Value
-        $state = Test-Installed $prop.Name $pin
-        if ($null -eq $state) { $label = 'unknown (docker unavailable)' }
+    $rows = foreach ($entry in $Tools.GetEnumerator()) {
+        $pin = $entry.Value
+        $state = Test-Installed $entry.Name $pin
+        if ($null -eq $state) {
+            if ($pin.kind -eq 'docker') { $label = 'unknown (docker unavailable)' }
+            else { $label = "unknown ($($pin.python) not in WSL)" }
+        }
         elseif ($state) { $label = 'installed' }
         else { $label = 'missing' }
         [pscustomobject]@{
-            Name = $prop.Name; Version = $pin.version; Kind = $pin.kind
+            Name = $entry.Name; Version = $pin.version; Kind = $pin.kind
             Platform = (Get-PlatformLabel $pin); State = $label
         }
     }
@@ -269,6 +343,25 @@ function Install-Docker([string]$name, $pin) {
     return $true
 }
 
+function Install-WslEnv([string]$name, $pin) {
+    if (-not (Test-WslPython $pin)) { Write-Host "  skipped ($($pin.python) not found in WSL $WslDistro)"; return $false }
+    $r = Get-WslEnvRequirements $pin
+    # Hold the packages the environment was built with at their installed
+    # versions so the resolver never replaces them.
+    $frozen = @(& wsl -d $WslDistro --exec $WslUv pip freeze --python $pin.python 2> $null)
+    if ($LASTEXITCODE -ne 0) { throw "uv pip freeze failed in WSL $WslDistro" }
+    $held = @($frozen | Where-Object { $r.Prebuilt -contains (Get-ReqName $_) })
+    if ($held.Count -ne $r.Prebuilt.Count) { throw "$($pin.python) lacks one of: $($r.Prebuilt -join ', ')" }
+    $overrides = Join-Path (Join-Path $ToolsDir '_downloads') "$name-overrides.txt"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $overrides) | Out-Null
+    [System.IO.File]::WriteAllLines($overrides, [string[]]($held + $r.Overrides))
+    Write-Host "  holding $($held -join ', ')"
+    $uvArgs = @('pip', 'install', '--python', $pin.python, '--override', (ConvertTo-WslPath $overrides)) + $r.Requirements
+    & wsl -d $WslDistro --exec $WslUv @uvArgs | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "uv pip install failed for $name" }
+    return $true
+}
+
 function Invoke-Probe([string]$name, $pin) {
     $probe = @()
     if (Get-Prop $pin 'probe') { $probe = @($pin.probe) }
@@ -281,6 +374,11 @@ function Invoke-Probe([string]$name, $pin) {
             return ($LASTEXITCODE -eq 0)
         }
         'docker' { return (Invoke-Docker @('image', 'inspect', (Get-DockerRef $pin)) -Quiet) }
+        'wsl-env' {
+            $proj = ConvertTo-WslPath (Join-Path $NodeDir $pin.project)
+            & wsl -d $WslDistro --cd $proj --exec $pin.python @probe | Out-Host
+            return ($LASTEXITCODE -eq 0)
+        }
         default {
             $bin = Get-BinPath $name $pin
             if (-not $bin -or -not (Test-Path $bin)) { return $false }
@@ -293,7 +391,7 @@ function Invoke-Probe([string]$name, $pin) {
 
 if ($List) { Show-List; exit 0 }
 
-$names = @($Pins.tools.PSObject.Properties | ForEach-Object { $_.Name })
+$names = @($Tools.Keys)
 if ($Tool) {
     $selected = @($Tool | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
     foreach ($t in $selected) { if ($names -notcontains $t) { throw "unknown tool: $t (known: $($names -join ', '))" } }
@@ -302,7 +400,7 @@ if ($Tool) {
 
 $failed = 0
 foreach ($name in $names) {
-    $pin = Get-Prop $Pins.tools $name
+    $pin = $Tools[$name]
     Write-Host "== $name $($pin.version) [$($pin.kind)]"
     try {
         $installed = Test-Installed $name $pin
@@ -315,6 +413,7 @@ foreach ($name in $names) {
                 'cargo' { Install-Cargo $name $pin }
                 'uv' { Install-Uv $name $pin }
                 'docker' { Install-Docker $name $pin }
+                'wsl-env' { Install-WslEnv $name $pin }
                 default { throw "unknown kind $($pin.kind)" }
             }
             if (-not $done) { continue }

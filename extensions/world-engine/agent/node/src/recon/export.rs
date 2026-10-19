@@ -152,6 +152,7 @@ mod tests {
             cy: 24.0,
             model: CameraModelModel::Opencv,
             dist: vec![0.1, 0.0, 0.0, 0.0, 0.0],
+            calibrated: false,
         };
         let mut poses = BTreeMap::new();
         poses.insert("cam0/5.png".to_string(), t);

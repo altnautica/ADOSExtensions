@@ -396,6 +396,7 @@ impl ToolRunner for StandInRunner {
             program: PathBuf::from(tool),
             prefix_args: Vec::<OsString>::new(),
             home: PathBuf::from("stand-in"),
+            wsl: false,
         })
     }
 
@@ -438,7 +439,9 @@ impl ToolRunner for StandInRunner {
                 fs::copy(&input, out).map_err(io).map(|_| ())
             }
             "docker" | "kalibr" | "dvlc" | "glim" => {
-                crate::calib::stand_in(inv).map_err(io)?;
+                if !super::glim::stand_in(inv).map_err(io)? {
+                    crate::calib::stand_in(inv).map_err(io)?;
+                }
                 Ok(())
             }
             _ => Ok(()),

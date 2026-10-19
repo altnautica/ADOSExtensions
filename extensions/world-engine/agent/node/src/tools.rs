@@ -44,6 +44,14 @@ pub struct PlatformPin {
     pub bin: Option<String>,
 }
 
+/// A tool's variant inside the WSL distribution, used on Windows hosts.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WslPin {
+    /// Linux interpreter of a prebuilt environment for a uv project.
+    #[serde(default)]
+    pub python: Option<String>,
+}
+
 /// One pinned tool.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ToolPin {
@@ -65,6 +73,8 @@ pub struct ToolPin {
     pub project: Option<String>,
     #[serde(default)]
     pub image: Option<String>,
+    #[serde(default)]
+    pub wsl: Option<WslPin>,
 }
 
 impl ToolPin {
@@ -215,7 +225,37 @@ pub fn wsl_path(p: &str) -> String {
     p
 }
 
-/// The WSL distribution containers run in on a Windows node.
+/// Length of the drive prefix (`D:` or `\\?\D:`) when `s` starts with an
+/// absolute Windows drive path.
+fn drive_prefix_len(s: &str) -> Option<usize> {
+    let (skip, rest) = match s.strip_prefix(r"\\?\") {
+        Some(r) => (4, r),
+        None => (0, s),
+    };
+    let b = rest.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && matches!(b[2], b'\\' | b'/'))
+        .then_some(skip + 2)
+}
+
+/// One argument of a program run inside WSL. An absolute Windows path is
+/// mapped with [`wsl_path`] when it is the whole argument, follows the first
+/// `=` (`--out=D:\x`, `K=D:\x`), or precedes a `:` suffix (`D:\x:/data`);
+/// anything else passes unchanged.
+pub fn wsl_arg(a: &str) -> String {
+    if let Some(n) = drive_prefix_len(a) {
+        return match a[n..].find(':') {
+            Some(i) => format!("{}{}", wsl_path(&a[..n + i]), &a[n + i..]),
+            None => wsl_path(a),
+        };
+    }
+    match a.split_once('=') {
+        Some((k, v)) if drive_prefix_len(v).is_some() => format!("{k}={}", wsl_arg(v)),
+        _ => a.to_string(),
+    }
+}
+
+/// The WSL distribution that runs the Linux-only tools (docker, the gsplat
+/// environment) on a Windows node.
 pub const WSL_DISTRO: &str = "Ubuntu-24.04";
 
 #[cfg(test)]
@@ -238,7 +278,8 @@ mod tests {
           "colmap":{"version":"4.2.0","kind":"archive","probe":["-h"],
             "platforms":{"x86_64-windows":{"url":"u","sha256":"s","archive":"zip","bin":"c/bin/colmap.exe"}}},
           "splat-transform":{"version":"1.0.0","kind":"npm","package":"p","bin":"node_modules/.bin/splat-transform"},
-          "gsplat_train":{"version":"0.1.0","kind":"uv","project":"python/gsplat_train"},
+          "gsplat_train":{"version":"0.1.0","kind":"uv","project":"python/gsplat_train",
+            "wsl":{"python":"/opt/v/bin/python"}},
           "kalibr":{"version":"1","kind":"docker","image":"img@sha256:ab"}}}"#;
         let p = ToolPins::parse(json).unwrap();
         assert_eq!(
@@ -252,6 +293,9 @@ mod tests {
         );
         assert_eq!(p.get("kalibr").unwrap().kind, ToolKind::Docker);
         assert_eq!(p.versions()["gsplat_train"], "0.1.0");
+        let wsl = p.get("gsplat_train").unwrap().wsl.as_ref().unwrap();
+        assert_eq!(wsl.python.as_deref(), Some("/opt/v/bin/python"));
+        assert_eq!(p.get("kalibr").unwrap().wsl, None);
     }
 
     #[test]
@@ -260,6 +304,44 @@ mod tests {
         assert_eq!(wsl_path("C:/a"), "/mnt/c/a");
         assert_eq!(wsl_path(r"\\?\E:\w"), "/mnt/e/w");
         assert_eq!(wsl_path("/already/unix"), "/already/unix");
+    }
+
+    #[test]
+    fn wsl_args_map_embedded_windows_paths() {
+        // Whole-argument paths: spaces, unicode, drive letters, verbatim form.
+        assert_eq!(wsl_arg(r"D:\x y\z.png"), "/mnt/d/x y/z.png");
+        assert_eq!(wsl_arg(r"D:\Daten\Übung été\x"), "/mnt/d/Daten/Übung été/x");
+        assert_eq!(wsl_arg(r"c:\A\B"), "/mnt/c/A/B");
+        assert_eq!(wsl_arg("Z:/"), "/mnt/z");
+        assert_eq!(wsl_arg(r"\\?\D:\long\p"), "/mnt/d/long/p");
+        // After `=`, and before a `:` suffix (a volume spec).
+        assert_eq!(wsl_arg(r"--x=D:\y"), "--x=/mnt/d/y");
+        assert_eq!(wsl_arg(r"config_path:=D:\c fg"), "config_path:=/mnt/d/c fg");
+        assert_eq!(wsl_arg(r"D:\x:/data"), "/mnt/d/x:/data");
+        assert_eq!(wsl_arg(r"D:\x:/data:ro"), "/mnt/d/x:/data:ro");
+        assert_eq!(wsl_arg(r"\\?\D:\x:/data"), "/mnt/d/x:/data");
+        assert_eq!(
+            wsl_arg(r"--volume=D:\w é:/data"),
+            "--volume=/mnt/d/w é:/data"
+        );
+        // Linux paths, other arguments and shell metacharacters pass unchanged.
+        for a in [
+            "/mnt/d/x:/data",
+            "/opt/ados-recon/gsplat-venv/bin/python",
+            "local/kalibr:1f60227442d2",
+            "img@sha256:ab",
+            "D:",
+            "D:rel",
+            r"\\?\UNC\srv\share",
+            r"\\srv\share",
+            "$HOME/*.png",
+            "{{.Server.Version}}",
+            "source /a && rosrun k x --folder /data/k",
+            "a=b",
+            "",
+        ] {
+            assert_eq!(wsl_arg(a), a);
+        }
     }
 
     #[test]

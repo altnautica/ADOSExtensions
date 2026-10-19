@@ -187,6 +187,7 @@ mod tests {
             cy: 24.0,
             model: CameraModelModel::Opencv,
             dist: vec![0.1, -0.01, 0.001, 0.002, 0.0],
+            calibrated: true,
         }
     }
 

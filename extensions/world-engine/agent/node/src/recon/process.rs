@@ -1,7 +1,12 @@
 //! The real [`ToolRunner`]: resolves pinned tools and spawns them.
+//!
+//! On Windows the Linux-only tools (docker, the prebuilt gsplat environment)
+//! run inside the WSL distribution through `wsl.exe --exec`, which hands the
+//! arguments to the program without a shell, so `$`, `*` and spaces arrive
+//! literally.
 
-use std::collections::VecDeque;
-use std::ffi::OsString;
+use std::collections::{BTreeMap, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -19,6 +24,8 @@ pub struct ProcessRunner {
     tools_root: PathBuf,
     assets: PathBuf,
     docker: Mutex<Option<Result<ResolvedTool, StageError>>>,
+    /// Whether a Linux executable exists in WSL, by path, probed once each.
+    wsl_executables: Mutex<BTreeMap<String, bool>>,
 }
 
 impl Default for ProcessRunner {
@@ -33,6 +40,7 @@ impl ProcessRunner {
             tools_root,
             assets,
             docker: Mutex::new(None),
+            wsl_executables: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -64,10 +72,23 @@ impl ProcessRunner {
                     program,
                     prefix_args: Vec::new(),
                     home: dir,
+                    wsl: false,
                 })
             }
             ToolKind::Uv => {
                 let project = self.assets.join(pin.project.as_deref().unwrap_or("python"));
+                if let Some(python) = self.wsl_python(pin, &project) {
+                    // Scripts stay in the Windows project dir and reach the
+                    // Linux interpreter as mapped paths.
+                    return Ok(ResolvedTool {
+                        name: pin.name.clone(),
+                        version: pin.version.clone(),
+                        program: PathBuf::from(python),
+                        prefix_args: Vec::new(),
+                        home: project,
+                        wsl: true,
+                    });
+                }
                 if !project.join(".venv").is_dir() {
                     return Err(StageError::tool_missing(
                         &pin.name,
@@ -89,6 +110,7 @@ impl ProcessRunner {
                         .chain([project.clone().into_os_string(), "python".into()])
                         .collect(),
                     home: project,
+                    wsl: false,
                 })
             }
             ToolKind::Docker => {
@@ -103,28 +125,45 @@ impl ProcessRunner {
         }
     }
 
-    /// docker on this host (through WSL on Windows), probed once.
+    /// The WSL interpreter of a uv tool's prebuilt environment, on Windows,
+    /// when the project ships here and the interpreter exists in WSL.
+    fn wsl_python(&self, pin: &ToolPin, project: &Path) -> Option<String> {
+        if !cfg!(windows) || !project.is_dir() {
+            return None;
+        }
+        let python = pin.wsl.as_ref()?.python.clone()?;
+        let mut known = self
+            .wsl_executables
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let present = *known.entry(python.clone()).or_insert_with(|| {
+            wsl_exec()
+                .args(["test", "-x", python.as_str()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
+        });
+        present.then_some(python)
+    }
+
+    /// docker on this host (inside WSL on Windows), probed once.
     fn resolve_docker(&self) -> Result<ResolvedTool, StageError> {
         let mut cached = self.docker.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(r) = cached.as_ref() {
             return r.clone();
         }
-        let (program, prefix): (PathBuf, Vec<OsString>) = if cfg!(windows) {
-            (
-                PathBuf::from("wsl.exe"),
-                vec![
-                    "-d".into(),
-                    tools::WSL_DISTRO.into(),
-                    "--".into(),
-                    "docker".into(),
-                ],
-            )
+        let wsl = cfg!(windows);
+        let mut probe = if wsl {
+            let mut c = wsl_exec();
+            c.arg("docker");
+            c
         } else {
-            (PathBuf::from("docker"), Vec::new())
+            Command::new("docker")
         };
-        let ok = Command::new(&program)
-            .args(&prefix)
+        let ok = probe
             .args(["version", "--format", "{{.Server.Version}}"])
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .output()
@@ -134,13 +173,14 @@ impl ProcessRunner {
             Some(o) => Ok(ResolvedTool {
                 name: "docker".into(),
                 version: String::from_utf8_lossy(&o.stdout).trim().to_string(),
-                program,
-                prefix_args: prefix,
+                program: PathBuf::from("docker"),
+                prefix_args: Vec::new(),
                 home: PathBuf::new(),
+                wsl,
             }),
             None => Err(StageError::tool_missing(
                 "docker",
-                if cfg!(windows) {
+                if wsl {
                     format!("docker is not available in WSL {}", tools::WSL_DISTRO)
                 } else {
                     "docker is not available".to_string()
@@ -150,6 +190,51 @@ impl ProcessRunner {
         *cached = Some(r.clone());
         r
     }
+}
+
+/// `wsl.exe -d <distro> --exec`, ready for the Linux program and its args.
+fn wsl_exec() -> Command {
+    let mut c = Command::new("wsl.exe");
+    c.args(["-d", tools::WSL_DISTRO, "--exec"]);
+    c
+}
+
+/// An argument for a WSL program, Windows paths mapped (non-UTF-8 unchanged).
+fn wsl_os_arg(a: &OsStr) -> OsString {
+    match a.to_str() {
+        Some(s) => tools::wsl_arg(s).into(),
+        None => a.to_os_string(),
+    }
+}
+
+/// The command that runs `inv` with `tool`. A WSL tool becomes
+/// `wsl.exe -d <distro> --cd <cwd> --exec [/usr/bin/env K=V ...] <program>
+/// <prefix args> <args>`, every argument and env value with its absolute
+/// Windows paths mapped to `/mnt/<drive>/...`.
+pub fn command(tool: &ResolvedTool, inv: &ToolInvocation) -> Command {
+    if !tool.wsl {
+        let mut cmd = Command::new(&tool.program);
+        cmd.args(&tool.prefix_args)
+            .args(&inv.args)
+            .current_dir(&inv.cwd)
+            .envs(inv.env.iter().map(|(k, v)| (k, v)));
+        return cmd;
+    }
+    let mut cmd = Command::new("wsl.exe");
+    cmd.args(["-d", tools::WSL_DISTRO, "--cd"])
+        .arg(tools::wsl_path(&inv.cwd.to_string_lossy()))
+        .arg("--exec");
+    if !inv.env.is_empty() {
+        cmd.arg("/usr/bin/env").args(
+            inv.env
+                .iter()
+                .map(|(k, v)| tools::wsl_arg(&format!("{k}={v}"))),
+        );
+    }
+    cmd.arg(wsl_os_arg(tool.program.as_os_str()))
+        .args(tool.prefix_args.iter().map(|a| wsl_os_arg(a)))
+        .args(inv.args.iter().map(|a| wsl_os_arg(a)));
+    cmd
 }
 
 /// `path`, or `path.exe` / `path.cmd` / `path.bat` on Windows, when it is a file.
@@ -193,6 +278,7 @@ impl ToolRunner for ProcessRunner {
                     .unwrap_or_default(),
                 program: PathBuf::from(p),
                 prefix_args: Vec::new(),
+                wsl: false,
             });
         }
         if tool == "docker" {
@@ -212,6 +298,7 @@ impl ToolRunner for ProcessRunner {
                 program: dir.join("index.html"),
                 prefix_args: Vec::new(),
                 home: dir,
+                wsl: false,
             });
         }
         match tools::pins().get(tool) {
@@ -225,19 +312,14 @@ impl ToolRunner for ProcessRunner {
 
     fn run(&self, inv: &ToolInvocation, on_line: &mut dyn FnMut(&str)) -> Result<(), StageError> {
         let tool = self.resolve(&inv.tool)?;
-        let mut cmd = Command::new(&tool.program);
-        cmd.args(&tool.prefix_args)
-            .args(&inv.args)
-            .current_dir(&inv.cwd)
-            .stdin(Stdio::null())
+        let mut cmd = command(&tool, inv);
+        cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        for (k, v) in &inv.env {
-            cmd.env(k, v);
-        }
-        tracing::info!(tool = %inv.tool, args = ?inv.args_lossy(), "tool start");
+        tracing::info!(tool = %inv.tool, wsl = tool.wsl, args = ?inv.args_lossy(), "tool start");
         let mut child = cmd.spawn().map_err(|e| {
-            StageError::tool_missing(&inv.tool, format!("spawn {}: {e}", tool.program.display()))
+            let program = Path::new(cmd.get_program()).display().to_string();
+            StageError::tool_missing(&inv.tool, format!("spawn {program}: {e}"))
         })?;
         // Both streams feed one channel so lines arrive in roughly the order
         // the tool wrote them, without either pipe filling and blocking it.

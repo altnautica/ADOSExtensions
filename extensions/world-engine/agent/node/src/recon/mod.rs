@@ -11,6 +11,8 @@ pub mod chunks_merge;
 pub mod colmap;
 pub mod export;
 pub mod geom;
+pub mod glim;
+pub mod glim_bag;
 pub mod pipeline;
 pub mod prepare;
 pub mod preset;
@@ -47,6 +49,9 @@ pub enum StagedJob {
         /// Frames per spatial chunk of a large posed session (job param
         /// `chunk_frames`; [`chunks::CHUNK_FRAMES`] when absent).
         chunk_frames: Option<usize>,
+        /// GLIM odometry of a LiDAR session (job param `glim_odometry`,
+        /// `cpu` when absent).
+        glim_odometry: glim::GlimOdometry,
     },
     Change {
         a: String,
@@ -149,12 +154,22 @@ pub fn prepare_staged(
                         })
                 })
                 .transpose()?;
+            let glim_odometry = match job.params.get("glim_odometry") {
+                None => glim::GlimOdometry::default(),
+                Some(v) => v
+                    .as_str()
+                    .and_then(glim::GlimOdometry::parse)
+                    .ok_or_else(|| {
+                        StageError::input("`glim_odometry` must be \"cpu\" or \"gpu\"")
+                    })?,
+            };
             Ok(StagedJob::Reconstruct {
                 session_id,
                 session_dir,
                 preset,
                 generation,
                 chunk_frames,
+                glim_odometry,
             })
         }
         ComputeJobKind::Change => {

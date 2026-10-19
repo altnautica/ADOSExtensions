@@ -92,6 +92,10 @@ pub struct ResolvedTool {
     /// The tool's install or project directory (a uv project's scripts live
     /// here).
     pub home: PathBuf,
+    /// `program` is a Linux program run inside the WSL distribution (Windows
+    /// hosts): it is spawned through `wsl.exe --exec` and every absolute
+    /// Windows path in its arguments is mapped to its `/mnt/<drive>` form.
+    pub wsl: bool,
 }
 
 /// One tool run, built by a stage.
