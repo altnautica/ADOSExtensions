@@ -92,10 +92,12 @@ pub enum ExposureMode {
     Short,
 }
 
-/// `exposure` in the state and the `PUT .../exposure` body/reply. `applied`
-/// is true only once the camera has taken the values; until then the
-/// requested (quantised) values are echoed with `applied: false`.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+/// `exposure` in the state and the `PUT .../exposure` body/reply. `locked`
+/// is the request; `applied` is true only when every enabled capture camera
+/// took the values, which are then the first camera's read-back. Otherwise
+/// the requested (quantised) values are echoed with `applied: false` and
+/// `reason` names why (`not_v4l2`, `control_unsupported`, `timeout`, ..).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExposureView {
     pub locked: bool,
     #[serde(default)]
@@ -106,6 +108,8 @@ pub struct ExposureView {
     pub mode: Option<ExposureMode>,
     #[serde(default)]
     pub applied: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// A control request.

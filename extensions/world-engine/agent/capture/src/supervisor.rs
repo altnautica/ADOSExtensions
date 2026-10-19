@@ -97,8 +97,8 @@ pub async fn read_config(
     Ok(AtlasRuntimeConfig::from_values(&ctx.agent_id, &values))
 }
 
-/// Where front-panel actions go and which pins mean REC and MARK.
-pub type HudSlot = Arc<Mutex<Option<(mpsc::Sender<HudAction>, u32, u32)>>>;
+/// Where front-panel actions go.
+pub type HudSlot = Arc<Mutex<Option<mpsc::Sender<HudAction>>>>;
 
 /// The process-lifetime feeds a run attaches to.
 #[derive(Clone)]
@@ -162,7 +162,7 @@ impl CaptureRun {
             )),
         ];
         let (hud_tx, hud_rx) = mpsc::channel(8);
-        *feeds.hud.lock() = Some((hud_tx, config.hud.rec_pin, config.hud.mark_pin));
+        *feeds.hud.lock() = Some(hud_tx);
         let (view_tx, view_rx) = watch::channel(Default::default());
         tasks.push(tokio::spawn(hud_page(ctx.clone(), view_rx, cancel.clone())));
         let enabled: HashSet<String> = config
@@ -186,6 +186,9 @@ impl CaptureRun {
             control_rx,
             hud_rx: Some(hud_rx),
             view_tx: Some(view_tx),
+            camera: Some(Arc::new(crate::camera_control::SdkCameraControl(
+                ctx.clone(),
+            ))),
             paths,
         };
         let capture = tokio::spawn(run_capture_loop(deps, cancel.clone()));
@@ -300,8 +303,8 @@ async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 4
     if !done[3] {
         let slot = feeds.hud.clone();
         let cb = Arc::new(move |press: ados_protocol::buttons::ButtonPress| {
-            if let Some((tx, rec, mark)) = slot.lock().as_ref() {
-                if let Some(a) = button_action(&press, *rec, *mark) {
+            if let Some(tx) = slot.lock().as_ref() {
+                if let Some(a) = button_action(&press) {
                     let _ = tx.try_send(a);
                 }
             }

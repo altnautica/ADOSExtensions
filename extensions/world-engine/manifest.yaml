@@ -210,9 +210,11 @@ agent:
     - id: display.oled.page
     - id: button.subscribe
     - id: mcp.expose
-    # link: the agent WHEP preview relay and the rig write relay.
+    # link: the agent WHEP preview relay and the rig write relay; capture:
+    # the exposure lock on the capture cameras.
     - id: video.whep.relay
     - id: sensors.rig.write
+    - id: camera.control.write
   contributes:
     services:
       - name: capture

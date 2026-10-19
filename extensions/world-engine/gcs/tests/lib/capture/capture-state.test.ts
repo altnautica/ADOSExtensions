@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   coerceCaptureState,
   coerceCoverage,
+  coerceExposure,
   bearingDeg,
   returnToStartPrompt,
   type CaptureState,
@@ -37,7 +38,14 @@ describe("coerceCaptureState", () => {
     expect(s.frames.perCamera).toEqual([{ id: "cam_fl", fps: 20, dropped: 3 }]);
     expect(s.pose.trackedFeatures).toBe(143);
     expect(s.coverage.distanceFromStartM).toBe(38.2);
-    expect(s.exposure).toEqual({ locked: true, exposureUs: 4000, gain: 2, mode: "walking" });
+    expect(s.exposure).toEqual({
+      locked: true,
+      exposureUs: 4000,
+      gain: 2,
+      mode: "walking",
+      applied: false,
+      reason: null,
+    });
     expect(s.storage.freeBytes).toBe(812345678901);
   });
 
@@ -48,6 +56,18 @@ describe("coerceCaptureState", () => {
     expect(s.coverage.roomPct).toBeNull();
     expect(s.exposure.exposureUs).toBeNull();
     expect(coerceCaptureState({})).toBeNull();
+  });
+});
+
+describe("coerceExposure", () => {
+  it("reads applied and the reason a lock was not applied", () => {
+    const e = coerceExposure({ locked: true, exposure_us: 2000, applied: false, reason: "not_v4l2" });
+    expect(e.applied).toBe(false);
+    expect(e.reason).toBe("not_v4l2");
+    const ok = coerceExposure({ locked: true, applied: true, reason: 3 });
+    expect(ok.applied).toBe(true);
+    expect(ok.reason).toBeNull();
+    expect(coerceExposure({ applied: "yes" }).applied).toBe(false);
   });
 });
 

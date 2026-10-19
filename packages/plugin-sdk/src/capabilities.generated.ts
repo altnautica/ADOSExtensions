@@ -2,6 +2,7 @@
 
 export const CAPABILITY_IDS = [
   "button.subscribe",
+  "camera.control.write",
   "capture.storage.write",
   "cloud.publish",
   "cloud.read",

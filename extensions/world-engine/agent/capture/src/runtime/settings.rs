@@ -90,23 +90,6 @@ impl Default for LidarSettings {
     }
 }
 
-/// Front-panel button pins (`atlas.hud`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct HudSettings {
-    pub rec_pin: u32,
-    pub mark_pin: u32,
-}
-
-impl Default for HudSettings {
-    fn default() -> Self {
-        Self {
-            rec_pin: crate::hud::DEFAULT_REC_PIN,
-            mark_pin: crate::hud::DEFAULT_MARK_PIN,
-        }
-    }
-}
-
 /// Segment roll (`atlas.segment`); the contract default is 4 GiB or 10 min.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]

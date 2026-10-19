@@ -9,10 +9,10 @@
 //!
 //! Buttons (`button.subscribe`): the visor button map assigns `passthrough` to
 //! B1 and B2 short presses, so only plugin subscribers act on them. B1 toggles
-//! recording, B2 marks a new room. A press is matched on its pin (B1/B2 are
-//! BCM 5/6 on the reference panel; `atlas.hud.rec_pin` / `atlas.hud.mark_pin`
-//! override) and must carry the `passthrough` action, so a board whose map
-//! gives B1 another job never starts a session by accident.
+//! recording, B2 marks a new room. A press is matched on the host's button
+//! label (`B1`/`B2`, whatever pin the board wires them to) and must carry the
+//! `passthrough` action, so a board whose map gives B1 another job never
+//! starts a session by accident.
 
 use ados_protocol::buttons::ButtonPress;
 use world_engine_protocol::capture_ctl::CaptureStateView;
@@ -21,9 +21,9 @@ use world_engine_protocol::capture_ctl::CaptureStateView;
 pub const PAGE_TITLE: &str = "Capture";
 /// The action the host's button map gives presses reserved for plugins.
 pub const PASSTHROUGH: &str = "passthrough";
-/// Reference-panel BCM pins of B1 and B2.
-pub const DEFAULT_REC_PIN: u32 = 5;
-pub const DEFAULT_MARK_PIN: u32 = 6;
+/// Front-panel labels of the REC and MARK buttons.
+pub const REC_LABEL: &str = "B1";
+pub const MARK_LABEL: &str = "B2";
 
 /// What a front-panel press asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,16 +33,14 @@ pub enum HudAction {
 }
 
 /// The capture action of a press, if any.
-pub fn button_action(press: &ButtonPress, rec_pin: u32, mark_pin: u32) -> Option<HudAction> {
+pub fn button_action(press: &ButtonPress) -> Option<HudAction> {
     if press.is_long() || press.action.as_deref() != Some(PASSTHROUGH) {
         return None;
     }
-    if press.pin == rec_pin {
-        Some(HudAction::ToggleRecording)
-    } else if press.pin == mark_pin {
-        Some(HudAction::Mark)
-    } else {
-        None
+    match press.label.as_deref() {
+        Some(REC_LABEL) => Some(HudAction::ToggleRecording),
+        Some(MARK_LABEL) => Some(HudAction::Mark),
+        _ => None,
     }
 }
 
@@ -117,9 +115,10 @@ mod tests {
         CoverageSummary, ExposureView, FramesView, HealthView, PoseView, StorageView,
     };
 
-    fn press(pin: u32, kind: &str, action: Option<&str>) -> ButtonPress {
+    fn press(label: Option<&str>, kind: &str, action: Option<&str>) -> ButtonPress {
         ButtonPress {
-            pin,
+            pin: 17,
+            label: label.map(str::to_string),
             kind: kind.into(),
             action: action.map(str::to_string),
             timestamp_ms: 0,
@@ -128,19 +127,18 @@ mod tests {
 
     #[test]
     fn only_passthrough_short_presses_on_b1_b2_act() {
-        let a = |p| button_action(&p, DEFAULT_REC_PIN, DEFAULT_MARK_PIN);
+        let a = |p| button_action(&p);
+        let pt = Some("passthrough");
         assert_eq!(
-            a(press(5, "short", Some("passthrough"))),
+            a(press(Some("B1"), "short", pt)),
             Some(HudAction::ToggleRecording)
         );
-        assert_eq!(
-            a(press(6, "short", Some("passthrough"))),
-            Some(HudAction::Mark)
-        );
-        assert_eq!(a(press(5, "long", Some("passthrough"))), None);
-        assert_eq!(a(press(5, "short", Some("cycle_screen"))), None);
-        assert_eq!(a(press(13, "short", Some("passthrough"))), None);
-        assert_eq!(a(press(5, "short", None)), None);
+        assert_eq!(a(press(Some("B2"), "short", pt)), Some(HudAction::Mark));
+        assert_eq!(a(press(Some("B1"), "long", pt)), None);
+        assert_eq!(a(press(Some("B1"), "short", Some("cycle_screen"))), None);
+        assert_eq!(a(press(Some("B3"), "short", pt)), None);
+        assert_eq!(a(press(None, "short", pt)), None);
+        assert_eq!(a(press(Some("B1"), "short", None)), None);
     }
 
     #[test]
@@ -183,6 +181,7 @@ mod tests {
                 gain: Some(2.0),
                 mode: None,
                 applied: false,
+                reason: None,
             },
             storage: StorageView {
                 free_bytes: Some(812 << 30),

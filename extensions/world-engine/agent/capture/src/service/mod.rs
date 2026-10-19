@@ -27,10 +27,11 @@ use std::time::Duration;
 use ados_capture_contract::{Manifest, Rig};
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use world_engine_protocol::capture_ctl::{CaptureStateView, ExposureView};
+use world_engine_protocol::capture_ctl::{CaptureStateView, CtlReply, ExposureView};
 
+use crate::camera_control::CameraControl;
 use crate::control::ControlMsg;
 use crate::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
 use crate::hud::HudAction;
@@ -91,6 +92,9 @@ pub struct LoopDeps {
     pub hud_rx: Option<mpsc::Receiver<HudAction>>,
     /// The HUD task renders the latest state from here.
     pub view_tx: Option<watch::Sender<CaptureStateView>>,
+    /// The host's camera control the exposure lock is applied through;
+    /// `None` where there is none (the lock is then never applied).
+    pub camera: Option<Arc<dyn CameraControl>>,
     pub paths: Paths,
 }
 
@@ -105,6 +109,13 @@ struct CamStats {
     dropped: u64,
     /// Host ns of this camera's last keyframe (its IMU window starts there).
     last_kf_ns: Option<u64>,
+}
+
+/// A finished exposure apply, back on the loop.
+pub(crate) struct ExposureDone {
+    seq: u64,
+    view: ExposureView,
+    reply: Option<oneshot::Sender<CtlReply>>,
 }
 
 /// The loop's state.
@@ -127,6 +138,10 @@ pub(crate) struct Engine {
     quality: QualityMonitor,
     coverage: Coverage,
     exposure: ExposureView,
+    camera: Option<Arc<dyn CameraControl>>,
+    /// Bumped per apply; only the latest one's result is kept.
+    exposure_seq: u64,
+    exposure_tx: mpsc::UnboundedSender<ExposureDone>,
     cams: HashMap<String, CamStats>,
     last_fix_seq: u64,
     kf_seq: u64,
@@ -152,6 +167,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         mut control_rx,
         mut hud_rx,
         view_tx,
+        camera,
         paths,
     } = deps;
     if let Some(fc) = &fc {
@@ -168,12 +184,16 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
             }
         }
     }
+    let (exposure_tx, mut exposure_rx) = mpsc::unbounded_channel();
     let mut engine = Engine {
         keyframes: CaptureSession::with_pose_interval(
             cfg.capture.clone(),
             cfg.pose_publish_interval_ms,
         ),
-        exposure: cfg.exposure,
+        exposure: cfg.exposure.clone(),
+        camera,
+        exposure_seq: 0,
+        exposure_tx,
         record_retry_at: cfg
             .record_on_start
             .then(|| crate::clock::mono_ns() + 2_000_000_000),
@@ -223,14 +243,17 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     engine.publish_status().await;
+    // A configured lock is applied once per run; unlocked leaves the cameras
+    // on their own auto exposure.
+    if engine.exposure.locked {
+        engine.apply_exposure(None);
+    }
     loop {
         tokio::select! {
             biased;
             _ = cancel.wait() => break,
-            Some(msg) = control_rx.recv() => {
-                let reply = engine.handle(msg.req).await;
-                let _ = msg.reply.send(reply);
-            }
+            Some(msg) = control_rx.recv() => engine.handle(msg).await,
+            Some(done) = exposure_rx.recv() => engine.exposure_done(done),
             Some(action) = async { match hud_rx.as_mut() { Some(rx) => rx.recv().await, None => None } } => {
                 engine.on_hud(action).await;
             }

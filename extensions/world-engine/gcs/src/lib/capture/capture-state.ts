@@ -29,10 +29,14 @@ export interface CameraFrames {
 }
 
 export interface ExposureState {
+  /** The operator's request; `applied` says whether the cameras took it. */
   locked: boolean;
   exposureUs: number | null;
   gain: number | null;
   mode: ExposureMode | null;
+  applied: boolean;
+  /** Why the request was not applied (`not_v4l2`, `timeout`, ..). */
+  reason: string | null;
 }
 
 export interface CaptureState {
@@ -78,6 +82,8 @@ export function coerceExposure(raw: unknown): ExposureState {
     exposureUs: num(e.exposure_us),
     gain: num(e.gain),
     mode: exposureMode(e.mode),
+    applied: bool(e.applied) === true,
+    reason: str(e.reason),
   };
 }
 

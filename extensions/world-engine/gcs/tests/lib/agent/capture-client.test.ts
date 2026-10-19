@@ -51,10 +51,13 @@ describe("CaptureClient", () => {
 
   it("puts the exposure lock and reads the applied exposure back", async () => {
     const { agent, fetch } = stubAgent(() =>
-      json(200, { locked: true, exposure_us: 4000, gain: 2, mode: "walking" }),
+      json(200, { locked: true, exposure_us: 4000, gain: 2, mode: "walking", applied: true }),
     );
     const res = await new CaptureClient(agent).setExposure({ locked: true, mode: "walking" });
-    expect(res).toEqual({ ok: true, value: { locked: true, exposureUs: 4000, gain: 2, mode: "walking" } });
+    expect(res).toEqual({
+      ok: true,
+      value: { locked: true, exposureUs: 4000, gain: 2, mode: "walking", applied: true, reason: null },
+    });
     expect(callAt(fetch).init.method).toBe("PUT");
   });
 

@@ -136,6 +136,7 @@ const AGENT_SURFACE_CALLS = {
   "mcp.expose": [/tools\s*\.\s*(register|serve)\s*\(/],
   "mavlink.write": [/mavlink\s*\.\s*send\w*\s*\(/],
   "vision.frame.read": [/subscribe_frames/],
+  "camera.control.write": [/set_controls\s*\(/],
   "hardware.uart": [/serial\.Serial\b|serial_asyncio|serialport::|tokio_serial/],
   "hardware.usb.uvc": [/uvc/i],
   "hardware.usb": [/usb/i],

@@ -95,6 +95,14 @@ All notable changes to the World Engine extension.
   `dist`, `readout_ns`.
 - The live-lane trainers resolve from the pinned tool set and fail with
   `E_TOOL_MISSING` instead of producing a placeholder.
+- The exposure lock is applied to every enabled capture camera through the
+  host camera control (`camera.control.write`), on `PUT /atlas/capture/exposure`
+  and at run start for a configured lock; unlock returns the cameras to auto
+  exposure. `applied` is true only when every camera took the values, which
+  are then the read-back; otherwise `reason` names why (`not_v4l2`,
+  `control_unsupported`, `timeout`) and the GCS shows "Requested, not applied".
+- Front-panel presses are matched on the host's button label (`B1` REC, `B2`
+  MARK) instead of a GPIO pin.
 
 ### Removed
 
@@ -106,6 +114,7 @@ All notable changes to the World Engine extension.
 - `atlas.intrinsics` and `atlas.pose_prior` refuse unknown keys, so a
   pre-contract override fails with an error naming the accepted keys.
 - `atlas.pose_prior.clock_offset_sigma_ns` is renamed `timebase_sigma_ns`.
+- The `atlas.hud` pin settings (`rec_pin`, `mark_pin`).
 - The session anchor is the mean of the first 100 3D fixes, with its MSL
   altitude raised to the ellipsoid by the EGM2008 geoid (1° grid).
 - A selected frame whose pose arrived more than 50 ms from the exposure is

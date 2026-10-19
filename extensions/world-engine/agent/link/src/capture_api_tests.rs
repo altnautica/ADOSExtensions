@@ -38,10 +38,10 @@ fn service(req: CtlRequest) -> CtlReply {
         }
         CtlRequest::Mark(m) if m.room.is_empty() => CtlReply::err(ctl_codes::BAD_REQUEST, "room"),
         CtlRequest::Mark(_) => CtlReply::ok(json!({"segment": 3})),
-        // Not applied to the sensor: unlocked, requested values echoed.
+        // Not applied to the sensor: the lock request echoed with the reason.
         CtlRequest::Exposure(e) => CtlReply::ok(ExposureView {
-            locked: false,
             applied: false,
+            reason: Some("not_v4l2".into()),
             ..e
         }),
         CtlRequest::Coverage => CtlReply::ok(CoverageView {
@@ -129,7 +129,7 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
     assert_eq!(st, StatusCode::OK);
     assert_eq!(
         body,
-        json!({"locked": false, "applied": false, "exposure_us": 4000, "gain": 2.0, "mode": "walking"})
+        json!({"locked": true, "applied": false, "reason": "not_v4l2", "exposure_us": 4000, "gain": 2.0, "mode": "walking"})
     );
     let sent: ExposureView = serde_json::from_value(
         serde_json::from_str::<Value>(recorded.lock().last().unwrap()).unwrap(),

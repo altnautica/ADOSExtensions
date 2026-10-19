@@ -27,8 +27,7 @@ use crate::recorder::convert::ImageEncoding;
 
 mod settings;
 pub use settings::{
-    resolve_pose_provider, HudSettings, LidarSettings, PoseProviderConfig, SegmentSettings,
-    VioSettings,
+    resolve_pose_provider, LidarSettings, PoseProviderConfig, SegmentSettings, VioSettings,
 };
 
 fn default_hfov_deg() -> f64 {
@@ -196,7 +195,6 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_IMAGE_ENCODING,
     KEY_MAINS_HZ,
     KEY_EXPOSURE,
-    KEY_HUD,
     KEY_VIO,
     KEY_LIDAR,
     KEY_SEGMENT,
@@ -218,7 +216,6 @@ pub const KEY_RECORD_ON_START: &str = "atlas.record_on_start";
 pub const KEY_IMAGE_ENCODING: &str = "atlas.image_encoding";
 pub const KEY_MAINS_HZ: &str = "atlas.mains_hz";
 pub const KEY_EXPOSURE: &str = "atlas.exposure";
-pub const KEY_HUD: &str = "atlas.hud";
 pub const KEY_VIO: &str = "atlas.vio";
 pub const KEY_LIDAR: &str = "atlas.lidar";
 pub const KEY_SEGMENT: &str = "atlas.segment";
@@ -231,6 +228,7 @@ fn default_exposure() -> ExposureView {
         gain: None,
         mode: Some(ExposureMode::Walking),
         applied: false,
+        reason: None,
     }
 }
 
@@ -254,7 +252,6 @@ pub struct AtlasRuntimeConfig {
     /// Mains frequency the exposure rule avoids flicker for (50 or 60).
     pub mains_hz: u32,
     pub exposure: ExposureView,
-    pub hud: HudSettings,
     pub vio: VioSettings,
     pub lidar: LidarSettings,
     pub segment: SegmentSettings,
@@ -275,7 +272,6 @@ impl Default for AtlasRuntimeConfig {
             image_encoding: ImageEncoding::Raw,
             mains_hz: 50,
             exposure: default_exposure(),
-            hud: HudSettings::default(),
             vio: VioSettings::default(),
             lidar: LidarSettings::default(),
             segment: SegmentSettings::default(),
@@ -403,7 +399,7 @@ impl AtlasRuntimeConfig {
         // The configured exposure goes through the same flicker/cap rule as
         // an operator request.
         let exposure = crate::quality::flicker::settle_exposure(
-            ExposureView::default(),
+            &ExposureView::default(),
             typed(values, KEY_EXPOSURE, default_exposure())?,
             mains_hz,
         );
@@ -428,7 +424,6 @@ impl AtlasRuntimeConfig {
             image_encoding: typed(values, KEY_IMAGE_ENCODING, ImageEncoding::Raw)?,
             mains_hz,
             exposure,
-            hud: typed(values, KEY_HUD, HudSettings::default())?,
             vio: typed(values, KEY_VIO, VioSettings::default())?,
             lidar: typed(values, KEY_LIDAR, LidarSettings::default())?,
             segment: typed(values, KEY_SEGMENT, SegmentSettings::default())?,

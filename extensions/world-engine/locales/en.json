@@ -386,6 +386,8 @@
     "errUnreachable": "The device did not answer.",
     "exposureLocked": "Locked",
     "exposureAuto": "Auto",
+    "exposureNotApplied": "Requested, not applied",
+    "exposureNotAppliedReason": "Requested, not applied ({reason})",
     "exposureMode": "Exposure mode",
     "exposureModes": { "walking": "Walking (≤ 4 ms)", "slow": "Slow (≤ 10 ms)", "short": "Short (≤ 2 ms)" },
     "lock": "Lock",

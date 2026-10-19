@@ -147,9 +147,9 @@ pub fn quantise_exposure(
 
 /// Fold an exposure request into the current view: missing fields keep
 /// their current values and the result is re-quantised against the
-/// (possibly new) mode cap. The camera control path does not exist yet, so
-/// the view is never `locked` or `applied`; the values are what was asked.
-pub fn settle_exposure(cur: ExposureView, req: ExposureView, mains_hz: u32) -> ExposureView {
+/// (possibly new) mode cap. `locked` is the request's; whether the cameras
+/// took the values is decided by the apply step, so `applied` starts false.
+pub fn settle_exposure(cur: &ExposureView, req: ExposureView, mains_hz: u32) -> ExposureView {
     let mode = req.mode.or(cur.mode).unwrap_or_default();
     let gain = req.gain.or(cur.gain);
     let (exposure_us, gain) = match req.exposure_us.or(cur.exposure_us) {
@@ -160,11 +160,12 @@ pub fn settle_exposure(cur: ExposureView, req: ExposureView, mains_hz: u32) -> E
         None => (None, gain),
     };
     ExposureView {
-        locked: false,
+        locked: req.locked,
         exposure_us,
         gain,
         mode: Some(mode),
         applied: false,
+        reason: None,
     }
 }
 
@@ -249,7 +250,7 @@ mod tests {
     #[test]
     fn a_mode_change_alone_reapplies_the_cap() {
         let slow = settle_exposure(
-            ExposureView::default(),
+            &ExposureView::default(),
             ExposureView {
                 locked: true,
                 exposure_us: Some(10_000),
@@ -259,9 +260,9 @@ mod tests {
             50,
         );
         assert_eq!(slow.exposure_us, Some(10_000));
-        assert!(!slow.locked && !slow.applied);
+        assert!(slow.locked && !slow.applied);
         let walking = settle_exposure(
-            slow,
+            &slow,
             ExposureView {
                 mode: Some(ExposureMode::Walking),
                 ..Default::default()

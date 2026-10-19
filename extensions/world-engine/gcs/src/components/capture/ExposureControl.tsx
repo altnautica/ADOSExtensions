@@ -3,7 +3,7 @@
  * @description Exposure lock: the current exposure and gain, the capture
  * mode (walking ≤ 4 ms, slow ≤ 10 ms, short ≤ 2 ms against mains flicker) and
  * a lock / unlock toggle. A locked exposure keeps one segment consistent for
- * the trainer.
+ * the trainer; a lock the cameras did not take is flagged with its reason.
  */
 
 import { useState } from "react";
@@ -53,6 +53,13 @@ export function ExposureControl({
       <span className={exposure.locked ? "we:text-status-success" : "we:text-text-tertiary"}>
         {exposure.locked ? t("exposureLocked") : t("exposureAuto")}
       </span>
+      {exposure.locked && !exposure.applied && (
+        <span className="we:text-status-warning" role="status">
+          {exposure.reason
+            ? t("exposureNotAppliedReason", { reason: exposure.reason })
+            : t("exposureNotApplied")}
+        </span>
+      )}
       <select
         aria-label={t("exposureMode")}
         value={exposure.mode ?? "walking"}

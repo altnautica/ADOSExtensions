@@ -3,11 +3,14 @@
 
 use ados_capture_contract::{SessionHealth, Timebase};
 use serde_json::json;
+use tokio::sync::oneshot;
 use world_engine_protocol::atlas::CaptureState;
 use world_engine_protocol::capture_ctl::{codes, CtlReply, CtlRequest, ExposureView, StartArgs};
 
-use super::Engine;
+use super::{Engine, ExposureDone};
+use crate::camera_control::{apply_exposure, APPLY_TIMEOUT};
 use crate::clock::ClockSidecar;
+use crate::control::ControlMsg;
 use crate::hud::HudAction;
 use crate::quality::coverage::Coverage;
 use crate::quality::flicker::settle_exposure;
@@ -28,7 +31,19 @@ pub(crate) fn stop_and_bag(session: &mut CaptureSession) -> bool {
 }
 
 impl Engine {
-    pub(super) async fn handle(&mut self, req: CtlRequest) -> CtlReply {
+    /// Answer a control request. An exposure request is answered once the
+    /// cameras have taken it (or [`APPLY_TIMEOUT`]), off the loop.
+    pub(super) async fn handle(&mut self, msg: ControlMsg) {
+        let ControlMsg { req, reply } = msg;
+        if let CtlRequest::Exposure(e) = req {
+            self.exposure = settle_exposure(&self.exposure, e, self.cfg.mains_hz);
+            self.apply_exposure(Some(reply));
+            return;
+        }
+        let _ = reply.send(self.answer(req).await);
+    }
+
+    async fn answer(&mut self, req: CtlRequest) -> CtlReply {
         match req {
             CtlRequest::Status => CtlReply::ok(self.keyframes.status()),
             CtlRequest::State => CtlReply::ok(self.state_view()),
@@ -69,7 +84,8 @@ impl Engine {
                     None => CtlReply::err(codes::NOT_RECORDING, "no session is open"),
                 }
             }
-            CtlRequest::Exposure(e) => CtlReply::ok(self.set_exposure(e)),
+            // Answered in `handle` once applied; the current view otherwise.
+            CtlRequest::Exposure(_) => CtlReply::ok(&self.exposure),
         }
     }
 
@@ -100,9 +116,42 @@ impl Engine {
         Some(seg)
     }
 
-    fn set_exposure(&mut self, req: ExposureView) -> ExposureView {
-        self.exposure = settle_exposure(self.exposure, req, self.cfg.mains_hz);
-        self.exposure
+    /// Apply the current exposure to every enabled capture camera on its own
+    /// task; the result comes back through [`Self::exposure_done`].
+    pub(super) fn apply_exposure(&mut self, reply: Option<oneshot::Sender<CtlReply>>) {
+        self.exposure_seq += 1;
+        let seq = self.exposure_seq;
+        let want = self.exposure.clone();
+        let ctl = self.camera.clone();
+        let cameras: Vec<String> = self
+            .cfg
+            .capture
+            .enabled_cameras()
+            .map(|c| c.id.clone())
+            .collect();
+        let tx = self.exposure_tx.clone();
+        tokio::spawn(async move {
+            let view = match ctl {
+                Some(ctl) => apply_exposure(ctl.as_ref(), &cameras, want, APPLY_TIMEOUT).await,
+                None => ExposureView {
+                    applied: false,
+                    reason: Some("camera_control_unavailable".into()),
+                    ..want
+                },
+            };
+            let _ = tx.send(ExposureDone { seq, view, reply });
+        });
+    }
+
+    /// Keep the latest apply's result for the state reads and answer its
+    /// request; a superseded apply only answers.
+    pub(super) fn exposure_done(&mut self, done: ExposureDone) {
+        if done.seq == self.exposure_seq {
+            self.exposure = done.view.clone();
+        }
+        if let Some(reply) = done.reply {
+            let _ = reply.send(CtlReply::ok(&done.view));
+        }
     }
 
     /// Admit and open a session.

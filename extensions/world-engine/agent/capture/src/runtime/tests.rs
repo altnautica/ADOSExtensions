@@ -39,7 +39,7 @@ fn configured_exposure_is_quantised_and_capped() {
     )]);
     let c = AtlasRuntimeConfig::from_values("d", &v).unwrap();
     assert_eq!(c.exposure.exposure_us, Some(10_000));
-    assert!(!c.exposure.locked && !c.exposure.applied);
+    assert!(c.exposure.locked && !c.exposure.applied);
     let v = values(&[(
         KEY_EXPOSURE,
         json!({"locked": false, "exposure_us": 9000, "mode": "walking"}),

@@ -324,21 +324,6 @@
         }
       }
     },
-    "atlas.hud": {
-      "type": "object",
-      "default": {},
-      "additionalProperties": false,
-      "properties": {
-        "rec_pin": {
-          "type": "integer",
-          "default": 5
-        },
-        "mark_pin": {
-          "type": "integer",
-          "default": 6
-        }
-      }
-    },
     "atlas.vio": {
       "type": "object",
       "default": {},

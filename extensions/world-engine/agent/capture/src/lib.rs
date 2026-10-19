@@ -35,6 +35,7 @@ mod session;
 
 pub mod calib;
 mod calib_kalibr;
+pub mod camera_control;
 pub mod clock;
 pub mod control;
 pub mod encode;

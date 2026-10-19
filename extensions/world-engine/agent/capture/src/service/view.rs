@@ -77,7 +77,7 @@ impl Engine {
             pose,
             coverage: self.coverage.summary(),
             health: self.quality.health(now),
-            exposure: self.exposure,
+            exposure: self.exposure.clone(),
             storage: StorageView {
                 free_bytes: free,
                 est_remaining_s: free.zip(rate).map(|(f, r)| (f as f64 / r).round()),
