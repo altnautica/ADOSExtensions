@@ -104,7 +104,7 @@ pub use node_credentials::{
 };
 #[cfg(feature = "onnx")]
 pub use offload::OnnxDetector;
-pub use offload::{Detection, Detector, FrameRef, MockDetector};
+pub use offload::{Detection, Detector, FrameRef, MockDetector, NoDetector};
 pub use offload_session_manager::{OffloadSessionManager, SessionSpec};
 pub use offload_stream::{
     run_offload_session, OffloadFrame, OffloadFrameStream, RtspFrameStream, SessionExit,

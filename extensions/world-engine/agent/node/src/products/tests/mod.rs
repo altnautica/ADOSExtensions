@@ -1,6 +1,7 @@
 //! Unit tests of the indoor products on synthetic scenes.
 
 mod aisles;
+mod align;
 mod change;
 mod cloud_io;
 mod floorplan;

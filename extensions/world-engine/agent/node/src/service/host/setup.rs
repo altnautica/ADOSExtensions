@@ -10,11 +10,11 @@ pub(super) fn env_or(key: &str, default: &str) -> String {
 /// Pick the perception-offload detector. When the `onnx` feature is built AND
 /// `ADOS_COMPUTE_DETECTOR_MODEL` (or the `serving.detector_model` plugin config)
 /// names an `.onnx` file, load the real ONNX detector (CoreML-accelerated on
-/// macOS via the `coreml` feature); otherwise fall back to the mock so the
-/// offload path stays exercised with no model. A load failure logs and falls
-/// back to the mock rather than refusing to start (the node still comes up).
+/// macOS via the `coreml` feature); otherwise the node has no detector and
+/// refuses offload inference with the reason. A load failure logs and leaves
+/// the node without a detector rather than refusing to start.
 pub(super) fn select_detector(config_model_path: Option<&str>) -> Arc<dyn Detector> {
-    // Used only in the onnx build (the mock path ignores it).
+    // Used only in the onnx build.
     #[cfg(not(feature = "onnx"))]
     let _ = config_model_path;
     #[cfg(feature = "onnx")]
@@ -57,12 +57,12 @@ pub(super) fn select_detector(config_model_path: Option<&str>) -> Arc<dyn Detect
                     return Arc::new(det);
                 }
                 Err(e) => {
-                    tracing::warn!(model = %path, error = %e, "perception offload: ONNX load failed, using mock");
+                    tracing::warn!(model = %path, error = %e, "perception offload: ONNX load failed; offload inference unavailable");
                 }
             }
         }
     }
-    Arc::new(MockDetector)
+    Arc::new(NoDetector)
 }
 
 /// Parse a `WxH` input-size string (e.g. `640x640`) into `(width, height)`,

@@ -19,6 +19,7 @@ pub mod imu_noise;
 mod kalibr_job;
 pub mod kalibr_yaml;
 pub mod ros2_bag;
+#[cfg(any(test, feature = "mock"))]
 mod stand_in;
 
 #[cfg(test)]
@@ -37,6 +38,7 @@ use crate::recon::{StageError, ToolInvocation, ToolRunner};
 
 pub use dvlc::rig_from_dvlc;
 pub use kalibr_yaml::rig_from_kalibr;
+#[cfg(any(test, feature = "mock"))]
 pub use stand_in::stand_in;
 
 /// What a calibration job calibrates.

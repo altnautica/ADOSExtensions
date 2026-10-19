@@ -26,6 +26,7 @@ FLOW_SIDE = 640
 MOTION_MIN_PX = 2.0
 MIRROR_DIFF_M = 0.3
 MIRROR_GRID = 4  # LiDAR/depth comparison runs at 1/4 resolution
+MIRROR_EDGE_CELLS = 4  # grid cells the planarity test loses at a region's edge
 LIDAR_VOXEL_M = 0.05
 LIDAR_MAX_RANGE_M = 40.0
 
@@ -220,6 +221,13 @@ def mirror_mask(fr: dict, lidar: np.ndarray, depth: np.ndarray) -> np.ndarray:
         samples = both[reg].sum()
         if samples >= 20 and disagree[reg].sum() > 0.5 * samples:
             out |= reg
+    # The normal blur and depth gradient mark a band along each region's edge
+    # as non-planar; claim that band back where LiDAR disagrees too.
+    if out.any():
+        band = disagree & ~planar
+        kernel = np.ones((3, 3), np.uint8)
+        for _ in range(MIRROR_EDGE_CELLS):
+            out |= (cv2.dilate(out.astype(np.uint8), kernel) > 0) & band
     return cv2.resize(out.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST) > 0
 
 

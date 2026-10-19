@@ -18,8 +18,8 @@ use crate::job_files::job_files_router;
 use crate::lanes::upload_and_artifact_lanes;
 use crate::worker::{worker_loop, WorkerCtx};
 use crate::{
-    build_router_with_base, derive_public_base, Cluster, ComputeAuth, Engine, JobStore,
-    MockDetector, Scheduler, SelectingReconstructor, SessionRegistry,
+    build_router_with_base, derive_public_base, Cluster, ComputeAuth, Engine, JobStore, NoDetector,
+    Scheduler, SelectingReconstructor, SessionRegistry,
 };
 
 /// Command-line options of a standalone run.
@@ -113,7 +113,7 @@ fn hostname() -> Option<String> {
 pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Error>> {
     let node = opts.data_dir.join("node");
     let work_root = node.join("work");
-    let sessions_root = work_root.join("sessions");
+    let sessions_root = node.join("sessions");
     std::fs::create_dir_all(&sessions_root)?;
     let token = owner_token(opts.token.clone(), &node.join("owner-token"))?;
     let public_base = derive_public_base(
@@ -126,7 +126,7 @@ pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Erro
     let scheduler = Scheduler::new(
         store,
         Arc::new(SelectingReconstructor::new(work_root.clone())),
-        Arc::new(MockDetector),
+        Arc::new(NoDetector),
     )
     .with_sessions_root(sessions_root.clone());
     let engine = Engine::new(scheduler, Cluster::new_master("standalone"), opts.workers);

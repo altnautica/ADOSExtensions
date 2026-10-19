@@ -232,13 +232,15 @@ pub fn decode_raw(img: &RawImage) -> Result<DecodedImage, StageError> {
         match img.encoding.as_str() {
             "mono8" | "8UC1" => data.extend_from_slice(row(r, w)?),
             "mono16" | "16UC1" => {
-                // Big- or little-endian per ROS convention is little on these rigs.
-                data.extend(row(r, w * 2)?.chunks_exact(2).map(|p| p[1]));
+                // Little-endian 16-bit samples: keep the high byte.
+                data.extend(row(r, w * 2)?.as_chunks::<2>().0.iter().map(|p| p[1]));
             }
             "rgb8" => data.extend_from_slice(row(r, w * 3)?),
             "bgr8" => data.extend(
                 row(r, w * 3)?
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .flat_map(|p| [p[2], p[1], p[0]]),
             ),
             _ => {
@@ -352,7 +354,7 @@ mod tests {
         let h = 48u32;
         let checker: Vec<u8> = (0..w * h)
             .map(|i| {
-                if ((i % w) / 4 + (i / w) / 4) % 2 == 0 {
+                if ((i % w) / 4 + (i / w) / 4).is_multiple_of(2) {
                     0
                 } else {
                     255

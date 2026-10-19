@@ -8,7 +8,9 @@ use ados_capture_contract::{CameraModelModel, RigSensorKind, SessionReader};
 
 use super::preset::{stage_weight, CALIBRATE_STAGES, CHANGE_STAGES, RECONSTRUCT_STAGES};
 use super::products_stage::{self, ArtifactOut, ProductsInput, OUTPUTS_FILE};
-use super::{check_tools, job_dir, prepare, sfm, train, Preset, StageError, StagedJob, ToolRunner};
+use super::{
+    check_tools, chunks, job_dir, prepare, sfm, train, Preset, StageError, StagedJob, ToolRunner,
+};
 use crate::products::{change, cloud};
 use crate::store_stages::{StageRow, StageState};
 
@@ -128,7 +130,7 @@ pub fn run_staged(
     staged: &StagedJob,
     ctx: &RunCtx<'_>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
-    let dir = job_dir(ctx.work_root, job_id);
+    let dir = job_dir(ctx.work_root, job_id)?;
     fs::create_dir_all(&dir)?;
     match staged {
         StagedJob::Reconstruct {
@@ -136,7 +138,16 @@ pub fn run_staged(
             session_dir,
             preset,
             generation,
-        } => reconstruct(&dir, session_id, session_dir, *preset, *generation, ctx),
+            chunk_frames,
+        } => reconstruct(
+            &dir,
+            session_id,
+            session_dir,
+            *preset,
+            *chunk_frames,
+            *generation,
+            ctx,
+        ),
         StagedJob::Change { a, b, a_job, b_job } => change_job(&dir, ctx, (a, a_job), (b, b_job)),
         StagedJob::Calibrate {
             session_dir,
@@ -151,6 +162,7 @@ fn reconstruct(
     session_id: &str,
     session_dir: &Path,
     preset: Preset,
+    chunk_frames: Option<usize>,
     generation: u32,
     ctx: &RunCtx<'_>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
@@ -165,35 +177,60 @@ fn reconstruct(
     let dataset = dir.join("dataset");
 
     let prep = stages.run("prepare", |p| {
-        let summary = prepare::run(&reader, &dataset, &spec, &mut |f| p(0.8 * f))?;
+        let summary = prepare::run(&reader, &dataset, &spec, &mut |f| p(0.6 * f))?;
+        let has_lidar = summary.lidar_points > 0;
         let mut detail = serde_json::to_value(&summary)?;
+        // Monocular depth serves two consumers: the training depth prior of a
+        // camera-only session, and the mirror/glass mask pass of a LiDAR
+        // session (depth that disagrees with LiDAR on a plane is a reflection).
+        // It runs before the masks so both find it.
+        let want_depth = (spec.depth_priors && !has_lidar) || (spec.masks && has_lidar);
+        if want_depth {
+            train::depth_priors(ctx.runner, &dataset, &mut |f| p(0.6 + 0.2 * f))?;
+            detail["depths"] = true.into();
+        }
         if spec.masks {
-            train::masks(
+            let m = train::masks(
                 ctx.runner,
                 &dataset,
                 ctx.person_model.as_deref(),
                 &mut |f| p(0.8 + 0.2 * f),
             )?;
-            detail["masks"] = true.into();
+            detail["masks"] = serde_json::to_value(m)?;
         }
         Ok(detail)
     })?;
     let prior = prep["pose_prior"].as_str().map(str::to_string);
     let has_lidar = prep["lidar_points"].as_u64().unwrap_or(0) > 0;
 
+    let sfm_dir = dir.join("sfm");
     let sfm_detail = stages.run("sfm", |p| {
+        let fixed = prior.as_deref() == Some("lidar");
+        // A posed warehouse session larger than one chunk runs per chunk.
+        let plan = match preset {
+            Preset::Warehouse => chunks::plan_dataset(&dataset, chunk_frames)?,
+            _ => None,
+        };
+        if let Some(plan) = plan {
+            return chunks::run_sfm(ctx.runner, &dataset, &sfm_dir, &plan, fixed, true, p);
+        }
+        let refine = preset != Preset::Preview;
         let s = sfm::run(
             ctx.runner,
             &dataset,
-            &dir.join("sfm"),
-            prior.as_deref() == Some("lidar"),
-            preset != Preset::Preview,
+            &sfm_dir,
+            fixed,
+            refine,
             spec.hierarchical,
             p,
         )?;
         Ok(serde_json::to_value(s)?)
     })?;
     let world_frame = sfm_detail["world_frame"].as_bool().unwrap_or(false);
+    let chunk_plan = match sfm_detail["chunks"].is_array() {
+        true => Some(chunks::read_plan(&sfm_dir)?),
+        false => None,
+    };
 
     let rig = reader.rig();
     let ut = rig.sensors.iter().any(|s| {
@@ -209,51 +246,33 @@ fn reconstruct(
     let max_splats = train::max_splats_for(spec.max_splats_8gb, ctx.vram_mb);
     let train_dir = dir.join("train");
     stages.run("train", |p| {
-        let summary = if preset == Preset::Preview {
-            train::brush(
-                ctx.runner,
-                &dataset,
-                &train_dir,
-                spec.train_steps,
-                max_splats,
-                None,
-                p,
-            )?
+        // `Some(reason)`: train with Brush, which stands in at full length
+        // (and the stage says why) when the gsplat kernels do not run on this
+        // node (no CUDA toolkit, no GPU).
+        let brush: Option<Option<String>> = if preset == Preset::Preview {
+            Some(None)
         } else if let Err(why) = train::gsplat_available(ctx.runner, &train_dir) {
-            // The gsplat kernels do not run on this node (no CUDA toolkit, no
-            // GPU): Brush stands in at full length and the stage says so.
             tracing::warn!(error = %why, "gsplat unavailable; training with brush");
             ctx.runner.resolve("brush")?;
-            let reason = format!("gsplat unavailable: {}", why.message);
-            train::brush(
-                ctx.runner,
-                &dataset,
-                &train_dir,
-                spec.train_steps,
-                max_splats,
-                Some(&reason),
-                p,
-            )?
+            Some(Some(format!("gsplat unavailable: {}", why.message)))
         } else {
-            let depths = if spec.depth_priors && !has_lidar {
-                Some(train::depth_priors(ctx.runner, &dataset, &mut |f| {
-                    p(0.1 * f)
-                })?)
-            } else {
-                None
-            };
-            train::gsplat(
-                ctx.runner,
-                &dataset,
-                &train_dir,
-                spec.train_steps,
-                max_splats,
-                ut,
-                depths.as_deref(),
-                &mut |f| p(0.1 + 0.9 * f),
-            )?
+            None
         };
-        Ok(serde_json::to_value(summary)?)
+        let (steps, runner) = (spec.train_steps, ctx.runner);
+        let train_one = |ds: &Path, out: &Path, p: &mut dyn FnMut(f32)| match &brush {
+            Some(reason) => train::brush(runner, ds, out, steps, max_splats, reason.as_deref(), p),
+            None => {
+                // The depth priors `prepare` computed for a camera-only session.
+                let depths = ds.join("depths");
+                let depths = (spec.depth_priors && !has_lidar && depths.is_dir()).then_some(depths);
+                let p = &mut |f| p(0.1 + 0.9 * f);
+                train::gsplat(runner, ds, out, steps, max_splats, ut, depths.as_deref(), p)
+            }
+        };
+        match &chunk_plan {
+            Some(plan) => chunks::run_train(plan, &dataset, &train_dir, &sfm_detail, &train_one, p),
+            None => Ok(serde_json::to_value(train_one(&dataset, &train_dir, p)?)?),
+        }
     })?;
 
     if spec.mesh {
@@ -307,8 +326,10 @@ fn change_job(
     b: (&str, &str),
 ) -> Result<Vec<ArtifactOut>, StageError> {
     let stages = Stages::new(ctx.sink, &CHANGE_STAGES);
-    let cloud_of = |job: &str| job_dir(ctx.work_root, job).join("out").join("cloud.laz");
-    let (pa, pb) = (cloud_of(a.1), cloud_of(b.1));
+    let cloud_of = |job: &str| -> Result<std::path::PathBuf, StageError> {
+        Ok(job_dir(ctx.work_root, job)?.join("out").join("cloud.laz"))
+    };
+    let (pa, pb) = (cloud_of(a.1)?, cloud_of(b.1)?);
     stages.run("prepare", |_| {
         for p in [&pa, &pb] {
             if !p.is_file() {
@@ -323,8 +344,19 @@ fn change_job(
     stages.run("products", |p| {
         let ca = cloud::read_laz(&pa).map_err(StageError::io)?;
         let cb = cloud::read_laz(&pb).map_err(StageError::io)?;
-        p(0.4);
-        let result = change::compare(&ca, &cb, 0.05);
+        p(0.3);
+        // Each cloud sits in its own session frame; b is aligned into a's
+        // frame (anchor offset when both are georeferenced, then ICP) before
+        // the comparison, or the job is refused when they cannot be related.
+        let (anchor_a, anchor_b) = (cloud_anchor(&pa)?, cloud_anchor(&pb)?);
+        let (result, _alignment) =
+            change::align_and_compare(&ca, anchor_a.as_ref(), &cb, anchor_b.as_ref(), 0.05)
+                .map_err(|e| match e {
+                    crate::products::ProductError::FramesUnrelated(m) => {
+                        StageError::new("E_FRAMES_UNRELATED", m)
+                    }
+                    other => StageError::io(other),
+                })?;
         let out = dir.join("out");
         if out.exists() {
             fs::remove_dir_all(&out)?;
@@ -346,6 +378,25 @@ fn change_job(
     read_outputs(dir)
 }
 
+/// The geo anchor recorded in a point cloud's placement sidecar.
+fn cloud_anchor(cloud: &Path) -> Result<Option<ados_capture_contract::GeoAnchor>, StageError> {
+    let sidecar = cloud.with_file_name(format!(
+        "{}.place.json",
+        cloud
+            .file_name()
+            .map(|n| n.to_string_lossy())
+            .unwrap_or_default()
+    ));
+    match fs::read(&sidecar) {
+        Ok(b) => {
+            let d: ados_capture_contract::ArtifactDescriptor = serde_json::from_slice(&b)?;
+            Ok(d.anchor)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e.into()),
+    }
+}
+
 fn calibrate(
     dir: &Path,
     session_dir: &Path,
@@ -356,6 +407,7 @@ fn calibrate(
     stages.run("prepare", |_| {
         let reader = SessionReader::open(session_dir)?;
         reader.verify()?;
+        prepare::check_ids(reader.rig())?;
         Ok(serde_json::json!({ "rig_id": reader.rig().rig_id }))
     })?;
     stages.run("calibrate", |p| {

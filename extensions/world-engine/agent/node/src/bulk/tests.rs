@@ -13,6 +13,7 @@ use tower::ServiceExt;
 use super::*;
 
 mod flows;
+mod guards;
 mod refusals;
 
 const ID: &str = "sim-1-20261019T000000Z-0001";
@@ -41,9 +42,24 @@ struct Harness {
     _tmp: tempfile::TempDir,
 }
 
-fn harness_with(result: Result<(), String>) -> Harness {
+/// A store under a fresh temp dir. The volume free-space probe is stubbed out
+/// so a nearly full dev disk does not fail unrelated tests.
+fn store_with(
+    limits: impl FnOnce(SessionStore) -> SessionStore,
+) -> (SessionStore, tempfile::TempDir) {
     let tmp = tempfile::tempdir().unwrap();
-    let store = Arc::new(SessionStore::new(tmp.path().join("sessions")));
+    let store = SessionStore::new(tmp.path().join("sessions"))
+        .with_free_space(Arc::new(|_: &std::path::Path| None));
+    (limits(store), tmp)
+}
+
+fn harness_with(result: Result<(), String>) -> Harness {
+    let (store, tmp) = store_with(|s| s);
+    harness_on(store, tmp, result)
+}
+
+fn harness_on(store: SessionStore, tmp: tempfile::TempDir, result: Result<(), String>) -> Harness {
+    let store = Arc::new(store);
     let calls = Arc::new(AtomicUsize::new(0));
     let seen = calls.clone();
     let hook: CommitHook = Arc::new(move |s: &CommittedSession| {

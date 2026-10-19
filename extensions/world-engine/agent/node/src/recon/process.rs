@@ -198,6 +198,22 @@ impl ToolRunner for ProcessRunner {
         if tool == "docker" {
             return self.resolve_docker();
         }
+        if tool == super::preset::TOUR_VIEWER {
+            let dir = tools::tour_viewer_dir();
+            if !dir.join("index.html").is_file() {
+                return Err(StageError::tool_missing(
+                    tool,
+                    format!("the tour viewer build is missing at {}", dir.display()),
+                ));
+            }
+            return Ok(ResolvedTool {
+                name: tool.to_string(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                program: dir.join("index.html"),
+                prefix_args: Vec::new(),
+                home: dir,
+            });
+        }
         match tools::pins().get(tool) {
             Some(pin) => self.resolve_pin(pin),
             None => Err(StageError::tool_missing(

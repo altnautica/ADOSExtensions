@@ -73,7 +73,7 @@ use world_engine_node::{
     put_accepted, rewrite_output_to_artifact_url, status_payload, submit_reconstruct_job,
     AtlasIngest, AtlasLanes, BackendResult, Cluster, ComputeAuth, ComputeHeartbeatSidecar,
     ComputeJobState, DetectionBroadcaster, Detector, Engine, JobStore, JobsCloudSync, LaneRoutes,
-    LatestComputeStatus, LiveReconstructConfig, MockDetector, NodeCredentialStore,
+    LatestComputeStatus, LiveReconstructConfig, NoDetector, NodeCredentialStore,
     OffloadSessionManager, Prepared, PreparedInput, Scheduler, SelectingReconstructor, SessionSpec,
     WorldDescriptorSet, DEFAULT_NODE_CREDENTIALS_PATH, JOBS_COLLECTION,
 };
@@ -172,8 +172,11 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let detector = select_detector(serving.detector_model_path.as_deref());
     // The live-lane reconstructor picks the pinned trainer per job and writes
     // artifacts under work_root; staged session jobs find their uploads under
-    // `<work_root>/sessions`.
-    let sessions_root = work_root.join("sessions");
+    // `sessions/` beside the work root, outside the artifact-served tree.
+    let sessions_root = work_root
+        .parent()
+        .map(|p| p.join("sessions"))
+        .unwrap_or_else(|| work_root.join("..").join("sessions"));
     let _ = std::fs::create_dir_all(&sessions_root);
     let scheduler = Scheduler::new(
         store,

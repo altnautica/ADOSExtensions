@@ -6,6 +6,8 @@
 //! that was interrupted. Every third-party program runs through a
 //! [`ToolRunner`] resolved from the pinned tool set.
 
+pub mod chunks;
+pub mod chunks_merge;
 pub mod colmap;
 pub mod export;
 pub mod geom;
@@ -42,6 +44,9 @@ pub enum StagedJob {
         preset: Preset,
         /// Placement generation of this reconstruction (1 for the first).
         generation: u32,
+        /// Frames per spatial chunk of a large posed session (job param
+        /// `chunk_frames`; [`chunks::CHUNK_FRAMES`] when absent).
+        chunk_frames: Option<usize>,
     },
     Change {
         a: String,
@@ -120,15 +125,36 @@ pub fn prepare_staged(
             let preset = Preset::parse(preset_s)
                 .ok_or_else(|| StageError::input(format!("unknown preset `{preset_s}`")))?;
             let session_dir = committed_session_dir(sessions_root, &session_id)?;
-            let generation = store
-                .session_generation(&session_id)
-                .map_err(StageError::io)?
-                + 1;
+            // Fixed at submit; computed only for a job submitted without it.
+            let generation = match job.params.get("generation").and_then(|g| g.as_u64()) {
+                Some(g) => {
+                    u32::try_from(g).map_err(|_| StageError::input("generation out of range"))?
+                }
+                None => {
+                    store
+                        .session_generation(&session_id)
+                        .map_err(StageError::io)?
+                        + 1
+                }
+            };
+            let chunk_frames = job
+                .params
+                .get("chunk_frames")
+                .map(|v| {
+                    v.as_u64()
+                        .filter(|&n| n > 0)
+                        .map(|n| n as usize)
+                        .ok_or_else(|| {
+                            StageError::input("`chunk_frames` must be a positive integer")
+                        })
+                })
+                .transpose()?;
             Ok(StagedJob::Reconstruct {
                 session_id,
                 session_dir,
                 preset,
                 generation,
+                chunk_frames,
             })
         }
         ComputeJobKind::Change => {
@@ -176,7 +202,40 @@ pub fn check_tools(runner: &dyn ToolRunner, tools: &[&str]) -> Result<(), StageE
     Ok(())
 }
 
-/// Where a job's working tree lives.
-pub fn job_dir(work_root: &std::path::Path, job_id: &str) -> PathBuf {
-    work_root.join("jobs").join(job_id)
+/// Whether `id` is usable as one plain path component: ASCII letters,
+/// digits, `-`, `_` and `.`, not starting with `.`, at most 128 bytes.
+pub fn valid_job_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && !id.starts_with('.')
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// Where a job's working tree lives; refuses an id that is not one plain
+/// path component.
+pub fn job_dir(work_root: &std::path::Path, job_id: &str) -> Result<PathBuf, StageError> {
+    if !valid_job_id(job_id) {
+        return Err(StageError::input(format!("invalid job id {job_id:?}")));
+    }
+    Ok(work_root.join("jobs").join(job_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_dirs_refuse_anything_but_one_plain_component() {
+        let root = std::path::Path::new("/w");
+        assert_eq!(
+            job_dir(root, "job-1.a_b").unwrap(),
+            root.join("jobs").join("job-1.a_b")
+        );
+        for bad in ["", "..", "../../x", "a/b", "a\\b", ".hidden", "a\nb", "C:x"] {
+            assert!(job_dir(root, bad).is_err(), "{bad:?}");
+        }
+        assert!(job_dir(root, &"a".repeat(129)).is_err());
+    }
 }

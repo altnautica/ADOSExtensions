@@ -153,7 +153,10 @@ mod tests {
             auth.clone(),
             LaneRoutes {
                 work_root: work,
-                uploads: Router::new(),
+                uploads: crate::bulk::bulk_router(
+                    Arc::new(crate::bulk::SessionStore::new(dir.path().join("sessions"))),
+                    Arc::new(|_| Ok(())),
+                ),
                 offload: Arc::new(DetectionBroadcaster::new(8)),
                 atlas: AtlasLanes {
                     events: tx,

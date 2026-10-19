@@ -123,6 +123,13 @@ fn offset_mismatch(received: u64) -> ApiError {
     )
 }
 
+fn storage_full(headroom: u64) -> ApiError {
+    ApiError::with(
+        StatusCode::INSUFFICIENT_STORAGE,
+        json!({ "error": "E_STORAGE_FULL", "free_bytes": headroom }),
+    )
+}
+
 /// Run blocking filesystem work off the async workers.
 pub(crate) async fn blocking<T, F>(f: F) -> ApiResult<T>
 where
@@ -162,6 +169,9 @@ async fn post_manifest(
     let lock = ctx.store.lock(&id);
     let _guard = lock.lock().await;
     let dir = ctx.store.session_dir(&id);
+    if ctx.store.case_variant_of(&id).is_some() {
+        return Err(ApiError::new(StatusCode::CONFLICT, "E_SESSION_EXISTS"));
+    }
     if disk::is_committed(&dir) {
         return Err(already_committed());
     }
@@ -253,15 +263,32 @@ async fn put_file(
     if expected.is_some_and(|n| n > MAX_REQUEST_BYTES) {
         return Err(ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "E_TOO_LARGE"));
     }
+    // The declared size, else the transport length; either way the stream is
+    // capped at the headroom so an undeclared body cannot overrun it.
+    let declared = expected.or_else(|| {
+        headers
+            .get(header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok())
+    });
+    let headroom = {
+        let store = ctx.store.clone();
+        blocking(move || store.headroom()).await?
+    };
+    if declared.is_some_and(|n| n > headroom) {
+        return Err(storage_full(headroom));
+    }
+    let cap = MAX_REQUEST_BYTES.min(headroom);
 
     let part = disk::part_path(&dir, &rel);
     if let Some(parent) = part.parent() {
         tokio::fs::create_dir_all(parent).await?;
     }
-    let written = disk::stream_to_part(&part, start, body, expected, MAX_REQUEST_BYTES)
+    let written = disk::stream_to_part(&part, start, body, expected, cap)
         .await
         .map_err(|fail| match fail {
             StreamFail::Length => ApiError::new(StatusCode::BAD_REQUEST, "E_LENGTH_MISMATCH"),
+            StreamFail::TooLarge if cap < MAX_REQUEST_BYTES => storage_full(headroom),
             StreamFail::TooLarge => ApiError::new(StatusCode::PAYLOAD_TOO_LARGE, "E_TOO_LARGE"),
             StreamFail::Body(message) => ApiError::with(
                 StatusCode::BAD_REQUEST,

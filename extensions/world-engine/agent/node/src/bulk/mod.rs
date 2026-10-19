@@ -10,13 +10,18 @@
 //! - `<id>/.upload/<rel>.part` and `<rel>.total`: a partial file and its
 //!   declared total length.
 //! - `<id>/.committed`: the commit marker (`{committed_ms, files, bytes}`).
+//!
+//! A commit also validates `manifest.json` and `rig.json` against the
+//! contract schemas and the id rules of [`is_safe_id`].
 
 mod commit;
 mod disk;
 mod paths;
 mod routes;
+mod storage;
 #[cfg(test)]
 mod tests;
+mod validate;
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,6 +29,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub use routes::bulk_router;
+pub use storage::{FreeSpaceFn, DEFAULT_MIN_FREE_BYTES};
+pub use validate::{is_safe_id, validate_session_docs};
 
 /// File name of the session manifest inside a session directory.
 pub(crate) const MANIFEST_FILE: &str = "manifest.json";
@@ -47,19 +54,37 @@ pub struct CommittedSession {
     pub manifest: ados_capture_contract::Manifest,
 }
 
-/// The directory tree uploaded sessions land in, plus per-session locks.
+/// The directory tree uploaded sessions land in, per-session locks and the
+/// storage limits uploads are held to.
 pub struct SessionStore {
     root: PathBuf,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    limits: storage::Limits,
 }
 
 impl SessionStore {
     /// A store rooted at `root`; the directory is created on first upload.
+    /// No total cap, and [`DEFAULT_MIN_FREE_BYTES`] kept free on the volume.
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             locks: Mutex::new(HashMap::new()),
+            limits: storage::Limits::default(),
         }
+    }
+
+    /// Cap the bytes held across every session (`None`: no cap) and the free
+    /// space an upload must leave on the store's volume.
+    pub fn with_limits(mut self, max_total_bytes: Option<u64>, min_free_bytes: u64) -> Self {
+        self.limits.max_total_bytes = max_total_bytes;
+        self.limits.min_free_bytes = min_free_bytes;
+        self
+    }
+
+    /// Replace the volume free-space lookup (tests, or a quota-aware probe).
+    pub fn with_free_space(mut self, free_space: FreeSpaceFn) -> Self {
+        self.limits.free_space = free_space;
+        self
     }
 
     /// The store root directory.
@@ -79,21 +104,43 @@ impl SessionStore {
 
     /// Ids of every committed session, sorted.
     pub fn committed(&self) -> Vec<String> {
-        let Ok(entries) = fs::read_dir(&self.root) else {
-            return Vec::new();
-        };
-        let mut ids: Vec<String> = entries
-            .filter_map(Result::ok)
-            .filter_map(|e| e.file_name().into_string().ok())
+        let mut ids: Vec<String> = self
+            .session_names()
+            .into_iter()
             .filter(|id| self.is_committed(id))
             .collect();
         ids.sort();
         ids
     }
 
-    /// The async mutex serializing every mutation of session `id`.
+    /// Names of every entry directly under the root.
+    fn session_names(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(&self.root) else {
+            return Vec::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect()
+    }
+
+    /// An existing session whose id equals `id` up to ASCII case but not
+    /// exactly. Such ids share one folder on a case-insensitive filesystem.
+    pub(crate) fn case_variant_of(&self, id: &str) -> Option<String> {
+        self.session_names()
+            .into_iter()
+            .find(|name| name != id && name.eq_ignore_ascii_case(id))
+    }
+
+    /// Bytes an upload may still add before a storage limit is hit.
+    pub(crate) fn headroom(&self) -> std::io::Result<u64> {
+        self.limits.headroom(&self.root)
+    }
+
+    /// The async mutex serializing every mutation of session `id`, keyed by
+    /// the lowercased id so case variants share one lock.
     pub(crate) fn lock(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
         let mut locks = self.locks.lock().unwrap_or_else(|e| e.into_inner());
-        locks.entry(id.to_string()).or_default().clone()
+        locks.entry(id.to_ascii_lowercase()).or_default().clone()
     }
 }

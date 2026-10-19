@@ -18,11 +18,14 @@ use crate::products::cloud::read_ply_mesh;
 use crate::products::measure::{measure, MeasureRequest, MeshIndex};
 use crate::resolve_under_root;
 
+/// The last job's mesh index, keyed by job id.
+type MeshCache = Arc<StdMutex<Option<(String, Arc<MeshIndex>)>>>;
+
 #[derive(Clone)]
 struct FilesState {
     work_root: Arc<PathBuf>,
     /// The last job's mesh index, so repeated measurements reuse it.
-    mesh: Arc<StdMutex<Option<(String, Arc<MeshIndex>)>>>,
+    mesh: MeshCache,
 }
 
 /// The job-file and measurement routes, behind the job-API gate (owner only).
@@ -46,15 +49,7 @@ fn error(status: StatusCode, code: &str, detail: impl Into<String>) -> Response 
         .into_response()
 }
 
-/// A job id is one plain path component.
-fn valid_job_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 128
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-        && !id.starts_with('.')
-}
+use crate::recon::valid_job_id;
 
 async fn serve(state: &FilesState, id: &str, rel: &str, req: Request) -> Response {
     if !valid_job_id(id) {

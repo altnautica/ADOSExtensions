@@ -63,6 +63,8 @@ blake3 = "1"
 getrandom = "0.3"
 # ROS 2 bag export for the LiDAR-camera calibration container.
 mcap = { version = "0.25", default-features = false }
+# Commit-time validation of uploaded session documents against the contract.
+jsonschema = { version = "0.59", default-features = false }
 
 # The plugin host, the agent wire and the Atlas transport are unix-only (they
 # speak unix sockets); a Windows build is the standalone reconstruction node.

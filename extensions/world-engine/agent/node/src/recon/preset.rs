@@ -110,20 +110,28 @@ impl Preset {
     }
 
     /// The pinned tools the preset cannot run without. Checked when the job
-    /// is submitted and again when it starts (`E_TOOL_MISSING`).
+    /// is submitted and again when it starts (`E_TOOL_MISSING`). Brush is
+    /// required by every preset: it is the preview trainer and the stand-in
+    /// when the gsplat kernels do not run. A tour also needs the built tour
+    /// viewer it bundles.
     pub fn required_tools(self) -> Vec<&'static str> {
         let spec = self.spec();
-        let mut tools = vec!["colmap", "splat-transform"];
-        match self {
-            Self::Preview => tools.push("brush"),
-            _ => tools.push("gsplat_train"),
+        let mut tools = vec!["colmap", "splat-transform", "brush"];
+        if self != Self::Preview {
+            tools.push("gsplat_train");
         }
         if spec.lod {
             tools.push("spark-build-lod");
         }
+        if spec.tour {
+            tools.push(TOUR_VIEWER);
+        }
         tools
     }
 }
+
+/// The pseudo-tool name of the built static tour viewer.
+pub const TOUR_VIEWER: &str = "tour-viewer";
 
 /// The stages of a session reconstruction, in order.
 pub const RECONSTRUCT_STAGES: [&str; 5] = ["prepare", "sfm", "train", "mesh", "products"];

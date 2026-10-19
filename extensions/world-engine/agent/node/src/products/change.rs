@@ -1,10 +1,24 @@
-//! Cloud-to-cloud change detection: each point of the later cloud is measured
-//! against its nearest neighbour in the earlier one.
+//! Cloud-to-cloud change detection: the later cloud is first registered into
+//! the earlier cloud's frame, then each of its points is measured against its
+//! nearest neighbour in the earlier one.
 
+use ados_capture_contract::GeoAnchor;
 use kiddo::{ImmutableKdTree, SquaredEuclidean};
 use serde::{Deserialize, Serialize};
 
+use super::align::{
+    apply, icp, kd_tree, unaligned, voxel_representatives, AlignResult, ALIGN_VOXEL_M, IDENTITY_4X4,
+};
 use super::cloud::PointCloud;
+use super::geo::anchor_transform;
+use super::ProductError;
+
+/// Below this fitness two clouds are never compared.
+pub const MIN_FITNESS: f64 = 0.3;
+/// Fitness required when only one cloud is anchored (no geo prior).
+pub const MIN_FITNESS_UNANCHORED: f64 = 0.6;
+/// Above this residual two clouds are never compared (m).
+pub const MAX_RMSE_M: f64 = 0.15;
 
 /// Distance at which the change colour ramp saturates (red).
 pub const RAMP_CAP_M: f64 = 0.5;
@@ -23,6 +37,30 @@ pub struct ChangeSummary {
     pub mean_changed_m: f64,
     /// `[[minx, miny, minz], [maxx, maxy, maxz]]` of the changed points.
     pub bbox_changed: Option<[[f64; 3]; 2]>,
+    /// How `b` was brought into `a`'s frame; absent for a plain
+    /// [`compare`] of clouds already in one frame.
+    #[serde(default)]
+    pub alignment: Option<Alignment>,
+}
+
+/// Start of the registration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AlignInit {
+    /// Both clouds anchored: the exact WGS-84 relation of the anchors.
+    Anchor,
+    /// At least one local frame: identity (and a centroid-matched start).
+    Identity,
+}
+
+/// Registration recorded in the change summary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Alignment {
+    /// Row-major 4×4 `T_a_b` applied to `b` before comparing.
+    pub transform: [f64; 16],
+    pub fitness: f64,
+    pub rmse_m: f64,
+    pub init: AlignInit,
 }
 
 #[derive(Debug, Clone)]
@@ -54,12 +92,19 @@ fn ramp(d: f64, threshold: f64) -> [u16; 3] {
 /// Compares `b` against `a`; a point of `b` changed when its nearest point of
 /// `a` is at least `threshold_m` away.
 pub fn compare(a: &PointCloud, b: &PointCloud, threshold_m: f64) -> ChangeResult {
-    let distances: Vec<f32> = if a.points.is_empty() {
-        vec![f32::INFINITY; b.points.len()]
-    } else {
-        let tree: ImmutableKdTree<f64, 3> = ImmutableKdTree::new_from_slice(&a.points)
-            .expect("u32 item index covers the cloud size");
-        b.points
+    measure(kd_tree(&a.points).as_ref(), b, threshold_m)
+}
+
+/// [`compare`] against a prepared index of `a` (`None` when `a` is empty).
+fn measure(
+    tree: Option<&ImmutableKdTree<f64, 3>>,
+    b: &PointCloud,
+    threshold_m: f64,
+) -> ChangeResult {
+    let distances: Vec<f32> = match tree {
+        None => vec![f32::INFINITY; b.points.len()],
+        Some(tree) => b
+            .points
             .iter()
             .map(|p| {
                 tree.query(p)
@@ -68,7 +113,7 @@ pub fn compare(a: &PointCloud, b: &PointCloud, threshold_m: f64) -> ChangeResult
                     .distance
                     .sqrt() as f32
             })
-            .collect()
+            .collect(),
     };
     let mut colors = Vec::with_capacity(b.points.len());
     let (mut changed, mut finite, mut sum, mut max) = (0usize, 0usize, 0.0f64, 0.0f64);
@@ -105,6 +150,7 @@ pub fn compare(a: &PointCloud, b: &PointCloud, threshold_m: f64) -> ChangeResult
         max_m: max,
         mean_changed_m: if finite > 0 { sum / finite as f64 } else { 0.0 },
         bbox_changed: bbox,
+        alignment: None,
     };
     ChangeResult {
         cloud: PointCloud {
@@ -114,4 +160,89 @@ pub fn compare(a: &PointCloud, b: &PointCloud, threshold_m: f64) -> ChangeResult
         distances,
         summary,
     }
+}
+
+fn centroid(cloud: &PointCloud) -> [f64; 3] {
+    let mut s = [0.0; 3];
+    for p in &cloud.points {
+        for k in 0..3 {
+            s[k] += p[k];
+        }
+    }
+    s.map(|v| v / cloud.points.len().max(1) as f64)
+}
+
+fn describe(anchor: Option<&GeoAnchor>) -> String {
+    match anchor {
+        Some(g) => format!(
+            "anchored at {:.7}°, {:.7}°, {:.2} m",
+            g.lat_deg, g.lon_deg, g.h_ellipsoid_m
+        ),
+        None => "local frame".into(),
+    }
+}
+
+/// Registers `b` into `a`'s frame, then [`compare`]s them. The registration
+/// starts from the anchors' WGS-84 relation when both clouds are anchored,
+/// else from identity and from a centroid-matched start (the better fit
+/// wins). The returned cloud is `b` in `a`'s frame.
+///
+/// Refuses with [`ProductError::FramesUnrelated`] when the final fitness is
+/// below [`MIN_FITNESS`] (or [`MIN_FITNESS_UNANCHORED`] when only one cloud
+/// is anchored) or the residual exceeds [`MAX_RMSE_M`].
+pub fn align_and_compare(
+    a: &PointCloud,
+    anchor_a: Option<&GeoAnchor>,
+    b: &PointCloud,
+    anchor_b: Option<&GeoAnchor>,
+    threshold_m: f64,
+) -> Result<(ChangeResult, AlignResult), ProductError> {
+    let tree = kd_tree(&a.points);
+    let moving = voxel_representatives(&b.points, ALIGN_VOXEL_M);
+    let run = |init: [f64; 16]| match &tree {
+        Some(tree) => icp(tree, &a.points, &moving, init),
+        None => unaligned(init),
+    };
+    let (init, fit) = match (anchor_a, anchor_b) {
+        (Some(ga), Some(gb)) => (AlignInit::Anchor, run(anchor_transform(ga, gb))),
+        _ => {
+            let (ca, cb) = (centroid(a), centroid(b));
+            let mut shifted = IDENTITY_4X4;
+            for k in 0..3 {
+                shifted[4 * k + 3] = ca[k] - cb[k];
+            }
+            let direct = run(IDENTITY_4X4);
+            let matched = run(shifted);
+            let better = matched.fitness > direct.fitness
+                || (matched.fitness == direct.fitness && matched.rmse_m < direct.rmse_m);
+            (AlignInit::Identity, if better { matched } else { direct })
+        }
+    };
+    let min_fitness = if anchor_a.is_some() != anchor_b.is_some() {
+        MIN_FITNESS_UNANCHORED
+    } else {
+        MIN_FITNESS
+    };
+    if fit.fitness < min_fitness || fit.rmse_m.is_nan() || fit.rmse_m > MAX_RMSE_M {
+        return Err(ProductError::FramesUnrelated(format!(
+            "cloud a ({}) and cloud b ({}) do not align: fitness {:.3} (need ≥ {min_fitness:.2}), \
+             rmse {:.3} m (limit {MAX_RMSE_M:.2} m)",
+            describe(anchor_a),
+            describe(anchor_b),
+            fit.fitness,
+            fit.rmse_m,
+        )));
+    }
+    let moved = PointCloud {
+        points: b.points.iter().map(|p| apply(&fit.transform, p)).collect(),
+        colors: b.colors.clone(),
+    };
+    let mut result = measure(tree.as_ref(), &moved, threshold_m);
+    result.summary.alignment = Some(Alignment {
+        transform: fit.transform,
+        fitness: fit.fitness,
+        rmse_m: fit.rmse_m,
+        init,
+    });
+    Ok((result, fit))
 }

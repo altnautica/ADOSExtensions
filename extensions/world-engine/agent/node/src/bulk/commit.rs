@@ -16,7 +16,11 @@ use serde_json::{json, Value};
 use super::disk::{self, Marker};
 use super::paths;
 use super::routes::{blocking, check_id, require_session, ApiError, ApiResult, Ctx};
+use super::validate::validate_session_docs;
 use super::{CommittedSession, MANIFEST_FILE, UPLOAD_DIR};
+
+/// File name of the rig description inside a session directory.
+const RIG_FILE: &str = "rig.json";
 
 /// Outcome of checking a session directory against its checksum list.
 #[derive(Debug, PartialEq, Eq)]
@@ -128,6 +132,13 @@ fn unprocessable(code: &str, files: Vec<String>) -> ApiError {
     )
 }
 
+fn invalid_session(detail: String) -> ApiError {
+    ApiError::with(
+        StatusCode::UNPROCESSABLE_ENTITY,
+        json!({ "error": "E_INVALID_SESSION", "detail": detail }),
+    )
+}
+
 fn success(id: &str, files: u64, bytes: u64) -> Json<Value> {
     Json(json!({ "ok": true, "session_id": id, "files": files, "bytes": bytes }))
 }
@@ -170,6 +181,17 @@ pub(crate) async fn commit(
         }
     };
     let manifest_bytes = tokio::fs::read(dir.join(MANIFEST_FILE)).await?;
+    let rig_bytes = match tokio::fs::read(dir.join(RIG_FILE)).await {
+        Ok(body) => body,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Err(invalid_session(format!("{RIG_FILE} missing")))
+        }
+        Err(e) => return Err(e.into()),
+    };
+    if let Err(detail) = validate_session_docs(&manifest_bytes, &rig_bytes) {
+        tracing::warn!(session = %id, %detail, "session documents rejected");
+        return Err(invalid_session(detail));
+    }
     let manifest: Manifest = serde_json::from_slice(&manifest_bytes).map_err(|e| {
         ApiError::with(
             StatusCode::UNPROCESSABLE_ENTITY,

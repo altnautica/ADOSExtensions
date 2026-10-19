@@ -236,13 +236,27 @@ pub fn depth_priors(
     Ok(out)
 }
 
+/// Which mask passes ran, reported on the `prepare` stage so a missing pass
+/// is visible on the job status rather than silent.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MaskSummary {
+    /// Ego-motion flow-residual masks (always on).
+    pub motion: bool,
+    /// Person masks from the detector model.
+    pub person: bool,
+    /// Mirror/glass masks from depth vs LiDAR disagreement.
+    pub mirror_glass: bool,
+    /// Why a pass did not run.
+    pub off: Vec<String>,
+}
+
 /// Dynamic-object and mirror/glass masks (`dataset/masks/`).
 pub fn masks(
     runner: &dyn ToolRunner,
     dataset: &Path,
     person_model: Option<&Path>,
     progress: &mut dyn FnMut(f32),
-) -> Result<(), StageError> {
+) -> Result<MaskSummary, StageError> {
     let out = dataset.join("masks");
     fs::create_dir_all(&out)?;
     let mut args: Vec<std::ffi::OsString> = vec![
@@ -253,8 +267,23 @@ pub fn masks(
         "--out".into(),
         out.into(),
     ];
-    if let Some(m) = person_model {
-        args.extend(["--person-model".into(), m.into()]);
+    let mut summary = MaskSummary {
+        motion: true,
+        person: false,
+        mirror_glass: false,
+        off: Vec::new(),
+    };
+    match person_model {
+        Some(m) if m.is_file() => {
+            args.extend(["--person-model".into(), m.into()]);
+            summary.person = true;
+        }
+        Some(m) => summary
+            .off
+            .push(format!("person: model {} not found", m.display())),
+        None => summary
+            .off
+            .push("person: no detector model configured (ADOS_WE_PERSON_MODEL)".into()),
     }
     let lidar = dataset.join("lidar_points.laz");
     let depths = dataset.join("depths");
@@ -265,8 +294,14 @@ pub fn masks(
             "--lidar".into(),
             lidar.into(),
         ]);
+        summary.mirror_glass = true;
+    } else {
+        summary
+            .off
+            .push("mirror_glass: needs LiDAR and depth".into());
     }
-    run_script(runner, "masks.py", args, dataset, progress).map(|_| ())
+    run_script(runner, "masks.py", args, dataset, progress)?;
+    Ok(summary)
 }
 
 /// Stage `mesh`: depth renders of the splat fused by TSDF, decimated.

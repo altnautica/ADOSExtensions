@@ -365,16 +365,25 @@ fn build_tour(
         }
     }
     let stills_dir = input.job_dir.join("stills");
+    let _ = fs::remove_dir_all(&stills_dir);
+    // Hero stills are rendered from the splat by gsplat. Brush renders only in
+    // its viewer, so on a node without the gsplat kernels (or when a render
+    // fails) the rooms carry `still: null` and the tour still ships.
     if !poses.is_empty() {
         let poses_json = input.job_dir.join("stills.json");
         fs::write(&poses_json, serde_json::to_vec_pretty(&poses)?)?;
-        train::stills(
-            runner,
-            &input.job_dir.join("train").join("splat.ply"),
-            &poses_json,
-            &stills_dir,
-            &mut |p| progress(0.7 + 0.2 * p),
-        )?;
+        let rendered = train::gsplat_available(runner, input.job_dir).and_then(|()| {
+            train::stills(
+                runner,
+                &input.job_dir.join("train").join("splat.ply"),
+                &poses_json,
+                &stills_dir,
+                &mut |p| progress(0.7 + 0.2 * p),
+            )
+        });
+        if let Err(e) = rendered {
+            tracing::warn!(error = %e, "tour stills skipped");
+        }
     }
     let mut files: Vec<(PathBuf, String)> = vec![(out.join("scene.spz"), "scene.spz".into())];
     for (f, opt) in [

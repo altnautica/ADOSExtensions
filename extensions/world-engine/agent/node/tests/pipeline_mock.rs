@@ -217,7 +217,7 @@ async fn a_tour_reconstruction_runs_every_stage_and_resumes() {
             ("products", "done")
         ]
     );
-    assert_eq!(done["tools"]["colmap"].as_str().is_some(), true);
+    assert!(done["tools"]["colmap"].as_str().is_some());
 
     let (_, outs) = json(
         &n.router,
@@ -269,6 +269,30 @@ async fn a_tour_reconstruction_runs_every_stage_and_resumes() {
     let desc: ados_capture_contract::ArtifactDescriptor = serde_json::from_slice(&body).unwrap();
     assert_eq!(desc.source_session, SESSION);
     assert_eq!(desc.generation, 1);
+    // splat-transform writes SPZ positions unchanged (verified round trip), so
+    // the SPZ sits in the same ENU frame as the PLY.
+    assert_eq!(
+        desc.r_enu_artifact,
+        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    );
+    let export = n.work.join("jobs").join(&job).join("out/export.zip");
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&export).unwrap()).unwrap();
+    let names: Vec<String> = (0..zip.len())
+        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
+        .collect();
+    assert!(names.iter().any(|n| n == "transforms.json"), "{names:?}");
+    assert!(
+        names.iter().any(|n| n.starts_with("sparse/0/")),
+        "{names:?}"
+    );
+    let images: Vec<&String> = names.iter().filter(|n| n.starts_with("images/")).collect();
+    assert!(!images.is_empty(), "{names:?}");
+    let transforms: serde_json::Value =
+        serde_json::from_reader(zip.by_name("transforms.json").unwrap()).unwrap();
+    for f in transforms["frames"].as_array().unwrap() {
+        let p = f["file_path"].as_str().unwrap();
+        assert!(names.iter().any(|n| n == p), "{p} not in the export");
+    }
     let (s, zip) = call(
         &n.router,
         "GET",
@@ -314,6 +338,16 @@ async fn a_tour_reconstruction_runs_every_stage_and_resumes() {
     }
     let again = wait_terminal(&n.router, &job).await;
     assert_eq!(again["state"], "completed", "{again}");
+    // The resumed products rerun keeps the generation fixed at submit.
+    let (_, body) = call(
+        &n.router,
+        "GET",
+        &format!("/api/compute/jobs/{job}/files/scene.spz.place.json"),
+        vec![],
+    )
+    .await;
+    let desc: ados_capture_contract::ArtifactDescriptor = serde_json::from_slice(&body).unwrap();
+    assert_eq!(desc.generation, 1);
     assert_eq!(
         again["stages"][0]["started_ns"].as_i64().unwrap(),
         prepare_started
@@ -355,6 +389,7 @@ async fn a_tour_reconstruction_runs_every_stage_and_resumes() {
 async fn submissions_are_refused_with_the_reason() {
     let (n, _ctx) = node(StandInRunner {
         missing: vec!["colmap".into()],
+        ..Default::default()
     });
     // Not uploaded yet.
     let (s, body) = json(
@@ -385,6 +420,17 @@ async fn submissions_are_refused_with_the_reason() {
     )
     .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
+    for bad in ["../../x", "a/b", ".hidden", "a\\b"] {
+        let (s, body) = json(
+            &n.router,
+            "POST",
+            "/api/compute/jobs",
+            serde_json::json!({"job_id": bad, "kind": "reconstruct", "session_id": SESSION, "preset": "preview"}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {body}");
+        assert_eq!(body["error"], "E_INPUT");
+    }
     assert_eq!(body["error"], "E_INPUT");
     let (s, body) = json(
         &n.router,

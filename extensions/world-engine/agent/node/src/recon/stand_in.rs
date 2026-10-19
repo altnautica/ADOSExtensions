@@ -10,10 +10,43 @@ use std::path::{Path, PathBuf};
 
 use super::{ResolvedTool, StageError, ToolInvocation, ToolRunner};
 
-/// The stand-in runner. `missing` lists tools it reports as not installed.
+/// The stand-in runner. `missing` lists tools it reports as not installed
+/// (`gsplat_kernels` makes the gsplat probe fail while the project resolves);
+/// `log` records every invocation it ran.
 #[derive(Debug, Default, Clone)]
 pub struct StandInRunner {
     pub missing: Vec<String>,
+    pub log: std::sync::Arc<std::sync::Mutex<Vec<ToolInvocation>>>,
+}
+
+impl StandInRunner {
+    /// The invocations of `tool` so far.
+    pub fn runs_of(&self, tool: &str) -> Vec<ToolInvocation> {
+        self.log
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .filter(|i| i.tool == tool)
+            .cloned()
+            .collect()
+    }
+}
+
+/// Every file under `dir`, as `/`-separated paths relative to it.
+fn files_under(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(rel) = p.strip_prefix(dir) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    out
 }
 
 fn arg_after(inv: &ToolInvocation, flag: &str) -> Option<PathBuf> {
@@ -68,9 +101,10 @@ fn box_points() -> Vec<[f64; 3]> {
     out
 }
 
-fn write_points_txt(dir: &Path) -> Result<(), StageError> {
+/// The box room plus `extra` points.
+fn write_points_txt(dir: &Path, extra: &[[f64; 3]]) -> Result<(), StageError> {
     let mut s = String::from("# POINT3D_ID X Y Z R G B ERROR TRACK[]\n");
-    for (i, p) in box_points().iter().enumerate() {
+    for (i, p) in box_points().iter().chain(extra).enumerate() {
         let _ = writeln!(
             s,
             "{} {} {} {} 180 170 160 0.5 1 1",
@@ -83,9 +117,17 @@ fn write_points_txt(dir: &Path) -> Result<(), StageError> {
     fs::write(dir.join("points3D.txt"), s).map_err(io)
 }
 
-/// A minimal 3DGS-style binary PLY over the stand-in points.
-fn write_splat_ply(path: &Path) -> Result<(), StageError> {
-    let pts = box_points();
+/// The stand-in trainer's gaussians: one per sparse point of the dataset it
+/// trains on (the box room when it has no model).
+fn splat_points(dataset: &Path) -> Vec<[f64; 3]> {
+    match super::colmap::read_points(&dataset.join("sparse").join("0")) {
+        Ok(pts) => pts.into_iter().map(|p| p.xyz).collect(),
+        Err(_) => box_points(),
+    }
+}
+
+/// A minimal 3DGS-style binary PLY over `pts`.
+fn write_splat_ply(path: &Path, pts: &[[f64; 3]]) -> Result<(), StageError> {
     let props = [
         "x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity", "scale_0", "scale_1", "scale_2",
         "rot_0", "rot_1", "rot_2", "rot_3",
@@ -99,7 +141,7 @@ fn write_splat_ply(path: &Path) -> Result<(), StageError> {
     }
     out.push_str("end_header\n");
     let mut bytes = out.into_bytes();
-    for p in &pts {
+    for p in pts {
         for v in [
             p[0] as f32,
             p[1] as f32,
@@ -209,7 +251,7 @@ fn map(inv: &ToolInvocation) -> Result<(), StageError> {
     fs::write(out.join("cameras.txt"), cams).map_err(io)?;
     fs::write(out.join("images.txt"), imgs).map_err(io)?;
     fs::write(out.join("images.bin"), [1u8]).map_err(io)?;
-    write_points_txt(&out)
+    write_points_txt(&out, &[])
 }
 
 impl StandInRunner {
@@ -226,7 +268,13 @@ impl StandInRunner {
                 for f in ["cameras.txt", "images.txt"] {
                     fs::copy(input.join(f), out.join(f)).map_err(io)?;
                 }
-                write_points_txt(&out)
+                // One point a metre in front of each posed camera, so a
+                // model's points follow its cameras.
+                let ahead: Vec<[f64; 3]> = super::colmap::read_image_poses(&input)?
+                    .values()
+                    .map(|t| [t[3] + t[2], t[7] + t[6], t[11] + t[10]])
+                    .collect();
+                write_points_txt(&out, &ahead)
             }
             "model_converter" => {
                 let input =
@@ -256,14 +304,16 @@ impl StandInRunner {
         on_line(r#"{"event":"progress","progress":0.5}"#);
         match script.as_str() {
             "train.py" => {
-                write_splat_ply(&out.join("splat.ply"))?;
+                let colmap = arg_after(inv, "--colmap").unwrap_or_default();
+                let pts = splat_points(&colmap);
+                write_splat_ply(&out.join("splat.ply"), &pts)?;
                 on_line(&format!(
                     r#"{{"event":"done","ply":"{}","gaussians":{},"psnr":31.5}}"#,
                     out.join("splat.ply")
                         .display()
                         .to_string()
                         .replace('\\', "/"),
-                    box_points().len()
+                    pts.len()
                 ));
             }
             "mesh.py" => {
@@ -287,6 +337,38 @@ impl StandInRunner {
                     .map_err(io)?;
                 }
                 on_line(r#"{"event":"done"}"#);
+            }
+            "masks.py" => {
+                // One keep-everything mask per image, at `<image rel>.png`.
+                let images =
+                    arg_after(inv, "--images").ok_or_else(|| StageError::input("images"))?;
+                for rel in files_under(&images) {
+                    let path = out.join(format!("{rel}.png"));
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).map_err(io)?;
+                    }
+                    image::save_buffer(&path, &[255u8; 4], 2, 2, image::ExtendedColorType::L8)
+                        .map_err(io)?;
+                }
+                on_line(r#"{"event":"done"}"#);
+            }
+            "depth.py" => {
+                let images =
+                    arg_after(inv, "--images").ok_or_else(|| StageError::input("images"))?;
+                for rel in files_under(&images) {
+                    let path = out.join(format!("{rel}.npy"));
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).map_err(io)?;
+                    }
+                    fs::write(&path, b"\x93NUMPY").map_err(io)?;
+                }
+                on_line(r#"{"event":"done"}"#);
+            }
+            "common.py" if self.missing.iter().any(|m| m == "gsplat_kernels") => {
+                return Err(StageError::tool_failed(
+                    "gsplat_train",
+                    "stand-in: no gsplat kernels",
+                ));
             }
             _ => on_line(r#"{"event":"done"}"#),
         }
@@ -313,13 +395,18 @@ impl ToolRunner for StandInRunner {
 
     fn run(&self, inv: &ToolInvocation, on_line: &mut dyn FnMut(&str)) -> Result<(), StageError> {
         self.resolve(&inv.tool)?;
+        self.log
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(inv.clone());
         match inv.tool.as_str() {
             "colmap" => self.colmap(inv),
             "brush" => {
                 let dir = arg_after(inv, "--export-path").unwrap_or_else(|| inv.cwd.clone());
                 let name = arg_after(inv, "--export-name").unwrap_or_else(|| "splat.ply".into());
-                on_line("step 7000 gaussians: 1234");
-                write_splat_ply(&dir.join(name))
+                let pts = splat_points(Path::new(&first(inv)));
+                on_line(&format!("step 7000 gaussians: {}", pts.len()));
+                write_splat_ply(&dir.join(name), &pts)
             }
             "gsplat_train" => self.script(inv, on_line),
             "splat-transform" => {

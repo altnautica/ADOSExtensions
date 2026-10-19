@@ -66,6 +66,12 @@ async fn the_operator_socket_is_the_owner_while_tcp_without_a_key_is_refused() {
         auth,
         LaneRoutes {
             work_root: work,
+            uploads: world_engine_node::bulk::bulk_router(
+                Arc::new(world_engine_node::bulk::SessionStore::new(
+                    dir.path().join("sessions"),
+                )),
+                Arc::new(|_| Ok(())),
+            ),
             offload: Arc::new(DetectionBroadcaster::new(8)),
             atlas: AtlasLanes {
                 events,

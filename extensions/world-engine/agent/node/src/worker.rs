@@ -131,7 +131,9 @@ pub fn artifact_outputs(
     public_base: &str,
     now_ms: i64,
 ) -> Vec<Output> {
-    let out_dir = recon::job_dir(work_root, job_id).join("out");
+    let Ok(out_dir) = recon::job_dir(work_root, job_id).map(|d| d.join("out")) else {
+        return Vec::new();
+    };
     arts.iter()
         .enumerate()
         .map(|(i, a)| {
@@ -345,7 +347,7 @@ mod tests {
     #[test]
     fn artifacts_become_fetchable_outputs() {
         let dir = tempfile::tempdir().unwrap();
-        let out = recon::job_dir(dir.path(), "j1").join("out");
+        let out = recon::job_dir(dir.path(), "j1").unwrap().join("out");
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(out.join("scene.spz"), b"x").unwrap();
         let arts = vec![ArtifactOut {

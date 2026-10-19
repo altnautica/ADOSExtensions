@@ -108,6 +108,23 @@ pub fn write_export(
             .map_err(StageError::io)?;
         zip.write_all(&fs::read(model.join(&name))?)?;
     }
+    // The registered images, at the paths `transforms.json` and `images.bin`
+    // name (PNG is already compressed: stored, not deflated).
+    let stored = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Stored)
+        .large_file(true);
+    for f in frames.iter().filter(|f| poses.contains_key(&f.name)) {
+        let src = dataset.join("images").join(&f.name);
+        if !src.is_file() {
+            return Err(StageError::io(format!(
+                "export: {} is missing",
+                src.display()
+            )));
+        }
+        zip.start_file(format!("images/{}", f.name), stored)
+            .map_err(StageError::io)?;
+        std::io::copy(&mut fs::File::open(&src)?, &mut zip)?;
+    }
     zip.start_file("transforms.json", opts)
         .map_err(StageError::io)?;
     zip.write_all(&serde_json::to_vec_pretty(&transforms)?)?;

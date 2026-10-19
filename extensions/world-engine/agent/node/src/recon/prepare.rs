@@ -114,6 +114,9 @@ pub fn run(
         fs::remove_dir_all(dataset_dir)?;
     }
     fs::create_dir_all(dataset_dir.join("images"))?;
+    // Rig sensor ids name folders and list entries below; refuse any that is
+    // not a plain contract id, whatever path the session arrived by.
+    check_ids(reader.rig())?;
     let index = session_data::index(reader)?;
     if index.frames.is_empty() {
         return Err(StageError::input("the session has no camera frames"));
@@ -261,6 +264,20 @@ pub fn run(
     })
 }
 
+/// Every rig id the pipeline uses as a path component or a list entry must be
+/// a plain contract id.
+pub fn check_ids(rig: &ados_capture_contract::Rig) -> Result<(), StageError> {
+    for id in std::iter::once(rig.rig_id.as_str()).chain(rig.sensors.iter().map(|s| s.id.as_str()))
+    {
+        if !crate::bulk::is_safe_id(id) {
+            return Err(StageError::new(
+                "E_INVALID_SESSION",
+                format!("rig id {id:?} is not a plain contract id"),
+            ));
+        }
+    }
+    Ok(())
+}
 /// Drop frames whose blur score is far under their camera's median (and
 /// delete their PNGs). Returns how many were dropped.
 fn drop_blurred(

@@ -1,8 +1,8 @@
 //! The perception-offload backend: a detector the compute node runs over frames
-//! streamed from an NPU-less drone, returning detections (and, for a SLAM
-//! offload, poses) so the drone's autonomous behaviours run on borrowed
-//! compute. Real backends run an ONNX / TensorRT / RKNN model; the mock keeps
-//! the offload path testable with no model and no camera.
+//! streamed from an NPU-less drone, returning detections so the drone's
+//! autonomous behaviours run on borrowed compute. Real backends run an ONNX
+//! model; [`NoDetector`] refuses honestly on a node with no model, and the mock
+//! keeps the offload path testable with no model and no camera.
 //!
 //! The fast control loop stays on the drone; this is the slow perception lane.
 //! A consumer treats a stale or link-lost result as lost (the safety gate lives
@@ -64,6 +64,28 @@ impl Detector for MockDetector {
             confidence: 0.9,
             track_id: Some(frame.ts_ms.unsigned_abs() % 1000),
         }])
+    }
+}
+
+/// The detector of a node with no detection model: every inference is refused,
+/// so an offload job fails with the reason instead of returning boxes.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoDetector;
+
+impl Detector for NoDetector {
+    fn name(&self) -> &str {
+        "none"
+    }
+
+    fn infer(
+        &self,
+        _frame: &FrameRef,
+        _pixels: Option<&[u8]>,
+    ) -> Result<Vec<Detection>, ComputeError> {
+        Err(ComputeError::Backend {
+            backend: "none".into(),
+            message: "perception offload is unavailable: this node has no detection model".into(),
+        })
     }
 }
 

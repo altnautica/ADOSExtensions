@@ -5,9 +5,11 @@
 use std::path::PathBuf;
 
 pub mod aisles;
+pub mod align;
 pub mod change;
 pub mod cloud;
 pub mod floorplan;
+pub mod geo;
 pub mod measure;
 pub mod tour;
 
@@ -30,4 +32,7 @@ pub enum ProductError {
     Format(String),
     #[error("viewer bundle missing: {} has no index.html", .0.display())]
     ViewerMissing(PathBuf),
+    /// Two clouds could not be brought into one frame.
+    #[error("frames unrelated: {0}")]
+    FramesUnrelated(String),
 }
