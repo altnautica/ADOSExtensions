@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use kiddo::{ImmutableKdTree, SquaredEuclidean};
 
 use super::cloud::PointCloud;
+use super::ProductError;
 
 /// Voxel edge used to thin the moving cloud before registration (m).
 pub const ALIGN_VOXEL_M: f64 = 0.05;
@@ -32,6 +33,13 @@ pub(super) const MAX_ITERATIONS: u32 = 50;
 const YAW_STEP_DEG: u32 = 10;
 const COARSE_VOXEL_M: f64 = 0.5;
 const COARSE_ITERATIONS: u32 = 8;
+/// Half-turn ambiguity: heading tolerance around 180°, the coarse fitness
+/// margin that earns the opposite candidate a full ICP, and the margins
+/// (fitness, residual ratio) within which the two refined fits tie.
+const HALF_TURN_TOL_DEG: f64 = 20.0;
+const RIVAL_COARSE_MARGIN: f64 = 0.05;
+const RIVAL_FITNESS_MARGIN: f64 = 0.02;
+const RIVAL_RMSE_RATIO: f64 = 1.1;
 
 /// Row-major 4×4 identity.
 pub const IDENTITY_4X4: [f64; 16] = [
@@ -229,12 +237,57 @@ pub fn align(a: &PointCloud, b: &PointCloud, init: [f64; 16]) -> AlignResult {
 }
 
 /// Registers `b` onto `a` without a prior pose, for gravity-aligned (Z up)
-/// clouds whose relative heading is unknown: see [`yaw_search`].
-pub fn align_global(a: &PointCloud, b: &PointCloud) -> AlignResult {
+/// clouds whose relative heading is unknown: see [`yaw_search`]. Fails with
+/// [`ProductError::AlignAmbiguous`] when a pose turned by about 180° fits as
+/// well as the best one.
+pub fn align_global(a: &PointCloud, b: &PointCloud) -> Result<AlignResult, ProductError> {
     match kd_tree(&a.points) {
-        Some(tree) => yaw_search(&tree, &a.points, &b.points),
-        None => unaligned(IDENTITY_4X4),
+        Some(tree) => yaw_search(&tree, &a.points, &b.points).unambiguous(),
+        None => Ok(unaligned(IDENTITY_4X4)),
     }
+}
+
+/// Outcome of [`yaw_search`]: the best registration and, when the layout is
+/// symmetric under a half turn, an equally good one about 180° away.
+pub(super) struct GlobalFit {
+    pub best: AlignResult,
+    pub rival: Option<AlignResult>,
+}
+
+impl GlobalFit {
+    /// The best registration, or [`ProductError::AlignAmbiguous`] naming
+    /// both headings when a rival exists.
+    pub fn unambiguous(self) -> Result<AlignResult, ProductError> {
+        match self.rival {
+            None => Ok(self.best),
+            Some(r) => Err(ProductError::AlignAmbiguous(format!(
+                "two headings fit equally: yaw {:.1}° (fitness {:.3}, rmse {:.3} m) and \
+                 yaw {:.1}° (fitness {:.3}, rmse {:.3} m); the layout looks symmetric under a \
+                 half turn",
+                yaw_deg(&self.best.transform),
+                self.best.fitness,
+                self.best.rmse_m,
+                yaw_deg(&r.transform),
+                r.fitness,
+                r.rmse_m,
+            ))),
+        }
+    }
+}
+
+/// Heading (rotation about Z) of a transform, in `(-180, 180]` degrees.
+pub fn yaw_deg(t: &[f64; 16]) -> f64 {
+    t[4].atan2(t[0]).to_degrees()
+}
+
+/// Absolute difference of two headings, in `[0, 180]` degrees.
+fn yaw_gap_deg(x: f64, y: f64) -> f64 {
+    let d = (x - y).rem_euclid(360.0);
+    d.min(360.0 - d)
+}
+
+fn better(x: &AlignResult, y: &AlignResult) -> bool {
+    x.fitness > y.fitness || (x.fitness == y.fitness && x.rmse_m < y.rmse_m)
 }
 
 /// Global search over the heading: from identity and from every
@@ -242,11 +295,17 @@ pub fn align_global(a: &PointCloud, b: &PointCloud) -> AlignResult {
 /// `a`'s centroid, a short ICP ([`COARSE_ITERATIONS`]) of `b` thinned to
 /// [`COARSE_VOXEL_M`] voxels; the candidate with the best fitness (then the
 /// lowest residual) seeds the full [`align`] ICP. `tree` indexes `a`.
+///
+/// Half-turn check: when the best coarse candidate about 180° (±
+/// [`HALF_TURN_TOL_DEG`]) from the winner is within [`RIVAL_COARSE_MARGIN`]
+/// of its fitness, it is refined too; if the two refined fits end within
+/// [`RIVAL_FITNESS_MARGIN`] fitness and [`RIVAL_RMSE_RATIO`] residual, it is
+/// reported as the rival.
 pub(super) fn yaw_search(
     tree: &ImmutableKdTree<f64, 3>,
     a: &[[f64; 3]],
     b: &[[f64; 3]],
-) -> AlignResult {
+) -> GlobalFit {
     let coarse = voxel_representatives(b, COARSE_VOXEL_M);
     let (ca, cb) = (centroid(a), centroid(b));
     let headings = (0..360).step_by(YAW_STEP_DEG as usize).map(|deg| {
@@ -272,20 +331,39 @@ pub(super) fn yaw_search(
             1.0,
         ]
     });
-    let best = std::iter::once(IDENTITY_4X4)
+    let candidates: Vec<AlignResult> = std::iter::once(IDENTITY_4X4)
         .chain(headings)
         .map(|start| icp(tree, a, &coarse, start, COARSE_ITERATIONS))
-        .reduce(|x, y| {
-            let y_better = y.fitness > x.fitness || (y.fitness == x.fitness && y.rmse_m < x.rmse_m);
-            if y_better {
-                y
-            } else {
-                x
-            }
-        })
+        .collect();
+    let top = candidates
+        .iter()
+        .reduce(|x, y| if better(y, x) { y } else { x })
         .expect("at least the identity candidate");
+    let top_yaw = yaw_deg(&top.transform);
+    let opposite = candidates
+        .iter()
+        .filter(|c| yaw_gap_deg(yaw_deg(&c.transform), top_yaw) >= 180.0 - HALF_TURN_TOL_DEG)
+        .reduce(|x, y| if better(y, x) { y } else { x })
+        .filter(|c| c.fitness >= top.fitness - RIVAL_COARSE_MARGIN);
     let moving = voxel_representatives(b, ALIGN_VOXEL_M);
-    icp(tree, a, &moving, best.transform, MAX_ITERATIONS)
+    let best = icp(tree, a, &moving, top.transform, MAX_ITERATIONS);
+    let Some(opposite) = opposite else {
+        return GlobalFit { best, rival: None };
+    };
+    let other = icp(tree, a, &moving, opposite.transform, MAX_ITERATIONS);
+    let (best, other) = if better(&other, &best) {
+        (other, best)
+    } else {
+        (best, other)
+    };
+    let tie = yaw_gap_deg(yaw_deg(&best.transform), yaw_deg(&other.transform))
+        >= 180.0 - HALF_TURN_TOL_DEG
+        && best.fitness - other.fitness <= RIVAL_FITNESS_MARGIN
+        && other.rmse_m <= best.rmse_m * RIVAL_RMSE_RATIO;
+    GlobalFit {
+        best,
+        rival: tie.then_some(other),
+    }
 }
 
 /// Mean of the points (origin when empty).

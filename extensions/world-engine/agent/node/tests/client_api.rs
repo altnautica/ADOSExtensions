@@ -213,16 +213,18 @@ async fn over_tcp_a_lane_credential_submits_but_reads_nothing_owner_only() {
         .mint("drone-1", &[NodeLane::from_static("jobs.submit")], 1)
         .unwrap();
     let drone = ComputeClient::new(format!("http://{addr}"), Some(minted.credential.clone()));
-    submit(drone).await.unwrap();
+    let submitted = submit(drone).await.unwrap();
 
-    // The same credential reads nothing owner-only.
+    // The same credential reads nothing owner-only, and of the jobs only the
+    // one it submitted: another job id reads as not found.
     let drone = ComputeClient::new(format!("http://{addr}"), Some(minted.credential));
     assert!(matches!(
         drone.status().await,
         Err(ClientError::Http(401, _))
     ));
+    assert!(drone.job_status(&submitted.job_id).await.is_ok());
     assert!(matches!(
         drone.job_status("nope").await,
-        Err(ClientError::Http(401, _))
+        Err(ClientError::Http(404, _))
     ));
 }

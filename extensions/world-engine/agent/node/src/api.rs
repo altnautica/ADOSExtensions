@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 use world_engine_protocol::compute::{CancelResponse, SubmitResponse};
 
 use crate::artifacts::rewrite_artifact_host;
-use crate::auth::{require_job_api, ComputeAuth};
+use crate::auth::{require_job_api, ComputeAuth, NodeCaller};
 #[cfg(unix)]
 use crate::credential_api;
 use crate::job_views::{JobView, OutputView};
@@ -220,6 +220,7 @@ async fn create_dataset(
 
 async fn submit_job(
     State(state): State<ApiState>,
+    caller: Option<Extension<NodeCaller>>,
     Json(req): Json<SubmitRequest>,
 ) -> Result<Response, ComputeError> {
     let now = now_ms();
@@ -231,6 +232,17 @@ async fn submit_job(
             }
             params[key] = v.clone();
         }
+    }
+    // Who submitted it: a node's credential id scopes its later reads; the
+    // caller never chooses this field.
+    if let Some(map) = params.as_object_mut() {
+        map.remove(SUBMITTED_BY);
+    }
+    if let Some(Extension(NodeCaller(cred))) = caller {
+        if !params.is_object() {
+            params = serde_json::json!({});
+        }
+        params[SUBMITTED_BY] = cred.into();
     }
     let id = req.job_id.unwrap_or_else(|| next_id("job"));
     // The job id names the job's working tree, so it must be one plain path
@@ -271,7 +283,7 @@ async fn submit_job(
             }
         };
         let runner = engine.runner();
-        if let Err(e) = recon::check_tools(runner.as_ref(), &recon::required_tools(&job)) {
+        if let Err(e) = recon::check_staged_tools(runner.as_ref(), &job, &staged) {
             return Ok(refuse(StatusCode::UNPROCESSABLE_ENTITY, &e));
         }
         // The placement generation is fixed at submit, so a resumed job keeps
@@ -325,22 +337,37 @@ async fn list_jobs(
     Ok(Json(views).into_response())
 }
 
+/// The job param naming the node credential that submitted a job.
+const SUBMITTED_BY: &str = "submitted_by";
+
+/// Whether `caller` may read `job`: the owner reads every job, a node only
+/// the jobs it submitted.
+fn may_read(caller: &Option<Extension<NodeCaller>>, job: &JobRecord) -> bool {
+    match caller {
+        None => true,
+        Some(Extension(NodeCaller(cred))) => {
+            job.params.get(SUBMITTED_BY).and_then(|v| v.as_str()) == Some(cred.as_str())
+        }
+    }
+}
+
 async fn job_status(
     State(state): State<ApiState>,
     Extension(public_base): Extension<Arc<str>>,
+    caller: Option<Extension<NodeCaller>>,
     Path(id): Path<String>,
 ) -> Result<Response, ComputeError> {
     let gpu = gpu_sample().await;
     let engine = state.lock().await;
     let store = engine.scheduler().store();
     match store.get_job(&id)? {
-        Some(job) => Ok(Json(JobView::build(
+        Some(job) if may_read(&caller, &job) => Ok(Json(JobView::build(
             store,
             rehost_job(job, &public_base),
             gpu.as_ref(),
         )?)
         .into_response()),
-        None => Err(ComputeError::NotFound(format!("job {id}"))),
+        _ => Err(ComputeError::NotFound(format!("job {id}"))),
     }
 }
 
@@ -356,12 +383,16 @@ async fn cancel_job(
 async fn job_outputs(
     State(state): State<ApiState>,
     Extension(public_base): Extension<Arc<str>>,
+    caller: Option<Extension<NodeCaller>>,
     Path(id): Path<String>,
 ) -> Result<Response, ComputeError> {
     let engine = state.lock().await;
-    let outputs: Vec<OutputView> = engine
-        .scheduler()
-        .store()
+    let store = engine.scheduler().store();
+    match store.get_job(&id)? {
+        Some(job) if may_read(&caller, &job) => {}
+        _ => return Err(ComputeError::NotFound(format!("job {id}"))),
+    }
+    let outputs: Vec<OutputView> = store
         .outputs_for_job(&id)?
         .into_iter()
         .map(|mut o| {

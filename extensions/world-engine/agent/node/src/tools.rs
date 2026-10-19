@@ -210,8 +210,45 @@ pub fn container_path(host: &Path) -> String {
     }
 }
 
+/// `path` made absolute against the current directory (no symlink
+/// resolution, so the directory need not exist), with the `\\?\` verbatim
+/// prefix removed: `\\?\D:\a` becomes `D:\a`, `\\?\UNC\srv\s` becomes
+/// `\\srv\s`.
+pub fn absolute_path(path: &Path) -> std::io::Result<PathBuf> {
+    let abs = std::path::absolute(path)?;
+    let s = abs.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return Ok(PathBuf::from(format!(r"\\{rest}")));
+    }
+    match s.strip_prefix(r"\\?\") {
+        Some(rest) if drive_prefix_len(rest).is_some() => Ok(PathBuf::from(rest)),
+        _ => Ok(abs),
+    }
+}
+
+/// Whether `s` starts with a Windows network-share or device path
+/// (`\\server\share`, `//server/share`, `\\?\UNC\...`, `\\.\pipe\...`),
+/// which WSL programs cannot open. The verbatim and device forms of a drive
+/// path (`\\?\D:\a`, `\\.\D:\a`) are local and do not count.
+pub fn is_network_path(s: &str) -> bool {
+    let sep = |c: u8| c == b'\\' || c == b'/';
+    let b = s.as_bytes();
+    if b.len() < 3 || !sep(b[0]) || !sep(b[1]) || sep(b[2]) {
+        return false;
+    }
+    if matches!(b[2], b'?' | b'.') && b.get(3).copied().is_some_and(sep) {
+        let rest = s[4..].replace('/', "\\");
+        return drive_prefix_len(&rest).is_none();
+    }
+    true
+}
+
 /// `D:\a\b` (or `D:/a/b`, or the `\\?\D:\a` verbatim form) → `/mnt/d/a/b`.
+/// A network-share path is returned unchanged (see [`is_network_path`]).
 pub fn wsl_path(p: &str) -> String {
+    if is_network_path(p) {
+        return p.to_string();
+    }
     let p = p.strip_prefix(r"\\?\").unwrap_or(p).replace('\\', "/");
     let b = p.as_bytes();
     if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
@@ -304,6 +341,53 @@ mod tests {
         assert_eq!(wsl_path("C:/a"), "/mnt/c/a");
         assert_eq!(wsl_path(r"\\?\E:\w"), "/mnt/e/w");
         assert_eq!(wsl_path("/already/unix"), "/already/unix");
+    }
+
+    #[test]
+    fn network_paths_are_recognised_and_left_unmapped() {
+        for p in [
+            r"\\srv\share\job",
+            "//srv/share/job",
+            r"\\?\UNC\srv\share",
+            r"\\.\pipe\x",
+            r"\\srv\share\job:/data",
+        ] {
+            assert!(is_network_path(p), "{p}");
+            assert_eq!(wsl_path(p), p);
+        }
+        for p in [
+            r"\\?\D:\a",
+            r"\\.\D:\a",
+            r"D:\a",
+            "/mnt/d/a",
+            "///x",
+            "",
+            r"\\",
+        ] {
+            assert!(!is_network_path(p), "{p}");
+        }
+    }
+
+    #[test]
+    fn absolute_paths_drop_the_verbatim_prefix() {
+        let rel = absolute_path(Path::new("data")).unwrap();
+        assert!(rel.is_absolute());
+        assert_eq!(rel, std::env::current_dir().unwrap().join("data"));
+        #[cfg(windows)]
+        {
+            assert_eq!(
+                absolute_path(Path::new(r"\\?\D:\x\y")).unwrap(),
+                Path::new(r"D:\x\y")
+            );
+            assert_eq!(
+                absolute_path(Path::new(r"\\?\UNC\srv\s\x")).unwrap(),
+                Path::new(r"\\srv\s\x")
+            );
+            assert_eq!(
+                absolute_path(Path::new("D:/x")).unwrap(),
+                Path::new(r"D:\x")
+            );
+        }
     }
 
     #[test]

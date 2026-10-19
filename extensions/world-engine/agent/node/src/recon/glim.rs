@@ -103,9 +103,18 @@ pub fn rig_has_lidar(rig: &Rig) -> bool {
     rig.sensors.iter().any(|s| s.kind == RigSensorKind::Lidar)
 }
 
+/// The runtime docker needs for `--gpus` (GPU odometry).
+pub const NVIDIA_RUNTIME: &str = "nvidia-container-runtime";
+
 /// `E_TOOL_MISSING{tool:"glim"}` unless docker resolves and the pinned image
-/// is present. `cwd` is any existing directory.
-pub fn check_available(runner: &dyn ToolRunner, cwd: &Path) -> Result<(), StageError> {
+/// is present; for GPU odometry also `E_TOOL_MISSING{tool:
+/// "nvidia-container-runtime"}` unless docker lists an `nvidia` runtime.
+/// `cwd` is any existing directory.
+pub fn check_available(
+    runner: &dyn ToolRunner,
+    cwd: &Path,
+    odometry: GlimOdometry,
+) -> Result<(), StageError> {
     runner
         .resolve("glim")
         .map_err(|e| StageError::tool_missing("glim", e.message))?;
@@ -117,7 +126,25 @@ pub fn check_available(runner: &dyn ToolRunner, cwd: &Path) -> Result<(), StageE
             "glim",
             format!("the pinned image {image} is not available: {}", e.message),
         )
-    })
+    })?;
+    if odometry == GlimOdometry::Gpu {
+        let mut runtimes = String::new();
+        let info =
+            ToolInvocation::new("glim", cwd).args(["info", "--format", "{{json .Runtimes}}"]);
+        runner
+            .run(&info, &mut |l| runtimes.push_str(l))
+            .map_err(|e| StageError::tool_missing(NVIDIA_RUNTIME, e.message))?;
+        let has = serde_json::from_str::<Value>(&runtimes)
+            .ok()
+            .is_some_and(|v| v.get("nvidia").is_some());
+        if !has {
+            return Err(StageError::tool_missing(
+                NVIDIA_RUNTIME,
+                format!("docker lists no nvidia runtime ({}); GPU odometry needs the NVIDIA Container Toolkit", runtimes.trim()),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn docker_run(dir: &Path, image: &str, extra: &[&str]) -> ToolInvocation {
@@ -139,9 +166,13 @@ pub fn copy_config(dir: &Path, image: &str) -> ToolInvocation {
 }
 
 /// The offline run over `<dir>/bag` with `<dir>/config`, dumping to
-/// `<dir>/dump`.
-pub fn glim_rosbag(dir: &Path, image: &str) -> ToolInvocation {
-    docker_run(dir, image, &["--gpus", "all"]).args([
+/// `<dir>/dump`; the GPU is passed through only for GPU odometry.
+pub fn glim_rosbag(dir: &Path, image: &str, odometry: GlimOdometry) -> ToolInvocation {
+    let gpus: &[&str] = match odometry {
+        GlimOdometry::Gpu => &["--gpus", "all"],
+        GlimOdometry::Cpu => &[],
+    };
+    docker_run(dir, image, gpus).args([
         "ros2",
         "run",
         "glim_ros",
@@ -294,7 +325,8 @@ pub fn write_config(
 }
 
 /// Run GLIM for the session and re-pose `dataset/frames.json` from its
-/// trajectory (see [`apply_trajectory`]).
+/// trajectory (see [`apply_trajectory`]). `None` when the LiDAR recorded no
+/// sweeps (nothing to run on; the dataset is left as prepared).
 pub fn run(
     runner: &dyn ToolRunner,
     reader: &SessionReader,
@@ -302,7 +334,7 @@ pub fn run(
     dataset: &Path,
     odometry: GlimOdometry,
     progress: &mut dyn FnMut(f32),
-) -> Result<GlimSummary, StageError> {
+) -> Result<Option<GlimSummary>, StageError> {
     let image = pinned_image("glim")?;
     let dir = job_dir.join(GLIM_DIR);
     if dir.exists() {
@@ -311,10 +343,8 @@ pub fn run(
     fs::create_dir_all(&dir)?;
     let bag = glim_bag::export(reader, &dir.join("bag"))?;
     if bag.cloud_times.is_empty() {
-        return Err(StageError::input(format!(
-            "LiDAR {} recorded no sweeps",
-            bag.lidar_id
-        )));
+        tracing::warn!(lidar = %bag.lidar_id, "the LiDAR recorded no sweeps; GLIM skipped");
+        return Ok(None);
     }
     progress(0.1);
     let track = session_data::index(reader)?.poses;
@@ -341,7 +371,7 @@ pub fn run(
     write_config(&dir.join(STOCK), &dir.join("config"), &bag, odometry)?;
     progress(0.2);
     runner.run(
-        &glim_rosbag(&dir, &image),
+        &glim_rosbag(&dir, &image, odometry),
         &mut |line| tracing::debug!(target: "glim", "{line}"),
     )?;
     progress(0.9);
@@ -357,7 +387,7 @@ pub fn run(
     }
     let summary = apply_trajectory(&dir, dataset, reader.rig(), poses, track.as_ref(), odometry)?;
     progress(1.0);
-    Ok(summary)
+    Ok(Some(summary))
 }
 
 #[path = "glim_poses.rs"]

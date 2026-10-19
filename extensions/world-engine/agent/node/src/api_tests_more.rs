@@ -257,3 +257,57 @@ async fn owner_routes_are_refused_over_tcp_whatever_is_presented() {
         }
     }
 }
+
+#[tokio::test]
+async fn a_node_reads_only_the_jobs_it_submitted() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = build_router(test_state(), auth_in(dir.path()));
+    let mut creds = Vec::new();
+    for peer in ["visor-1", "visor-2"] {
+        let (st, minted) = send(
+            &router,
+            "POST",
+            "/api/compute/node-credentials",
+            serde_json::json!({ "peer_device_id": peer }),
+        )
+        .await;
+        assert_eq!(st, StatusCode::CREATED);
+        creds.push(minted["credential"].as_str().unwrap().to_string());
+    }
+    let one = [("x-ados-node-credential", creds[0].as_str())];
+    let two = [("x-ados-node-credential", creds[1].as_str())];
+    // A forged `submitted_by` is replaced by the caller's credential id.
+    let submit = serde_json::json!({ "job_id": "j-own", "kind": "perception_offload",
+        "params": { "submitted_by": "someone-else",
+            "session": { "id": "s1", "rtsp_url": "rtsp://d:8554/main", "camera_id": "front" } } });
+    let (st, _) = send_tcp(&router, "POST", "/api/compute/jobs", &one, submit).await;
+    assert_eq!(st, StatusCode::CREATED);
+    for path in ["/api/compute/jobs/j-own", "/api/compute/jobs/j-own/outputs"] {
+        let (st, _) = send_tcp(&router, "GET", path, &one, serde_json::Value::Null).await;
+        assert_eq!(st, StatusCode::OK, "{path}");
+        let (st, _) = send_tcp(&router, "GET", path, &two, serde_json::Value::Null).await;
+        assert_eq!(st, StatusCode::NOT_FOUND, "{path}");
+        let (st, _) = send_tcp(&router, "GET", path, &[], serde_json::Value::Null).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    let (st, job) = send(
+        &router,
+        "GET",
+        "/api/compute/jobs/j-own",
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let id = creds[0].split('.').nth(1).unwrap();
+    assert_eq!(job["params"]["submitted_by"], id);
+    // Listing stays the owner's.
+    let (st, _) = send_tcp(
+        &router,
+        "GET",
+        "/api/compute/jobs",
+        &one,
+        serde_json::Value::Null,
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+}

@@ -35,4 +35,7 @@ pub enum ProductError {
     /// Two clouds could not be brought into one frame.
     #[error("frames unrelated: {0}")]
     FramesUnrelated(String),
+    /// Two clouds align equally well at two headings about 180° apart.
+    #[error("alignment ambiguous: {0}")]
+    AlignAmbiguous(String),
 }

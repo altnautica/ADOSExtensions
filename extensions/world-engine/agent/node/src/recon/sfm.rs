@@ -159,7 +159,8 @@ pub fn run(
             .arg(&images)
             .arg("--output_path")
             .arg(&mapped);
-        if calibrated && mapper == "mapper" {
+        // Both mappers take the same `--Mapper.*` options (COLMAP 4.2.1 help).
+        if calibrated {
             map = map.args([
                 "--Mapper.ba_refine_focal_length",
                 "0",
@@ -293,5 +294,46 @@ mod tests {
         assert!(!free
             .iter()
             .any(|a| a == "--BundleAdjustment.refine_focal_length"));
+    }
+
+    #[test]
+    fn calibrated_intrinsics_stay_fixed_in_the_hierarchical_mapper() {
+        let dir = tempfile::tempdir().unwrap();
+        let dataset = dir.path().join("dataset");
+        fs::create_dir_all(dataset.join("images/cam0")).unwrap();
+        let unposed: Vec<FrameRecord> = frames(true)
+            .into_iter()
+            .map(|f| FrameRecord {
+                t_world_cam: None,
+                ..f
+            })
+            .collect();
+        fs::write(
+            dataset.join("frames.json"),
+            serde_json::to_vec(&unposed).unwrap(),
+        )
+        .unwrap();
+        let runner = StandInRunner::default();
+        run(
+            &runner,
+            &dataset,
+            &dir.path().join("sfm"),
+            false,
+            true,
+            true,
+            &mut |_| {},
+        )
+        .unwrap();
+        let args = runner
+            .runs_of("colmap")
+            .into_iter()
+            .find(|i| i.args_lossy().first().map(String::as_str) == Some("hierarchical_mapper"))
+            .expect("hierarchical mapper ran")
+            .args_lossy();
+        let pos = args
+            .iter()
+            .position(|a| a == "--Mapper.ba_refine_focal_length")
+            .expect("focal length pinned");
+        assert_eq!(args[pos + 1], "0");
     }
 }

@@ -367,17 +367,47 @@ fn missing_glim_is_a_tool_missing_error() {
         missing: vec!["glim".into()],
         ..Default::default()
     };
-    let e = check_available(&runner, dir.path()).unwrap_err();
+    let e = check_available(&runner, dir.path(), GlimOdometry::Cpu).unwrap_err();
     assert_eq!(
         (e.code.as_str(), e.tool.as_deref()),
         ("E_TOOL_MISSING", Some("glim"))
     );
     let ok = StandInRunner::default();
-    check_available(&ok, dir.path()).unwrap();
-    let inspect = ok.runs_of("glim")[0].args_lossy();
+    check_available(&ok, dir.path(), GlimOdometry::Cpu).unwrap();
+    let runs = ok.runs_of("glim");
+    assert_eq!(runs.len(), 1, "CPU odometry does not ask for runtimes");
+    let inspect = runs[0].args_lossy();
     assert_eq!(inspect[..2], ["image", "inspect"]);
     assert!(inspect
         .last()
         .unwrap()
         .starts_with("koide3/glim_ros2@sha256:"));
+}
+
+#[test]
+fn gpu_odometry_needs_the_nvidia_runtime_and_passes_the_gpu() {
+    let dir = tempfile::tempdir().unwrap();
+    let ok = StandInRunner::default();
+    check_available(&ok, dir.path(), GlimOdometry::Gpu).unwrap();
+    let info = ok.runs_of("glim")[1].args_lossy();
+    assert_eq!(info, ["info", "--format", "{{json .Runtimes}}"]);
+
+    let no_nvidia = StandInRunner {
+        missing: vec![NVIDIA_RUNTIME.into()],
+        ..Default::default()
+    };
+    check_available(&no_nvidia, dir.path(), GlimOdometry::Cpu).unwrap();
+    let e = check_available(&no_nvidia, dir.path(), GlimOdometry::Gpu).unwrap_err();
+    assert_eq!(
+        (e.code.as_str(), e.tool.as_deref()),
+        ("E_TOOL_MISSING", Some("nvidia-container-runtime"))
+    );
+
+    let gpus = |o| {
+        glim_rosbag(dir.path(), "img", o)
+            .args_lossy()
+            .iter()
+            .any(|a| a == "--gpus")
+    };
+    assert!(gpus(GlimOdometry::Gpu) && !gpus(GlimOdometry::Cpu));
 }

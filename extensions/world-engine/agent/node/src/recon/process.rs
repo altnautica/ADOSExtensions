@@ -207,34 +207,64 @@ fn wsl_os_arg(a: &OsStr) -> OsString {
     }
 }
 
+/// `E_PATH_UNSUPPORTED` when `value` (or the part after its first `=`) is a
+/// network-share path, which a program inside WSL cannot open.
+fn check_wsl_path(tool: &str, value: &str) -> Result<(), StageError> {
+    let path = match value.split_once('=') {
+        Some((_, v)) if tools::is_network_path(v) => v,
+        _ if tools::is_network_path(value) => value,
+        _ => return Ok(()),
+    };
+    Err(StageError {
+        tool: Some(tool.to_string()),
+        ..StageError::new(
+            "E_PATH_UNSUPPORTED",
+            format!(
+                "{tool} runs inside WSL {} and cannot use the network-share path {path}; \
+                 use a path on a local drive",
+                tools::WSL_DISTRO
+            ),
+        )
+    })
+}
+
 /// The command that runs `inv` with `tool`. A WSL tool becomes
 /// `wsl.exe -d <distro> --cd <cwd> --exec [/usr/bin/env K=V ...] <program>
 /// <prefix args> <args>`, every argument and env value with its absolute
-/// Windows paths mapped to `/mnt/<drive>/...`.
-pub fn command(tool: &ResolvedTool, inv: &ToolInvocation) -> Command {
+/// Windows paths mapped to `/mnt/<drive>/...`; a network-share path in the
+/// working directory, an argument or an env value is `E_PATH_UNSUPPORTED`.
+pub fn command(tool: &ResolvedTool, inv: &ToolInvocation) -> Result<Command, StageError> {
     if !tool.wsl {
         let mut cmd = Command::new(&tool.program);
         cmd.args(&tool.prefix_args)
             .args(&inv.args)
             .current_dir(&inv.cwd)
             .envs(inv.env.iter().map(|(k, v)| (k, v)));
-        return cmd;
+        return Ok(cmd);
+    }
+    let cwd = inv.cwd.to_string_lossy();
+    check_wsl_path(&inv.tool, &cwd)?;
+    let env: Vec<String> = inv.env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    let args = std::iter::once(tool.program.as_os_str())
+        .chain(tool.prefix_args.iter().map(OsString::as_os_str))
+        .chain(inv.args.iter().map(OsString::as_os_str));
+    for a in env
+        .iter()
+        .map(String::as_str)
+        .chain(args.clone().filter_map(OsStr::to_str))
+    {
+        check_wsl_path(&inv.tool, a)?;
     }
     let mut cmd = Command::new("wsl.exe");
     cmd.args(["-d", tools::WSL_DISTRO, "--cd"])
-        .arg(tools::wsl_path(&inv.cwd.to_string_lossy()))
+        .arg(tools::wsl_path(&cwd))
         .arg("--exec");
-    if !inv.env.is_empty() {
-        cmd.arg("/usr/bin/env").args(
-            inv.env
-                .iter()
-                .map(|(k, v)| tools::wsl_arg(&format!("{k}={v}"))),
-        );
+    if !env.is_empty() {
+        cmd.arg("/usr/bin/env")
+            .args(env.iter().map(|kv| tools::wsl_arg(kv)));
     }
-    cmd.arg(wsl_os_arg(tool.program.as_os_str()))
-        .args(tool.prefix_args.iter().map(|a| wsl_os_arg(a)))
-        .args(inv.args.iter().map(|a| wsl_os_arg(a)));
-    cmd
+    cmd.args(args.map(wsl_os_arg));
+    Ok(cmd)
 }
 
 /// `path`, or `path.exe` / `path.cmd` / `path.bat` on Windows, when it is a file.
@@ -312,7 +342,7 @@ impl ToolRunner for ProcessRunner {
 
     fn run(&self, inv: &ToolInvocation, on_line: &mut dyn FnMut(&str)) -> Result<(), StageError> {
         let tool = self.resolve(&inv.tool)?;
-        let mut cmd = command(&tool, inv);
+        let mut cmd = command(&tool, inv)?;
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

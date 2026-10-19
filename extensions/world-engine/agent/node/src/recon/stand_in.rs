@@ -439,6 +439,20 @@ impl ToolRunner for StandInRunner {
                 fs::copy(&input, out).map_err(io).map(|_| ())
             }
             "docker" | "kalibr" | "dvlc" | "glim" => {
+                // `docker info`: the runtimes, with `nvidia` unless the
+                // NVIDIA runtime is reported missing.
+                if first(inv) == "info" {
+                    let missing = self
+                        .missing
+                        .iter()
+                        .any(|m| m == super::glim::NVIDIA_RUNTIME);
+                    on_line(if missing {
+                        r#"{"runc":{"path":"runc"}}"#
+                    } else {
+                        r#"{"nvidia":{"path":"nvidia-container-runtime"},"runc":{"path":"runc"}}"#
+                    });
+                    return Ok(());
+                }
                 if !super::glim::stand_in(inv).map_err(io)? {
                     crate::calib::stand_in(inv).map_err(io)?;
                 }

@@ -7,8 +7,8 @@ use kiddo::{ImmutableKdTree, SquaredEuclidean};
 use serde::{Deserialize, Serialize};
 
 use super::align::{
-    apply, icp, kd_tree, unaligned, voxel_representatives, yaw_search, AlignResult, ALIGN_VOXEL_M,
-    IDENTITY_4X4, MAX_ITERATIONS,
+    apply, icp, kd_tree, unaligned, voxel_representatives, yaw_search, AlignResult, GlobalFit,
+    ALIGN_VOXEL_M, IDENTITY_4X4, MAX_ITERATIONS,
 };
 use super::cloud::PointCloud;
 use super::geo::anchor_transform;
@@ -180,7 +180,9 @@ fn describe(anchor: Option<&GeoAnchor>) -> String {
 ///
 /// Refuses with [`ProductError::FramesUnrelated`] when the final fitness is
 /// below [`MIN_FITNESS`] (or [`MIN_FITNESS_UNANCHORED`] when only one cloud
-/// is anchored) or the residual exceeds [`MAX_RMSE_M`].
+/// is anchored) or the residual exceeds [`MAX_RMSE_M`], and otherwise with
+/// [`ProductError::AlignAmbiguous`] when the heading search found two equally
+/// good poses about 180° apart.
 pub fn align_and_compare(
     a: &PointCloud,
     anchor_a: Option<&GeoAnchor>,
@@ -189,20 +191,27 @@ pub fn align_and_compare(
     threshold_m: f64,
 ) -> Result<(ChangeResult, AlignResult), ProductError> {
     let tree = kd_tree(&a.points);
-    let fit = match (&tree, anchor_a, anchor_b) {
-        (None, ..) => unaligned(IDENTITY_4X4),
+    let global = match (&tree, anchor_a, anchor_b) {
+        (None, ..) => GlobalFit {
+            best: unaligned(IDENTITY_4X4),
+            rival: None,
+        },
         (Some(tree), Some(ga), Some(gb)) => {
             let moving = voxel_representatives(&b.points, ALIGN_VOXEL_M);
-            icp(
-                tree,
-                &a.points,
-                &moving,
-                anchor_transform(ga, gb),
-                MAX_ITERATIONS,
-            )
+            GlobalFit {
+                best: icp(
+                    tree,
+                    &a.points,
+                    &moving,
+                    anchor_transform(ga, gb),
+                    MAX_ITERATIONS,
+                ),
+                rival: None,
+            }
         }
         (Some(tree), ..) => yaw_search(tree, &a.points, &b.points),
     };
+    let fit = &global.best;
     let init = if anchor_a.is_some() && anchor_b.is_some() {
         AlignInit::Anchor
     } else {
@@ -223,6 +232,7 @@ pub fn align_and_compare(
             fit.rmse_m,
         )));
     }
+    let fit = global.unambiguous()?;
     let moved = PointCloud {
         points: b.points.iter().map(|p| apply(&fit.transform, p)).collect(),
         colors: b.colors.clone(),

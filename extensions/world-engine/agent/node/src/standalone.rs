@@ -39,9 +39,11 @@ pub struct StandaloneOptions {
 
 impl StandaloneOptions {
     /// Parse `--standalone --data-dir <dir> --listen <addr> [--token <t>]
-    /// [--public-url <url>] [--workers <n>] [--tools-dir <dir>]`. `--tools-dir`
-    /// is applied to the environment (`ADOS_WE_TOOLS_DIR`). `None` when
-    /// `--standalone` is absent.
+    /// [--public-url <url>] [--workers <n>] [--tools-dir <dir>]`. Both
+    /// directories are made absolute here (tools run with other working
+    /// directories, and inside WSL, where a relative Windows path means
+    /// nothing). `--tools-dir` is applied to the environment
+    /// (`ADOS_WE_TOOLS_DIR`). `None` when `--standalone` is absent.
     pub fn from_args(args: &[String]) -> Result<Option<Self>, String> {
         if !args.iter().any(|a| a == "--standalone") {
             return Ok(None);
@@ -57,12 +59,16 @@ impl StandaloneOptions {
                 None => Ok(None),
             }
         };
+        let absolute = |flag: &str, dir: String| {
+            crate::tools::absolute_path(Path::new(&dir)).map_err(|e| format!("{flag} {dir}: {e}"))
+        };
         let data_dir = value("--data-dir")?.ok_or("--data-dir is required")?;
+        let data_dir = absolute("--data-dir", data_dir)?;
         if let Some(t) = value("--tools-dir")? {
-            std::env::set_var("ADOS_WE_TOOLS_DIR", t);
+            std::env::set_var("ADOS_WE_TOOLS_DIR", absolute("--tools-dir", t)?);
         }
         Ok(Some(Self {
-            data_dir: PathBuf::from(data_dir),
+            data_dir,
             listen: value("--listen")?.unwrap_or_else(|| "127.0.0.1:8092".into()),
             token: value("--token")?.or_else(|| std::env::var("ADOS_COMPUTE_TOKEN").ok()),
             public_url: value("--public-url")?,
@@ -223,12 +229,48 @@ mod tests {
         ))
         .unwrap()
         .unwrap();
-        assert_eq!(o.data_dir, PathBuf::from("D:/x"));
+        assert!(o.data_dir.is_absolute());
+        assert!(o.data_dir.ends_with("x"));
         assert_eq!(o.listen, "0.0.0.0:8092");
         assert_eq!(o.workers, 2);
         assert_eq!(o.token.as_deref(), Some("abc"));
         assert!(StandaloneOptions::from_args(&args("node --standalone")).is_err());
         assert!(StandaloneOptions::from_args(&args("node --standalone --data-dir")).is_err());
+    }
+
+    #[test]
+    fn a_relative_data_dir_yields_absolute_tool_paths() {
+        use crate::recon::{process::command, ResolvedTool, ToolInvocation};
+        let o = StandaloneOptions::from_args(&args("node --standalone --data-dir data"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(o.data_dir, std::env::current_dir().unwrap().join("data"));
+        let job = o.data_dir.join("node").join("work").join("jobs").join("j1");
+        let root = if cfg!(windows) { "/mnt/" } else { "/" };
+        let tool = ResolvedTool {
+            name: "gsplat_train".into(),
+            version: "1".into(),
+            program: "/opt/v/bin/python".into(),
+            prefix_args: Vec::new(),
+            home: PathBuf::new(),
+            wsl: true,
+        };
+        let inv = ToolInvocation::new("gsplat_train", &job).arg(job.join("splat.ply"));
+        let argv: Vec<String> = command(&tool, &inv)
+            .unwrap()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(argv[3].starts_with(root), "--cd {}", argv[3]);
+        assert!(argv.last().unwrap().starts_with(root), "{argv:?}");
+        assert!(argv
+            .last()
+            .unwrap()
+            .ends_with("/node/work/jobs/j1/splat.ply"));
+        let inv = crate::calib::container::kalibr_bagcreater(&job, "img");
+        let volume = inv.args_lossy()[3].clone();
+        assert!(volume.starts_with(root), "{volume}");
+        assert!(volume.ends_with("/node/work/jobs/j1:/data"), "{volume}");
     }
 
     #[test]

@@ -143,16 +143,47 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// The node lane a job-API request belongs to, when another node may make it:
-/// submitting an offload session and reading session health. Everything else
-/// on the job API (listing, cancelling, datasets, outputs, issuing credentials)
-/// is the owner's alone.
+/// submitting a job, reading session health, and reading the status and
+/// outputs of a job it submitted itself (scoped by [`NodeCaller`] in the
+/// handlers). Everything else on the job API (listing, cancelling, datasets,
+/// issuing credentials) is the owner's alone.
 pub fn job_api_lane(method: &Method, path: &str) -> Option<NodeLane> {
     match (method, path) {
         (&Method::POST, "/api/compute/jobs") | (&Method::GET, "/api/compute/sessions") => {
             Some(crate::lanes::JOB_SUBMIT)
         }
+        (&Method::GET, p) if own_job_read(p) => Some(crate::lanes::JOB_SUBMIT),
         _ => None,
     }
+}
+
+/// `/api/compute/jobs/<id>` or `/api/compute/jobs/<id>/outputs`.
+fn own_job_read(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix("/api/compute/jobs/") else {
+        return false;
+    };
+    let mut parts = rest.split('/');
+    let id_ok = parts.next().is_some_and(|id| !id.is_empty());
+    id_ok
+        && matches!(
+            (parts.next(), parts.next()),
+            (None, _) | (Some("outputs"), None)
+        )
+}
+
+/// The issued credential a node request was admitted with (its id), set on
+/// the request by [`require_job_api`]; handlers scope a node's job reads to
+/// the jobs it submitted. Absent for the owner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeCaller(pub String);
+
+/// The id part of an `nc1.<id>.<secret>` credential.
+#[cfg(unix)]
+fn credential_id(req: &Request) -> Option<String> {
+    let token = req.headers().get(NODE_CREDENTIAL_HEADER)?.to_str().ok()?;
+    let mut parts = token.trim().splitn(3, '.');
+    parts.next()?;
+    parts.next().map(str::to_string)
 }
 
 /// Decide one TCP request: admitted only when it names a node lane and
@@ -227,7 +258,18 @@ pub async fn require_job_api(
             .into_response();
     }
     let lane = job_api_lane(req.method(), req.uri().path());
-    if is_owner(&auth, &req) || node_admitted(&auth, &req, lane.as_ref()) {
+    if is_owner(&auth, &req) {
+        return next.run(req).await;
+    }
+    if node_admitted(&auth, &req, lane.as_ref()) {
+        #[cfg(unix)]
+        let req = {
+            let mut req = req;
+            if let Some(id) = credential_id(&req) {
+                req.extensions_mut().insert(NodeCaller(id));
+            }
+            req
+        };
         next.run(req).await
     } else {
         unauthorized()
@@ -276,6 +318,27 @@ mod tests {
         assert!(!admits(cred, Some(&crate::lanes::ARTIFACTS), &s));
         // An owner-only route (issuing credentials, listing jobs, ...).
         assert!(!admits(cred, None, &s));
+    }
+
+    #[test]
+    fn a_node_may_read_single_jobs_and_their_outputs_but_nothing_wider() {
+        for p in ["/api/compute/jobs/j-1", "/api/compute/jobs/j-1/outputs"] {
+            assert_eq!(
+                job_api_lane(&Method::GET, p),
+                Some(crate::lanes::JOB_SUBMIT),
+                "{p}"
+            );
+        }
+        for (m, p) in [
+            (Method::GET, "/api/compute/jobs/"),
+            (Method::GET, "/api/compute/jobs/j-1/files/x.json"),
+            (Method::GET, "/api/compute/jobs/j-1/tour.zip"),
+            (Method::GET, "/api/compute/jobs/j-1/outputs/x"),
+            (Method::DELETE, "/api/compute/jobs/j-1"),
+            (Method::POST, "/api/compute/jobs/j-1/cancel"),
+        ] {
+            assert_eq!(job_api_lane(&m, p), None, "{m} {p}");
+        }
     }
 
     #[test]

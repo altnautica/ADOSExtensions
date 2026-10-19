@@ -1,6 +1,8 @@
 use ados_capture_contract::{GeoAnchor, GeoAnchorDatum, GeoAnchorSource};
 
-use super::super::align::{align, apply, compose, invert, voxel_representatives, IDENTITY_4X4};
+use super::super::align::{
+    align, align_global, apply, compose, invert, voxel_representatives, IDENTITY_4X4,
+};
 use super::super::change::{align_and_compare, AlignInit, ChangeResult};
 use super::super::geo::{anchor_transform, enu_offset, enu_rotation};
 use super::super::geom::Rng;
@@ -112,6 +114,23 @@ fn warehouse(pallet_xy: [f64; 2], seed: u64) -> (Vec<[f64; 3]>, usize) {
     s.open_box([11.5, 7.0, 0.0], [2.0, 1.8, 2.5]);
     let n_pallet = s.open_box([pallet_xy[0], pallet_xy[1], 0.0], PALLET);
     (s.points, n_pallet)
+}
+
+/// A 12 × 8 m hall sampled every 15 cm whose layout is point-symmetric under
+/// a half turn about its centre (6, 4): closed 1.5 m walls, two 8 m rack rows
+/// mirroring each other and a centred 6 m row. Nothing tells the two
+/// headings apart.
+fn symmetric_hall(seed: u64) -> Vec<[f64; 3]> {
+    let mut s = Scan::new(seed, 0.15);
+    s.patch([0.0; 3], X, Y, 12.0, 8.0);
+    s.patch([0.0; 3], X, Z, 12.0, 1.5);
+    s.patch([0.0, 8.0, 0.0], X, Z, 12.0, 1.5);
+    s.patch([0.0; 3], Y, Z, 8.0, 1.5);
+    s.patch([12.0, 0.0, 0.0], Y, Z, 8.0, 1.5);
+    s.open_box([2.0, 1.5, 0.0], [8.0, 1.0, 2.0]);
+    s.open_box([2.0, 5.5, 0.0], [8.0, 1.0, 2.0]);
+    s.open_box([3.0, 3.5, 0.0], [6.0, 1.0, 2.0]);
+    s.points
 }
 
 fn rz(deg: f64, t: [f64; 3]) -> [f64; 16] {
@@ -297,6 +316,40 @@ fn warehouse_with_large_yaw_is_found_by_the_heading_search() {
     // 15 cm sampling: two scans of one surface sit up to ~20 cm apart, so
     // the change threshold is 25 cm.
     assert_change_is_the_box(&res, new, PALLET, n_pallet, 0.25);
+}
+
+#[test]
+fn half_turn_symmetric_hall_is_ambiguous() {
+    let a = cloud(symmetric_hall(1), &IDENTITY_4X4);
+    let b = cloud(symmetric_hall(2), &rz(183.0, [4.0, -1.0, 0.0]));
+    match align_and_compare(&a, None, &b, None, 0.25) {
+        Err(ProductError::AlignAmbiguous(msg)) => {
+            assert!(msg.contains("yaw") && msg.contains("fitness"), "{msg}");
+        }
+        Err(other) => panic!("unexpected {other:?}"),
+        Ok((_, fit)) => panic!("aligned despite the symmetry: {fit:?}"),
+    }
+    // The same through the standalone entry point.
+    assert!(matches!(
+        align_global(&a, &b),
+        Err(ProductError::AlignAmbiguous(_))
+    ));
+}
+
+#[test]
+fn asymmetric_warehouse_has_one_heading() {
+    let (pa, _) = warehouse([12.5, 5.0], 1);
+    let a = cloud(pa, &IDENTITY_4X4);
+    let t_b_a = rz(183.0, [4.0, -1.0, 0.0]);
+    let (pb, _) = warehouse([12.5, 5.0], 2);
+    let b = cloud(pb, &t_b_a);
+    let fit = align_global(&a, &b).expect("doorway and office block break the symmetry");
+    let centre = apply(&t_b_a, &[7.0, 4.5, 1.0]);
+    let (angle, dt) = error(&fit.transform, &invert(&t_b_a), centre);
+    assert!(
+        angle < 0.2 && dt < 0.02,
+        "angle {angle}° offset {dt} m {fit:?}"
+    );
 }
 
 #[test]

@@ -179,9 +179,10 @@ fn reconstruct(
         dir.join("session-rig.json"),
         serde_json::to_vec_pretty(reader.rig())?,
     )?;
-    // A LiDAR session's poses come from GLIM, so it must be installed.
+    // A LiDAR session's poses come from GLIM, so it must be installed (and,
+    // for GPU odometry, docker must have the NVIDIA runtime).
     if glim::rig_has_lidar(reader.rig()) {
-        glim::check_available(ctx.runner, dir)?;
+        glim::check_available(ctx.runner, dir, glim_odometry)?;
     }
     let dataset = dir.join("dataset");
 
@@ -216,17 +217,19 @@ fn reconstruct(
     let sfm_detail = stages.run("sfm", |p| {
         // A LiDAR session takes its poses from the LiDAR-inertial trajectory
         // (aligned onto the recorded pose track) and keeps them fixed; a
-        // rejected trajectory leaves the recorded poses as they were.
-        let share = if has_lidar { 0.3 } else { 0.0 };
-        let glim = match has_lidar {
-            true => Some(glim::run(
+        // rejected trajectory leaves the recorded poses as they were. GLIM
+        // runs on the rig's LiDAR whether or not a track was recorded.
+        let lidar_rig = glim::rig_has_lidar(reader.rig());
+        let share = if lidar_rig { 0.3 } else { 0.0 };
+        let glim = match lidar_rig {
+            true => glim::run(
                 ctx.runner,
                 &reader,
                 dir,
                 &dataset,
                 glim_odometry,
                 &mut |f| p(share * f),
-            )?),
+            )?,
             false => None,
         };
         let p = &mut |f: f32| p(share + (1.0 - share) * f);
@@ -253,6 +256,11 @@ fn reconstruct(
             }
         };
         if let Some(g) = glim {
+            // With no recorded track GLIM's poses sit in its own arbitrary
+            // frame, so the model is local (no geo anchor).
+            if g.used && g.align_rmse_m.is_none() {
+                detail["world_frame"] = false.into();
+            }
             detail["glim"] = serde_json::to_value(g)?;
         }
         Ok(detail)
@@ -385,6 +393,9 @@ fn change_job(
                 .map_err(|e| match e {
                     crate::products::ProductError::FramesUnrelated(m) => {
                         StageError::new("E_FRAMES_UNRELATED", m)
+                    }
+                    crate::products::ProductError::AlignAmbiguous(m) => {
+                        StageError::new("E_ALIGN_AMBIGUOUS", m)
                     }
                     other => StageError::io(other),
                 })?;

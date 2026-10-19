@@ -217,6 +217,31 @@ pub fn check_tools(runner: &dyn ToolRunner, tools: &[&str]) -> Result<(), StageE
     Ok(())
 }
 
+/// The submit-time tool check of a resolved staged job: the preset's tools,
+/// plus GLIM (and, for GPU odometry, the NVIDIA runtime) when the session's
+/// rig has a LiDAR.
+pub fn check_staged_tools(
+    runner: &dyn ToolRunner,
+    job: &JobRecord,
+    staged: &StagedJob,
+) -> Result<(), StageError> {
+    check_tools(runner, &required_tools(job))?;
+    if let StagedJob::Reconstruct {
+        session_dir,
+        glim_odometry,
+        ..
+    } = staged
+    {
+        let rig: ados_capture_contract::Rig =
+            serde_json::from_slice(&std::fs::read(session_dir.join("rig.json"))?)
+                .map_err(|e| StageError::input(format!("rig.json: {e}")))?;
+        if glim::rig_has_lidar(&rig) {
+            glim::check_available(runner, session_dir, *glim_odometry)?;
+        }
+    }
+    Ok(())
+}
+
 /// Whether `id` is usable as one plain path component: ASCII letters,
 /// digits, `-`, `_` and `.`, not starting with `.`, at most 128 bytes.
 pub fn valid_job_id(id: &str) -> bool {

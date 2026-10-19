@@ -16,6 +16,7 @@ mod process_command {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    use world_engine_node::calib::container;
     use world_engine_node::recon::process::command;
     use world_engine_node::recon::{ResolvedTool, ToolInvocation};
     use world_engine_node::tools::WSL_DISTRO;
@@ -44,7 +45,7 @@ mod process_command {
             .args(["--out", r"\\?\D:\w x\o", "--glob", "$HOME/*.png"])
             .args([r"--colmap=D:\s", "/data/already", "C:"]);
         inv.env = vec![("K".into(), r"D:\e f".into()), ("N".into(), "$1".into())];
-        let cmd = command(&tool("/opt/v/bin/python", true), &inv);
+        let cmd = command(&tool("/opt/v/bin/python", true), &inv).unwrap();
         assert_eq!(cmd.get_program(), "wsl.exe");
         assert_eq!(
             argv(&cmd),
@@ -87,7 +88,7 @@ mod process_command {
             "-c",
             shell,
         ]);
-        let cmd = command(&tool("docker", true), &inv);
+        let cmd = command(&tool("docker", true), &inv).unwrap();
         let a = argv(&cmd);
         assert_eq!(
             a[..5],
@@ -105,12 +106,44 @@ mod process_command {
         t.prefix_args = vec!["run".into()];
         let mut inv = ToolInvocation::new("t", r"D:\job").arg(r"D:\in");
         inv.env = vec![("K".into(), "v".into())];
-        let cmd = command(&t, &inv);
+        let cmd = command(&t, &inv).unwrap();
         assert_eq!(cmd.get_program(), r"D:\t\colmap.exe");
         assert_eq!(argv(&cmd), ["run", r"D:\in"]);
         assert_eq!(cmd.get_current_dir(), Some(Path::new(r"D:\job")));
         let envs: Vec<_> = cmd.get_envs().collect();
         assert_eq!(envs, [(OsStr::new("K"), Some(OsStr::new("v")))]);
+    }
+
+    #[test]
+    fn a_network_share_path_is_refused_before_spawning() {
+        let share = r"\\srv\share\job";
+        let local = || ToolInvocation::new("docker", r"D:\job");
+        let mut with_env = local();
+        with_env.env = vec![("K".into(), share.into())];
+        let cases = [
+            ToolInvocation::new("docker", share),
+            ToolInvocation::new("docker", "//srv/share/job"),
+            local().arg(share),
+            local().arg(r"\\?\UNC\srv\share\x"),
+            local().arg(r"--out=\\srv\share\x"),
+            local().args(["-v", r"\\srv\share\job:/data"]),
+            with_env,
+            // The calibration container builder over a job on a share.
+            container::kalibr_bagcreater(Path::new(share), "img"),
+        ];
+        for inv in cases {
+            let e = command(&tool("docker", true), &inv).unwrap_err();
+            assert_eq!(e.code, "E_PATH_UNSUPPORTED", "{inv:?}");
+            assert_eq!(e.tool.as_deref(), Some("docker"));
+            // The message names the offending path.
+            assert!(
+                e.message.contains("srv") && e.message.contains("share"),
+                "{}",
+                e.message
+            );
+        }
+        // A native tool is spawned by Windows, which opens shares itself.
+        assert!(command(&tool("colmap.exe", false), &local().arg(share)).is_ok());
     }
 }
 
