@@ -23,14 +23,19 @@ import { CalmState } from "../workstation/CalmState";
 const t = translator("capture");
 
 export function CapturePage() {
-  const { client, state, coverage, loading, absent, refresh } = useCapture();
+  const { client, state, coverage, loading, absent, stale, refresh } = useCapture();
   if (loading) return <ViewerLoading label={t("loading")} />;
   if (absent || !state) return <CalmState icon={ScanLine} message={t("absent")} />;
 
   return (
     <div className="we:flex we:flex-col we:gap-3 we:p-3">
+      {stale && (
+        <p role="status" className="we:rounded we:bg-status-warning/15 we:px-2 we:py-1 we:text-[11px] we:text-status-warning">
+          {t("stale")}
+        </p>
+      )}
       <Section title={t("controls")}>
-        <CaptureControls client={client} state={state} onChanged={refresh} />
+        <CaptureControls client={client} state={state} coverage={coverage} onChanged={refresh} />
       </Section>
       <div className="we:grid we:gap-3 we:lg:grid-cols-[1fr_auto]">
         <Section title={t("cameras")}>
@@ -45,7 +50,7 @@ export function CapturePage() {
           )}
         </Section>
         <Section title={t("coverage")}>
-          <CoverageMap coverage={coverage} emptyLabel={t("noCoverage")} />
+          <CoverageMap coverage={coverage} emptyLabel={t("noCoverage")} label={t("coverage")} />
           <p className="we:text-[11px] we:text-text-tertiary">
             {state.coverage.roomPct !== null && t("roomCoverage", { pct: state.coverage.roomPct.toFixed(0) })}
             {state.pose.source && ` · ${t("pose", { source: state.pose.source, health: state.pose.health ?? "–" })}`}

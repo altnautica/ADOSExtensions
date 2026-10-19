@@ -3,12 +3,14 @@
  * @description The world viewer's 3D stage: a three.js scene rendering a
  * Gaussian splat with Spark (SPZ / PLY bytes, or a `.rad` level-of-detail file
  * streamed by URL), an optional collision mesh (GLB) used for picking, the
- * floorplan's walls drawn on the floor, and measurement markers. Three view
- * modes: orbit, dollhouse (orbit from above) and first-person walk.
+ * floorplan's walls and warehouse aisles drawn on the floor, and measurement
+ * markers. Three view modes: orbit, dollhouse (orbit from above) and
+ * first-person walk.
  *
  * Framework-free so the plugin page and the standalone tour viewer share it.
- * Everything is placed through `world/placement`: artifacts by their
- * placement, overlays from local ENU metres.
+ * Everything is placed through `world/placement`: artifacts by their frame,
+ * overlays from local ENU metres. Every replaced object and the stage itself
+ * free their GPU resources (`scene-resources`), Spark's renderer included.
  */
 
 import type * as T from "three";
@@ -16,11 +18,12 @@ import type * as SparkNs from "@sparkjsdev/spark";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
 
-import type { Placement } from "../../lib/contract/generated";
+import { aisleLinesViewer, type Aisle } from "../../lib/world/aisles";
 import type { FloorplanFloor } from "../../lib/world/floorplan";
 import { floorLinesViewer } from "../../lib/world/floorplan";
-import { artifactToViewerMatrix, type Vec3 } from "../../lib/world/placement";
+import { artifactToViewerMatrix, type ArtifactFrame, type Vec3 } from "../../lib/world/placement";
 import { followCanvasSize } from "../atlas/viewers/cloud-view";
+import { disposeMaterials, disposeObject } from "./scene-resources";
 import { WalkControls } from "./walk-controls";
 
 export type ViewMode = "orbit" | "dollhouse" | "walk";
@@ -30,9 +33,13 @@ export type SplatInput = { bytes: Uint8Array; fileName: string } | { url: string
 
 type Three = typeof T;
 type Spark = typeof SparkNs;
+type Matrix16 = Parameters<T.Matrix4["set"]>;
 
 const PLAN_COLOUR = 0x38bdf8;
+const AISLE_COLOUR = 0xf97316;
 const MEASURE_COLOUR = 0xfacc15;
+/** Overlays draw after the (transparent, depth-less) splat so they stay visible. */
+const OVERLAY_ORDER = 10;
 
 export class SparkStage {
   readonly camera: T.PerspectiveCamera;
@@ -46,7 +53,8 @@ export class SparkStage {
   private splat: SplatMesh | null = null;
   private collision: T.Object3D | null = null;
   private plan: T.LineSegments | null = null;
-  private measure: T.Group;
+  private aisles: T.LineSegments | null = null;
+  private readonly measure: T.Group;
   private bounds: T.Box3;
   private floorY = 0;
   private raf = 0;
@@ -106,8 +114,9 @@ export class SparkStage {
     this.raf = requestAnimationFrame(this.loop);
   };
 
-  /** Load the splat, placed by `placement` (null = already local ENU). */
-  async loadSplat(input: SplatInput, placement: Placement | null): Promise<void> {
+  /** Load the splat in `frame`; it replaces any previous splat, and the
+   * camera frames the new one alone. */
+  async loadSplat(input: SplatInput, frame: ArtifactFrame): Promise<void> {
     const { SplatMesh, SplatFileType } = this.SPARK;
     const ext = input.fileName.toLowerCase().split(".").pop() ?? "";
     const fileType = Object.values(SplatFileType).find((t) => t === ext);
@@ -116,34 +125,36 @@ export class SparkStage {
         ? new SplatMesh({ fileBytes: input.bytes, fileType, fileName: input.fileName })
         : new SplatMesh({ url: input.url, fileType, paged: true });
     mesh.matrixAutoUpdate = false;
-    mesh.matrix.set(...(artifactToViewerMatrix(placement) as Parameters<T.Matrix4["set"]>));
+    mesh.matrix.set(...(artifactToViewerMatrix(frame) as Matrix16));
     mesh.updateMatrixWorld(true);
-    this.splat?.dispose();
-    if (this.splat) this.scene.remove(this.splat);
+    if (this.splat) {
+      this.scene.remove(this.splat);
+      this.splat.dispose();
+    }
     this.splat = mesh;
     this.scene.add(mesh);
     await mesh.initialized;
-    const box = mesh.getBoundingBox(true);
-    if (!box.isEmpty()) this.bounds.union(box.applyMatrix4(mesh.matrix));
+    if (this.splat !== mesh) return;
+    this.bounds = mesh.getBoundingBox(true).applyMatrix4(mesh.matrix);
     this.frame();
   }
 
   /** Load the collision mesh (GLB, local ENU, Z up) used for picking. */
   async loadCollision(glb: ArrayBuffer, show = false): Promise<void> {
     const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-    const gltf = await new GLTFLoader().parseAsync(glb, "");
-    const root = gltf.scene;
+    const root = (await new GLTFLoader().parseAsync(glb, "")).scene;
     root.matrixAutoUpdate = false;
-    root.matrix.set(...(artifactToViewerMatrix(null) as Parameters<T.Matrix4["set"]>));
+    root.matrix.set(...(artifactToViewerMatrix(null) as Matrix16));
     root.traverse((o) => {
       const mesh = o as T.Mesh;
-      if (mesh.isMesh) {
-        mesh.material = new this.THREE.MeshBasicMaterial({ color: 0x94a3b8, wireframe: true, opacity: 0.25, transparent: true });
-        mesh.visible = show;
-      }
+      if (!mesh.isMesh) return;
+      // The loader's own materials are replaced, so free them now.
+      disposeMaterials(mesh.material);
+      mesh.material = new this.THREE.MeshBasicMaterial({ color: 0x94a3b8, wireframe: true, opacity: 0.25, transparent: true });
+      mesh.visible = show;
     });
     root.updateMatrixWorld(true);
-    if (this.collision) this.scene.remove(this.collision);
+    disposeObject(this.collision);
     this.collision = root;
     this.scene.add(root);
     if (this.bounds.isEmpty()) {
@@ -158,30 +169,35 @@ export class SparkStage {
     });
   }
 
-  /** Draw one floor's walls on the floor (null clears the plan). */
-  setFloor(floor: FloorplanFloor | null): void {
-    if (this.plan) {
-      this.scene.remove(this.plan);
-      this.plan.geometry.dispose();
-      (this.plan.material as T.Material).dispose();
-      this.plan = null;
-    }
-    if (!floor) return;
-    this.floorY = floor.zM;
+  private lines(positions: Float32Array | null, colour: number): T.LineSegments | null {
+    if (!positions || positions.length === 0) return null;
     const geom = new this.THREE.BufferGeometry();
-    geom.setAttribute("position", new this.THREE.BufferAttribute(floorLinesViewer(floor), 3));
-    // Drawn after the (transparent, depth-less) splat so the plan stays visible.
-    this.plan = new this.THREE.LineSegments(
+    geom.setAttribute("position", new this.THREE.BufferAttribute(positions, 3));
+    const seg = new this.THREE.LineSegments(
       geom,
-      new this.THREE.LineBasicMaterial({ color: PLAN_COLOUR, depthTest: false, transparent: true }),
+      new this.THREE.LineBasicMaterial({ color: colour, depthTest: false, transparent: true }),
     );
-    this.plan.renderOrder = 10;
-    this.scene.add(this.plan);
+    seg.renderOrder = OVERLAY_ORDER;
+    this.scene.add(seg);
     if (this.bounds.isEmpty()) {
       geom.computeBoundingBox();
       if (geom.boundingBox) this.bounds.copy(geom.boundingBox);
       this.frame();
     }
+    return seg;
+  }
+
+  /** Draw one floor's walls on the floor (null clears the plan). */
+  setFloor(floor: FloorplanFloor | null): void {
+    disposeObject(this.plan);
+    if (floor) this.floorY = floor.zM;
+    this.plan = this.lines(floor ? floorLinesViewer(floor) : null, PLAN_COLOUR);
+  }
+
+  /** Draw warehouse aisles (centrelines and edges) on the current floor. */
+  setAisles(aisles: readonly Aisle[]): void {
+    disposeObject(this.aisles);
+    this.aisles = this.lines(aisles.length ? aisleLinesViewer(aisles, this.floorY + 0.03) : null, AISLE_COLOUR);
   }
 
   setMode(mode: ViewMode): void {
@@ -238,23 +254,18 @@ export class SparkStage {
 
   /** Draw measurement points (viewer space) joined by a line. */
   setMeasure(points: readonly Vec3[]): void {
-    for (const c of [...this.measure.children]) {
-      this.measure.remove(c);
-      const m = c as T.Mesh;
-      m.geometry?.dispose();
-      (m.material as T.Material | undefined)?.dispose();
-    }
+    for (const c of [...this.measure.children]) disposeObject(c);
     const overlay = { color: MEASURE_COLOUR, depthTest: false, transparent: true };
     for (const p of points) {
       const dot = new this.THREE.Mesh(new this.THREE.SphereGeometry(0.04, 12, 8), new this.THREE.MeshBasicMaterial(overlay));
       dot.position.set(...p);
-      dot.renderOrder = 11;
+      dot.renderOrder = OVERLAY_ORDER + 1;
       this.measure.add(dot);
     }
     if (points.length === 2) {
       const geom = new this.THREE.BufferGeometry().setFromPoints(points.map((p) => new this.THREE.Vector3(...p)));
       const line = new this.THREE.Line(geom, new this.THREE.LineBasicMaterial(overlay));
-      line.renderOrder = 11;
+      line.renderOrder = OVERLAY_ORDER + 1;
       this.measure.add(line);
     }
   }
@@ -266,15 +277,17 @@ export class SparkStage {
     this.orbit.dispose();
     this.walk.dispose();
     this.setMeasure([]);
-    this.setFloor(null);
-    this.splat?.dispose();
-    this.collision?.traverse((o) => {
-      const m = o as T.Mesh;
-      if (m.isMesh) {
-        m.geometry.dispose();
-        (m.material as T.Material).dispose();
-      }
-    });
+    disposeObject(this.plan);
+    disposeObject(this.aisles);
+    disposeObject(this.collision);
+    this.plan = this.aisles = this.collision = null;
+    if (this.splat) {
+      this.scene.remove(this.splat);
+      this.splat.dispose();
+      this.splat = null;
+    }
+    this.scene.remove(this.spark);
+    this.spark.dispose();
     this.renderer.dispose();
   }
 }

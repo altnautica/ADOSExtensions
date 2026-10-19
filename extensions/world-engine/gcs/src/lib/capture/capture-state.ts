@@ -168,15 +168,37 @@ export const RETURN_PROMPT_AFTER_S = 180;
 /** Within this distance of the start a loop closure is offered. */
 export const LOOP_CLOSE_RADIUS_M = 2;
 
-/** What the "return to start" prompt says now: nothing, the distance back, or
- * that the walk is close enough to close the loop. */
-export function returnToStartPrompt(
-  state: CaptureState,
-): { kind: "none" } | { kind: "return"; distanceM: number } | { kind: "close_loop" } {
+/** Compass bearing (degrees clockwise from north, 0..360) from `from` to `to`
+ * in ENU metres. */
+export function bearingDeg(from: readonly number[], to: readonly number[]): number {
+  const deg = (Math.atan2((to[0] ?? 0) - (from[0] ?? 0), (to[1] ?? 0) - (from[1] ?? 0)) * 180) / Math.PI;
+  return (deg + 360) % 360;
+}
+
+export type ReturnPrompt =
+  | { kind: "none" }
+  | {
+      kind: "return";
+      distanceM: number;
+      /** Compass bearing to the start, or null without a position fix. */
+      bearingDeg: number | null;
+      /** Bearing relative to the operator's heading (−180..180, + = right). */
+      relativeDeg: number | null;
+    }
+  | { kind: "close_loop" };
+
+/** What the "return to start" prompt says now: nothing, the distance and
+ * bearing back (from the coverage's current position and heading), or that
+ * the walk is close enough to close the loop. */
+export function returnToStartPrompt(state: CaptureState, coverage: CaptureCoverage | null = null): ReturnPrompt {
   const d = state.coverage.distanceFromStartM;
   if (state.state !== "recording" || d === null || (state.durationS ?? 0) < RETURN_PROMPT_AFTER_S) {
     return { kind: "none" };
   }
   if (state.coverage.loopClosed === true) return { kind: "none" };
-  return d <= LOOP_CLOSE_RADIUS_M ? { kind: "close_loop" } : { kind: "return", distanceM: d };
+  if (d <= LOOP_CLOSE_RADIUS_M) return { kind: "close_loop" };
+  const bearing = coverage?.current && coverage.start ? bearingDeg(coverage.current, coverage.start) : null;
+  const heading = coverage?.headingDeg ?? null;
+  const relativeDeg = bearing !== null && heading !== null ? ((bearing - heading + 540) % 360) - 180 : null;
+  return { kind: "return", distanceM: d, bearingDeg: bearing, relativeDeg };
 }

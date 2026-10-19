@@ -8,24 +8,27 @@
 
 import { useEffect, useState, type RefObject } from "react";
 
-import type { Placement } from "../../lib/contract/generated";
 import type { ArtifactSource } from "../../lib/net/artifact-source";
 import { fetchArrayBufferWithProgress } from "../../lib/net/fetch-with-progress";
 import { honourRange, serveTreeAtSentinel, type SentinelRoute } from "../../lib/net/sentinel-fetch";
+import type { Aisle } from "../../lib/world/aisles";
 import type { Floorplan } from "../../lib/world/floorplan";
-import type { Vec3 } from "../../lib/world/placement";
+import type { ArtifactFrame, Vec3 } from "../../lib/world/placement";
 import { SparkStage } from "./spark-stage";
 
 /** Everything the world viewer shows for one reconstruction. */
 export interface WorldScene {
   /** The splat: `.spz` / `.ply` read whole, `.rad` streamed. */
   splat: ArtifactSource | null;
-  /** The splat's placement in local ENU (null = already local ENU). */
-  placement: Placement | null;
+  /** The splat's frame: a contract placement, null for local ENU, or
+   * `"colmap"` for a legacy artifact that carries no placement. */
+  placement: ArtifactFrame;
   /** Collision mesh (GLB, local ENU) for picking and measuring. */
   collision: ArtifactSource | null;
   floorplan: Floorplan | null;
   rooms: { name: string; floor: number; hotspot: Vec3 | null }[];
+  /** Warehouse aisles (local ENU), drawn on the floor. */
+  aisles?: Aisle[];
 }
 
 export type SceneLoad =
@@ -79,6 +82,8 @@ export function useSparkScene(
   }, [canvasRef]);
 
   const splat = scene.splat;
+  const frame = scene.placement;
+  const frameKey = JSON.stringify(frame);
   useEffect(() => {
     if (!stage || !splat) return;
     const abort = new AbortController();
@@ -88,14 +93,14 @@ export function useSparkScene(
       try {
         if (isLod(splat.name)) {
           route = serveLod(splat);
-          await stage.loadSplat({ url: route.url, fileName: splat.name }, scene.placement);
+          await stage.loadSplat({ url: route.url, fileName: splat.name }, frame);
         } else {
           const buf = await fetchArrayBufferWithProgress(splat, {
             signal: abort.signal,
             onProgress: (p) => setLoad({ phase: "loading", percent: p.percent }),
           });
           if (abort.signal.aborted) return;
-          await stage.loadSplat({ bytes: new Uint8Array(buf), fileName: splat.name }, scene.placement);
+          await stage.loadSplat({ bytes: new Uint8Array(buf), fileName: splat.name }, frame);
         }
         if (!abort.signal.aborted) setLoad({ phase: "ready" });
       } catch {
@@ -106,9 +111,9 @@ export function useSparkScene(
       abort.abort();
       route?.release();
     };
-    // The placement belongs to the splat; both change together with its key.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, splat?.key]);
+    // Keyed by identity, not object: an equal splat and frame handed over on
+    // a re-render must not restart the download.
+  }, [stage, splat?.key, frameKey]);
 
   const collision = scene.collision;
   useEffect(() => {
@@ -119,7 +124,6 @@ export function useSparkScene(
       // A missing collision mesh only disables surface picking.
       .catch(() => undefined);
     return () => abort.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stage, collision?.key]);
 
   return { stage, load };

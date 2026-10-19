@@ -60,11 +60,25 @@ export function artifactToEnu(p: Placement, [x, y, z]: Vec3): Vec3 {
 }
 
 /**
+ * Where an artifact sits: a contract placement, `null` for an artifact
+ * already in local ENU (the contract's own statement), or `"colmap"` for a
+ * legacy artifact that carries no placement at all. The single rule: an
+ * artifact without a contract placement is in the legacy COLMAP / OpenCV
+ * world frame (Y down, Z forward), the same frame `orientCloudToYUp` lifts a
+ * legacy `.ply` cloud out of, so its splat and cloud views agree.
+ */
+export type ArtifactFrame = Placement | null | "colmap";
+
+/** Legacy COLMAP world → viewer: a 180° rotation about X, `diag(1, −1, −1)`. */
+const COLMAP_TO_VIEWER = [1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1];
+
+/**
  * The row-major 4×4 that takes artifact coordinates into viewer coordinates:
  * `M_viewer_enu · [s·R | t]`. Feed it to three's `Matrix4.set(...)` (row-major).
  */
-export function artifactToViewerMatrix(p: Placement | null): number[] {
-  const { R_enu_artifact: R, t_enu_artifact: t, scale: s } = p ?? IDENTITY_PLACEMENT;
+export function artifactToViewerMatrix(frame: ArtifactFrame): number[] {
+  if (frame === "colmap") return [...COLMAP_TO_VIEWER];
+  const { R_enu_artifact: R, t_enu_artifact: t, scale: s } = frame ?? IDENTITY_PLACEMENT;
   // ENU rows (east, north, up) of s·R and t.
   const east = [s * R[0]!, s * R[1]!, s * R[2]!, t[0]!];
   const north = [s * R[3]!, s * R[4]!, s * R[5]!, t[1]!];

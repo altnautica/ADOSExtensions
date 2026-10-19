@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   coerceCaptureState,
   coerceCoverage,
+  bearingDeg,
   returnToStartPrompt,
   type CaptureState,
 } from "../../../src/lib/capture/capture-state";
@@ -78,8 +79,23 @@ describe("returnToStartPrompt", () => {
   });
 
   it("gives the distance back, then offers the loop close within 2 m", () => {
-    expect(returnToStartPrompt(at({ distanceFromStartM: 38.2 }, 400))).toEqual({ kind: "return", distanceM: 38.2 });
+    expect(returnToStartPrompt(at({ distanceFromStartM: 38.2 }, 400))).toEqual({
+      kind: "return",
+      distanceM: 38.2,
+      bearingDeg: null,
+      relativeDeg: null,
+    });
     expect(returnToStartPrompt(at({ distanceFromStartM: 1.5 }, 400))).toEqual({ kind: "close_loop" });
     expect(returnToStartPrompt(at({ distanceFromStartM: 1.5, loopClosed: true }, 400))).toEqual({ kind: "none" });
+  });
+
+  it("gives the compass bearing back to the start and the turn from the heading", () => {
+    const coverage = { cellM: 0.25, cells: [], trajectory: [], start: [0, 0, 0] as [number, number, number], current: [10, 10, 0] as [number, number, number], headingDeg: 90 };
+    const p = returnToStartPrompt(at({ distanceFromStartM: 14.1 }, 400), coverage);
+    // Start is south-west of the walker: bearing 225°; facing east → turn right 135°.
+    expect(p.kind === "return" && p.bearingDeg).toBeCloseTo(225, 9);
+    expect(p.kind === "return" && p.relativeDeg).toBeCloseTo(135, 9);
+    expect(bearingDeg([0, 0], [0, 5])).toBe(0);
+    expect(bearingDeg([0, 0], [-5, 0])).toBe(270);
   });
 });

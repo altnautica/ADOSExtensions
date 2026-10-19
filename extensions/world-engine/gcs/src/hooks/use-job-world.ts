@@ -1,16 +1,19 @@
 /**
  * @module use-job-world
  * @description Assembles one reconstruction job's outputs into what the world
- * viewer shows: the splat (the `.rad` LOD file when the node built one, else
- * the `.spz`), its placement sidecar, the collision mesh, the floorplan with
- * its room hotspots, the LAZ point cloud and the tour bundle.
+ * viewer shows: the splat (SPZ first, then the `.rad` LOD, then the raw PLY),
+ * its placement sidecar, the collision mesh, the floorplan with its room
+ * hotspots, warehouse aisles, the LAZ point cloud, the tour bundle and the
+ * dataset export.
  */
 
 import { useEffect, useState } from "react";
 
+import { pickSplatOutput } from "../components/atlas/viewer-types";
 import type { WorldScene } from "../components/world/use-spark-scene";
 import type { ComputeAgentClient, ComputeOutput } from "../lib/agent/compute-client";
 import type { ArtifactSource } from "../lib/net/artifact-source";
+import { coerceAisles } from "../lib/world/aisles";
 import { coerceFloorplan } from "../lib/world/floorplan";
 import { coercePlacement } from "../lib/world/placement";
 
@@ -18,6 +21,8 @@ export interface JobWorld {
   scene: WorldScene;
   pointcloud: ArtifactSource | null;
   tour: ArtifactSource | null;
+  /** Dataset export (COLMAP sparse model + transforms.json, zipped). */
+  export: ArtifactSource | null;
   outputs: ComputeOutput[];
 }
 
@@ -33,11 +38,13 @@ const byKind = (outputs: readonly ComputeOutput[], kind: string) => outputs.find
 export async function loadJobWorld(client: ComputeAgentClient, jobId: string): Promise<JobWorld | null> {
   const outputs = await client.getOutputs(jobId);
   if (!outputs) return null;
-  const splatOut = byKind(outputs, "splat_lod") ?? byKind(outputs, "splat");
+  const splatOut = pickSplatOutput(outputs);
   const plan = byKind(outputs, "floorplan");
-  const [placementRaw, planRaw] = await Promise.all([
+  const aisles = byKind(outputs, "aisles");
+  const [placementRaw, planRaw, aislesRaw] = await Promise.all([
     splatOut?.placeJson ? client.readJsonFile(jobId, splatOut.placeJson) : Promise.resolve(null),
     plan?.file ? client.readJsonFile(jobId, plan.file) : Promise.resolve(null),
+    aisles?.file ? client.readJsonFile(jobId, aisles.file) : Promise.resolve(null),
   ]);
   const floorplan = coerceFloorplan(planRaw);
   return {
@@ -50,9 +57,11 @@ export async function loadJobWorld(client: ComputeAgentClient, jobId: string): P
       rooms: (floorplan?.floors ?? []).flatMap((f) =>
         f.rooms.map((r) => ({ name: r.name, floor: f.floor, hotspot: r.hotspot })),
       ),
+      aisles: coerceAisles(aislesRaw),
     },
     pointcloud: (byKind(outputs, "pointcloud") ?? byKind(outputs, "change"))?.source ?? null,
     tour: byKind(outputs, "tour")?.source ?? null,
+    export: byKind(outputs, "export")?.source ?? null,
   };
 }
 

@@ -82,22 +82,43 @@ export function viewerForKind(kind: string): AtlasViewer {
 /** Point-cloud artifact kinds (consumed by the Cloud / LOD viewers). */
 const CLOUD_KINDS = ["cloud", "pointcloud", "ply"];
 
+/** A splat output's format: the node's `format`, else the file extension. */
+function splatFormat(o: { format?: string | null; file?: string | null; uri?: string }): string {
+  if (o.format) return o.format.toLowerCase();
+  const name = (o.file ?? o.uri ?? "").split(/[?#]/)[0] ?? "";
+  return name.toLowerCase().split(".").pop() ?? "";
+}
+
+/** Splat format preference: compressed SPZ first (≈10× smaller than the raw
+ * PLY), then the streamed `.rad` LOD, then the raw PLY. */
+const SPLAT_RANK = ["spz", "rad", "ply"];
+
+/** The best splat among a job's outputs (`splat` and `splat_lod` kinds). */
+export function pickSplatOutput<T extends { kind: string; format?: string | null; file?: string | null }>(
+  outputs: readonly T[],
+): T | undefined {
+  const splats = outputs.filter((o) => o.kind === "splat" || o.kind === "splat_lod");
+  const rank = (o: T) => {
+    const r = SPLAT_RANK.indexOf(splatFormat(o));
+    return r < 0 ? SPLAT_RANK.length : r;
+  };
+  return [...splats].sort((a, b) => rank(a) - rank(b))[0];
+}
+
 /**
  * The output artifact a given viewer should load, matched by the artifact's
- * `kind`. A reconstruct job can emit several outputs (a `splat` `.ply`, a
- * point-cloud `.ply`, and a `rerun` `.rrd`), so each viewer must pick ITS kind
- * — the splat viewer needs the gaussian-splat `.ply`, not a plain point cloud
- * (which lacks scale/rotation/opacity and renders as a black nothing). Returns
- * undefined when no matching kind exists, so the caller can fall back.
+ * `kind`. A reconstruct job can emit several outputs (a splat, a point cloud,
+ * a mesh, a `rerun` `.rrd`), so each viewer must pick ITS kind — the splat
+ * viewer needs a gaussian splat, not a plain point cloud (which lacks
+ * scale/rotation/opacity and renders as a black nothing). Returns undefined
+ * when no matching kind exists, so the caller can fall back.
  */
-export function pickArtifactForViewer<T extends { kind: string }>(
+export function pickArtifactForViewer<T extends { kind: string; format?: string | null; file?: string | null }>(
   outputs: readonly T[],
   viewer: AtlasViewer,
 ): T | undefined {
   if (viewer === "rerun") return outputs.find((o) => o.kind === "rerun");
-  if (viewer === "splat") {
-    return outputs.find((o) => o.kind === "splat_lod") ?? outputs.find((o) => o.kind === "splat");
-  }
+  if (viewer === "splat") return pickSplatOutput(outputs);
   // cloud / lod → a dense point cloud
   return outputs.find((o) => CLOUD_KINDS.includes(o.kind));
 }

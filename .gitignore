@@ -13,6 +13,11 @@ extensions/*/gcs/plugin.bundle.js
 extensions/world-engine/gcs/world-engine.mjs
 extensions/world-engine/gcs/plugin.css
 extensions/world-engine/gcs/assets/
+extensions/world-engine/gcs/tour-viewer/
+
+# World Engine node: fetched third-party tools and python project envs.
+extensions/world-engine/agent/node/tools/cache/
+extensions/world-engine/agent/node/python/*/.venv/
 
 # Rust build output (the cargo workspace at the repo root)
 /target

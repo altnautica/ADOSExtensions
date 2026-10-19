@@ -7,6 +7,7 @@
  */
 
 import type { ArtifactSource } from "../../lib/net/artifact-source";
+import type { ArtifactFrame } from "../../lib/world/placement";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
 import { SparkViewer } from "../world/SparkViewer";
 import { ReconstructionBadge } from "./ReconstructionBadge";
@@ -27,13 +28,13 @@ const VIEWER_WHAT: Record<AtlasViewer, string> = {
   lod: "point cloud",
 };
 
-function ViewerFor({ viewer, source }: { viewer: AtlasViewer; source: ArtifactSource }) {
+function ViewerFor({ viewer, source, frame }: { viewer: AtlasViewer; source: ArtifactSource; frame: ArtifactFrame }) {
   switch (viewer) {
     case "rerun":
       return <RerunViewer source={source} />;
     case "splat":
       return (
-        <SparkViewer scene={{ splat: source, placement: null, collision: null, floorplan: null, rooms: [] }} />
+        <SparkViewer scene={{ splat: source, placement: frame, collision: null, floorplan: null, rooms: [] }} />
       );
     case "cloud":
       return <PointCloudViewer source={source} />;
@@ -46,11 +47,16 @@ export function WorldModelViewport({
   viewer,
   artifact,
   backend = null,
+  frame = "colmap",
 }: {
   viewer: AtlasViewer;
   artifact: ArtifactSource | null;
   /** The reconstruction backend to name on the viewer, or null. */
   backend?: string | null;
+  /** The splat's frame. Defaults to the legacy COLMAP frame: an artifact
+   * without a contract placement is a legacy one, the same rule the cloud
+   * viewer applies to a `.ply` cloud. */
+  frame?: ArtifactFrame;
 }) {
   if (!artifact) return null;
   return (
@@ -64,7 +70,8 @@ export function WorldModelViewport({
           </div>
         }
       >
-        <ViewerFor viewer={viewer} source={artifact} />
+        {/* Keyed by artifact so a swap starts a fresh stage (no stale bounds). */}
+        <ViewerFor key={artifact.key} viewer={viewer} source={artifact} frame={frame} />
       </ErrorBoundary>
       <ReconstructionBadge backend={backend} />
     </>

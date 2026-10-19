@@ -42,11 +42,15 @@ export function JobWorldPanel({ client, jobId }: { client: ComputeAgentClient; j
   const world = useJobWorld(client, jobId);
   const { toast } = useToast();
   const [picked, setView] = useState<"splat" | "cloud" | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
 
   if (world.status === "loading" || world.status === "idle") return <ViewerLoading label={t("openingWorld")} />;
   if (world.status === "failed") return <CalmState icon={Boxes} message={t("worldUnavailable")} />;
-  const { scene, pointcloud, tour } = world.world;
+  const { scene, pointcloud, tour, export: dataset } = world.world;
+  const downloads = [
+    { id: "tour", source: tour, file: `tour-${jobId}.zip`, label: t("downloadTour") },
+    { id: "export", source: dataset, file: `dataset-${jobId}.zip`, label: t("downloadExport") },
+  ];
   const view = picked ?? (scene.splat ? "splat" : "cloud");
 
   return (
@@ -63,22 +67,27 @@ export function JobWorldPanel({ client, jobId }: { client: ComputeAgentClient; j
             {t(`view.${v}`)}
           </Button>
         ))}
-        {tour && (
-          <Button
-            size="sm"
-            variant="secondary"
-            className="we:ml-auto"
-            loading={saving}
-            icon={<Download size={12} />}
-            onClick={async () => {
-              setSaving(true);
-              const ok = await downloadArtifact(tour, `tour-${jobId}.zip`);
-              setSaving(false);
-              if (!ok) toast(t("downloadFailed"), "error");
-            }}
-          >
-            {t("downloadTour")}
-          </Button>
+        {downloads.map(
+          (d, i) =>
+            d.source && (
+              <Button
+                key={d.id}
+                size="sm"
+                variant="secondary"
+                className={i === 0 ? "we:ml-auto" : undefined}
+                loading={saving === d.id}
+                icon={<Download size={12} />}
+                title={d.id === "export" ? t("exportHint") : undefined}
+                onClick={async () => {
+                  setSaving(d.id);
+                  const ok = await downloadArtifact(d.source!, d.file);
+                  setSaving(null);
+                  if (!ok) toast(t("downloadFailed"), "error");
+                }}
+              >
+                {d.label}
+              </Button>
+            ),
         )}
       </div>
       <div className="we:relative we:h-[460px]">

@@ -25,9 +25,28 @@ export const CALIB_STEPS: readonly CalibStep[] = [
   { target: "lidar_camera", recordS: 30, needsLidar: true },
 ];
 
-/** The steps a rig needs: the LiDAR step only when the rig has a LiDAR. */
-export function stepsFor(hasLidar: boolean): CalibStep[] {
-  return CALIB_STEPS.filter((s) => hasLidar || !s.needsLidar);
+/** Steps the operator fills in from a measurement or the CAD model and that
+ * write straight into `rig.json` (no solver runs): the LiDAR mounting
+ * extrinsic and the GNSS antenna lever arm. */
+export type EntryTarget = "lidar_imu" | "gnss_lever_arm";
+
+export type WizardStep = { kind: "job"; step: CalibStep } | { kind: "entry"; target: EntryTarget };
+
+/** The whole wizard in order (IMU noise → intrinsics → camera–IMU → LiDAR–IMU
+ * → LiDAR–camera → GNSS lever arm), keeping only what the rig carries. */
+export function wizardFor(rig: { hasLidar: boolean; hasGnss: boolean }): WizardStep[] {
+  const job = (target: CalibTarget): WizardStep[] => {
+    const step = CALIB_STEPS.find((s) => s.target === target);
+    return step && (rig.hasLidar || !step.needsLidar) ? [{ kind: "job", step }] : [];
+  };
+  return [
+    ...job("imu_noise"),
+    ...job("intrinsics"),
+    ...job("camera_imu"),
+    ...(rig.hasLidar ? [{ kind: "entry" as const, target: "lidar_imu" as const }] : []),
+    ...job("lidar_camera"),
+    ...(rig.hasGnss ? [{ kind: "entry" as const, target: "gnss_lever_arm" as const }] : []),
+  ];
 }
 
 export interface CalibVersion {

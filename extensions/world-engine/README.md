@@ -27,11 +27,13 @@ The extension has two halves:
 | Path | Contents |
 |---|---|
 | `agent/capture/` | Drone-side capture service: keyframe selection, pose source, session state |
-| `agent/node/` | Compute node: ingest, job scheduler, reconstruction backends, artifacts, offload serving |
+| `agent/node/` | Reconstruction node: session upload lane, staged pipeline (prepare, SfM, train, mesh, products), indoor products, calibration jobs, job API, artifacts, offload serving |
+| `agent/node/tools/` | `tool-pins.json` (the exact third-party tool versions) and `fetch-tools.ps1` / `fetch-tools.sh` |
+| `agent/node/python/gsplat_train/` | uv project: gsplat training, mesh, depth priors, masks and hero stills |
 | `agent/transport/` | Keyframe bearers (LAN, WFB relay, cloud), mDNS discovery, offload client |
 | `agent/protocol/` | Wire types and topic names shared by every agent crate |
 | `agent/link/` | The extension's main process on every node: the bearer ladder and offload reconciler on a drone, the relay on a ground station, and the HTTP server the GCS reaches |
-| `agent/python/depth_seed.py` | Optional monocular-depth seed for splat training |
+| `contract/` | The MIT capture contract `ados.capture/1` (schemas, protobuf messages, fixtures) |
 | `gcs/` | The inline GCS module |
 | `locales/` | GCS strings |
 
@@ -65,16 +67,21 @@ Agent pages:
 | `offload` | drone, workstation, compute | On a drone, where perception runs and which compute node it offloads to; on a compute node, the serving switch, the detector model and the GPU |
 | `atlas-relay` | ground-station | The relay's keyframes seen and forwarded, with a staleness badge |
 
-Node surfaces on workstation and compute nodes:
+Node surfaces:
 
-| Surface | Label | What it shows |
-|---|---|---|
-| `overview` | Compute | GPU card with its utilisation history, compute-cluster status, a jobs summary |
-| `compute` | Jobs & outputs | The job queue, the artifact viewer over finished jobs, and the paired drones and ground stations allowed to use this node |
+| Surface | Nodes | Label | What it shows |
+|---|---|---|---|
+| `overview` | workstation, compute | Compute | GPU card with its utilisation history, compute-cluster status, a jobs summary |
+| `compute` | workstation, compute | Jobs & outputs | The job queue, the staged reconstruction pipeline (stage, GPU, ETA, tools, a missing tool), the artifact viewer over finished jobs, and the paired drones and ground stations allowed to use this node |
+| `capture` | visor | Capture | Live camera previews (WHEP), top-down coverage with the walked trajectory, the six health chips, record / mark with room and floor, exposure lock, return to start, storage left |
+| `sessions` | visor, drone | Sessions | Recorded sessions with upload progress, reconstruction presets (Preview, HQ, Tour, Warehouse), job progress, the world viewer, tour bundle and dataset downloads, change detection between two sessions |
+| `calibration` | visor | Calibration | The calibration wizard (IMU noise, camera intrinsics, camera–IMU, LiDAR–IMU, LiDAR–camera, GNSS lever arm) and the stored calibration versions |
 
-Every reconstruction carries the backend that produced it. A placeholder
-produced on a node with no reconstruction backend installed is badged as a
-placeholder and never shown as a real world model.
+The world viewer renders splats with Spark (SPZ, PLY, or a streamed `.rad`
+level-of-detail file) with orbit, dollhouse and first-person walk modes, the
+floorplan, room hotspots, warehouse aisles and a measure tool. Every
+reconstruction names the backend that produced it. `gcs/tour-viewer/` is the
+same viewer as a static page, copied into every tour bundle.
 
 ## Configuration
 
@@ -102,21 +109,26 @@ Per-node plugin configuration (`config-schema.json`):
 | `relay.listen_port` | Ground-station relay listen port |
 | `relay.compute_base_url` | Compute node the ground-station relay forwards to |
 
-## Optional host tools
+## Reconstruction tools
 
-The compute node shells out to reconstruction tools that are installed on
-the host, not shipped in the package. It uses whichever is present:
+The node drives pinned third-party tools listed in
+`agent/node/tools/tool-pins.json` and installed under `agent/node/tools/cache/`
+by `fetch-tools.ps1` (Windows) or `fetch-tools.sh` (Linux/macOS). It never
+takes a tool from `PATH`; `ADOS_TOOL_<NAME>` overrides one explicitly.
 
-- **COLMAP** for structure-from-motion poses and a sparse point cloud.
-- **Brush** (Metal, Vulkan or wgpu) or **msplat** (Apple Silicon) for
-  Gaussian-splat training; **nerfstudio** (`ns-train`, CUDA or MPS) is also
-  supported.
-- **Python 3** with `numpy`, `Pillow`, `torch` and `transformers` for the
-  monocular-depth seed in `agent/python/depth_seed.py`. Without it, splat
-  training starts from a random point cloud instead.
+- **COLMAP 4.2** for structure-from-motion (known-pose triangulation and
+  bundle adjustment, or incremental / hierarchical mapping).
+- **Brush** for the `preview` preset; **gsplat** (the `gsplat_train` uv project)
+  for `hq`, `tour` and `warehouse`. Without working gsplat kernels the node
+  trains with Brush at full length and records why.
+- **splat-transform** (SPZ) and the **Spark LoD builder** (`.rad`).
+- **Kalibr** and **direct_visual_lidar_calibration** containers (docker; WSL
+  on Windows) for calibration jobs.
 
-With no reconstruction backend installed, jobs complete with a placeholder
-output that the GCS badges as such.
+A preset whose tools are not installed is refused with `E_TOOL_MISSING` and
+the missing tool's name. On Windows the node runs standalone:
+`world-engine-node --standalone --data-dir <dir> --listen 0.0.0.0:8092`, with
+the owner bearer token in `<dir>/node/owner-token`.
 
 ## Building the GCS module
 

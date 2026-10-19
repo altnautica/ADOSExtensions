@@ -20,6 +20,7 @@ import { WorldModelViewport } from "../../components/atlas/WorldModelViewport";
 import { Button } from "../../components/ui/Button";
 import { Select } from "../../components/ui/Select";
 import { translator } from "../../host/i18n";
+import { useOutputFrame } from "../../hooks/use-output-frame";
 import type { ComputeAgentClient, ComputeJob, ComputeOutput } from "../../lib/agent/compute-client";
 
 const t = translator("atlas");
@@ -84,7 +85,8 @@ export function ForgeOutputs({ jobs, client }: { jobs: readonly ComputeJob[]; cl
       ? override.viewer
       : defaultViewer;
   const picked = pickArtifactForViewer(outputs, viewer);
-  const showable = picked !== undefined && picked.source !== null;
+  const frame = useOutputFrame(client, picked);
+  const showable = picked !== undefined && picked.source !== null && frame !== undefined;
 
   if (finished.length === 0) {
     return <div className="we:text-[11px] we:text-text-tertiary we:text-center we:py-8">{t("forgeNoOutputs")}</div>;
@@ -118,7 +120,7 @@ export function ForgeOutputs({ jobs, client }: { jobs: readonly ComputeJob[]; cl
 
       <div className="we:flex-1 we:relative we:min-h-[320px]">
         {showable ? (
-          <WorldModelViewport viewer={viewer} artifact={picked.source} backend={picked.backend} />
+          <WorldModelViewport viewer={viewer} artifact={picked.source} backend={picked.backend} frame={frame} />
         ) : (
           <div className="we:absolute we:inset-0 we:flex we:items-center we:justify-center we:p-6">
             <div className="we:text-center">

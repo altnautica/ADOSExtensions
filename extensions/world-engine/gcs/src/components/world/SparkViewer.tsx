@@ -53,7 +53,10 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
     [scene.rooms, floor],
   );
 
-  useEffect(() => stage?.setFloor(showPlan ? floor : null), [stage, floor, showPlan]);
+  useEffect(() => {
+    stage?.setFloor(showPlan ? floor : null);
+    stage?.setAisles(showPlan ? (scene.aisles ?? []) : []);
+  }, [stage, floor, showPlan, scene.aisles]);
   useEffect(() => stage?.setMode(mode), [stage, mode]);
   useEffect(() => stage?.setMeasure(points), [stage, points]);
 

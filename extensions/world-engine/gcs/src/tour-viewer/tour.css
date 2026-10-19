@@ -1,6 +1,6 @@
 /* The tour viewer reuses the extension's `we:`-prefixed utilities and supplies
    the theme variables Mission Control would otherwise provide (dark theme). */
-@import "../src/styles.css";
+@import "../styles.css";
 
 @source "./";
 

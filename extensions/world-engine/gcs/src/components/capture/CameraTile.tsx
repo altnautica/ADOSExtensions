@@ -58,7 +58,12 @@ export function CameraTile({ client, camera }: { client: CaptureClient; camera: 
         const sdp = pc.localDescription?.sdp;
         if (!sdp || closed) return;
         const answer = await client.whepOffer(camera.id, sdp);
-        if (closed) return;
+        if (closed) {
+          // Unmounted while the offer was in flight: the device opened a
+          // session nobody will read, so close it now.
+          if (answer?.location) void client.whepClose(answer.location);
+          return;
+        }
         if (!answer) {
           setStatus("failed");
           return;

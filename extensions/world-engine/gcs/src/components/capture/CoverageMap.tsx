@@ -2,70 +2,110 @@
  * @module capture/CoverageMap
  * @description The capture's top-down coverage: covered voxel columns shaded
  * by hit count, the walked trajectory, the start point and the operator's
- * current position and heading, north up.
+ * current position and heading, north up. Drawn to one canvas, once per
+ * coverage poll, so a warehouse-sized grid (10,000 m² at 0.25 m is 160k
+ * cells) costs one pass and no DOM nodes.
  */
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import type { CaptureCoverage } from "../../lib/capture/capture-state";
-import { planTransform } from "../../lib/world/floorplan";
+import { planTransform, type Bounds } from "../../lib/world/floorplan";
 
 const W = 320;
 const H = 220;
 
-export function CoverageMap({ coverage, emptyLabel }: { coverage: CaptureCoverage | null; emptyLabel: string }) {
-  const view = useMemo(() => {
-    if (!coverage || (coverage.cells.length === 0 && coverage.trajectory.length === 0)) return null;
-    const c = coverage.cellM;
-    const xs = [...coverage.cells.flatMap((k) => [k.ix * c, (k.ix + 1) * c]), ...coverage.trajectory.map((p) => p[0])];
-    const ys = [...coverage.cells.flatMap((k) => [k.iy * c, (k.iy + 1) * c]), ...coverage.trajectory.map((p) => p[1])];
-    const tf = planTransform(
-      { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) },
-      W,
-      H,
-      10,
-    );
-    const maxHits = Math.max(1, ...coverage.cells.map((k) => k.hits));
-    return { tf, maxHits };
-  }, [coverage]);
+/** The extent of the covered cells and the trajectory, in ENU metres, found
+ * in one pass (no argument spreading, safe for any cell count). Null when
+ * there is nothing to draw. */
+export function coverageBounds(c: CaptureCoverage): Bounds | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const k of c.cells) {
+    if (k.ix * c.cellM < minX) minX = k.ix * c.cellM;
+    if (k.iy * c.cellM < minY) minY = k.iy * c.cellM;
+    if ((k.ix + 1) * c.cellM > maxX) maxX = (k.ix + 1) * c.cellM;
+    if ((k.iy + 1) * c.cellM > maxY) maxY = (k.iy + 1) * c.cellM;
+  }
+  for (const [x, y] of c.trajectory) {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  }
+  return Number.isFinite(minX) ? { minX, minY, maxX, maxY } : null;
+}
 
-  if (!coverage || !view) {
+function draw(ctx: CanvasRenderingContext2D, c: CaptureCoverage, b: Bounds, accent: string): void {
+  const tf = planTransform(b, W, H, 10);
+  const side = Math.max(1, c.cellM * tf.scale);
+  let maxHits = 1;
+  for (const k of c.cells) if (k.hits > maxHits) maxHits = k.hits;
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = accent;
+  for (const k of c.cells) {
+    const [x, y] = tf.toPx(k.ix * c.cellM, (k.iy + 1) * c.cellM);
+    ctx.globalAlpha = 0.2 + 0.6 * Math.min(1, k.hits / maxHits);
+    ctx.fillRect(x, y, side, side);
+  }
+  ctx.globalAlpha = 1;
+  if (c.trajectory.length > 1) {
+    ctx.strokeStyle = "#facc15";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    c.trajectory.forEach(([x, y], i) => {
+      const [px, py] = tf.toPx(x, y);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  }
+  if (c.start) {
+    const [sx, sy] = tf.toPx(c.start[0], c.start[1]);
+    ctx.strokeStyle = "#22c55e";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 4, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  if (c.current) {
+    const [cx, cy] = tf.toPx(c.current[0], c.current[1]);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(((c.headingDeg ?? 0) * Math.PI) / 180);
+    ctx.fillStyle = "#f8fafc";
+    ctx.beginPath();
+    ctx.moveTo(0, -7);
+    ctx.lineTo(5, 5);
+    ctx.lineTo(0, 2);
+    ctx.lineTo(-5, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+export function CoverageMap({ coverage, emptyLabel, label }: { coverage: CaptureCoverage | null; emptyLabel: string; label: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const bounds = useMemo(() => (coverage ? coverageBounds(coverage) : null), [coverage]);
+
+  useEffect(() => {
+    const canvas = ref.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx || !coverage || !bounds) return;
+    draw(ctx, coverage, bounds, getComputedStyle(canvas).color || "#38bdf8");
+  }, [coverage, bounds]);
+
+  if (!coverage || !bounds) {
     return (
       <div className="we:flex we:items-center we:justify-center we:rounded we:bg-bg-tertiary we:text-[11px] we:text-text-tertiary" style={{ width: W, height: H }}>
         {emptyLabel}
       </div>
     );
   }
-  const { tf, maxHits } = view;
-  const c = coverage.cellM;
-  const side = Math.max(1, c * tf.scale);
-  const path = coverage.trajectory.map((p) => tf.toPx(p[0], p[1]).join(",")).join(" ");
-  const start = coverage.start ? tf.toPx(coverage.start[0], coverage.start[1]) : null;
-  const cur = coverage.current ? tf.toPx(coverage.current[0], coverage.current[1]) : null;
-
   return (
-    <svg width={W} height={H} className="we:rounded we:bg-bg-tertiary we:text-accent-primary" role="img">
-      {coverage.cells.map((k) => {
-        const [x, y] = tf.toPx(k.ix * c, (k.iy + 1) * c);
-        return (
-          <rect
-            key={`${k.ix}:${k.iy}`}
-            x={x}
-            y={y}
-            width={side}
-            height={side}
-            fill="currentColor"
-            fillOpacity={0.2 + 0.6 * Math.min(1, k.hits / maxHits)}
-          />
-        );
-      })}
-      {path && <polyline points={path} fill="none" stroke="#facc15" strokeWidth={1.5} />}
-      {start && <circle cx={start[0]} cy={start[1]} r={4} fill="none" stroke="#22c55e" strokeWidth={2} />}
-      {cur && (
-        <g transform={`translate(${cur[0]} ${cur[1]}) rotate(${coverage.headingDeg ?? 0})`}>
-          <path d="M0,-7 L5,5 L0,2 L-5,5 Z" fill="#f8fafc" />
-        </g>
-      )}
-    </svg>
+    <canvas ref={ref} width={W} height={H} role="img" aria-label={label} className="we:rounded we:bg-bg-tertiary we:text-accent-primary" />
   );
 }

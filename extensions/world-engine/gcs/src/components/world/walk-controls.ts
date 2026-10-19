@@ -44,6 +44,19 @@ export function walkStep(input: StickInput, yaw: number, dt: number, speed = WAL
   return [-Math.sin(yaw) * f + Math.cos(yaw) * s, -Math.cos(yaw) * f - Math.sin(yaw) * s];
 }
 
+/** Whether a key event should move the walker: only when the viewer element
+ * itself is the focus target, and never from an editable or a select. */
+export function walkKeyApplies(eventTarget: EventTarget | null, viewer: HTMLElement): boolean {
+  if (eventTarget !== viewer) return false;
+  const el = eventTarget as HTMLElement;
+  return !(
+    el instanceof HTMLInputElement ||
+    el instanceof HTMLTextAreaElement ||
+    el instanceof HTMLSelectElement ||
+    el.isContentEditable
+  );
+}
+
 export class WalkControls {
   yaw = 0;
   pitch = 0;
@@ -58,16 +71,24 @@ export class WalkControls {
     private readonly camera: PerspectiveCamera,
     target: HTMLElement,
   ) {
+    // Keys move the walker only while the viewer itself has focus, never
+    // while the operator types in a field or uses a control elsewhere.
+    if (target.tabIndex < 0) target.tabIndex = 0;
     const down = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement) return;
-      if (KEY_AXES[e.code]) this.keys.add(e.code);
+      if (!walkKeyApplies(e.target, target)) return;
+      if (KEY_AXES[e.code]) {
+        this.keys.add(e.code);
+        e.preventDefault();
+      }
       this.fast = e.shiftKey;
     };
     const up = (e: KeyboardEvent) => {
       this.keys.delete(e.code);
       this.fast = e.shiftKey;
     };
+    const blur = () => this.keys.clear();
     const pdown = (e: PointerEvent) => {
+      target.focus({ preventScroll: true });
       this.drag = { x: e.clientX, y: e.clientY };
     };
     const pmove = (e: PointerEvent) => {
@@ -82,12 +103,14 @@ export class WalkControls {
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
     target.addEventListener("pointerdown", pdown);
+    target.addEventListener("blur", blur);
     window.addEventListener("pointermove", pmove);
     window.addEventListener("pointerup", pup);
     this.off.push(
       () => window.removeEventListener("keydown", down),
       () => window.removeEventListener("keyup", up),
       () => target.removeEventListener("pointerdown", pdown),
+      () => target.removeEventListener("blur", blur),
       () => window.removeEventListener("pointermove", pmove),
       () => window.removeEventListener("pointerup", pup),
     );

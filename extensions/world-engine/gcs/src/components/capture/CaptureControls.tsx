@@ -11,7 +11,7 @@ import { Circle, CornerDownLeft, Flag, Minus, Plus, Square } from "lucide-react"
 
 import { translator } from "../../host/i18n";
 import type { ActionResult, CaptureClient } from "../../lib/agent/capture-client";
-import { returnToStartPrompt, type CaptureState } from "../../lib/capture/capture-state";
+import { returnToStartPrompt, type CaptureCoverage, type CaptureState } from "../../lib/capture/capture-state";
 import { formatBytes, formatDuration } from "../../lib/capture/sessions";
 import { Button } from "../ui/Button";
 import { useToast } from "../ui/Toast";
@@ -29,10 +29,12 @@ const ERROR_KEYS: Record<string, string> = {
 export function CaptureControls({
   client,
   state,
+  coverage,
   onChanged,
 }: {
   client: CaptureClient;
   state: CaptureState;
+  coverage: CaptureCoverage | null;
   onChanged: () => void;
 }) {
   const { toast } = useToast();
@@ -40,7 +42,7 @@ export function CaptureControls({
   const [floor, setFloor] = useState(state.floor);
   const [busy, setBusy] = useState(false);
   const recording = state.state === "recording" || state.state === "paused";
-  const prompt = returnToStartPrompt(state);
+  const prompt = returnToStartPrompt(state, coverage);
 
   const run = async <T,>(action: () => Promise<ActionResult<T>>, okKey: string) => {
     setBusy(true);
@@ -117,7 +119,18 @@ export function CaptureControls({
         {prompt.kind === "return" && (
           <span className="we:flex we:items-center we:gap-1 we:text-status-warning">
             <CornerDownLeft size={12} />
-            {t("returnToStart", { d: prompt.distanceM.toFixed(0) })}
+            {prompt.bearingDeg === null
+              ? t("returnToStart", { d: prompt.distanceM.toFixed(0) })
+              : t("returnToStartBearing", {
+                  d: prompt.distanceM.toFixed(0),
+                  b: prompt.bearingDeg.toFixed(0),
+                  turn:
+                    prompt.relativeDeg === null
+                      ? ""
+                      : t(Math.abs(prompt.relativeDeg) < 15 ? "ahead" : prompt.relativeDeg > 0 ? "turnRight" : "turnLeft", {
+                          deg: Math.abs(prompt.relativeDeg).toFixed(0),
+                        }),
+                })}
           </span>
         )}
         {prompt.kind === "close_loop" && (

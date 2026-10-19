@@ -91,7 +91,7 @@ export function SessionsPage() {
 
       {openJobId && nodeClient && (
         <Section title={t("viewerTitle")}>
-          <JobWorldPanel client={nodeClient} jobId={openJobId} />
+          <JobWorldPanel key={openJobId} client={nodeClient} jobId={openJobId} />
         </Section>
       )}
 

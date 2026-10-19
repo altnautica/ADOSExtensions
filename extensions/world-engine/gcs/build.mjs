@@ -3,8 +3,9 @@
 //   world-engine.mjs            ESM bundle; React comes from the host
 //   plugin.css                  Tailwind utilities under the `we:` prefix
 //   assets/re_viewer_bg.wasm    the Rerun viewer's wasm, served as a plugin asset
-//   dist/tour-viewer/           static tour viewer (Vite; no backend), copied
-//                               into every tour bundle the node builds
+//   tour-viewer/                static tour viewer (Vite; no backend; sources in
+//                               src/tour-viewer/), shipped in the packed extension
+//                               and copied into every tour bundle the node builds
 //
 // Module workers are bundled separately and embedded as source strings
 // (`import src from "./x.ts?worker-source"`), so the page starts them from a
@@ -115,9 +116,9 @@ const rerunDir = dirname(fileURLToPath(import.meta.resolve("@rerun-io/web-viewer
 mkdirSync(join(here, "assets"), { recursive: true });
 copyFileSync(join(rerunDir, "re_viewer_bg.wasm"), join(here, "assets/re_viewer_bg.wasm"));
 
-await viteBuild({ configFile: join(here, "tour-viewer/vite.config.mjs"), logLevel: "warn" });
+await viteBuild({ configFile: join(here, "src/tour-viewer/vite.config.mjs"), logLevel: "warn" });
 
-for (const file of ["world-engine.mjs", "plugin.css", "assets/re_viewer_bg.wasm", "dist/tour-viewer/index.html"]) {
+for (const file of ["world-engine.mjs", "plugin.css", "assets/re_viewer_bg.wasm", "tour-viewer/index.html"]) {
   const kib = statSync(join(here, file)).size / 1024;
   console.log(`${file.padEnd(28)} ${kib.toFixed(1)} KiB`);
 }

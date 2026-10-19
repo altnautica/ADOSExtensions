@@ -374,6 +374,11 @@
     "storageLeft": "{free} free · ~{time} left",
     "returnToStart": "Return to start: {d} m",
     "closeLoop": "At the start: close the loop",
+    "returnToStartBearing": "Return to start: {d} m, bearing {b}° {turn}",
+    "ahead": "(ahead)",
+    "turnRight": "(turn right {deg}°)",
+    "turnLeft": "(turn left {deg}°)",
+    "stale": "The device has not answered for a few seconds; showing its last reported state.",
     "errStorageFull": "Capture storage is full; upload or delete sessions first.",
     "errAlreadyRecording": "A session is already recording.",
     "errServiceDown": "The capture service is not running.",
@@ -425,6 +430,8 @@
     "noSplat": "This job produced no splat.",
     "view": { "splat": "Splat", "cloud": "Point cloud" },
     "downloadTour": "Download tour bundle",
+    "downloadExport": "Download dataset",
+    "exportHint": "COLMAP sparse model and transforms.json",
     "downloadFailed": "The download failed.",
     "changeTitle": "Change detection",
     "changeNeedsTwo": "Upload two sessions of one site to the same compute node to compare them.",
@@ -453,13 +460,17 @@
       "imu_noise": "IMU noise (Allan deviation)",
       "intrinsics": "Camera intrinsics",
       "camera_imu": "Camera–IMU",
-      "lidar_camera": "LiDAR–camera"
+      "lidar_camera": "LiDAR–camera",
+      "lidar_imu": "LiDAR–IMU",
+      "gnss_lever_arm": "GNSS lever arm"
     },
     "hint": {
       "imu_noise": "Leave the rig still on a stable surface for the whole recording.",
       "intrinsics": "Move an AprilGrid target through every part of each camera's view.",
       "camera_imu": "Excite every axis while keeping the AprilGrid in view.",
-      "lidar_camera": "Record a structured scene with the rig held still."
+      "lidar_camera": "Record a structured scene with the rig held still.",
+      "lidar_imu": "Enter the LiDAR mounting offset and rotation in the body frame (x forward, y left, z up), measured or from the CAD model.",
+      "gnss_lever_arm": "Enter the GNSS antenna phase centre in the body frame, measured or from the CAD model."
     },
     "recordFor": "record ~{d}",
     "record": "Record",
@@ -477,7 +488,14 @@
     "noVersions": "No calibration stored on this device yet.",
     "versionUnreadable": "That calibration version could not be read.",
     "active": "active",
-    "activate": "Activate"
+    "activate": "Activate",
+    "measured": "measured / CAD entry",
+    "sensor": "Sensor",
+    "translation": "Offset",
+    "rotation": "Rotation",
+    "leverArm": "Lever arm",
+    "saveToRig": "Save to rig",
+    "noActiveRig": "No active rig on the device; LiDAR–IMU and lever-arm entry need one."
   },
   "tour": {
     "loading": "Loading tour…",

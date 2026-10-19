@@ -1,17 +1,19 @@
 /**
  * @module CalibrationPage
  * @description The capture rig's calibration (Visor node surface
- * `calibration`): the wizard (IMU noise → camera intrinsics → camera–IMU →
- * LiDAR–camera when the rig has a LiDAR), each step run as a node
- * `calibrate` job on a recorded session, and the device's stored calibration
- * versions with the active one and an activate action that pushes that
- * version's rig to the device.
+ * `calibration`): the wizard — IMU noise → camera intrinsics → camera–IMU
+ * (node `calibrate` jobs on recorded sessions) → LiDAR–IMU (measured entry) →
+ * LiDAR–camera (node job) → GNSS lever arm (measured / CAD entry), each step
+ * shown only when the rig carries that sensor — and the device's stored
+ * calibration versions with the active one and an activate action that pushes
+ * that version's rig to the device.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Crosshair } from "lucide-react";
 
 import { CalibStepCard, type StepProgress } from "../../components/calibration/CalibStepCard";
+import { RigEntryCard } from "../../components/calibration/RigEntryCard";
 import { ViewerLoading } from "../../components/atlas/viewers/ViewerLoading";
 import { Button } from "../../components/ui/Button";
 import { Section } from "../../components/ui/Section";
@@ -19,7 +21,8 @@ import { useToast } from "../../components/ui/Toast";
 import { translator } from "../../host/i18n";
 import { usePairedNodes } from "../../hooks/use-paired-nodes";
 import { useSessions } from "../../hooks/use-sessions";
-import { stepsFor, type CalibStore, type CalibTarget } from "../../lib/capture/calibration";
+import { wizardFor, type CalibStore, type CalibTarget } from "../../lib/capture/calibration";
+import type { Rig } from "../../lib/contract/generated";
 import { CalmState } from "../workstation/CalmState";
 
 const t = translator("calibration");
@@ -31,14 +34,13 @@ export function CalibrationPage() {
   const { toast } = useToast();
   const nodes = usePairedNodes();
   const [store, setStore] = useState<CalibStore | null | undefined>(undefined);
-  const [hasLidar, setHasLidar] = useState(false);
+  const [rig, setRig] = useState<Rig | null>(null);
   const [progress, setProgress] = useState<Partial<Record<CalibTarget, StepProgress>>>({});
 
   const load = useCallback(async () => {
     const s = await client.getCalib();
     setStore(s);
-    const rig = s?.active ? await client.getCalibRig(s.active) : null;
-    setHasLidar(rig?.sensors.some((x) => x.kind === "lidar") ?? false);
+    setRig(s?.active ? await client.getCalibRig(s.active) : null);
   }, [client]);
   useEffect(() => {
     void load();
@@ -50,17 +52,25 @@ export function CalibrationPage() {
     () => nodes.find((n) => n.profile === "workstation" || n.profile === "compute")?.deviceId ?? null,
     [nodes],
   );
+  const wizard = useMemo(
+    () =>
+      wizardFor({
+        hasLidar: rig?.sensors.some((x) => x.kind === "lidar") ?? false,
+        hasGnss: rig?.sensors.some((x) => x.kind === "gnss") ?? false,
+      }),
+    [rig],
+  );
 
   if (store === undefined) return <ViewerLoading label={t("loading")} />;
   if (store === null) return <CalmState icon={Crosshair} message={t("absent")} />;
 
   const activate = async (version: string) => {
-    const rig = await client.getCalibRig(version);
-    if (!rig) {
+    const versionRig = await client.getCalibRig(version);
+    if (!versionRig) {
       toast(t("versionUnreadable"), "error");
       return;
     }
-    const res = await client.putRig(rig);
+    const res = await client.putRig(versionRig);
     if (res.ok) toast(t("applied", { version }), "success");
     else toast(res.message, "error");
     void load();
@@ -73,7 +83,13 @@ export function CalibrationPage() {
           {t("rig", { rig: store.rigId ?? "–", version: store.active ?? "–" })}
         </p>
         <ol className="we:flex we:flex-col we:gap-2">
-          {stepsFor(hasLidar).map((step, i) => {
+          {wizard.map((w, i) => {
+            if (w.kind === "entry") {
+              return rig ? (
+                <RigEntryCard key={w.target} index={i} target={w.target} rig={rig} device={client} onApplied={() => void load()} />
+              ) : null;
+            }
+            const step = w.step;
             const p = progress[step.target] ?? IDLE;
             const session = sessions.find((s) => s.sessionId === p.sessionId) ?? null;
             return (
@@ -94,6 +110,7 @@ export function CalibrationPage() {
             );
           })}
         </ol>
+        {!rig && <p className="we:text-[11px] we:text-text-tertiary">{t("noActiveRig")}</p>}
       </Section>
       <Section title={t("versions")}>
         {store.versions.length === 0 ? (
