@@ -16,6 +16,9 @@ world-engine-capture-x86_64-linux   bin/x86_64-linux/world-engine-capture   x86_
 world-engine-node-aarch64-linux     bin/aarch64-linux/world-engine-node     aarch64-linux  workstation,compute
 world-engine-node-x86_64-linux      bin/x86_64-linux/world-engine-node      x86_64-linux   workstation,compute
 world-engine-node-aarch64-macos     bin/aarch64-macos/world-engine-node     aarch64-macos  workstation,compute
+# The standalone reconstruction node for a Windows workstation
+# (`world-engine-node --standalone`), built on the windows release leg.
+world-engine-node-x86_64-windows.exe bin/x86_64-windows/world-engine-node.exe x86_64-windows workstation,compute
 # Native helpers of the capture service, built on the x86_64-linux release leg
 # by the pinned upstream build scripts (glibc, Ubuntu 24.04 runner):
 #   extensions/world-engine/agent/capture/basalt/build.sh --arch x86_64 --out <dir>

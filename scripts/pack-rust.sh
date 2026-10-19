@@ -196,9 +196,11 @@ else
   # Payload paths are fetched at install and may not also ship in the archive
   # (the host refuses a payload that would overwrite an archive file), so each
   # one is excluded by its anchored path. The Rust crate sources never ship;
-  # agent/python/ holds helper scripts the binaries run and
+  # agent/python/ holds helper scripts the binaries run,
   # agent/capture/python/ the uv projects the capture service syncs on first
-  # start, so both do.
+  # start, and agent/node/{tools,python}/ the reconstruction node's tool pins,
+  # fetch scripts and training project (never the fetched tool cache), so
+  # they do.
   payload_excludes=()
   while read -r payload_path; do
     payload_excludes+=(--exclude "/${payload_path}")
@@ -213,6 +215,10 @@ else
     --include '/agent/capture/python/' \
     --include '/agent/capture/python/***' \
     --exclude '/agent/capture/python/**/.venv/***' \
+    --include '/agent/node/' \
+    --exclude '/agent/node/tools/cache/***' \
+    --include '/agent/node/tools/***' \
+    --include '/agent/node/python/***' \
     --exclude '/agent/***' \
     "${ext_dir}/" "${stage}/"
 

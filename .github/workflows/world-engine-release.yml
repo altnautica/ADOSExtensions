@@ -78,6 +78,20 @@ jobs:
             zig: false
             crates: world-engine-link world-engine-node
             node_features: coreml
+          # The standalone reconstruction node for a Windows workstation
+          # (`world-engine-node --standalone`); the plugin-host service is
+          # unix-only, so this leg builds the node alone.
+          - runner: windows-2022
+            arch_os: x86_64-windows
+            target: x86_64-pc-windows-msvc
+            zig: false
+            crates: world-engine-node
+            node_features: ""
+            exe: ".exe"
+    defaults:
+      run:
+        # Git Bash on the windows runner, so every leg runs the same scripts.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -139,12 +153,14 @@ jobs:
           TARGET: ${{ matrix.target }}
           CRATES: ${{ matrix.crates }}
           ARCH_OS: ${{ matrix.arch_os }}
+          EXE: ${{ matrix.exe }}
         run: |
           set -euo pipefail
           mkdir -p payloads
           for crate in ${CRATES}; do
-            cp "target/${TARGET}/release/${crate}" "payloads/${crate}-${ARCH_OS}"
-            file "payloads/${crate}-${ARCH_OS}"
+            cp "target/${TARGET}/release/${crate}${EXE}" "payloads/${crate}-${ARCH_OS}${EXE}"
+            ls -l "payloads/${crate}-${ARCH_OS}${EXE}"
+            if command -v file >/dev/null; then file "payloads/${crate}-${ARCH_OS}${EXE}"; fi
           done
 
       - name: Build native capture payloads
