@@ -102,7 +102,7 @@ def camera_terms(item, use_ut: bool, device):
     model, radial, tangential = cam.distortion() if cam is not None else ("pinhole", [], [])
     kw = {"camera_model": model}
     if not use_ut:
-        if model != "pinhole" or any(abs(x) > 1e-9 for x in radial + tangential):
+        if cam is not None and cam.is_distorted():
             raise RuntimeError(f"{item['name']}: distorted/{model} camera needs --ut or undistorted input")
         return kw
     n = 4 if model == "fisheye" else 6
@@ -216,6 +216,12 @@ def train(args) -> None:
     device = "cuda"
 
     views, pts, cols = common.load_colmap_views(args.colmap)
+    # The model SfM produced decides, not the rig alone: an uncalibrated `opencv` camera comes
+    # back with refined distortion, which only the 3DGUT path renders.
+    ut = common.needs_ut(views, args.ut)
+    if ut and not args.ut:
+        common.progress(0.01, "distorted cameras in the SfM model: training with 3DGUT")
+    args.ut = ut
     data = Dataset(args, views)
     common.progress(0.02, f"{len(data.items)} views, {len(pts)} sparse points")
     params, scene_scale = init_params(pts, cols, data.views, args.max_splats, device)
@@ -290,7 +296,7 @@ def train(args) -> None:
             params["shN"].cpu().numpy(),
         )
     psnr_out = psnr if psnr is not None and math.isfinite(psnr) else None
-    common.done(ply=str(ply), gaussians=int(len(params["means"])), psnr=psnr_out)
+    common.done(ply=str(ply), gaussians=int(len(params["means"])), psnr=psnr_out, ut=bool(args.ut))
 
 
 if __name__ == "__main__":

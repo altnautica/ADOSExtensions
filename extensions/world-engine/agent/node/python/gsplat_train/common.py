@@ -112,6 +112,12 @@ class ColmapCamera:
             return "fisheye", [p[3], p[4]], []
         raise ValueError(f"unsupported COLMAP camera model {m}")
 
+    def is_distorted(self) -> bool:
+        """True when this camera cannot be rendered as an ideal pinhole: a fisheye model, or any
+        non-zero distortion coefficient (also one SfM refined on an `opencv` camera)."""
+        model, radial, tangential = self.distortion()
+        return model != "pinhole" or any(abs(x) > 1e-9 for x in radial + tangential)
+
 
 @dataclass
 class ColmapImage:
@@ -210,6 +216,11 @@ def load_colmap_views(colmap_dir: Path) -> tuple[list[View], np.ndarray, np.ndar
         K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], np.float64)
         views.append(View(im.name.replace("\\", "/"), im.w2c, K, cam.width, cam.height, cam))
     return views, pts, cols
+
+
+def needs_ut(views: list[View], requested: bool) -> bool:
+    """3DGUT when asked for, or when any camera of the model is distorted."""
+    return requested or any(v.camera is not None and v.camera.is_distorted() for v in views)
 
 
 def load_frames_json(path: Path) -> list[dict]:
