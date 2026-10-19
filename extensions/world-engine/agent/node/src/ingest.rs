@@ -41,7 +41,7 @@ const DEFAULT_RECONSTRUCT_BACKEND: &str = "auto";
 
 /// The default gaussian-splat training length (`steps` job param) when nothing
 /// overrides it. A splat trainer's quality-vs-time knob; the backend reads it as
-/// `--total-train-iters` (Brush) / `--max-num-iterations` (nerfstudio).
+/// `--total-steps` (Brush) / `-n` (msplat).
 const DEFAULT_TRAIN_ITERS: u64 = 30_000;
 
 /// Resolve the reconstruct training length: the `ADOS_COMPUTE_TRAIN_ITERS`

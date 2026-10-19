@@ -1,25 +1,20 @@
 //! The lanes other nodes use on this node's listener, each behind its gate.
 //!
-//! Beside the owner's job API the node serves the lanes a drone reaches: the
-//! reconstruction artifacts, the offloaded-detection return stream, the Atlas
-//! capture-event ingest and the world-model descriptor stream.
-//! Each is mounted here and nowhere else, wrapped in
-//! [`crate::auth::require_lane`] for its own [`NodeLane`], so a lane cannot be
-//! mounted without its gate: it serves only the operator (on `http.sock`) or,
-//! over TCP, a node holding a credential issued for that lane.
+//! Beside the owner's job API the node serves the lanes a drone or a handheld
+//! capture device reaches: the reconstruction artifacts, the capture-session
+//! upload, the offloaded-detection return stream, the Atlas capture-event
+//! ingest and the world-model descriptor stream. Each is mounted here and
+//! nowhere else, wrapped in [`crate::auth::require_lane`] for its own
+//! [`NodeLane`], so a lane cannot be mounted without its gate: it serves only
+//! the owner (on `http.sock`, or the standalone bearer) or, over TCP, a node
+//! holding a credential issued for that lane.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
-use tokio::sync::mpsc::Sender;
-
 use world_engine_protocol::node_credential::NodeLane;
-use world_engine_transport::{atlas_event_router, world_ws_router, AtlasEvent, WorldBroadcaster};
 
-use crate::artifacts::artifact_router;
 use crate::auth::{require_lane, ComputeAuth};
-use crate::offload_ws::{offload_ws_router, DetectionBroadcaster};
 
 /// The world-model capture ingest (`POST /api/atlas/event` and its probe).
 pub(crate) const ATLAS_INGEST: NodeLane = NodeLane::from_static("atlas.ingest");
@@ -29,57 +24,113 @@ pub(crate) const ATLAS_WORLD: NodeLane = NodeLane::from_static("atlas.world");
 pub(crate) const OFFLOAD_STREAM: NodeLane = NodeLane::from_static("offload.stream");
 /// Reconstruction artifacts (`GET /artifacts/*`).
 pub(crate) const ARTIFACTS: NodeLane = NodeLane::from_static("artifacts.read");
-/// Submitting an offload session and reading its health.
+/// Submitting a job (an offload session, a reconstruction of an uploaded
+/// session) and reading session health.
 pub(crate) const JOB_SUBMIT: NodeLane = NodeLane::from_static("jobs.submit");
+/// Uploading a capture session (`/api/compute/sessions/<id>/...`).
+pub(crate) const SESSION_UPLOAD: NodeLane = NodeLane::from_static("sessions.upload");
 /// Every lane this node serves, in wire order: the default grant for a drone.
-pub(crate) const ALL: [NodeLane; 5] = [
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) const ALL: [NodeLane; 6] = [
     ATLAS_INGEST,
     ATLAS_WORLD,
     OFFLOAD_STREAM,
     ARTIFACTS,
     JOB_SUBMIT,
+    SESSION_UPLOAD,
 ];
 
-/// The Atlas lanes.
-pub struct AtlasLanes {
-    /// Where decoded capture events go (the receiver loop drains it).
-    pub events: Sender<AtlasEvent>,
-    /// The world-model descriptor fan-out.
-    pub world: Arc<WorldBroadcaster>,
+/// Wrap `router` in the gate for `lane`.
+pub fn gate(auth: &Arc<ComputeAuth>, router: Router, lane: NodeLane) -> Router {
+    router.route_layer(axum::middleware::from_fn_with_state(
+        (auth.clone(), lane),
+        require_lane,
+    ))
 }
 
-/// What the lane routers serve.
-pub struct LaneRoutes {
-    /// The artifact work root (path-jailed by the artifact router).
-    pub work_root: PathBuf,
-    /// The offload detection fan-out.
-    pub offload: Arc<DetectionBroadcaster>,
-    /// The Atlas ingest and world-model lanes.
-    pub atlas: AtlasLanes,
+/// The capture-session upload lane and the artifacts lane, the two lanes a
+/// standalone node serves.
+pub fn upload_and_artifact_lanes(
+    auth: &Arc<ComputeAuth>,
+    uploads: Router,
+    work_root: std::path::PathBuf,
+) -> Router {
+    gate(auth, uploads, SESSION_UPLOAD).merge(gate(
+        auth,
+        crate::artifacts::artifact_router(work_root),
+        ARTIFACTS,
+    ))
 }
 
-/// Every lane router, each behind the gate for its lane.
-pub fn lane_router(auth: Arc<ComputeAuth>, routes: LaneRoutes) -> Router {
-    let gate = |router: Router, lane: NodeLane| {
-        router.route_layer(axum::middleware::from_fn_with_state(
-            (auth.clone(), lane),
-            require_lane,
-        ))
+#[cfg(unix)]
+pub use host::{lane_router, AtlasLanes, LaneRoutes};
+
+#[cfg(unix)]
+mod host {
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    use axum::Router;
+    use tokio::sync::mpsc::Sender;
+    use world_engine_transport::{
+        atlas_event_router, world_ws_router, AtlasEvent, WorldBroadcaster,
     };
-    gate(artifact_router(routes.work_root), ARTIFACTS)
-        .merge(gate(offload_ws_router(routes.offload), OFFLOAD_STREAM))
-        .merge(gate(atlas_event_router(routes.atlas.events), ATLAS_INGEST))
-        .merge(gate(world_ws_router(routes.atlas.world), ATLAS_WORLD))
+
+    use super::{gate, ATLAS_INGEST, ATLAS_WORLD, OFFLOAD_STREAM};
+    use crate::auth::ComputeAuth;
+    use crate::offload_ws::{offload_ws_router, DetectionBroadcaster};
+
+    /// The Atlas lanes.
+    pub struct AtlasLanes {
+        /// Where decoded capture events go (the receiver loop drains it).
+        pub events: Sender<AtlasEvent>,
+        /// The world-model descriptor fan-out.
+        pub world: Arc<WorldBroadcaster>,
+    }
+
+    /// What the lane routers serve.
+    pub struct LaneRoutes {
+        /// The artifact work root (path-jailed by the artifact router).
+        pub work_root: PathBuf,
+        /// The capture-session upload router ([`crate::bulk::bulk_router`]).
+        pub uploads: Router,
+        /// The offload detection fan-out.
+        pub offload: Arc<DetectionBroadcaster>,
+        /// The Atlas ingest and world-model lanes.
+        pub atlas: AtlasLanes,
+    }
+
+    /// Every lane router, each behind the gate for its lane.
+    pub fn lane_router(auth: Arc<ComputeAuth>, routes: LaneRoutes) -> Router {
+        super::upload_and_artifact_lanes(&auth, routes.uploads, routes.work_root)
+            .merge(gate(
+                &auth,
+                offload_ws_router(routes.offload),
+                OFFLOAD_STREAM,
+            ))
+            .merge(gate(
+                &auth,
+                atlas_event_router(routes.atlas.events),
+                ATLAS_INGEST,
+            ))
+            .merge(gate(
+                &auth,
+                world_ws_router(routes.atlas.world),
+                ATLAS_WORLD,
+            ))
+    }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::node_credentials::NodeCredentialStore;
+    use crate::offload_ws::DetectionBroadcaster;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tokio::sync::mpsc::{channel, Receiver};
     use tower::ServiceExt;
+    use world_engine_transport::{AtlasEvent, WorldBroadcaster};
 
     struct Fixture {
         router: Router,
@@ -102,6 +153,7 @@ mod tests {
             auth.clone(),
             LaneRoutes {
                 work_root: work,
+                uploads: Router::new(),
                 offload: Arc::new(DetectionBroadcaster::new(8)),
                 atlas: AtlasLanes {
                     events: tx,

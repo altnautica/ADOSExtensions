@@ -37,7 +37,7 @@ fn store_or_conflict(e: rusqlite::Error, ctx: String) -> ComputeError {
 
 /// The job store over one SQLite connection.
 pub struct JobStore {
-    conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl JobStore {
@@ -83,7 +83,22 @@ impl JobStore {
                  meta TEXT NOT NULL DEFAULT 'null',
                  created_ms INTEGER NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS outputs_job ON outputs(job_id);",
+             CREATE INDEX IF NOT EXISTS outputs_job ON outputs(job_id);
+             CREATE TABLE IF NOT EXISTS job_stages (
+                 job_id TEXT NOT NULL,
+                 stage TEXT NOT NULL,
+                 seq INTEGER NOT NULL,
+                 state TEXT NOT NULL,
+                 progress REAL NOT NULL DEFAULT 0,
+                 started_ns INTEGER,
+                 ended_ns INTEGER,
+                 detail TEXT NOT NULL DEFAULT 'null',
+                 PRIMARY KEY (job_id, stage)
+             );
+             CREATE TABLE IF NOT EXISTS job_errors (
+                 job_id TEXT PRIMARY KEY,
+                 error TEXT NOT NULL
+             );",
         )?;
         Ok(Self { conn })
     }
@@ -270,12 +285,18 @@ impl JobStore {
     /// the job never reached a terminal state). Called once at startup so a
     /// crash does not strand a job forever: a `Running` job is neither claimable
     /// (claim picks only `queued`) nor purgeable (retention drops only terminal
-    /// states). Returns the number requeued.
+    /// states). A staged job's finished stages are kept, so it resumes at the
+    /// stage that was interrupted. Returns the number requeued.
     pub fn requeue_stale_running(&self, updated_ms: i64) -> Result<usize, ComputeError> {
         let n = self.conn.execute(
-            "UPDATE jobs SET state = 'queued', progress = 0.0, updated_ms = ?1
+            "UPDATE jobs SET state = 'queued', updated_ms = ?1
              WHERE state = 'running'",
             params![updated_ms],
+        )?;
+        self.conn.execute(
+            "UPDATE job_stages SET state = 'pending', progress = 0, started_ns = NULL
+             WHERE state = 'running'",
+            [],
         )?;
         Ok(n)
     }
@@ -334,6 +355,10 @@ impl JobStore {
             "DELETE FROM jobs
              WHERE state IN ('completed','failed','cancelled') AND updated_ms < ?1",
             params![cutoff_ms],
+        )?;
+        self.conn.execute_batch(
+            "DELETE FROM job_stages WHERE job_id NOT IN (SELECT id FROM jobs);
+             DELETE FROM job_errors WHERE job_id NOT IN (SELECT id FROM jobs);",
         )?;
         Ok(n)
     }

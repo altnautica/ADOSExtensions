@@ -31,7 +31,7 @@ pub struct JobOutcome {
     pub job_id: String,
     pub state: ComputeJobState,
     pub outputs: Vec<Output>,
-    /// Detections returned by a perception/SLAM offload job (empty otherwise).
+    /// Detections returned by a perception offload job (empty otherwise).
     pub detections: Vec<Detection>,
 }
 
@@ -39,13 +39,13 @@ pub struct JobOutcome {
 /// backend run itself touches no store state.
 #[derive(Debug)]
 pub enum PreparedInput {
-    /// A reconstruction over a resolved dataset.
+    /// A live-lane reconstruction over a resolved keyframe dataset.
     Reconstruct(Dataset),
-    /// A perception or SLAM offload over one frame.
-    Offload {
-        kind: ComputeJobKind,
-        frame: FrameRef,
-    },
+    /// A perception offload over one frame.
+    Offload { frame: FrameRef },
+    /// A staged job (a session reconstruction, change detection or a
+    /// calibration) the pipeline worker runs stage by stage.
+    Staged(crate::recon::StagedJob),
 }
 
 /// The outcome of [`Scheduler::claim_and_prepare`].
@@ -81,6 +81,8 @@ pub struct Scheduler {
     store: JobStore,
     reconstructor: Arc<dyn Reconstructor>,
     detector: Arc<dyn Detector>,
+    /// Where the upload lane keeps committed capture sessions.
+    sessions_root: Option<std::path::PathBuf>,
 }
 
 impl Scheduler {
@@ -93,7 +95,19 @@ impl Scheduler {
             store,
             reconstructor,
             detector,
+            sessions_root: None,
         }
+    }
+
+    /// Set where committed capture sessions live (the upload lane's root).
+    pub fn with_sessions_root(mut self, root: std::path::PathBuf) -> Self {
+        self.sessions_root = Some(root);
+        self
+    }
+
+    /// Where committed capture sessions live.
+    pub fn sessions_root(&self) -> Option<&std::path::Path> {
+        self.sessions_root.as_deref()
     }
 
     /// Borrow the store (the API layer reads jobs/outputs through it).
@@ -120,6 +134,22 @@ impl Scheduler {
         };
 
         match job.kind {
+            ComputeJobKind::Reconstruct | ComputeJobKind::Change | ComputeJobKind::Calibrate
+                if crate::recon::is_staged(&job) =>
+            {
+                match crate::recon::prepare_staged(&self.store, self.sessions_root(), &job) {
+                    Ok(staged) => Ok(Prepared::Ready {
+                        job,
+                        input: PreparedInput::Staged(staged),
+                    }),
+                    Err(e) => Ok(Prepared::Failed(self.fail_staged(&job.id, &e, now_ms)?)),
+                }
+            }
+            ComputeJobKind::Change | ComputeJobKind::Calibrate => Ok(Prepared::Failed(self.fail(
+                &job.id,
+                "job is missing its session parameters",
+                now_ms,
+            )?)),
             ComputeJobKind::Reconstruct => {
                 let dataset = match job.dataset_id.as_deref() {
                     Some(id) => self.store.get_dataset(id)?,
@@ -137,7 +167,7 @@ impl Scheduler {
                     input: PreparedInput::Reconstruct(dataset),
                 })
             }
-            ComputeJobKind::PerceptionOffload | ComputeJobKind::SlamOffload => {
+            ComputeJobKind::PerceptionOffload => {
                 // The frame to process rides the job params on this lane; absent
                 // one, a default frame keeps the mock path exercised. A
                 // malformed `frame` is bad input: fail the job (recorded).
@@ -159,10 +189,9 @@ impl Scheduler {
                         ts_ms: now_ms,
                     },
                 };
-                let kind = job.kind;
                 Ok(Prepared::Ready {
                     job,
-                    input: PreparedInput::Offload { kind, frame },
+                    input: PreparedInput::Offload { frame },
                 })
             }
         }
@@ -195,9 +224,8 @@ impl Scheduler {
                             out.uri,
                             now_ms,
                         );
-                        // Surface the backend's result metadata to clients. The
-                        // `backend` key lets the GCS badge a `mock` artifact as a
-                        // placeholder instead of a real world model.
+                        // Surface the backend's result metadata to clients: the
+                        // gaussian count and the tool that produced it.
                         output.meta = serde_json::json!({ "gaussian_count": gaussian_count, "backend": backend });
                         BackendResult {
                             outputs: vec![output],
@@ -212,26 +240,17 @@ impl Scheduler {
                     },
                 }
             }
-            PreparedInput::Offload { kind, frame } => {
-                // A SLAM offload returns poses; a perception offload returns
-                // detections. The artifact KIND reflects the job kind while the
-                // detections ride the result.
-                let out_kind = if matches!(kind, ComputeJobKind::SlamOffload) {
-                    "pose"
-                } else {
-                    "detection"
-                };
-                // Pixels arrive on the streaming transport (wired next); the
-                // job-params lane carries only frame metadata, so pass None. A
-                // real detector errors without pixels rather than fabricating a
-                // box; the mock ignores them.
+            PreparedInput::Offload { frame } => {
+                // Pixels arrive on the streaming transport; the job-params lane
+                // carries only frame metadata, so pass None. A real detector
+                // errors without pixels rather than fabricating a box.
                 match detector.infer(frame, None) {
                     Ok(detections) => {
                         let output = Output::new(
                             format!("{}-out", job.id),
                             job.id.clone(),
-                            out_kind.into(),
-                            format!("offload://{out_kind}/{}", job.id),
+                            "detection".into(),
+                            format!("offload://detection/{}", job.id),
                             now_ms,
                         );
                         BackendResult {
@@ -247,6 +266,13 @@ impl Scheduler {
                     },
                 }
             }
+            // A staged job runs on the pipeline worker ([`crate::worker`]),
+            // never through this one-shot path.
+            PreparedInput::Staged(_) => BackendResult {
+                outputs: Vec::new(),
+                detections: Vec::new(),
+                error: Some("a staged job runs on the pipeline worker".into()),
+            },
         }
     }
 
@@ -356,6 +382,17 @@ impl Scheduler {
             outputs: Vec::new(),
             detections: Vec::new(),
         })
+    }
+
+    /// Fail a staged job at prepare, recording its structured error.
+    fn fail_staged(
+        &self,
+        job_id: &str,
+        e: &crate::recon::StageError,
+        now_ms: i64,
+    ) -> Result<JobOutcome, ComputeError> {
+        self.store.set_job_error(job_id, e)?;
+        self.fail(job_id, &e.to_string(), now_ms)
     }
 }
 
@@ -526,23 +563,21 @@ mod tests {
     }
 
     #[test]
-    fn slam_offload_produces_a_pose_output() {
+    fn a_staged_job_without_a_committed_session_fails_with_a_structured_error() {
         let s = scheduler();
         s.store()
             .submit_job(&queued(
-                "job-slam",
-                ComputeJobKind::SlamOffload,
+                "job-stage",
+                ComputeJobKind::Reconstruct,
                 None,
-                serde_json::json!({}),
+                serde_json::json!({ "session_id": "dev-20261019T000000Z-0001", "preset": "hq" }),
             ))
             .unwrap();
         let outcome = s.run_one(300).unwrap().unwrap();
-        assert_eq!(outcome.state, ComputeJobState::Completed);
-        // A SLAM offload's artifact is a pose, not a detection.
-        assert_eq!(outcome.outputs[0].kind, "pose");
-        assert_eq!(outcome.outputs[0].uri, "offload://pose/job-slam");
+        assert_eq!(outcome.state, ComputeJobState::Failed);
+        let err = s.store().job_error("job-stage").unwrap().unwrap();
+        assert_eq!(err.code, "E_NOT_UPLOADED");
     }
-
     #[test]
     fn jobs_run_in_fifo_order() {
         let s = scheduler();

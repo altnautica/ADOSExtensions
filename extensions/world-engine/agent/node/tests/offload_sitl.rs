@@ -8,6 +8,8 @@
 //! Synthetic frames go in on the node side and boxes come out of the
 //! publisher the drone half hands to the plugin host, with the freshness + lock
 //! safety gate exercised. No GPU, no camera, no RTSP, no RF.
+// These tests drive the unix-socket transport and the issued-credential store.
+#![cfg(unix)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

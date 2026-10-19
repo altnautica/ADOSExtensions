@@ -11,6 +11,22 @@ All notable changes to the World Engine extension.
   session), the `ados-capture-contract` crate generated from them with an MCAP
   session writer and reader, and generated TypeScript types for the GCS half.
 - The capture service and link run on the `visor` profile.
+- **Session upload lane.** `/api/compute/sessions/<id>`: manifest POST,
+  resumable `PUT files/<rel>` with `Content-Range`, `HEAD` offsets, and a
+  commit that verifies every file against `checksums.b3`.
+- **Staged reconstruction.** Job kind `reconstruct {session_id, preset}` with
+  presets `preview`, `hq`, `tour`, `warehouse`, run as persisted stages
+  (prepare, sfm, train, mesh, products) that resume after a node restart. Job
+  status carries the stage, per-stage rows, GPU, ETA, tool versions and a
+  structured error.
+- Deliverables: SPZ and `.rad` splats, collision mesh, LAZ point cloud, ESDF,
+  placement sidecars, a dataset export (COLMAP model + `transforms.json`), and
+  for indoor presets a floorplan with rooms, aisles and a static tour bundle.
+- Job kinds `change {a, b}` (cloud-to-cloud change detection) and
+  `calibrate {session_id, target}` (IMU noise, intrinsics, camera-IMU,
+  LiDAR-camera); `POST /api/compute/measure`; job files served with ranges.
+- Pinned tool set (`agent/node/tools/tool-pins.json`) with fetch scripts.
+- A standalone node (`--standalone`) and a Windows build of the node.
 
 ### Changed
 
@@ -21,6 +37,14 @@ All notable changes to the World Engine extension.
 - `atlas.intrinsics.<camera>` takes the contract camera model: `model`
   (`pinhole`, `opencv`, `opencv_fisheye`, `kb4`), `fx`, `fy`, `cx`, `cy`,
   `dist`, `readout_ns`.
+- The live-lane trainers resolve from the pinned tool set and fail with
+  `E_TOOL_MISSING` instead of producing a placeholder.
+
+### Removed
+
+- The nerfstudio backend, the monocular-depth seed script and the random seed
+  cloud; the placeholder reconstructor in release builds; the SLAM offload job
+  kind.
 - Compute-node datasets are written as the contract `transforms.json`, with
   the session anchor and per-frame exposure times.
 - `atlas.intrinsics` and `atlas.pose_prior` refuse unknown keys, so a

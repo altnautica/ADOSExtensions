@@ -6,6 +6,8 @@
 //! which reach the node on its `http.sock`; the client speaks TCP, so those
 //! tests serve the router with every request marked as arriving on the
 //! operator socket, exercising the real handlers and wire shapes.
+// These tests drive the unix-socket transport and the issued-credential store.
+#![cfg(unix)]
 
 use std::net::SocketAddr;
 use std::sync::Arc;

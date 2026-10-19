@@ -18,8 +18,13 @@ mod api;
 mod artifacts;
 mod auth;
 mod backends;
+/// The resumable bulk upload lane for capture sessions.
+pub mod bulk;
+/// Sensor calibration jobs (Kalibr import, Allan deviation, calibration containers).
+pub mod calib;
 mod cluster;
 mod compute_status;
+#[cfg(unix)]
 mod credential_api;
 mod engine;
 /// Host-GPU reporting for the workstation profile (identity + live utilisation).
@@ -27,33 +32,53 @@ mod engine;
 pub mod gpu;
 mod heartbeat_sidecar;
 mod ingest;
+/// Owner routes over a job's deliverables (files, tour bundle, measurement).
+pub mod job_files;
+/// The job and output shapes the REST API serves.
+pub mod job_views;
 mod jobs_sync;
 mod keyframe_persister;
 mod lanes;
+#[cfg(unix)]
 mod node_credentials;
 mod offload;
 mod offload_session_manager;
 mod offload_stream;
 mod offload_ws;
-mod pipeline;
+/// Products built from a finished reconstruction (floorplan, rooms, aisles,
+/// change detection, measurement, tour bundle, point-cloud I/O).
+pub mod products;
+/// The staged reconstruction pipeline over an uploaded capture session.
+pub mod recon;
 mod reconstructor;
 mod rerun_log;
 mod rerun_world;
 mod scheduler;
-mod seed;
+#[cfg(unix)]
 mod serving_config;
 mod session;
 mod session_registry;
+/// The standalone node (no plugin host): the reconstruction node a Windows
+/// workstation runs.
+pub mod standalone;
 mod store;
+/// Persistence of staged-job stages and structured job errors.
+pub mod store_stages;
+/// The pinned third-party tool set.
+pub mod tools;
+/// The worker that runs claimed jobs.
+pub mod worker;
 mod world_descriptors;
 
 pub use api::{build_router, build_router_with_base, ApiState};
 pub use artifacts::{
     artifact_router, derive_public_base, resolve_under_root, rewrite_output_to_artifact_url,
 };
-pub use auth::{admits, job_api_lane, require_job_api, require_lane, ComputeAuth, RateLimiter};
+#[cfg(unix)]
+pub use auth::admits;
+pub use auth::{job_api_lane, require_job_api, require_lane, ComputeAuth, RateLimiter};
 pub use backends::{
-    file_uri_to_path, is_apple_silicon, is_tool_available, parse_gaussian_count, path_to_file_uri,
+    file_uri_to_path, is_apple_silicon, parse_gaussian_count, path_to_file_uri,
     select_reconstructor, CliReconstructor, ReconstructCommand, ReconstructorKind,
     SeededSplatReconstructor, SelectingReconstructor,
 };
@@ -69,7 +94,10 @@ pub use jobs_sync::{
     JOBS_COLLECTION,
 };
 pub use keyframe_persister::{dataset_anchor, dataset_id_for, KeyframePersister};
+pub use lanes::{gate, upload_and_artifact_lanes};
+#[cfg(unix)]
 pub use lanes::{lane_router, AtlasLanes, LaneRoutes};
+#[cfg(unix)]
 pub use node_credentials::{
     CredentialError, IssuedCredential, MintedCredential, NodeCredentialStore,
     DEFAULT_NODE_CREDENTIALS_PATH,
@@ -85,15 +113,16 @@ pub use offload_stream::{
 pub use offload_ws::{
     offload_ws_path, offload_ws_router, pump_to_broadcaster, DetectionBroadcaster, OFFLOAD_WS_ROUTE,
 };
-pub use pipeline::{chain_input_uri, stage_index_of, Pipeline, PipelineRunner, PipelineStage};
-pub use reconstructor::{MockReconstructor, ReconstructOutput, Reconstructor};
+#[cfg(any(test, feature = "mock"))]
+pub use reconstructor::MockReconstructor;
+pub use reconstructor::{ReconstructOutput, Reconstructor};
 pub use rerun_log::{
     log_keyframe, log_mesh, log_occupancy, log_pointcloud, log_splat, RerunArchetype,
     RerunLogEntry, RerunRecording,
 };
 pub use rerun_world::{build_rerun_output, build_world_recording, RERUN_OUTPUT_FILE};
 pub use scheduler::{BackendResult, JobOutcome, Prepared, PreparedInput, Scheduler};
-pub use seed::{seed_points, SeedError, MIN_SEED_POINTS};
+#[cfg(unix)]
 pub use serving_config::{load_serving_config, resolve_serving_config, ServingConfig};
 pub use session::{LiveReconstructConfig, LiveReconstructDriver};
 pub use session_registry::{

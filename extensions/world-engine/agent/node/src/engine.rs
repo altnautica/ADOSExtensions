@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use world_engine_protocol::compute::ComputeHeartbeat;
 
+use crate::recon::{ProcessRunner, ToolRunner};
 use crate::{Cluster, ComputeError, ComputeJobState, JobOutcome, Scheduler};
 
 /// One compute node: its scheduler, its cluster view, and its worker count.
@@ -20,6 +21,8 @@ pub struct Engine {
     /// (which owns + updates it). `None` when the node runs no session manager
     /// (e.g. tests), reported as 0 in the heartbeat.
     session_counter: Option<Arc<AtomicU32>>,
+    /// How staged jobs run their tools (the pinned tool set by default).
+    runner: Arc<dyn ToolRunner>,
 }
 
 impl Engine {
@@ -31,7 +34,18 @@ impl Engine {
             cluster,
             workers,
             session_counter: None,
+            runner: Arc::new(ProcessRunner::default()),
         }
+    }
+
+    /// Replace the tool runner (the stand-in runner in tests).
+    pub fn set_runner(&mut self, runner: Arc<dyn ToolRunner>) {
+        self.runner = runner;
+    }
+
+    /// The tool runner staged jobs use.
+    pub fn runner(&self) -> Arc<dyn ToolRunner> {
+        self.runner.clone()
     }
 
     /// Share the streaming-offload session counter so the heartbeat reflects live

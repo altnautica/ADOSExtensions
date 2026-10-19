@@ -1,0 +1,112 @@
+{
+  "schema": 1,
+  "tools": {
+    "colmap": {
+      "version": "4.2.1",
+      "license": "BSD-3-Clause",
+      "kind": "archive",
+      "probe": ["-h"],
+      "note": "upstream publishes Windows (CUDA, no-CUDA) and arm64 macOS binaries only; Linux nodes build from source or use a distribution package via ADOS_TOOL_COLMAP",
+      "platforms": {
+        "x86_64-windows": {
+          "url": "https://github.com/colmap/colmap/releases/download/4.2.1/colmap-x64-windows-cuda.zip",
+          "sha256": "e9c5cbd84c2ea986d2e970a2473fc2d2e6b34a2cdcf5d3df2765c319a63af881",
+          "archive": "zip",
+          "bin": "bin/colmap.exe"
+        },
+        "aarch64-macos": {
+          "url": "https://github.com/colmap/colmap/releases/download/4.2.1/colmap-arm64-macos.zip",
+          "sha256": "1fe9d65bddd61e0598f3087641cb14c4d4d4c74529e9f58911e8a5238a140a04",
+          "archive": "zip",
+          "inner": "COLMAP-mac.zip",
+          "bin": "COLMAP.app/Contents/MacOS/colmap"
+        }
+      }
+    },
+    "brush": {
+      "version": "0.3.0",
+      "license": "Apache-2.0",
+      "kind": "archive",
+      "probe": ["--help"],
+      "platforms": {
+        "x86_64-windows": {
+          "url": "https://github.com/ArthurBrussee/brush/releases/download/v0.3.0/brush-app-x86_64-pc-windows-msvc.zip",
+          "sha256": "b68e3e9cf052d51bf3ee30776fa5a364de7f2ba13b58443128ff797bb7bcfcd6",
+          "archive": "zip",
+          "bin": "brush_app.exe"
+        },
+        "x86_64-linux": {
+          "url": "https://github.com/ArthurBrussee/brush/releases/download/v0.3.0/brush-app-x86_64-unknown-linux-gnu.tar.xz",
+          "sha256": "4f0f9a8785d1951c62df26aae247c02c5bba32b00f40b06df4e1c9b867399e20",
+          "archive": "tar.xz",
+          "bin": "brush-app-x86_64-unknown-linux-gnu/brush_app"
+        },
+        "aarch64-macos": {
+          "url": "https://github.com/ArthurBrussee/brush/releases/download/v0.3.0/brush-app-aarch64-apple-darwin.tar.xz",
+          "sha256": "65b2631398c839be3c1d4d7160fe2326389dec87830aac0710985e6690a1048c",
+          "archive": "tar.xz",
+          "bin": "brush-app-aarch64-apple-darwin/brush_app"
+        }
+      }
+    },
+    "splat-transform": {
+      "version": "3.10.1",
+      "license": "MIT",
+      "kind": "npm",
+      "package": "@playcanvas/splat-transform",
+      "probe": ["--help"],
+      "bin": "node_modules/.bin/splat-transform",
+      "platforms": {
+        "x86_64-windows": { "bin": "node_modules/.bin/splat-transform.cmd" }
+      }
+    },
+    "spark-build-lod": {
+      "version": "2.3.1",
+      "license": "MIT",
+      "kind": "cargo",
+      "note": "the Spark LoD builder ships only as a Rust binary crate in the source tree (no npm CLI, no release binary); built with cargo install from the pinned tag commit",
+      "cargo": {
+        "repo": "https://github.com/sparkjsdev/spark",
+        "rev": "2e9c2e74a486b1ba3a31025a22b231b8e4fccde3",
+        "package": "build-lod"
+      },
+      "probe": ["probe-lod.rad"],
+      "bin": "bin/build-lod",
+      "platforms": {
+        "x86_64-windows": { "bin": "bin/build-lod.exe" }
+      }
+    },
+    "gsplat_train": {
+      "version": "0.1.0",
+      "license": "Apache-2.0",
+      "kind": "uv",
+      "project": "python/gsplat_train",
+      "probe": ["python", "common.py", "--probe"]
+    },
+    "kalibr": {
+      "version": "1f60227442d2",
+      "license": "BSD-3-Clause",
+      "kind": "docker",
+      "note": "upstream publishes no image; built locally from the pinned commit's Dockerfile",
+      "image": "local/kalibr:1f60227442d2",
+      "build": {
+        "repo": "https://github.com/ethz-asl/kalibr",
+        "commit": "1f60227442d25e36365ef5f72cd80b9666d73467",
+        "dockerfile": "Dockerfile_ros1_20_04",
+        "tag": "local/kalibr:1f60227442d2"
+      }
+    },
+    "dvlc": {
+      "version": "jazzy-20260102",
+      "license": "MIT",
+      "kind": "docker",
+      "image": "koide3/direct_visual_lidar_calibration@sha256:82cf0a10ac9bc61d838515edced5433d69dbdc80f39987189d2aa45f818fdabd"
+    },
+    "glim": {
+      "version": "jazzy_cuda13.1-20261006",
+      "license": "MIT",
+      "kind": "docker",
+      "image": "koide3/glim_ros2@sha256:8e00163cd989faf845134500237cfdcc0ed3b14fb3b33ce45b4952ba29b9c8cc"
+    }
+  }
+}

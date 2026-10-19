@@ -11,7 +11,8 @@
 //!   ADOS_TEST_RTSP=rtsp://<camera-host>:8554/main \
 //!     ADOS_TEST_COCO_ONNX=/path/to/yolov8n_coco_640.onnx \
 //!     cargo test -p world-engine-node --features coreml --test offload_live_rtsp -- --ignored --nocapture
-
+// These tests drive the unix-socket transport and the issued-credential store.
+#![cfg(unix)]
 #![cfg(feature = "onnx")]
 
 use std::path::{Path, PathBuf};

@@ -20,7 +20,10 @@ use world_engine_protocol::compute::{CancelResponse, SubmitResponse};
 
 use crate::artifacts::rewrite_artifact_host;
 use crate::auth::{require_job_api, ComputeAuth};
+#[cfg(unix)]
 use crate::credential_api;
+use crate::job_views::{JobView, OutputView};
+use crate::recon::{self, StageError};
 use crate::session_registry::{SessionRegistry, SessionStateCounts};
 use crate::{
     ComputeError, ComputeHeartbeat, ComputeJobKind, ComputeJobState, Dataset, Engine, JobRecord,
@@ -53,7 +56,7 @@ pub fn build_router_with_base(
     public_base: Arc<str>,
     sessions: Arc<SessionRegistry>,
 ) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/api/compute/status", get(status))
         .route("/api/compute/datasets", post(create_dataset))
         .route("/api/compute/jobs", get(list_jobs).post(submit_job))
@@ -62,9 +65,11 @@ pub fn build_router_with_base(
         .route("/api/compute/jobs/:id/outputs", get(job_outputs))
         // The live streaming perception-offload sessions (state / throughput /
         // reconnect + restart history), read from the registry, not the job store.
-        .route("/api/compute/sessions", get(list_sessions))
-        // Issuing credentials to other nodes: owner-only (no node lane
-        // reaches them).
+        .route("/api/compute/sessions", get(list_sessions));
+    // Issuing credentials to other nodes: owner-only (no node lane reaches
+    // them). A standalone Windows node issues none.
+    #[cfg(unix)]
+    let router = router
         .route(
             "/api/compute/node-credentials",
             get(credential_api::list).post(credential_api::mint),
@@ -72,7 +77,8 @@ pub fn build_router_with_base(
         .route(
             "/api/compute/node-credentials/:id/revoke",
             post(credential_api::revoke),
-        )
+        );
+    router
         .layer(axum::middleware::from_fn_with_state(
             auth.clone(),
             require_job_api,
@@ -119,6 +125,15 @@ impl IntoResponse for ComputeError {
     }
 }
 
+/// A refused submission: `{error: <code>, detail, tool?}`.
+fn refuse(status: StatusCode, e: &StageError) -> Response {
+    let mut body = serde_json::json!({ "error": e.code, "detail": e.message });
+    if let Some(t) = &e.tool {
+        body["tool"] = t.clone().into();
+    }
+    (status, Json(body)).into_response()
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateDatasetRequest {
     id: Option<String>,
@@ -126,39 +141,23 @@ struct CreateDatasetRequest {
     meta: Option<serde_json::Value>,
 }
 
+/// A job submission. The staged kinds may carry their inputs at the top level
+/// (`{"kind":"reconstruct","session_id":..,"preset":..}`,
+/// `{"kind":"change","a":..,"b":..}`,
+/// `{"kind":"calibrate","session_id":..,"target":..}`); they are folded into
+/// `params`.
 #[derive(Debug, Deserialize)]
 struct SubmitRequest {
     job_id: Option<String>,
     kind: ComputeJobKind,
     dataset_id: Option<String>,
     params: Option<serde_json::Value>,
-}
-
-/// A job as served over the REST API: every [`JobRecord`] field plus a top-level
-/// `session_id` lifted from the job's `params` (the capturing session a
-/// reconstruct job belongs to). The GCS correlates a world-model artifact to a
-/// drone's active session by `session_id` without re-parsing the opaque params or
-/// the dataset/job id format. Omitted when the job carries no session — an offload
-/// job, or a reconstruct job written by an agent before the session was tagged —
-/// so the surface stays backward-compatible.
-#[derive(Debug, Serialize)]
-struct JobView {
     #[serde(flatten)]
-    job: JobRecord,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<String>,
+    extra: serde_json::Map<String, serde_json::Value>,
 }
 
-impl JobView {
-    fn of(job: JobRecord) -> Self {
-        let session_id = job
-            .params
-            .get("session_id")
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        Self { job, session_id }
-    }
-}
+/// The top-level fields a staged submission may carry.
+const STAGED_FIELDS: [&str; 6] = ["session_id", "preset", "a", "b", "target", "board"];
 
 /// The node status: the engine heartbeat (role / cluster / queue / active
 /// sessions count) plus a per-state breakdown of the live streaming sessions.
@@ -215,19 +214,48 @@ async fn submit_job(
     Json(req): Json<SubmitRequest>,
 ) -> Result<Response, ComputeError> {
     let now = now_ms();
-    let job = JobRecord {
+    let mut params = req.params.unwrap_or(serde_json::Value::Null);
+    for key in STAGED_FIELDS {
+        if let Some(v) = req.extra.get(key) {
+            if !params.is_object() {
+                params = serde_json::json!({});
+            }
+            params[key] = v.clone();
+        }
+    }
+    let mut job = JobRecord {
         id: req.job_id.unwrap_or_else(|| next_id("job")),
         kind: req.kind,
         dataset_id: req.dataset_id,
         state: ComputeJobState::Queued,
         progress: 0.0,
-        params: req.params.unwrap_or(serde_json::Value::Null),
+        params,
         result_ref: None,
         error: None,
         created_ms: now,
         updated_ms: now,
     };
     let engine = state.lock().await;
+    // A staged job is checked up front so the caller hears why it cannot run
+    // (not uploaded, unknown preset, a pinned tool missing) instead of a job
+    // that fails at once.
+    if recon::is_staged(&job) {
+        let scheduler = engine.scheduler();
+        if let Err(e) = recon::prepare_staged(scheduler.store(), scheduler.sessions_root(), &job) {
+            let status = match e.code.as_str() {
+                "E_NOT_UPLOADED" | "E_NOT_RECONSTRUCTED" => StatusCode::CONFLICT,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            return Ok(refuse(status, &e));
+        }
+        let runner = engine.runner();
+        if let Err(e) = recon::check_tools(runner.as_ref(), &recon::required_tools(&job)) {
+            return Ok(refuse(StatusCode::UNPROCESSABLE_ENTITY, &e));
+        }
+        if let Some(sid) = job.params.get("session_id").and_then(|v| v.as_str()) {
+            job.dataset_id.get_or_insert_with(|| sid.to_string());
+        }
+    }
     engine.scheduler().store().submit_job(&job)?;
     Ok((
         StatusCode::CREATED,
@@ -247,16 +275,26 @@ fn rehost_job(mut job: JobRecord, public_base: &str) -> JobRecord {
     job
 }
 
+/// The current GPU sample, read off the async runtime.
+async fn gpu_sample() -> Option<crate::worker::NvidiaGpu> {
+    tokio::task::spawn_blocking(crate::worker::nvidia_gpu)
+        .await
+        .ok()
+        .flatten()
+}
+
 async fn list_jobs(
     State(state): State<ApiState>,
     Extension(public_base): Extension<Arc<str>>,
 ) -> Result<Response, ComputeError> {
+    let gpu = gpu_sample().await;
     let engine = state.lock().await;
-    let jobs = engine.scheduler().store().list_jobs()?;
-    let views: Vec<JobView> = jobs
+    let store = engine.scheduler().store();
+    let views = store
+        .list_jobs()?
         .into_iter()
-        .map(|job| JobView::of(rehost_job(job, &public_base)))
-        .collect();
+        .map(|job| JobView::build(store, rehost_job(job, &public_base), gpu.as_ref()))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(views).into_response())
 }
 
@@ -265,9 +303,16 @@ async fn job_status(
     Extension(public_base): Extension<Arc<str>>,
     Path(id): Path<String>,
 ) -> Result<Response, ComputeError> {
+    let gpu = gpu_sample().await;
     let engine = state.lock().await;
-    match engine.scheduler().store().get_job(&id)? {
-        Some(job) => Ok(Json(JobView::of(rehost_job(job, &public_base))).into_response()),
+    let store = engine.scheduler().store();
+    match store.get_job(&id)? {
+        Some(job) => Ok(Json(JobView::build(
+            store,
+            rehost_job(job, &public_base),
+            gpu.as_ref(),
+        )?)
+        .into_response()),
         None => Err(ComputeError::NotFound(format!("job {id}"))),
     }
 }
@@ -287,14 +332,22 @@ async fn job_outputs(
     Path(id): Path<String>,
 ) -> Result<Response, ComputeError> {
     let engine = state.lock().await;
-    let mut outputs = engine.scheduler().store().outputs_for_job(&id)?;
-    for o in &mut outputs {
-        o.uri = rewrite_artifact_host(&o.uri, &public_base);
-    }
+    let outputs: Vec<OutputView> = engine
+        .scheduler()
+        .store()
+        .outputs_for_job(&id)?
+        .into_iter()
+        .map(|mut o| {
+            o.uri = rewrite_artifact_host(&o.uri, &public_base);
+            OutputView::of(o)
+        })
+        .collect();
     Ok(Json(outputs).into_response())
 }
 
-#[cfg(test)]
+// These tests reach the job API as the operator (the unix operator socket)
+// and through issued node credentials.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::{Cluster, JobStore, MockDetector, MockReconstructor, Output, Scheduler};

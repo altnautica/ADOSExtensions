@@ -1,0 +1,15 @@
+Calibration results
+===================
+Normalized Residuals
+----------------------------
+Reprojection error (cam0):     mean 0.3120, median 0.2810, std: 0.1880
+Reprojection error (cam1):     mean 0.3340, median 0.2990, std: 0.1910
+Gyroscope error (imu0):        mean 0.4100, median 0.3700, std: 0.2200
+Accelerometer error (imu0):    mean 0.3900, median 0.3500, std: 0.2100
+
+Residuals
+----------------------------
+Reprojection error (cam0) [px]:     mean 0.3, median 0.27, std: 0.4
+Reprojection error (cam1) [px]:     mean 0.6, median 0.5, std: 0.8
+Gyroscope error (imu0) [rad/s]:     mean 0.0021, median 0.0019, std: 0.0011
+Accelerometer error (imu0) [m/s^2]: mean 0.0310, median 0.0280, std: 0.0170

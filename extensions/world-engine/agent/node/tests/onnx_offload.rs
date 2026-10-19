@@ -9,7 +9,8 @@
 //! (on the Apple GPU under `coreml`) over a frame, and asserts the offload
 //! returns a well-formed, normalized detection set — the same shape a local NPU
 //! detection would land on the drone's bus.
-
+// These tests drive the unix-socket transport and the issued-credential store.
+#![cfg(unix)]
 #![cfg(feature = "onnx")]
 
 use std::path::PathBuf;

@@ -1,7 +1,7 @@
 //! The reconstructor backend: turns a keyframe-bag dataset into a world-model
-//! artifact (gaussian splat / point cloud / mesh). Real backends shell out to
-//! third-party tools (Brush / msplat / nerfstudio / COLMAP); the mock keeps the
-//! engine testable with no GPU.
+//! artifact (gaussian splat). Real backends shell out to the pinned trainers
+//! ([`crate::backends`]); the stand-in exists only for tests (`cfg(test)` or
+//! feature `mock`) and is never part of a release build.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,12 +16,8 @@ pub struct ReconstructOutput {
     pub uri: String,
     /// Gaussian count for a splat (0 for non-splat artifacts).
     pub gaussian_count: u64,
-    /// The concrete backend that produced this artifact. `mock` is a
-    /// deterministic placeholder (no GPU, CI / no-backend node) and is NEVER a
-    /// real world model; a real reconstruction carries its tool name
-    /// (`brush` / `msplat` / `nerfstudio` / `colmap`). Stamped by the backend
-    /// that actually ran so it survives the selecting-reconstructor indirection
-    /// and reaches the client for an honest-placeholder badge.
+    /// The concrete backend that produced this artifact (`brush`, `msplat`),
+    /// stamped by the backend that actually ran.
     pub backend: String,
 }
 
@@ -40,12 +36,13 @@ pub trait Reconstructor: Send + Sync {
     ) -> Result<ReconstructOutput, ComputeError>;
 }
 
-/// A no-GPU reconstructor that returns a deterministic fake splat. Used in CI
-/// and on a node with no real backend installed, so the queue, scheduler, and
-/// output paths are exercised end to end without a GPU.
+/// A no-GPU reconstructor that returns a deterministic fake splat, for tests
+/// of the queue, scheduler and output paths.
+#[cfg(any(test, feature = "mock"))]
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MockReconstructor;
 
+#[cfg(any(test, feature = "mock"))]
 impl Reconstructor for MockReconstructor {
     fn name(&self) -> &str {
         "mock"
@@ -83,8 +80,6 @@ mod tests {
         assert_eq!(out.kind, "splat");
         assert_eq!(out.uri, "mock://splat/ds-7");
         assert_eq!(out.gaussian_count, 1000);
-        // The mock stamps its backend so a client can badge it as a placeholder,
-        // never mistaking the deterministic fake for a real world model.
         assert_eq!(out.backend, "mock");
         assert_eq!(MockReconstructor.name(), "mock");
     }

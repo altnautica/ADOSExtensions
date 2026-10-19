@@ -2,6 +2,8 @@
 //! ados-control authenticated the operator before proxying, so a request with
 //! no credential reaches an owner-only route there, while the same request over
 //! the node's TCP listener (even from loopback) is refused.
+// These tests drive the unix-socket transport and the issued-credential store.
+#![cfg(unix)]
 
 use std::path::Path;
 use std::sync::Arc;

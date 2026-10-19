@@ -233,7 +233,7 @@ HOST_SUFFIXES = (
     "objects.githubusercontent.com",
     "release-assets.githubusercontent.com",
 )
-PROFILES = {"drone", "ground-station", "ground_station", "workstation", "compute"}
+PROFILES = {"drone", "ground-station", "ground_station", "workstation", "compute", "visor"}
 ARCH_OS = re.compile(r"^[a-z0-9_]+-[a-z0-9_]+$")
 
 

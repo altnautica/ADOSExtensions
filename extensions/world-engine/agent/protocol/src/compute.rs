@@ -5,10 +5,10 @@
 //! master/slave cluster: there is always one master (the single logical compute
 //! endpoint a drone or GCS pairs with, and the scheduler), and extra nodes
 //! slave to it and offer their workers. A caller submits a job (reconstruction,
-//! or a perception/SLAM offload session) through the node job API and reads
-//! its status and result back from the same API. The heavy result is delivered
-//! out-of-band (a shared-data topic or a stream-lane url); the job interface
-//! carries the small request and status only.
+//! change detection, calibration, or a perception offload session) through the
+//! node job API and reads its status and result back from the same API. The
+//! heavy result is delivered out-of-band (a shared-data topic or a stream-lane
+//! url); the job interface carries the small request and status only.
 //!
 //! The wire structs live here so the compute node, the drone-side client, the
 //! offload session, and the cluster heartbeat all speak one contract.
@@ -28,12 +28,15 @@ pub enum ComputeRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputeJobKind {
-    /// Reconstruct a world model from a keyframe bag (splat / cloud / mesh).
+    /// Reconstruct a world model: from a keyframe bag (the live lane), or from
+    /// an uploaded capture session with a preset (the staged pipeline).
     Reconstruct,
     /// A streaming session: frames in, detections back (for an NPU-less drone).
     PerceptionOffload,
-    /// A streaming session: frames in, poses back (offloaded SLAM).
-    SlamOffload,
+    /// Compare the point clouds of two reconstructed sessions of one site.
+    Change,
+    /// Calibrate a rig from a calibration capture session.
+    Calibrate,
 }
 
 /// Lifecycle of a compute job.
@@ -256,6 +259,19 @@ mod tests {
         let back = ComputeJobRequest::from_msgpack(&req.to_msgpack().unwrap()).unwrap();
         assert_eq!(req, back);
         assert_eq!(back.kind, ComputeJobKind::PerceptionOffload);
+    }
+
+    #[test]
+    fn job_kinds_use_snake_case_wire_names() {
+        for (kind, wire) in [
+            (ComputeJobKind::Reconstruct, "reconstruct"),
+            (ComputeJobKind::PerceptionOffload, "perception_offload"),
+            (ComputeJobKind::Change, "change"),
+            (ComputeJobKind::Calibrate, "calibrate"),
+        ] {
+            assert_eq!(serde_json::to_value(kind).unwrap(), wire);
+        }
+        assert!(serde_json::from_value::<ComputeJobKind>("slam_offload".into()).is_err());
     }
 
     #[test]

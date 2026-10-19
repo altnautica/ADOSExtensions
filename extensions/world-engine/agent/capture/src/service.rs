@@ -399,7 +399,7 @@ async fn process_frame(
     session.set_vio_health(ps.health);
     session.set_pose_tier(ps.source);
     // The anchor latch is observable from the sample: the reader fills `anchor`
-    // once the first 3D fix lands and every later sample carries it.
+    // once 100 3D fixes have been averaged and every later sample carries it.
     session.set_anchored(ps.anchor.is_some());
 
     // Encode the JPEG only when this frame will actually become a keyframe, and

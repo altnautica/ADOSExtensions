@@ -1,0 +1,243 @@
+//! The standalone node: the reconstruction node without a plugin host (a
+//! Windows workstation, or a Linux box run by hand). It serves the job API,
+//! the job files and measurement, the session upload lane and the artifacts
+//! on one TCP listener, and runs the worker. With no operator socket, the
+//! owner is whoever presents the node's bearer token; there are no issued
+//! node lanes.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use tokio::net::TcpListener;
+use tokio::sync::Mutex;
+use tower_http::cors::CorsLayer;
+
+use crate::bulk::{bulk_router, CommitHook, SessionStore};
+use crate::job_files::job_files_router;
+use crate::lanes::upload_and_artifact_lanes;
+use crate::worker::{worker_loop, WorkerCtx};
+use crate::{
+    build_router_with_base, derive_public_base, Cluster, ComputeAuth, Engine, JobStore,
+    MockDetector, Scheduler, SelectingReconstructor, SessionRegistry,
+};
+
+/// Command-line options of a standalone run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StandaloneOptions {
+    /// State directory: `node/jobs.db`, `node/work/` (jobs, sessions),
+    /// `node/owner-token`.
+    pub data_dir: PathBuf,
+    /// Listen address, e.g. `0.0.0.0:8092`.
+    pub listen: String,
+    /// The owner bearer token; generated into `node/owner-token` when absent.
+    pub token: Option<String>,
+    /// Base URL artifacts are fetched from (derived from `listen` when absent).
+    pub public_url: Option<String>,
+    pub workers: u32,
+}
+
+impl StandaloneOptions {
+    /// Parse `--standalone --data-dir <dir> --listen <addr> [--token <t>]
+    /// [--public-url <url>] [--workers <n>] [--tools-dir <dir>]`. `--tools-dir`
+    /// is applied to the environment (`ADOS_WE_TOOLS_DIR`). `None` when
+    /// `--standalone` is absent.
+    pub fn from_args(args: &[String]) -> Result<Option<Self>, String> {
+        if !args.iter().any(|a| a == "--standalone") {
+            return Ok(None);
+        }
+        let value = |flag: &str| -> Result<Option<String>, String> {
+            match args.iter().position(|a| a == flag) {
+                Some(i) => args
+                    .get(i + 1)
+                    .filter(|v| !v.starts_with("--"))
+                    .cloned()
+                    .map(Some)
+                    .ok_or_else(|| format!("{flag} needs a value")),
+                None => Ok(None),
+            }
+        };
+        let data_dir = value("--data-dir")?.ok_or("--data-dir is required")?;
+        if let Some(t) = value("--tools-dir")? {
+            std::env::set_var("ADOS_WE_TOOLS_DIR", t);
+        }
+        Ok(Some(Self {
+            data_dir: PathBuf::from(data_dir),
+            listen: value("--listen")?.unwrap_or_else(|| "127.0.0.1:8092".into()),
+            token: value("--token")?.or_else(|| std::env::var("ADOS_COMPUTE_TOKEN").ok()),
+            public_url: value("--public-url")?,
+            workers: value("--workers")?
+                .map(|w| {
+                    w.parse()
+                        .map_err(|_| "--workers needs a number".to_string())
+                })
+                .transpose()?
+                .unwrap_or(1),
+        }))
+    }
+}
+
+/// The owner token: given, else read from (or generated into) `path`.
+fn owner_token(given: Option<String>, path: &Path) -> std::io::Result<String> {
+    if let Some(t) = given.filter(|t| !t.trim().is_empty()) {
+        return Ok(t.trim().to_string());
+    }
+    if let Ok(t) = std::fs::read_to_string(path) {
+        if !t.trim().is_empty() {
+            return Ok(t.trim().to_string());
+        }
+    }
+    let mut bytes = [0u8; 24];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let token = hex::encode(bytes);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, &token)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(token)
+}
+
+fn hostname() -> Option<String> {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .ok()
+        .filter(|h| !h.trim().is_empty() && !h.eq_ignore_ascii_case("localhost"))
+}
+
+/// Run the standalone node until the listener stops.
+pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let node = opts.data_dir.join("node");
+    let work_root = node.join("work");
+    let sessions_root = work_root.join("sessions");
+    std::fs::create_dir_all(&sessions_root)?;
+    let token = owner_token(opts.token.clone(), &node.join("owner-token"))?;
+    let public_base = derive_public_base(
+        &opts.listen,
+        opts.public_url.as_deref(),
+        hostname().as_deref(),
+    );
+
+    let store = JobStore::open(&node.join("jobs.db").to_string_lossy())?;
+    let scheduler = Scheduler::new(
+        store,
+        Arc::new(SelectingReconstructor::new(work_root.clone())),
+        Arc::new(MockDetector),
+    )
+    .with_sessions_root(sessions_root.clone());
+    let engine = Engine::new(scheduler, Cluster::new_master("standalone"), opts.workers);
+    let runner = engine.runner();
+    let state = Arc::new(Mutex::new(engine));
+    {
+        let engine = state.lock().await;
+        let n = engine
+            .scheduler()
+            .store()
+            .requeue_stale_running(crate::worker::now_ms())?;
+        if n > 0 {
+            tracing::info!(requeued = n, "requeued interrupted jobs");
+        }
+    }
+
+    #[cfg(unix)]
+    let auth = Arc::new(
+        ComputeAuth::new(crate::NodeCredentialStore::open(
+            node.join("node-credentials.json"),
+            "standalone",
+        ))
+        .with_owner_token(token),
+    );
+    #[cfg(not(unix))]
+    let auth = Arc::new(ComputeAuth::standalone(token));
+
+    let on_commit: CommitHook = Arc::new(|s| {
+        tracing::info!(session = %s.session_id, files = s.files, bytes = s.bytes, "session committed");
+        Ok(())
+    });
+    let router = build_router_with_base(
+        state.clone(),
+        auth.clone(),
+        Arc::from(public_base.as_str()),
+        Arc::new(SessionRegistry::new()),
+    )
+    .merge(job_files_router(auth.clone(), work_root.clone()))
+    .merge(upload_and_artifact_lanes(
+        &auth,
+        bulk_router(Arc::new(SessionStore::new(sessions_root)), on_commit),
+        work_root.clone(),
+    ))
+    .layer(CorsLayer::permissive());
+
+    let ctx = WorkerCtx {
+        state: state.clone(),
+        work_root: work_root.clone(),
+        public_base: public_base.clone(),
+        runner,
+        tour_viewer: crate::tools::tour_viewer_dir(),
+        person_model: std::env::var_os("ADOS_WE_PERSON_MODEL").map(PathBuf::from),
+    };
+    for _ in 0..opts.workers.max(1) {
+        tokio::spawn(worker_loop(ctx.clone()));
+    }
+    let retention = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+            let cutoff = crate::worker::now_ms() - 7 * 86_400_000;
+            let engine = retention.lock().await;
+            if let Err(e) = engine.scheduler().store().purge_terminal_before(cutoff) {
+                tracing::warn!(error = %e, "retention purge failed");
+            }
+        }
+    });
+
+    let listener = TcpListener::bind(&opts.listen).await?;
+    tracing::info!(
+        listen = %opts.listen,
+        public_base = %public_base,
+        token_file = %node.join("owner-token").display(),
+        tools = %crate::tools::tools_root().display(),
+        "standalone reconstruction node listening"
+    );
+    axum::serve(listener, router).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn standalone_flags_parse() {
+        assert_eq!(StandaloneOptions::from_args(&args("node")).unwrap(), None);
+        let o = StandaloneOptions::from_args(&args(
+            "node --standalone --data-dir D:/x --listen 0.0.0.0:8092 --workers 2 --token abc",
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(o.data_dir, PathBuf::from("D:/x"));
+        assert_eq!(o.listen, "0.0.0.0:8092");
+        assert_eq!(o.workers, 2);
+        assert_eq!(o.token.as_deref(), Some("abc"));
+        assert!(StandaloneOptions::from_args(&args("node --standalone")).is_err());
+        assert!(StandaloneOptions::from_args(&args("node --standalone --data-dir")).is_err());
+    }
+
+    #[test]
+    fn the_owner_token_is_generated_once_and_reused() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("node/owner-token");
+        let a = owner_token(None, &p).unwrap();
+        assert_eq!(a.len(), 48);
+        assert_eq!(owner_token(None, &p).unwrap(), a);
+        assert_eq!(owner_token(Some("given".into()), &p).unwrap(), "given");
+    }
+}

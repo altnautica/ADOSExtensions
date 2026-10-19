@@ -7,6 +7,8 @@
 //! per-crate unit tests do not exercise together. The real-GPU / real-camera /
 //! real-RF criteria of each gate are bench items (the stop boundary, M15); a
 //! WFB-relay or cloud lane substitutes the same `AtlasBearer` here.
+// These tests drive the unix-socket transport and the issued-credential store.
+#![cfg(unix)]
 
 use std::sync::Arc;
 
