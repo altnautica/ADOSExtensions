@@ -40,6 +40,24 @@ impl Engine {
             .is_some_and(|s| s.phase == Phase::Recording)
     }
 
+    /// The host-clock exposure instant of a frame stamped with simulator time
+    /// (`ts_sensor_ns` on `TIMEBASE_SIM`, from the renderer's SEI), whose
+    /// `ts_ns` is only its arrival over RTSP, 0.1–0.3 s late and jittery. In a
+    /// simulation the agent clock runs on simulator time (its `sim` source, or
+    /// the simulated hub whose clock is simulator time), so its map's inverse
+    /// gives the host instant the IMU samples are stamped on. `None` for any
+    /// other frame, or before the map has a sample.
+    fn sim_exposure_host(&self, f: &CapturedFrame) -> Option<u64> {
+        if f.timebase != TIMEBASE_SIM {
+            return None;
+        }
+        let t = f.ts_sensor_ns?;
+        match &self.session {
+            Some(s) if s.timebase == Timebase::Sim => s.clock.to_host(t),
+            _ => self.sensors.lock().clock.to_host(t),
+        }
+    }
+
     /// The frame's exposure instant on the session timebase, and the trigger
     /// record it joined (already on the session timebase).
     fn frame_time(
@@ -74,7 +92,12 @@ impl Engine {
         }
     }
 
-    pub(super) async fn on_frame(&mut self, f: CapturedFrame) {
+    pub(super) async fn on_frame(&mut self, mut f: CapturedFrame) {
+        // The pose provider, the quality and coverage clocks and the fallback
+        // session stamp all want the exposure instant, not the arrival.
+        if let Some(t) = self.sim_exposure_host(&f) {
+            f.ts_ns = t;
+        }
         let cam = self.cams.entry(f.camera_id.clone()).or_default();
         cam.width = f.width;
         cam.height = f.height;

@@ -205,6 +205,14 @@ impl ClockMap {
         (t as f64 + dh * self.rate.unwrap_or(1.0)).max(0.0).round() as u64
     }
 
+    /// Host monotonic ns of source-timebase `t_ns` (the inverse of
+    /// [`Self::to_session`]); `None` until the map has a sample.
+    pub fn to_host(&self, t_ns: u64) -> Option<u64> {
+        let (h, t) = self.anchor?;
+        let dt = t_ns as f64 - t as f64;
+        Some((h as f64 + dt / self.rate.unwrap_or(1.0)).max(0.0).round() as u64)
+    }
+
     /// UTC ns at host monotonic `host_ns`, when the samples carry UTC.
     pub fn utc_at(&self, host_ns: u64) -> Option<i64> {
         let l = self.latest.as_ref()?;
@@ -231,6 +239,18 @@ mod tests {
             utc_ns: Some(1_700_000_000_000_000_000 + host as i64),
             locked: true,
             sigma_ns: 400_000,
+        }
+    }
+
+    #[test]
+    fn to_host_inverts_the_map_with_its_rate() {
+        let mut m = ClockMap::new();
+        assert_eq!(m.to_host(5), None, "nothing mapped yet");
+        m.observe(sample(0, 1_000_000_000));
+        m.observe(sample(1_000_040_000, 2_000_000_000));
+        for host in [1_500_000_000u64, 2_000_000_000, 9_000_000_000] {
+            let back = m.to_host(m.to_session(host)).unwrap();
+            assert!(back.abs_diff(host) <= 1, "{host} -> {back}");
         }
     }
 
