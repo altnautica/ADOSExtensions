@@ -44,3 +44,27 @@ def test_flat_wall_fuses_to_triangles() -> None:
     assert n > 1000, f"only {n} triangles"
     z = np.asarray(tri.vertices)[:, 2]
     assert abs(float(np.median(z)) - WALL_Z) < 0.05
+
+
+def test_tsdf_falls_back_to_the_cpu_when_the_gpu_grid_runs_out_of_memory(monkeypatch):
+    calls = []
+
+    def fake_fuse(args, renderer, views, device):
+        calls.append(device)
+        if device is None:
+            raise RuntimeError("[Open3D Error] MemoryManagerCUDA.cpp:24 CUDA runtime error: out of memory")
+        return "cpu-mesh"
+
+    monkeypatch.setattr(mesh.common, "SplatRenderer", lambda splat: object())
+    monkeypatch.setattr(mesh, "fuse", fake_fuse)
+    assert mesh.tsdf_mesh(None, "splat.ply", []) == "cpu-mesh"
+    assert calls == [None, "CPU:0"]
+
+    def other_error(args, renderer, views, device):
+        raise RuntimeError("no view rendered usable depth")
+
+    monkeypatch.setattr(mesh, "fuse", other_error)
+    import pytest
+
+    with pytest.raises(RuntimeError, match="usable depth"):
+        mesh.tsdf_mesh(None, "splat.ply", [])

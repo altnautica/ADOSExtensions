@@ -18,6 +18,32 @@ import common
 MAX_SIDE = 1600  # training images are downscaled so the long side fits this
 RAM_CACHE_BYTES = 6 << 30
 SH_DEGREE = 3
+# A view's monocular depth prior is used only where it agrees with the model's own sparse points.
+DEPTH_MIN_POINTS = 50
+DEPTH_MAX_MEDIAN_REL = 0.05
+DEPTH_MAX_P90_REL = 0.25
+
+
+def depth_prior_scale(prior: np.ndarray, obs_xy: np.ndarray | None, z: np.ndarray | None) -> float | None:
+    """The scale that puts a view's monocular depth `prior` (full resolution) onto the model's
+    depths `z` of the sparse points observed at pixels `obs_xy`, or None when the prior disagrees
+    with them (median relative error > 5 % or 90th percentile > 25 % after scaling, or too few
+    points): a wrong prior pulls gaussians along the view rays, so such a view trains without a
+    depth term."""
+    if obs_xy is None or z is None or len(z) < DEPTH_MIN_POINTS:
+        return None
+    h, w = prior.shape
+    u = np.clip(np.floor(obs_xy[:, 0]).astype(int), 0, w - 1)
+    v = np.clip(np.floor(obs_xy[:, 1]).astype(int), 0, h - 1)
+    p = prior[v, u].astype(np.float64)
+    ok = np.isfinite(p) & (p > 0) & (z > 0)
+    if ok.sum() < DEPTH_MIN_POINTS:
+        return None
+    s = float(np.median(z[ok] / p[ok]))
+    rel = np.abs(s * p[ok] - z[ok]) / z[ok]
+    if np.median(rel) > DEPTH_MAX_MEDIAN_REL or np.percentile(rel, 90) > DEPTH_MAX_P90_REL:
+        return None
+    return s
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -42,6 +68,7 @@ class Dataset:
         import cv2
 
         self.views, self.items = [], []
+        self.depth_used = self.depth_rejected = 0
         budget = RAM_CACHE_BYTES
         for v in views:
             path = args.images / v.name
@@ -57,7 +84,15 @@ class Dataset:
             if args.masks and common.mask_path(args.masks, v.name).is_file():
                 item["mask_path"] = common.mask_path(args.masks, v.name)
             if args.depths and common.depth_path(args.depths, v.name).is_file():
-                item["depth_path"] = common.depth_path(args.depths, v.name)
+                prior = np.load(common.depth_path(args.depths, v.name)).astype(np.float32)
+                z = None if v.obs_xyz is None else v.obs_xyz @ v.w2c[:3, :3].T[:, 2] + v.w2c[2, 3]
+                scale = depth_prior_scale(prior, v.obs_xy, z)
+                if scale is None:
+                    self.depth_rejected += 1
+                else:
+                    item["depth_path"] = common.depth_path(args.depths, v.name)
+                    item["depth_scale"] = scale
+                    self.depth_used += 1
             need = w * h * 3
             if need <= budget:
                 item["rgb"] = self._load_rgb(item, cv2)
@@ -88,7 +123,7 @@ class Dataset:
             m = cv2.resize(m, (it["w"], it["h"]), interpolation=cv2.INTER_NEAREST)
             out["mask"] = torch.from_numpy((m > 127).astype(np.float32)).to(device)
         if "depth_path" in it:
-            d = np.load(it["depth_path"]).astype(np.float32)
+            d = np.load(it["depth_path"]).astype(np.float32) * it["depth_scale"]
             d = cv2.resize(d, (it["w"], it["h"]), interpolation=cv2.INTER_NEAREST)
             out["depth"] = torch.from_numpy(np.nan_to_num(d, nan=0.0, posinf=0.0, neginf=0.0)).to(device)
         return out
@@ -223,7 +258,8 @@ def train(args) -> None:
         common.progress(0.01, "distorted cameras in the SfM model: training with 3DGUT")
     args.ut = ut
     data = Dataset(args, views)
-    common.progress(0.02, f"{len(data.items)} views, {len(pts)} sparse points")
+    common.progress(0.02, f"{len(data.items)} views, {len(pts)} sparse points, depth prior on "
+                          f"{data.depth_used} views ({data.depth_rejected} disagree with the sparse points)")
     params, scene_scale = init_params(pts, cols, data.views, args.max_splats, device)
     optimizers = make_optimizers(params, scene_scale)
     steps = max(1, args.steps)
@@ -296,7 +332,8 @@ def train(args) -> None:
             params["shN"].cpu().numpy(),
         )
     psnr_out = psnr if psnr is not None and math.isfinite(psnr) else None
-    common.done(ply=str(ply), gaussians=int(len(params["means"])), psnr=psnr_out, ut=bool(args.ut))
+    common.done(ply=str(ply), gaussians=int(len(params["means"])), psnr=psnr_out, ut=bool(args.ut),
+                depth_views=data.depth_used, depth_rejected=data.depth_rejected)
 
 
 if __name__ == "__main__":

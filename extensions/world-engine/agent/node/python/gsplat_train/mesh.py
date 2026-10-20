@@ -40,12 +40,12 @@ def parse_args(argv=None) -> argparse.Namespace:
 class TsdfFuser:
     """TSDF fusion of depth + colour views into a sparse voxel block grid."""
 
-    def __init__(self, voxel: float):
+    def __init__(self, voxel: float, device: str | None = None):
         import open3d as o3d
         import open3d.core as o3c
 
         self.o3d, self.o3c = o3d, o3c
-        self.device = o3c.Device("CUDA:0" if o3c.cuda.is_available() else "CPU:0")
+        self.device = o3c.Device(device or ("CUDA:0" if o3c.cuda.is_available() else "CPU:0"))
         self.grid = o3d.t.geometry.VoxelBlockGrid(
             attr_names=("tsdf", "weight", "color"),
             attr_dtypes=(o3c.float32, o3c.float32, o3c.float32),
@@ -80,9 +80,32 @@ class TsdfFuser:
         return self.grid.extract_triangle_mesh(weight_threshold=1.0).cpu().to_legacy()
 
 
+def is_out_of_memory(e: BaseException) -> bool:
+    return "out of memory" in str(e).lower()
+
+
 def tsdf_mesh(args, splat, views):
     renderer = common.SplatRenderer(splat)
-    fuser = TsdfFuser(args.voxel)
+    try:
+        return fuse(args, renderer, views, None)
+    except RuntimeError as e:
+        # A large site at a fine voxel outgrows the GPU next to the splat; host memory holds it.
+        if not is_out_of_memory(e):
+            raise
+    # Outside the handler, so the traceback no longer pins the GPU grid.
+    import gc
+
+    gc.collect()
+    import open3d.core as o3c
+
+    if o3c.cuda.is_available():
+        o3c.cuda.release_cache()
+    common.progress(0.05, "TSDF grid out of GPU memory: fusing on the CPU")
+    return fuse(args, renderer, views, "CPU:0")
+
+
+def fuse(args, renderer, views, device: str | None):
+    fuser = TsdfFuser(args.voxel, device)
     for i, v in enumerate(views):
         s = min(1.0, MAX_RENDER_SIDE / max(v.width, v.height))
         w, h = max(1, round(v.width * s)), max(1, round(v.height * s))

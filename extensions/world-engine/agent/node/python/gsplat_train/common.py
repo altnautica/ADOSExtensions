@@ -125,6 +125,8 @@ class ColmapImage:
     camera_id: int
     name: str
     w2c: np.ndarray  # 4x4 float64
+    obs_xy: np.ndarray | None = None  # [K,2] pixel positions of the observations with a 3D point
+    obs_point: np.ndarray | None = None  # [K] their point3D ids
 
 
 def _qvec_to_rot(q: np.ndarray) -> np.ndarray:
@@ -165,26 +167,36 @@ def read_images_bin(path: Path) -> dict[int, ColmapImage]:
             while (c := f.read(1)) != b"\x00":
                 name += c
             (npts,) = _read(f, "Q")
-            f.seek(npts * 24, os.SEEK_CUR)  # x, y (double) + point3D id (int64)
+            obs = np.frombuffer(f.read(npts * 24), dtype=[("x", "<f8"), ("y", "<f8"), ("id", "<i8")])
+            seen = obs["id"] >= 0
             w2c = np.eye(4)
             w2c[:3, :3] = _qvec_to_rot(np.array([qw, qx, qy, qz]))
             w2c[:3, 3] = [tx, ty, tz]
-            images[iid] = ColmapImage(iid, cid, name.decode("utf-8"), w2c)
+            images[iid] = ColmapImage(iid, cid, name.decode("utf-8"), w2c,
+                                      np.column_stack([obs["x"][seen], obs["y"][seen]]), obs["id"][seen].copy())
     return images
 
 
 def read_points3d_bin(path: Path) -> tuple[np.ndarray, np.ndarray]:
     """(xyz [N,3] float32, rgb [N,3] float32 in 0..1)."""
-    xyz, rgb = [], []
+    xyz, rgb, _ = read_points3d_bin_ids(path)
+    return xyz, rgb
+
+
+def read_points3d_bin_ids(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """(xyz [N,3] float32, rgb [N,3] float32 in 0..1, point3D ids [N] int64)."""
+    xyz, rgb, ids = [], [], []
     with open(path, "rb") as f:
         (n,) = _read(f, "Q")
         for _ in range(n):
             vals = _read(f, "QdddBBBd")
+            ids.append(vals[0])
             xyz.append(vals[1:4])
             rgb.append(vals[4:7])
             (tl,) = _read(f, "Q")
             f.seek(tl * 8, os.SEEK_CUR)
-    return np.asarray(xyz, np.float32).reshape(-1, 3), np.asarray(rgb, np.float32).reshape(-1, 3) / 255.0
+    return (np.asarray(xyz, np.float32).reshape(-1, 3), np.asarray(rgb, np.float32).reshape(-1, 3) / 255.0,
+            np.asarray(ids, np.int64))
 
 
 def sparse_dir(colmap_dir: Path) -> Path:
@@ -202,19 +214,29 @@ class View:
     width: int
     height: int
     camera: ColmapCamera | None = None
+    obs_xy: np.ndarray | None = None  # [K,2] pixels (full resolution) of the view's sparse points
+    obs_xyz: np.ndarray | None = None  # [K,3] those points in the model frame
 
 
 def load_colmap_views(colmap_dir: Path) -> tuple[list[View], np.ndarray, np.ndarray]:
     sp = sparse_dir(colmap_dir)
     cams = read_cameras_bin(sp / "cameras.bin")
     imgs = read_images_bin(sp / "images.bin")
-    pts, cols = read_points3d_bin(sp / "points3D.bin") if (sp / "points3D.bin").is_file() else (np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32))
+    if (sp / "points3D.bin").is_file():
+        pts, cols, ids = read_points3d_bin_ids(sp / "points3D.bin")
+    else:
+        pts, cols, ids = np.zeros((0, 3), np.float32), np.zeros((0, 3), np.float32), np.zeros(0, np.int64)
+    index = {int(i): k for k, i in enumerate(ids)}
     views = []
     for im in sorted(imgs.values(), key=lambda i: i.name):
         cam = cams[im.camera_id]
         fx, fy, cx, cy = cam.intrinsics()
         K = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], np.float64)
-        views.append(View(im.name.replace("\\", "/"), im.w2c, K, cam.width, cam.height, cam))
+        rows = [index.get(int(p), -1) for p in im.obs_point] if im.obs_point is not None else []
+        keep = np.array([r >= 0 for r in rows], dtype=bool)
+        obs_xy = im.obs_xy[keep] if len(rows) else None
+        obs_xyz = pts[np.array(rows, dtype=np.int64)[keep]].astype(np.float64) if len(rows) else None
+        views.append(View(im.name.replace("\\", "/"), im.w2c, K, cam.width, cam.height, cam, obs_xy, obs_xyz))
     return views, pts, cols
 
 
