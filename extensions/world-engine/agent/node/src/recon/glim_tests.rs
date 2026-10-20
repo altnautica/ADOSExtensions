@@ -43,6 +43,25 @@ fn close(a: &[f64], b: &[f64], tol: f64) {
 }
 
 #[test]
+fn only_solid_or_spinning_lidar_rigs_are_3d() {
+    let with = |lidar: Value| {
+        let mut r = serde_json::to_value(rig()).unwrap();
+        r["sensors"][1]["lidar"] = lidar;
+        serde_json::from_value::<Rig>(r).unwrap()
+    };
+    let mut spinning = crate::calib::test_util::mid360();
+    spinning["pattern"] = "spinning".into();
+    assert!(rig_has_3d_lidar(&rig()));
+    assert!(rig_has_3d_lidar(&with(spinning)));
+    assert!(!rig_has_3d_lidar(&with(
+        crate::calib::test_util::rplidar_c1()
+    )));
+    let mut camera_only = rig();
+    camera_only.sensors.truncate(1);
+    assert!(!rig_has_3d_lidar(&camera_only));
+}
+
+#[test]
 fn comments_are_stripped_outside_strings() {
     let s =
         "{\"url\": \"http://x/*y*/\", /* block\n */ \"a\": 1, // tail \"q\"\n \"b\": \"\\\"//\"}";

@@ -12,8 +12,10 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::Value;
 
+use super::glim::rig_has_3d_lidar;
 use super::train::run_script;
 use super::{StageError, ToolRunner};
+use ados_capture_contract::Rig;
 
 /// Below this training PSNR the splat has diverged and no mesh is built.
 pub const PSNR_FLOOR_DB: f64 = 18.0;
@@ -61,17 +63,6 @@ pub fn check_psnr_floor(train_detail: &Value) -> Result<(), StageError> {
     }
 }
 
-/// Whether a session rig (`rig.json` as JSON) carries a 3D LiDAR: a `lidar`
-/// sensor whose `lidar` model block has pattern `solid` or `spinning`.
-pub fn rig_has_3d_lidar(rig: &Value) -> bool {
-    rig["sensors"].as_array().is_some_and(|sensors| {
-        sensors.iter().any(|s| {
-            s["kind"] == "lidar"
-                && matches!(s["lidar"]["pattern"].as_str(), Some("solid" | "spinning"))
-        })
-    })
-}
-
 /// Stage `mesh` of a reconstruction in `job_dir` (its `dataset/` and
 /// `train/splat.ply`, writing `mesh/`): refused below the PSNR floor of
 /// `train_detail`; a 3D LiDAR's registered cloud is the surface source unless
@@ -89,7 +80,7 @@ pub fn stage(
     let dataset = job_dir.join("dataset");
     let cloud = dataset.join("lidar_points.laz");
     let lidar = method == MeshMethod::Tsdf && cloud.is_file() && {
-        let rig: Value = serde_json::from_slice(&fs::read(session_dir.join("rig.json"))?)
+        let rig: Rig = serde_json::from_slice(&fs::read(session_dir.join("rig.json"))?)
             .map_err(|e| StageError::input(format!("rig.json: {e}")))?;
         rig_has_3d_lidar(&rig)
     };
@@ -215,8 +206,15 @@ mod tests {
         fs::create_dir_all(job.join("dataset")).unwrap();
         fs::create_dir_all(&session).unwrap();
         fs::write(job.join("dataset/lidar_points.laz"), b"laz").unwrap();
-        let rig =
-            json!({"sensors": [{"id": "lidar0", "kind": "lidar", "lidar": {"pattern": pattern}}]});
+        let mut lidar = crate::calib::test_util::mid360();
+        lidar["pattern"] = pattern.into();
+        let rig = json!({
+            "contract": "ados.capture/1", "rig_id": "r", "calib_version": "1",
+            "sensors": [{"id": "lidar0", "kind": "lidar", "role": "up", "time_offset_ns": 0,
+                "T_body_sensor": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                                  0.0, 0.0, 0.0, 1.0],
+                "lidar": lidar}]
+        });
         fs::write(session.join("rig.json"), rig.to_string()).unwrap();
         (job, session)
     }
@@ -298,20 +296,5 @@ mod tests {
         assert_eq!(MeshMethod::parse("2DGS"), None);
         assert_eq!(MeshMethod::parse("poisson"), None);
         assert_eq!(serde_json::to_value(MeshMethod::TwoDgs).unwrap(), "2dgs");
-    }
-
-    #[test]
-    fn only_solid_or_spinning_lidar_rigs_are_3d() {
-        let rig = |lidar: Value| {
-            json!({"sensors": [
-                {"id": "cam0", "kind": "camera"},
-                {"id": "lidar0", "kind": "lidar", "lidar": lidar}
-            ]})
-        };
-        assert!(rig_has_3d_lidar(&rig(json!({"pattern": "solid"}))));
-        assert!(rig_has_3d_lidar(&rig(json!({"pattern": "spinning"}))));
-        assert!(!rig_has_3d_lidar(&rig(json!({"pattern": "planar"}))));
-        assert!(!rig_has_3d_lidar(&rig(Value::Null)));
-        assert!(!rig_has_3d_lidar(&json!({"sensors": [{"kind": "camera"}]})));
     }
 }

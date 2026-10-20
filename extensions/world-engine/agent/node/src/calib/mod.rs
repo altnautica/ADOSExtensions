@@ -4,13 +4,16 @@
 //! - `imu_noise`: native Allan deviation over the session's IMU samples.
 //! - `intrinsics` / `camera_imu`: the session exported to a Kalibr folder and
 //!   calibrated in the pinned Kalibr container.
-//! - `lidar_camera`: the session exported to a ROS 2 bag and calibrated in the
-//!   pinned LiDAR-camera container (NID registration).
+//! - `lidar_camera`: for a 3D LiDAR, the session exported to a ROS 2 bag and
+//!   calibrated in the pinned LiDAR-camera container (NID registration); for
+//!   a planar LiDAR, natively from the calibration board the scan line
+//!   crosses ([`lrf_camera`]).
 //!
 //! Each returns the session rig with the calibrated fields replaced and
 //! `calib_version` = `<input>+<target>-<UTC yyyymmddThhmmssZ>`, plus a report.
 
 pub mod allan;
+pub mod board;
 pub mod container;
 mod dvlc;
 pub mod export;
@@ -18,6 +21,9 @@ pub mod geom;
 pub mod imu_noise;
 mod kalibr_job;
 pub mod kalibr_yaml;
+pub mod lens;
+pub mod lrf_camera;
+pub mod lrf_solve;
 pub mod ros2_bag;
 #[cfg(any(test, feature = "mock"))]
 mod stand_in;
@@ -147,6 +153,9 @@ pub(crate) fn run_with(
         }
         CalibTarget::CameraImu => {
             kalibr_job::camera_imu(&reader, &req.board, work_dir, runner, image, progress)?
+        }
+        CalibTarget::LidarCamera if lrf_camera::rig_lidar_is_planar(reader.rig()) => {
+            lrf_camera::lidar_camera(&reader, &req.board, progress)?
         }
         CalibTarget::LidarCamera => dvlc::lidar_camera(&reader, work_dir, runner, image, progress)?,
     };

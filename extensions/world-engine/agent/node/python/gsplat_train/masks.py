@@ -28,7 +28,6 @@ MIRROR_DIFF_M = 0.3
 MIRROR_GRID = 4  # LiDAR/depth comparison runs at 1/4 resolution
 MIRROR_EDGE_CELLS = 4  # grid cells the planarity test loses at a region's edge
 LIDAR_VOXEL_M = 0.05
-LIDAR_MAX_RANGE_M = 40.0
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -39,8 +38,15 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--person-model", type=Path, help="ONNX YOLO (COCO classes) detector")
     p.add_argument("--depths", type=Path, help="<depths>/<image rel>.npy depth priors")
     p.add_argument("--lidar", type=Path, help="world-frame LAZ/LAS point cloud")
+    p.add_argument(
+        "--lidar-max-range", type=float,
+        help="the rig LiDAR's maximum range, metres (required with --lidar); farther points are ignored",
+    )
     p.add_argument("--no-motion", action="store_true", help="skip the motion mask")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.lidar is not None and args.lidar_max_range is None:
+        p.error("--lidar needs --lidar-max-range")
+    return args
 
 
 # ---------------------------------------------------------------- person
@@ -181,7 +187,7 @@ def load_lidar(path: Path) -> np.ndarray:
     return xyz[first]
 
 
-def mirror_mask(fr: dict, lidar: np.ndarray, depth: np.ndarray) -> np.ndarray:
+def mirror_mask(fr: dict, lidar: np.ndarray, depth: np.ndarray, max_range_m: float) -> np.ndarray:
     """bool at full resolution, True on planar depth-prior regions LiDAR contradicts."""
     import cv2
 
@@ -191,7 +197,7 @@ def mirror_mask(fr: dict, lidar: np.ndarray, depth: np.ndarray) -> np.ndarray:
     K[0] *= w / W
     K[1] *= h / H
     pc = lidar @ fr["w2c"][:3, :3].T + fr["w2c"][:3, 3]
-    pc = pc[(pc[:, 2] > 0.1) & (pc[:, 2] < LIDAR_MAX_RANGE_M)]
+    pc = pc[(pc[:, 2] > 0.1) & (pc[:, 2] < max_range_m)]
     u = np.floor(K[0, 0] * pc[:, 0] / pc[:, 2] + K[0, 2]).astype(np.int64)
     v = np.floor(K[1, 1] * pc[:, 1] / pc[:, 2] + K[1, 2]).astype(np.int64)
     ok = (u >= 0) & (u < w) & (v >= 0) & (v < h)
@@ -265,7 +271,8 @@ def main(args) -> None:
             counts["motion"] += int(m.any())
             ignore |= m[: ignore.shape[0], : ignore.shape[1]]
         if use_mirror and posed and common.depth_path(args.depths, fr["name"]).is_file():
-            m = mirror_mask(fr, lidar, np.load(common.depth_path(args.depths, fr["name"])))
+            depth = np.load(common.depth_path(args.depths, fr["name"]))
+            m = mirror_mask(fr, lidar, depth, args.lidar_max_range)
             counts["mirror"] += int(m.any())
             ignore |= m
         common.write_png(common.mask_path(args.out, fr["name"]), np.where(ignore, 0, 255).astype(np.uint8))

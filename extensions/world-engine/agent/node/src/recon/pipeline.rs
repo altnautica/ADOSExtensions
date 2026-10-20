@@ -208,7 +208,7 @@ fn reconstruct(
     )?;
     // A LiDAR session's poses come from GLIM, so it must be installed (and,
     // for GPU odometry, docker must have the NVIDIA runtime).
-    if glim::rig_has_lidar(reader.rig()) {
+    if glim::rig_has_3d_lidar(reader.rig()) {
         glim::check_available(ctx.runner, dir, glim_odometry)?;
     }
     let dataset = dir.join("dataset");
@@ -231,6 +231,7 @@ fn reconstruct(
                 ctx.runner,
                 &dataset,
                 ctx.person_model.as_deref(),
+                None,
                 &mut |f| p(0.8 + 0.2 * f),
             )?;
             detail["masks"] = serde_json::to_value(m)?;
@@ -246,7 +247,7 @@ fn reconstruct(
         // (aligned onto the recorded pose track) and keeps them fixed; a
         // rejected trajectory leaves the recorded poses as they were. GLIM
         // runs on the rig's LiDAR whether or not a track was recorded.
-        let lidar_rig = glim::rig_has_lidar(reader.rig());
+        let lidar_rig = glim::rig_has_3d_lidar(reader.rig());
         let share = if lidar_rig { 0.3 } else { 0.0 };
         let glim = match lidar_rig {
             true => glim::run(
