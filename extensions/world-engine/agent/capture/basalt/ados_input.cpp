@@ -79,8 +79,9 @@ constexpr auto kInitExit = std::chrono::milliseconds(15000);
 // blocked on a full optical-flow queue (10 frames, which fills whenever flow
 // runs slower than the cameras) never reads it, so the estimator never
 // finishes the frame that would drain the queue. Stereo pairs are therefore
-// offered with try_push and dropped when the queue is full; the reader never
-// blocks on vision.
+// offered with try_push and dropped when the queue is full, and a full IMU
+// queue evicts its oldest sample (push_imu); the reader never blocks on the
+// estimator.
 constexpr size_t kImuPreroll = 10000;
 constexpr int64_t kImuLeadNs = 100'000'000;
 constexpr int kImuQueueCapacity = 20000;
@@ -199,9 +200,10 @@ struct Shared {
   std::mutex mutex;
   std::map<int64_t, size_t> features_at;  // frame t_ns -> tracked features
   int low_feature_run = 0;
-  std::atomic<int64_t> frames_in{0};
-  std::atomic<int64_t> last_frame_ms{0};
-  uint64_t frames_dropped = 0;  // input thread only
+  std::atomic<int64_t> frames_in{0};       // pairs delivered to optical flow
+  std::atomic<int64_t> last_frame_ms{0};   // when the last pair was delivered
+  uint64_t frames_dropped = 0;  // input thread only: pairs refused by a full flow queue
+  uint64_t imu_dropped = 0;     // input thread only: oldest IMU evicted on a full queue
   uint64_t imu_out_of_order = 0;     // input thread only
   uint64_t frames_out_of_order = 0;  // input thread only
 };
@@ -224,6 +226,24 @@ basalt::ManagedImage<uint16_t>::Ptr to_basalt_image(const uint8_t* gray,
     for (uint32_t x = 0; x < w; x++) row[x] = uint16_t(src[x]) << 8;
   }
   return img;
+}
+
+// Queue one IMU sample without ever blocking the reader. A full queue means
+// the estimator is behind; blocking here would stop the reader from reading
+// the very frames the estimator waits for (the deadlock described above), so
+// the oldest queued sample is evicted instead and counted. Order is kept: the
+// new sample is still the newest one in the queue.
+void push_imu(basalt::VioEstimatorBase& vio, basalt::ImuData<double>::Ptr d,
+              Shared& shared) {
+  while (!vio.imu_data_queue.try_push(d)) {
+    basalt::ImuData<double>::Ptr old;
+    if (vio.imu_data_queue.try_pop(old) &&
+        ++shared.imu_dropped % 1000 == 1) {
+      std::fprintf(stderr,
+                   "basalt-ados: %llu IMU samples dropped (estimator behind)\n",
+                   static_cast<unsigned long long>(shared.imu_dropped));
+    }
+  }
 }
 
 void input_loop(int fd, const basalt::Calibration<double>& calib,
@@ -275,7 +295,7 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
         if (preroll.size() > kImuPreroll) preroll.pop_front();
         continue;
       }
-      vio.imu_data_queue.push(d);
+      push_imu(vio, d, shared);
     } else if (type == ados::kMsgStereo) {
       if (len < ados::kStereoHeaderLen) die(2, "bad stereo message length");
       const ados::StereoHeader h = ados::decode_stereo_header(buf.data());
@@ -312,23 +332,10 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
       const uint8_t* left = buf.data() + ados::kStereoHeaderLen;
       in->img_data[0].img = to_basalt_image(left, h.width, h.height);
       in->img_data[1].img = to_basalt_image(left + plane, h.width, h.height);
-      shared.frames_in++;
-      shared.last_frame_ms = now_ms();
-      if (shared.frames_in % 200 == 1) {
-        // Frame and IMU clocks must agree: a frame far ahead of the newest
-        // IMU, or far behind it, points at a timestamp mismatch upstream.
-        std::fprintf(stderr,
-                     "basalt-ados: pair %lld t_ns %lld, newest IMU %lld, "
-                     "frame minus IMU %.3f s\n",
-                     static_cast<long long>(shared.frames_in.load()),
-                     static_cast<long long>(h.t_ns),
-                     static_cast<long long>(last_imu_t_ns),
-                     (double(h.t_ns) - double(last_imu_t_ns)) * 1e-9);
-      }
       if (!seen_stereo) {
         // The IMU from just before the first frame, so integration starts there.
         for (auto& p : preroll) {
-          if (p->t_ns + kImuLeadNs >= int64_t(h.t_ns)) vio.imu_data_queue.push(p);
+          if (p->t_ns + kImuLeadNs >= int64_t(h.t_ns)) push_imu(vio, p, shared);
         }
         preroll.clear();
         seen_stereo = true;
@@ -339,12 +346,28 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
           std::fprintf(stderr, "basalt-ados: %llu stereo pairs dropped (flow behind)\n",
                        static_cast<unsigned long long>(shared.frames_dropped));
         }
+        continue;
+      }
+      shared.frames_in++;
+      shared.last_frame_ms = now_ms();
+      if (shared.frames_in % 200 == 1) {
+        // Frame and IMU clocks must agree: a frame far ahead of the newest
+        // IMU, or far behind it, points at a timestamp mismatch upstream.
+        std::fprintf(stderr,
+                     "basalt-ados: pair %lld t_ns %lld, newest IMU %lld, "
+                     "frame minus IMU %.3f s, %llu pairs dropped\n",
+                     static_cast<long long>(shared.frames_in.load()),
+                     static_cast<long long>(h.t_ns),
+                     static_cast<long long>(last_imu_t_ns),
+                     (double(h.t_ns) - double(last_imu_t_ns)) * 1e-9,
+                     static_cast<unsigned long long>(shared.frames_dropped));
       }
     }
   }
-  // End of input: drain the pipeline.
+  // End of input: drain the pipeline. The IMU end marker goes through the
+  // evicting push: the queue may be full and the estimator already gone.
   flow.input_queue.push(nullptr);
-  vio.imu_data_queue.push(nullptr);
+  push_imu(vio, nullptr, shared);
 }
 
 // Optical flow output -> VIO input, recording the tracked-feature count.

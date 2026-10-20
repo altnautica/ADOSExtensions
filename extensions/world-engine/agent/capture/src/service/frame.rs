@@ -7,6 +7,7 @@ use world_engine_protocol::atlas::{
 };
 
 use super::Engine;
+use crate::clock::ClockMap;
 use crate::frame_source::CapturedFrame;
 use crate::pose::{se3, PoseEstimate};
 use crate::quality;
@@ -42,20 +43,17 @@ impl Engine {
 
     /// The host-clock exposure instant of a frame stamped with simulator time
     /// (`ts_sensor_ns` on `TIMEBASE_SIM`, from the renderer's SEI), whose
-    /// `ts_ns` is only its arrival over RTSP, 0.1–0.3 s late and jittery. In a
-    /// simulation the agent clock runs on simulator time (its `sim` source, or
-    /// the simulated hub whose clock is simulator time), so its map's inverse
-    /// gives the host instant the IMU samples are stamped on. `None` for any
-    /// other frame, or before the map has a sample.
-    fn sim_exposure_host(&self, f: &CapturedFrame) -> Option<u64> {
-        if f.timebase != TIMEBASE_SIM {
-            return None;
-        }
-        let t = f.ts_sensor_ns?;
-        match &self.session {
-            Some(s) if s.timebase == Timebase::Sim => s.clock.to_host(t),
-            _ => self.sensors.lock().clock.to_host(t),
-        }
+    /// `ts_ns` is only its arrival over RTSP, 0.1–0.3 s late and jittery. See
+    /// [`sim_exposure_host`].
+    fn sim_exposure(&self, f: &CapturedFrame) -> SimStamp {
+        let sensors = self.sensors.lock();
+        sim_exposure_host(
+            f.timebase,
+            f.ts_sensor_ns,
+            self.session.as_ref().map(|s| (s.timebase, &s.clock)),
+            self.bus_timebase,
+            &sensors.clock,
+        )
     }
 
     /// The frame's exposure instant on the session timebase, and the trigger
@@ -93,10 +91,22 @@ impl Engine {
     }
 
     pub(super) async fn on_frame(&mut self, mut f: CapturedFrame) {
-        // The pose provider, the quality and coverage clocks and the fallback
-        // session stamp all want the exposure instant, not the arrival.
-        if let Some(t) = self.sim_exposure_host(&f) {
-            f.ts_ns = t;
+        // The pose provider, the quality and coverage clocks, the keyframe
+        // selector and the fallback session stamp all want the exposure
+        // instant, not the arrival.
+        match self.sim_exposure(&f) {
+            SimStamp::Mapped(t) => retime(&mut f, t),
+            SimStamp::Unmapped => {
+                self.sim_unmapped += 1;
+                if self.sim_unmapped % 500 == 1 {
+                    tracing::warn!(
+                        frames = self.sim_unmapped,
+                        bus_timebase = ?self.bus_timebase,
+                        "sim_frame_stamp_unmapped_keeping_arrival"
+                    );
+                }
+            }
+            SimStamp::NotSim => {}
         }
         let cam = self.cams.entry(f.camera_id.clone()).or_default();
         cam.width = f.width;
@@ -270,5 +280,158 @@ impl Engine {
             .and_then(|r| r.sensors.iter().find(|s| s.id == camera))
             .and_then(|s| s.camera.clone())
             .unwrap_or_else(|| self.cfg.intrinsics_for(camera, w, h))
+    }
+}
+
+/// How a frame's simulator stamp maps onto the host clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SimStamp {
+    /// Not a sim-stamped frame.
+    NotSim,
+    /// The host-clock exposure instant.
+    Mapped(u64),
+    /// A sim stamp with no clock on `sim` to invert (or no sample yet): the
+    /// frame keeps its arrival stamp.
+    Unmapped,
+}
+
+/// The host instant of a `TIMEBASE_SIM` stamp. Only a clock whose timebase is
+/// `sim` can be inverted: the open session's when it is a `sim` session, else
+/// the bus clock when the clock service names `sim`. In a simulation the agent
+/// clock runs on simulator time (its `sim` source), so that map's inverse is
+/// the host instant the IMU samples are stamped on; any other clock (hub, GNSS,
+/// host) is a different time scale and inverting it would misplace the frame.
+pub(super) fn sim_exposure_host(
+    frame_timebase: u8,
+    ts_sensor_ns: Option<u64>,
+    session: Option<(Timebase, &ClockMap)>,
+    bus_timebase: Option<Timebase>,
+    bus: &ClockMap,
+) -> SimStamp {
+    if frame_timebase != TIMEBASE_SIM {
+        return SimStamp::NotSim;
+    }
+    let Some(t) = ts_sensor_ns else {
+        return SimStamp::NotSim;
+    };
+    let map = match session {
+        Some((Timebase::Sim, m)) => Some(m),
+        _ if bus_timebase == Some(Timebase::Sim) => Some(bus),
+        _ => None,
+    };
+    match map.and_then(|m| m.to_host(t)) {
+        Some(h) => SimStamp::Mapped(h),
+        None => SimStamp::Unmapped,
+    }
+}
+
+/// Move a frame's host stamp to `t_ns`, shifting its unix-ms stamp (the
+/// keyframe selector's clock) by the same amount so both name the exposure.
+pub(super) fn retime(f: &mut CapturedFrame, t_ns: u64) {
+    let shift_ns = t_ns as i128 - f.ts_ns as i128;
+    f.ts_ms += (shift_ns.div_euclid(1_000_000)) as i64;
+    f.ts_ns = t_ns;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ados_capture_contract::v1::ClockSample;
+    use ados_protocol::framebus::TIMEBASE_HOST;
+
+    /// A map whose source reads `offset` ahead of the host clock.
+    fn map(offset: u64) -> ClockMap {
+        let mut m = ClockMap::new();
+        for h in [1_000_000_000u64, 2_000_000_000] {
+            m.observe(ClockSample {
+                t_ns: h + offset,
+                host_mono_ns: h,
+                utc_ns: None,
+                locked: true,
+                sigma_ns: 1_000,
+            });
+        }
+        m
+    }
+
+    #[test]
+    fn sim_stamp_inverts_only_a_sim_clock() {
+        let bus = map(5_000_000_000);
+        let t = 7_000_000_000;
+        // Bus clock on sim: inverted.
+        assert_eq!(
+            sim_exposure_host(TIMEBASE_SIM, Some(t), None, Some(Timebase::Sim), &bus),
+            SimStamp::Mapped(2_000_000_000)
+        );
+        // Bus clock on the hub or unknown: arrival kept, flagged.
+        for tb in [
+            Some(Timebase::HubFreerun),
+            Some(Timebase::HostMonotonic),
+            None,
+        ] {
+            assert_eq!(
+                sim_exposure_host(TIMEBASE_SIM, Some(t), None, tb, &bus),
+                SimStamp::Unmapped
+            );
+        }
+        // A non-sim session never borrows the bus clock unless it is on sim.
+        let sess = map(1_000_000_000);
+        assert_eq!(
+            sim_exposure_host(
+                TIMEBASE_SIM,
+                Some(t),
+                Some((Timebase::HubFreerun, &sess)),
+                Some(Timebase::HubFreerun),
+                &bus
+            ),
+            SimStamp::Unmapped
+        );
+        // A sim session uses its own map.
+        assert_eq!(
+            sim_exposure_host(
+                TIMEBASE_SIM,
+                Some(t),
+                Some((Timebase::Sim, &sess)),
+                None,
+                &bus
+            ),
+            SimStamp::Mapped(6_000_000_000)
+        );
+        // Sim clock with no sample yet: unmapped.
+        assert_eq!(
+            sim_exposure_host(
+                TIMEBASE_SIM,
+                Some(t),
+                None,
+                Some(Timebase::Sim),
+                &ClockMap::new()
+            ),
+            SimStamp::Unmapped
+        );
+        assert_eq!(
+            sim_exposure_host(TIMEBASE_HOST, Some(t), None, Some(Timebase::Sim), &bus),
+            SimStamp::NotSim
+        );
+    }
+
+    #[test]
+    fn retime_moves_the_unix_stamp_with_the_exposure() {
+        let mut f = CapturedFrame {
+            ts_ms: 1_700_000_000_250,
+            ts_ns: 10_250_000_000,
+            camera_id: "front_left".into(),
+            ts_sensor_ns: Some(3_000_000_000),
+            timebase: TIMEBASE_SIM,
+            trigger_seq: None,
+            exposure_ns: None,
+            seq: 1,
+            width: 2,
+            height: 2,
+            format: ados_protocol::framebus::FrameFormat::Gray8,
+            pixels: vec![0; 4],
+        };
+        retime(&mut f, 10_000_000_000);
+        assert_eq!(f.ts_ns, 10_000_000_000);
+        assert_eq!(f.ts_ms, 1_700_000_000_000);
     }
 }

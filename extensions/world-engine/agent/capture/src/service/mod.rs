@@ -24,7 +24,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_capture_contract::{Manifest, Rig};
+use ados_capture_contract::{Manifest, Rig, Timebase};
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -147,6 +147,11 @@ pub(crate) struct Engine {
     kf_seq: u64,
     slow: u32,
     record_retry_at: Option<u64>,
+    /// The clock service's timebase (its sidecar), refreshed on the slow tick.
+    bus_timebase: Option<Timebase>,
+    /// Sim-stamped frames whose exposure could not be mapped to the host
+    /// clock (the bus clock is not on `sim`); they keep their arrival stamp.
+    sim_unmapped: u64,
 }
 
 /// Run the capture loop until `cancel`. An open session is closed (manifest
@@ -185,6 +190,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         }
     }
     let (exposure_tx, mut exposure_rx) = mpsc::unbounded_channel();
+    let bus_timebase = crate::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
     let mut engine = Engine {
         keyframes: CaptureSession::with_pose_interval(
             cfg.capture.clone(),
@@ -216,6 +222,8 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         last_fix_seq: 0,
         kf_seq: 0,
         slow: 0,
+        bus_timebase,
+        sim_unmapped: 0,
     };
     // Frames are pulled on their own task so a source read is never
     // cancelled mid-frame by the select below.

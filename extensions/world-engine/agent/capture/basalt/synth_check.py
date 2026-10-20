@@ -150,6 +150,11 @@ def main():
     ap.add_argument("--imu-stepback-every", type=int, default=0,
                     help="every Nth IMU sample, also send one stamped half a "
                          "period before the previous sample (0 = never)")
+    # A stalled estimator (no further frames) must not stop the reader: past
+    # the IMU queue capacity the oldest samples are evicted, never blocked on.
+    ap.add_argument("--imu-burst", type=int, default=0,
+                    help="after the run, send this many IMU samples at once "
+                         "(above the 20000-sample queue to test eviction)")
     args = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     config = args.config or os.path.join(here, "vio_config.json")
@@ -210,12 +215,31 @@ def main():
             conn.sendall(struct.pack("<BIQII", 2, 16 + 2 * W * H, te_ns, W, H)
                          + left.tobytes() + right.tobytes())
             frames += 1
+    burst_s = None
+    if args.imu_burst:
+        conn.settimeout(10)
+        t_end = (n_imu + 1) / IMU_HZ
+        g, a = imu_sample(t_end)
+        burst = b"".join(
+            struct.pack("<BIQ6d", 1, 56, T0_NS + round((t_end + i / IMU_HZ) * 1e9), *g, *a)
+            for i in range(args.imu_burst))
+        t_burst = time.monotonic()
+        try:
+            conn.sendall(burst)
+            burst_s = time.monotonic() - t_burst
+        except TimeoutError:
+            burst_s = float("inf")
     conn.close()
     child.wait(timeout=30)
     reader.join(timeout=5)
 
     print(f"frames sent {frames}, states {len(states)}, exit {child.returncode}")
     ok = True
+    if burst_s is not None:
+        print(f"IMU burst of {args.imu_burst} sent in {burst_s:.2f} s")
+        if burst_s > 5.0:
+            print("FAIL: the reader blocked on a full IMU queue")
+            ok = False
     if bad_lines:
         ok = False
     if not any(s["status"] == "tracking" for s in statuses):

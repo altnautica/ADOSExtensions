@@ -148,3 +148,8 @@ ends within 10 % of the distance travelled after yaw alignment:
 ```sh
 uv run synth_check.py build/out/bin/x86_64-linux/basalt-ados
 ```
+
+`--imu-burst 30000` then sends more IMU than the 20000-sample queue holds
+with no frame to consume it, and fails if the reader blocks (a full IMU queue
+evicts its oldest sample; pairs refused by a full optical-flow queue are
+counted as dropped, not as delivered).

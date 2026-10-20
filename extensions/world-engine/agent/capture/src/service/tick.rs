@@ -207,6 +207,8 @@ impl Engine {
                 level: Level::Bad,
             },
         };
+        self.bus_timebase =
+            crate::clock::ClockSidecar::read(&self.paths.clock_sidecar).map(|c| c.timebase());
         let s = self.sensors.lock();
         let (locked, sigma) = s.clock.lock();
         self.quality.clock = ClockReading {
