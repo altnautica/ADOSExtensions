@@ -26,7 +26,11 @@ All notable changes to the World Engine extension.
   `calibrate {session_id, target}` (IMU noise, intrinsics, camera-IMU,
   LiDAR-camera); `POST /api/compute/measure`; job files served with ranges.
 - Pinned tool set (`agent/node/tools/tool-pins.json`) with fetch scripts.
-- A standalone node (`--standalone`) and a Windows build of the node.
+- A standalone node (`--standalone`) and a Windows build of the node. The
+  standalone node issues node credentials (`/api/compute/node-credentials`,
+  owner bearer only) kept in its data directory, and admits a capture device
+  presenting one on the lanes it was issued for (session upload, job submit
+  and reads of its own jobs, artifacts).
 - **Device capture surface.** The link serves `POST /atlas/capture/{start,
   stop,pause,resume,mark}`, `GET /atlas/capture/{state,coverage}`,
   `PUT /atlas/capture/exposure`, `GET /atlas/sessions`,

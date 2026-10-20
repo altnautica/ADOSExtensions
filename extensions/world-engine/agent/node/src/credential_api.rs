@@ -7,8 +7,8 @@
 //! - `POST /api/compute/node-credentials/:id/revoke` revokes one.
 //!
 //! All three sit behind [`crate::auth::require_job_api`] with no node lane, so
-//! only the operator (on the plugin's `http.sock`) reaches them: a node
-//! credential can never issue another.
+//! only the owner (on the plugin's `http.sock`, or the standalone node's
+//! bearer) reaches them: a node credential can never issue another.
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};

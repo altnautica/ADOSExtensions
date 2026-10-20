@@ -135,7 +135,11 @@ takes a tool from `PATH`; `ADOS_TOOL_<NAME>` overrides one explicitly.
 A preset whose tools are not installed is refused with `E_TOOL_MISSING` and
 the missing tool's name. On Windows the node runs standalone:
 `world-engine-node --standalone --data-dir <dir> --listen 0.0.0.0:8092`, with
-the owner bearer token in `<dir>/node/owner-token`.
+the owner bearer token in `<dir>/node/owner-token`. The owner issues a capture
+device its credential with `POST /api/compute/node-credentials
+{"peer_device_id": "<id>"}` (bearer); the issued set is kept in
+`<dir>/node/node-credentials.json`, listed with `GET` and revoked with
+`POST /api/compute/node-credentials/<id>/revoke`.
 
 ## Building the GCS module
 

@@ -30,16 +30,8 @@ use world_engine_node::{
 const TOKEN: &str = "lidar-test-token";
 
 fn auth(dir: &Path) -> Arc<ComputeAuth> {
-    #[cfg(unix)]
-    {
-        let creds = world_engine_node::NodeCredentialStore::open(dir.join("creds.json"), "t");
-        Arc::new(ComputeAuth::new(creds).with_owner_token(TOKEN.into()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
-        Arc::new(ComputeAuth::standalone(TOKEN.into()))
-    }
+    let creds = world_engine_node::NodeCredentialStore::open(dir.join("creds.json"), "t");
+    Arc::new(ComputeAuth::new(creds).with_owner_token(TOKEN.into()))
 }
 
 async fn call(router: &Router, method: &str, uri: &str, body: Vec<u8>) -> (StatusCode, Vec<u8>) {

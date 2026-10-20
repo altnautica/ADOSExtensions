@@ -30,7 +30,6 @@ pub(crate) const JOB_SUBMIT: NodeLane = NodeLane::from_static("jobs.submit");
 /// Uploading a capture session (`/api/compute/sessions/<id>/...`).
 pub(crate) const SESSION_UPLOAD: NodeLane = NodeLane::from_static("sessions.upload");
 /// Every lane this node serves, in wire order: the default grant for a drone.
-#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) const ALL: [NodeLane; 6] = [
     ATLAS_INGEST,
     ATLAS_WORLD,

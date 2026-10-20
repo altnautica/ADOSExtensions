@@ -8,8 +8,9 @@
 //!
 //! Each issued record keeps only a SHA-256 digest of the secret. Issuing again
 //! for the same peer replaces its earlier credential, so a re-provision is also
-//! a rotation; revoking removes it. The store is persisted owner-only beside
-//! the job store.
+//! a rotation; revoking removes it. The store is persisted beside the job store
+//! (owner-only on unix), by the plugin-hosted node and the standalone node
+//! alike.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -18,7 +19,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use ados_protocol::pairing_posture::constant_time_eq;
+use crate::auth::constant_time_eq;
 use world_engine_protocol::node_credential::NodeLane;
 
 /// Default location of the issued-credential store.
@@ -26,10 +27,12 @@ pub const DEFAULT_NODE_CREDENTIALS_PATH: &str = "/var/ados/compute/node-credenti
 
 /// The version prefix of an issued token: `nc1.<id>.<secret>`.
 const TOKEN_PREFIX: &str = "nc1";
-/// Id and secret lengths, drawn from the unambiguous charset (31 symbols): the
+/// Id and secret lengths, drawn from [`TOKEN_CHARSET`] (31 symbols): the
 /// secret carries over 200 bits.
 const ID_LEN: usize = 12;
 const SECRET_LEN: usize = 43;
+/// Token characters: no visually ambiguous `0/O`, `1/I/L`.
+const TOKEN_CHARSET: &[u8] = b"ABCDEFGHJKMNPQRSTUVWXYZ23456789";
 /// A peer device id is a node id, not free text.
 const MAX_PEER_ID_LEN: usize = 128;
 
@@ -146,10 +149,8 @@ impl NodeCredentialStore {
         if lanes.is_empty() {
             return Err(CredentialError::NoLanes);
         }
-        let id = ados_protocol::secret_gen::generate(ID_LEN)
-            .map_err(|e| CredentialError::Entropy(e.to_string()))?;
-        let secret = ados_protocol::secret_gen::generate(SECRET_LEN)
-            .map_err(|e| CredentialError::Entropy(e.to_string()))?;
+        let id = random_token(ID_LEN)?;
+        let secret = random_token(SECRET_LEN)?;
         let record = IssuedRecord {
             id: id.clone(),
             peer_device_id: peer.to_string(),
@@ -228,6 +229,25 @@ fn parse_token(token: &str) -> Option<(&str, &str)> {
     let id = parts.next()?;
     let secret = parts.next()?;
     (!id.is_empty() && !secret.is_empty()).then_some((id, secret))
+}
+
+/// Draw `len` characters from [`TOKEN_CHARSET`], rejection-sampled so every
+/// character is equally likely. Fails closed on an entropy error.
+fn random_token(len: usize) -> Result<String, CredentialError> {
+    let n = TOKEN_CHARSET.len() as u8;
+    let limit = (256u16 - (256u16 % u16::from(n))) as u8;
+    let mut out = String::with_capacity(len);
+    let mut buf = [0u8; 64];
+    while out.len() < len {
+        getrandom::fill(&mut buf).map_err(|e| CredentialError::Entropy(e.to_string()))?;
+        for &b in buf.iter().filter(|&&b| b < limit) {
+            if out.len() == len {
+                break;
+            }
+            out.push(TOKEN_CHARSET[(b % n) as usize] as char);
+        }
+    }
+    Ok(out)
 }
 
 fn digest(secret: &str) -> String {
@@ -330,6 +350,14 @@ mod tests {
             let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600);
         }
+    }
+
+    #[test]
+    fn tokens_are_drawn_from_the_unambiguous_charset() {
+        let t = random_token(SECRET_LEN).unwrap();
+        assert_eq!(t.len(), SECRET_LEN);
+        assert!(t.bytes().all(|b| TOKEN_CHARSET.contains(&b)), "{t}");
+        assert_ne!(t, random_token(SECRET_LEN).unwrap());
     }
 
     #[test]

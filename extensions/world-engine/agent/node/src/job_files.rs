@@ -152,12 +152,6 @@ mod tests {
         assert!(!valid_job_id(""));
     }
 
-    #[cfg(not(unix))]
-    fn router(work: PathBuf) -> Router {
-        job_files_router(Arc::new(ComputeAuth::standalone("t".into())), work)
-    }
-
-    #[cfg(unix)]
     fn router(work: PathBuf) -> Router {
         let creds = crate::NodeCredentialStore::open(work.join("creds.json"), "n");
         job_files_router(

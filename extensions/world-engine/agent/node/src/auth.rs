@@ -1,17 +1,20 @@
-//! Auth for the compute node's two listeners.
+//! Auth for the compute node's listeners.
 //!
-//! - **The operator socket (`http.sock`).** A request marked with [`UnixPeer`]
-//!   came through ados-control, which already authenticated the operator: it
-//!   is the owner and reaches every route, with no key or credential,
-//!   and without spending the TCP rate budget.
-//! - **The TCP listener (`:8092`).** Only other nodes use it. A node presents
-//!   the credential this node issued it ([`crate::node_credentials`]) in the
-//!   node-credential header and reaches only the lanes it was issued for.
-//!   Owner-only routes are never reachable over TCP, from any peer.
+//! - **The operator socket (`http.sock`, plugin-hosted node).** A request
+//!   marked with [`UnixPeer`] came through ados-control, which already
+//!   authenticated the operator: it is the owner and reaches every route, with
+//!   no key or credential, and without spending the TCP rate budget.
+//! - **The owner bearer (standalone node).** With no operator socket, the
+//!   owner presents the node's token as `Authorization: Bearer <token>` over
+//!   TCP and reaches every route.
+//! - **Other nodes, over TCP (`:8092`).** A node presents the credential this
+//!   node issued it ([`crate::node_credentials`]) in the node-credential
+//!   header and reaches only the lanes it was issued for. Owner-only routes
+//!   are never reachable with a node credential.
 //!
-//! [`require_job_api`] guards the job API: owner-only except the two calls a
-//! drone's offload session makes ([`job_api_lane`]). [`require_lane`] guards
-//! each lane router. TCP callers share one rate budget on the job API.
+//! [`require_job_api`] guards the job API: owner-only except the calls another
+//! node makes ([`job_api_lane`]). [`require_lane`] guards each lane router.
+//! TCP callers share one rate budget on the job API.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -22,13 +25,10 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-use world_engine_protocol::node_credential::NodeLane;
-#[cfg(unix)]
-use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
+use world_engine_protocol::node_credential::{NodeLane, NODE_CREDENTIAL_HEADER};
 #[cfg(unix)]
 use world_engine_transport::UnixPeer;
 
-#[cfg(unix)]
 use crate::node_credentials::NodeCredentialStore;
 
 /// A fixed-window token bucket that guards the TCP edge of the job API so a
@@ -85,7 +85,6 @@ impl RateLimiter {
 /// bearer token.
 pub struct ComputeAuth {
     pub limiter: RateLimiter,
-    #[cfg(unix)]
     pub credentials: NodeCredentialStore,
     /// A standalone node (no plugin host, so no operator socket) admits the
     /// owner over TCP by this bearer token (`Authorization: Bearer <token>`).
@@ -95,7 +94,6 @@ pub struct ComputeAuth {
 impl ComputeAuth {
     /// Build the auth state over the issued credential store, with the default
     /// TCP rate budget.
-    #[cfg(unix)]
     pub fn new(credentials: NodeCredentialStore) -> Self {
         Self {
             limiter: RateLimiter::default_control(),
@@ -105,19 +103,9 @@ impl ComputeAuth {
     }
 
     /// Admit the owner over TCP by `token` as well (the standalone node).
-    #[cfg(unix)]
     pub fn with_owner_token(mut self, token: String) -> Self {
         self.owner_token = Some(token);
         self
-    }
-
-    /// The standalone node's auth: the owner token only, no issued lanes.
-    #[cfg(not(unix))]
-    pub fn standalone(token: String) -> Self {
-        Self {
-            limiter: RateLimiter::default_control(),
-            owner_token: Some(token),
-        }
     }
 
     /// Whether the request carries the owner's bearer token.
@@ -134,7 +122,7 @@ impl ComputeAuth {
 }
 
 /// Compare two secrets without an early exit on the first differing byte.
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -178,7 +166,6 @@ fn own_job_read(path: &str) -> bool {
 pub struct NodeCaller(pub String);
 
 /// The id part of an `nc1.<id>.<secret>` credential.
-#[cfg(unix)]
 fn credential_id(req: &Request) -> Option<String> {
     let token = req.headers().get(NODE_CREDENTIAL_HEADER)?.to_str().ok()?;
     let mut parts = token.trim().splitn(3, '.');
@@ -186,10 +173,9 @@ fn credential_id(req: &Request) -> Option<String> {
     parts.next().map(str::to_string)
 }
 
-/// Decide one TCP request: admitted only when it names a node lane and
+/// Decide one node request: admitted only when it names a node lane and
 /// presents a credential issued for that lane. An owner-only route (`lane:
-/// None`) is never admitted over TCP.
-#[cfg(unix)]
+/// None`) is never admitted with a node credential.
 pub fn admits(
     credential: Option<&str>,
     lane: Option<&NodeLane>,
@@ -213,19 +199,12 @@ fn is_owner(auth: &ComputeAuth, req: &Request) -> bool {
 }
 
 /// Whether a node credential issued for `lane` rides the request.
-#[cfg(unix)]
 fn node_admitted(auth: &ComputeAuth, req: &Request, lane: Option<&NodeLane>) -> bool {
     let credential = req
         .headers()
         .get(NODE_CREDENTIAL_HEADER)
         .and_then(|v| v.to_str().ok());
     admits(credential, lane, &auth.credentials)
-}
-
-/// A standalone Windows node issues no lanes: only the owner gets in.
-#[cfg(not(unix))]
-fn node_admitted(_auth: &ComputeAuth, _req: &Request, _lane: Option<&NodeLane>) -> bool {
-    false
 }
 
 /// A terse, state-independent 401: the status itself is the only signal.
@@ -262,14 +241,10 @@ pub async fn require_job_api(
         return next.run(req).await;
     }
     if node_admitted(&auth, &req, lane.as_ref()) {
-        #[cfg(unix)]
-        let req = {
-            let mut req = req;
-            if let Some(id) = credential_id(&req) {
-                req.extensions_mut().insert(NodeCaller(id));
-            }
-            req
-        };
+        let mut req = req;
+        if let Some(id) = credential_id(&req) {
+            req.extensions_mut().insert(NodeCaller(id));
+        }
         next.run(req).await
     } else {
         unauthorized()
@@ -294,12 +269,10 @@ pub async fn require_lane(
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
     fn store(dir: &std::path::Path) -> NodeCredentialStore {
         NodeCredentialStore::open(dir.join("creds.json"), "ws-node")
     }
 
-    #[cfg(unix)]
     #[test]
     fn a_drone_credential_reaches_only_its_lanes_and_never_owner_routes() {
         let dir = tempfile::tempdir().unwrap();
@@ -363,15 +336,8 @@ mod tests {
     }
 
     fn auth_with_token(token: &str) -> ComputeAuth {
-        #[cfg(unix)]
-        {
-            let dir = tempfile::tempdir().unwrap();
-            ComputeAuth::new(store(dir.path())).with_owner_token(token.into())
-        }
-        #[cfg(not(unix))]
-        {
-            ComputeAuth::standalone(token.into())
-        }
+        let dir = tempfile::tempdir().unwrap();
+        ComputeAuth::new(store(dir.path())).with_owner_token(token.into())
     }
 
     fn req_with(header: Option<&str>) -> Request {

@@ -8,7 +8,7 @@
 //!   runs without a plugin host (the Windows workstation build only runs this
 //!   way): the job API, the job files, the session upload lane and the
 //!   artifacts on one listener, admitted by the owner bearer token kept in
-//!   `<data-dir>/node/owner-token`.
+//!   `<data-dir>/node/owner-token` or by a node credential the owner issued.
 
 #[cfg(unix)]
 #[path = "service/host/mod.rs"]

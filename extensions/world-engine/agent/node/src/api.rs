@@ -1,9 +1,10 @@
 //! The compute node's REST job API (native Rust, axum over tokio). A drone or
 //! GCS submits reconstruction and offload jobs here and reads their status and
 //! results. Handlers lock the engine (a single-writer SQLite store) briefly per
-//! request. Gated by [`crate::auth::require_job_api`]: the operator (on the
-//! plugin's `http.sock`) reaches every route; over TCP only a node credential
-//! for the offload calls a drone makes is admitted, under a rate limiter.
+//! request. Gated by [`crate::auth::require_job_api`]: the owner (on the
+//! plugin's `http.sock`, or the standalone node's bearer) reaches every route;
+//! over TCP a node credential reaches only the calls another node makes, under
+//! a rate limiter.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -20,7 +21,6 @@ use world_engine_protocol::compute::{CancelResponse, SubmitResponse};
 
 use crate::artifacts::rewrite_artifact_host;
 use crate::auth::{require_job_api, ComputeAuth, NodeCaller};
-#[cfg(unix)]
 use crate::credential_api;
 use crate::job_views::{JobView, OutputView};
 use crate::recon::{self, StageError};
@@ -56,7 +56,7 @@ pub fn build_router_with_base(
     public_base: Arc<str>,
     sessions: Arc<SessionRegistry>,
 ) -> Router {
-    let router = Router::new()
+    Router::new()
         .route("/api/compute/status", get(status))
         .route("/api/compute/datasets", post(create_dataset))
         .route("/api/compute/jobs", get(list_jobs).post(submit_job))
@@ -65,11 +65,9 @@ pub fn build_router_with_base(
         .route("/api/compute/jobs/:id/outputs", get(job_outputs))
         // The live streaming perception-offload sessions (state / throughput /
         // reconnect + restart history), read from the registry, not the job store.
-        .route("/api/compute/sessions", get(list_sessions));
-    // Issuing credentials to other nodes: owner-only (no node lane reaches
-    // them). A standalone Windows node issues none.
-    #[cfg(unix)]
-    let router = router
+        .route("/api/compute/sessions", get(list_sessions))
+        // Issuing credentials to other nodes: owner-only (no node lane reaches
+        // them).
         .route(
             "/api/compute/node-credentials",
             get(credential_api::list).post(credential_api::mint),
@@ -77,8 +75,7 @@ pub fn build_router_with_base(
         .route(
             "/api/compute/node-credentials/:id/revoke",
             post(credential_api::revoke),
-        );
-    router
+        )
         .layer(axum::middleware::from_fn_with_state(
             auth.clone(),
             require_job_api,

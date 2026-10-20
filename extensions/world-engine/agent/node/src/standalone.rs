@@ -2,8 +2,9 @@
 //! Windows workstation, or a Linux box run by hand). It serves the job API,
 //! the job files and measurement, the session upload lane and the artifacts
 //! on one TCP listener, and runs the worker. With no operator socket, the
-//! owner is whoever presents the node's bearer token; there are no issued
-//! node lanes.
+//! owner is whoever presents the node's bearer token; the owner issues other
+//! nodes credentials (`/api/compute/node-credentials`), kept in
+//! `node/node-credentials.json`, which admit them to their lanes.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -26,7 +27,8 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct StandaloneOptions {
     /// State directory: `node/jobs.db`, `node/work/` (job outputs),
-    /// `node/sessions/` (uploaded capture sessions), `node/owner-token`.
+    /// `node/sessions/` (uploaded capture sessions), `node/owner-token`,
+    /// `node/node-credentials.json` (credentials issued to other nodes).
     pub data_dir: PathBuf,
     /// Listen address, e.g. `0.0.0.0:8092`.
     pub listen: String,
@@ -115,6 +117,35 @@ fn hostname() -> Option<String> {
         .filter(|h| !h.trim().is_empty() && !h.eq_ignore_ascii_case("localhost"))
 }
 
+/// Everything the standalone node serves on its listener: the job API (with
+/// credential issuing), the job files, the session upload lane and the
+/// artifacts, each behind `auth`.
+pub fn router(
+    state: crate::ApiState,
+    auth: Arc<ComputeAuth>,
+    public_base: &str,
+    work_root: PathBuf,
+    sessions_root: PathBuf,
+) -> axum::Router {
+    let on_commit: CommitHook = Arc::new(|s| {
+        tracing::info!(session = %s.session_id, files = s.files, bytes = s.bytes, "session committed");
+        Ok(())
+    });
+    build_router_with_base(
+        state,
+        auth.clone(),
+        Arc::from(public_base),
+        Arc::new(SessionRegistry::new()),
+    )
+    .merge(job_files_router(auth.clone(), work_root.clone()))
+    .merge(upload_and_artifact_lanes(
+        &auth,
+        bulk_router(Arc::new(SessionStore::new(sessions_root)), on_commit),
+        work_root,
+    ))
+    .layer(CorsLayer::permissive())
+}
+
 /// Run the standalone node until the listener stops.
 pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Error>> {
     let node = opts.data_dir.join("node");
@@ -149,7 +180,6 @@ pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    #[cfg(unix)]
     let auth = Arc::new(
         ComputeAuth::new(crate::NodeCredentialStore::open(
             node.join("node-credentials.json"),
@@ -157,26 +187,13 @@ pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Erro
         ))
         .with_owner_token(token),
     );
-    #[cfg(not(unix))]
-    let auth = Arc::new(ComputeAuth::standalone(token));
-
-    let on_commit: CommitHook = Arc::new(|s| {
-        tracing::info!(session = %s.session_id, files = s.files, bytes = s.bytes, "session committed");
-        Ok(())
-    });
-    let router = build_router_with_base(
+    let router = router(
         state.clone(),
-        auth.clone(),
-        Arc::from(public_base.as_str()),
-        Arc::new(SessionRegistry::new()),
-    )
-    .merge(job_files_router(auth.clone(), work_root.clone()))
-    .merge(upload_and_artifact_lanes(
-        &auth,
-        bulk_router(Arc::new(SessionStore::new(sessions_root)), on_commit),
+        auth,
+        &public_base,
         work_root.clone(),
-    ))
-    .layer(CorsLayer::permissive());
+        sessions_root,
+    );
 
     let ctx = WorkerCtx {
         state: state.clone(),

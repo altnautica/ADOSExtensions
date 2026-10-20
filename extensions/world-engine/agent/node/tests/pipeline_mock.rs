@@ -31,16 +31,8 @@ fn fixture() -> PathBuf {
 }
 
 fn auth(dir: &Path) -> Arc<ComputeAuth> {
-    #[cfg(unix)]
-    {
-        let creds = world_engine_node::NodeCredentialStore::open(dir.join("creds.json"), "t");
-        Arc::new(ComputeAuth::new(creds).with_owner_token(TOKEN.into()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = dir;
-        Arc::new(ComputeAuth::standalone(TOKEN.into()))
-    }
+    let creds = world_engine_node::NodeCredentialStore::open(dir.join("creds.json"), "t");
+    Arc::new(ComputeAuth::new(creds).with_owner_token(TOKEN.into()))
 }
 
 struct Node {

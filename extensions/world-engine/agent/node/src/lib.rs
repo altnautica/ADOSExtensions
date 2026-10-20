@@ -24,7 +24,6 @@ pub mod bulk;
 pub mod calib;
 mod cluster;
 mod compute_status;
-#[cfg(unix)]
 mod credential_api;
 mod engine;
 /// Host-GPU reporting for the workstation profile (identity + live utilisation).
@@ -39,7 +38,6 @@ pub mod job_views;
 mod jobs_sync;
 mod keyframe_persister;
 mod lanes;
-#[cfg(unix)]
 mod node_credentials;
 mod offload;
 mod offload_session_manager;
@@ -74,9 +72,7 @@ pub use api::{build_router, build_router_with_base, ApiState};
 pub use artifacts::{
     artifact_router, derive_public_base, resolve_under_root, rewrite_output_to_artifact_url,
 };
-#[cfg(unix)]
-pub use auth::admits;
-pub use auth::{job_api_lane, require_job_api, require_lane, ComputeAuth, RateLimiter};
+pub use auth::{admits, job_api_lane, require_job_api, require_lane, ComputeAuth, RateLimiter};
 pub use backends::{
     file_uri_to_path, is_apple_silicon, parse_gaussian_count, path_to_file_uri,
     select_reconstructor, CliReconstructor, ReconstructCommand, ReconstructorKind,
@@ -97,7 +93,6 @@ pub use keyframe_persister::{dataset_anchor, dataset_id_for, KeyframePersister};
 pub use lanes::{gate, upload_and_artifact_lanes};
 #[cfg(unix)]
 pub use lanes::{lane_router, AtlasLanes, LaneRoutes};
-#[cfg(unix)]
 pub use node_credentials::{
     CredentialError, IssuedCredential, MintedCredential, NodeCredentialStore,
     DEFAULT_NODE_CREDENTIALS_PATH,
