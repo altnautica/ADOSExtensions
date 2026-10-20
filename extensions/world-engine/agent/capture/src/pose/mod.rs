@@ -17,9 +17,12 @@
 //!   LOCAL_POSITION_NED + GPS_GLOBAL_ORIGIN), placed in the session ENU frame
 //!   with exact WGS-84 geodesy. Outdoor drone default.
 //! - [`vio::VioPose`]: Basalt stereo-inertial VIO as a supervised subprocess.
-//!   Indoor Visor default.
-//! - [`lidar::LidarPose`]: KISS-ICP LiDAR odometry as a supervised
-//!   subprocess, with the ICP Hessian eigenvalues for corridor degeneracy.
+//!   Indoor Visor default on a rig without a LiDAR.
+//! - [`lidar::LidarPose`]: KISS-ICP LiDAR odometry for a 3D LiDAR as a
+//!   supervised subprocess, with the ICP Hessian eigenvalues for corridor
+//!   degeneracy.
+//! - [`planar::PlanarLidarPose`]: 2D scan matching for a planar LiDAR on a
+//!   worker thread; single floor only.
 //! - [`replay::ReplayPose`]: a fixed estimate list, for tests and SITL.
 //!
 //! All times here are host `CLOCK_MONOTONIC` nanoseconds, the sensor bus and
@@ -36,6 +39,7 @@ use crate::lidar_scan::LidarScan;
 
 pub mod fc_ekf;
 pub mod lidar;
+pub mod planar;
 pub mod replay;
 pub mod se3;
 pub mod vio;
@@ -253,6 +257,12 @@ pub trait PoseProvider: Send + Sync {
     fn feed_imu(&self, _src: &str, _batch: &ImuBatch) {}
     /// One LiDAR scan.
     fn feed_lidar(&self, _scan: &LidarScan) {}
+
+    /// The pose holds one floor only (a planar LiDAR cannot see a level
+    /// change); the capture HUD says so.
+    fn single_floor(&self) -> bool {
+        false
+    }
 
     fn pose_at(&self, t_ns: u64) -> Option<PoseEstimate> {
         self.track().pose_at(t_ns)

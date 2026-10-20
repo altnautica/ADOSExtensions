@@ -170,24 +170,60 @@ fn an_unparseable_key_is_an_error_naming_it() {
 }
 
 #[test]
-fn auto_picks_vio_on_a_visor_stereo_rig_and_the_ekf_elsewhere() {
-    let r = |c, p, s| resolve_pose_provider(c, p, s);
-    assert_eq!(r(PoseProviderConfig::Auto, "visor", true), PoseSource::Vio);
+fn auto_picks_lidar_then_vio_on_a_visor_and_the_ekf_elsewhere() {
+    let r = |c, p, s, l| resolve_pose_provider(c, p, s, l);
+    let auto = PoseProviderConfig::Auto;
+    assert_eq!(r(auto, "visor", true, false), PoseSource::Vio);
+    assert_eq!(r(auto, "visor", false, true), PoseSource::Lidar);
+    // A LiDAR and IMU outrank the stereo pair.
+    assert_eq!(r(auto, "visor", true, true), PoseSource::Lidar);
+    assert_eq!(r(auto, "visor", false, false), PoseSource::FcEkf);
+    assert_eq!(r(auto, "drone", true, true), PoseSource::FcEkf);
     assert_eq!(
-        r(PoseProviderConfig::Auto, "visor", false),
-        PoseSource::FcEkf
-    );
-    assert_eq!(
-        r(PoseProviderConfig::Auto, "drone", true),
-        PoseSource::FcEkf
-    );
-    assert_eq!(
-        r(PoseProviderConfig::Lidar, "drone", false),
+        r(PoseProviderConfig::Lidar, "drone", false, false),
         PoseSource::Lidar
     );
     assert_eq!(
-        r(PoseProviderConfig::FcEkf, "visor", true),
+        r(PoseProviderConfig::FcEkf, "visor", true, true),
         PoseSource::FcEkf
+    );
+    assert_eq!(
+        r(PoseProviderConfig::Vio, "visor", false, true),
+        PoseSource::Vio
+    );
+}
+
+#[test]
+fn lidar_settings_take_per_driver_blocks() {
+    let load = |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_LIDAR, v)]));
+    let d = load(json!({})).unwrap().lidar;
+    assert_eq!((d.lidar_id.as_str(), d.imu.as_str()), ("lidar0", "imu0"));
+    assert_eq!(
+        (d.rplidar.device.as_str(), d.rplidar.baud),
+        ("auto", 460_800)
+    );
+    assert_eq!(d.livox.host_ip, None);
+    assert!(d
+        .livox
+        .sdk_library
+        .ends_with("liblivox_lidar_sdk_shared.so"));
+    let c = load(json!({
+        "lidar_id": "lidar1",
+        "rplidar": {"device": "tcp:192.168.50.1:7700"},
+        "livox": {"host_ip": "192.168.1.50", "lidar_ips": ["192.168.1.12"]},
+    }))
+    .unwrap()
+    .lidar;
+    assert_eq!(c.lidar_id, "lidar1");
+    assert_eq!(c.rplidar.device, "tcp:192.168.50.1:7700");
+    assert_eq!(c.rplidar.baud, 460_800);
+    assert_eq!(c.livox.host_ip.as_deref(), Some("192.168.1.50"));
+    assert_eq!(c.livox.lidar_ips, ["192.168.1.12"]);
+    // The old flat Livox keys and unknown driver keys are refused, naming the key.
+    assert_eq!(load(json!({"host_ip": "x"})).unwrap_err().key, KEY_LIDAR);
+    assert_eq!(
+        load(json!({"rplidar": {"port": "x"}})).unwrap_err().key,
+        KEY_LIDAR
     );
 }
 

@@ -1,5 +1,6 @@
-//! [`LidarPose`]: KISS-ICP LiDAR odometry (`python/kiss_icp_live`, MIT
-//! KISS-ICP) as a supervised child process.
+//! [`LidarPose`]: KISS-ICP LiDAR odometry for a 3D LiDAR (`solid` or
+//! `spinning` scan model; `python/kiss_icp_live`, MIT KISS-ICP) as a
+//! supervised child process. A planar LiDAR uses [`super::planar`].
 //!
 //! Input: [`PoseProvider::feed_lidar`] encodes each scan of the configured
 //! LiDAR in the [`wire`] format and hands it to a bounded queue with
@@ -32,7 +33,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use ados_capture_contract::{Rig, RigSensorKind};
+use ados_capture_contract::{LidarModel, Rig, RigSensorKind};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -75,7 +76,7 @@ pub struct LidarPoseConfig {
     /// Where the config, socket and provisioned environment live; must be
     /// writable and persistent (the plugin data dir).
     pub work_dir: PathBuf,
-    /// KISS-ICP config ([`default_kiss_config`] when unsure).
+    /// KISS-ICP config ([`kiss_config`] of the rig's LiDAR model).
     pub kiss: Value,
 }
 
@@ -112,11 +113,17 @@ pub struct LidarStats {
     pub setup_failures: u64,
 }
 
-/// KISS-ICP settings for a Mid-360-class sensor: 40 m range, 0.5 m minimum
-/// (the rig itself), per-point deskew. `live` tunes the Hessian normals.
-pub fn default_kiss_config() -> Value {
+/// KISS-ICP settings for a 3D LiDAR (`solid` or `spinning` scan model):
+/// the model's maximum range, a minimum of the model's or 0.5 m, whichever is
+/// larger (returns off the rig itself), per-point deskew. `live` tunes the
+/// Hessian normals.
+pub fn kiss_config(model: &LidarModel) -> Value {
     json!({
-        "data": { "max_range": 40.0, "min_range": 0.5, "deskew": true },
+        "data": {
+            "max_range": model.max_range_m,
+            "min_range": model.min_range_m.max(0.5),
+            "deskew": true
+        },
         "mapping": { "voxel_size": 0.4, "max_points_per_voxel": 20 },
         "live": { "normal_k": 8, "planarity": 0.3, "min_points": 50 }
     })

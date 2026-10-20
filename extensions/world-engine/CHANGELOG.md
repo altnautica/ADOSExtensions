@@ -19,6 +19,16 @@ All notable changes to the World Engine extension.
 - **Splat delivery.** Before SPZ and LoD, the trained splat drops non-finite
   splats, everything outside the keyframe bounds (±3 m across, 1 m below,
   3 m above) and floaters (splat-transform's GPU floater filter at 5 cm).
+- **LiDAR input is picked by the rig's LiDAR model.** The capture service
+  starts the live driver the rig sensor's `lidar.model` names (`rplidar-c1`
+  over its serial protocol, `livox-mid360` through the Livox SDK); any other
+  model is refused by name. `atlas.lidar` takes `lidar_id`, `imu`, and
+  per-driver blocks `rplidar` (`device`, default `auto`; `baud`) and `livox`
+  (`sdk_library`, `host_ip`, `lidar_ips`); the flat Livox keys are gone.
+- `atlas.pose_provider = auto` on a visor picks LiDAR odometry when the rig
+  has the configured LiDAR and IMU, ahead of VIO. A planar LiDAR runs 2D scan
+  matching on the device; a 3D one keeps KISS-ICP, with its ranges taken
+  from the LiDAR model.
 
 ### Added
 
@@ -28,6 +38,13 @@ All notable changes to the World Engine extension.
   show as floor discs that jump the walker there. The plugin viewer walks
   against the job's ESDF too.
 - The prepare stage records the LiDAR scan origins (`lidar_origins.json`).
+- **Planar LiDAR pose.** `PlanarLidarPose` levels each scan with the IMU and
+  matches it into probability-grid submaps on a worker thread; it is `lost`
+  until the first submap holds 10 scans and `degraded` in featureless
+  corridors. The capture state's `pose.single_floor` is set, and the device
+  HUD and the capture page show "Planar LiDAR pose: single floor only".
+- The manifest requests `hardware.uart` (optional) so the visor's capture
+  service can open a serial LiDAR.
 
 ## [2.0.0]
 

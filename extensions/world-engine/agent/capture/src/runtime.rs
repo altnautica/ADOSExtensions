@@ -27,7 +27,8 @@ use crate::recorder::convert::ImageEncoding;
 
 mod settings;
 pub use settings::{
-    resolve_pose_provider, LidarSettings, PoseProviderConfig, SegmentSettings, VioSettings,
+    resolve_pose_provider, LidarSettings, LivoxSettings, PoseProviderConfig, RplidarSettings,
+    SegmentSettings, VioSettings,
 };
 
 fn default_hfov_deg() -> f64 {

@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use ados_capture_contract::{
-    CameraModel, ContractId, Rig, RigSensor, RigSensorKind, RigSensorRole,
+    CameraModel, ContractId, LidarModel, Rig, RigSensor, RigSensorKind, RigSensorRole,
 };
 use world_engine_protocol::atlas::CameraRole;
 
@@ -143,13 +143,22 @@ pub fn has_stereo_imu(rig: &Rig, left: &str, right: &str, imu: &str) -> bool {
         && has(imu, RigSensorKind::Imu)
 }
 
-/// The rig's LiDAR sensor ids.
-pub fn lidar_ids(rig: &Rig) -> Vec<String> {
+/// The rig's LiDAR sensor `id` with its scan model.
+pub fn lidar_sensor<'a>(rig: &'a Rig, id: &str) -> Option<(&'a RigSensor, &'a LidarModel)> {
     rig.sensors
         .iter()
-        .filter(|s| s.kind == RigSensorKind::Lidar)
-        .map(|s| s.id.clone())
-        .collect()
+        .find(|s| s.id == id && s.kind == RigSensorKind::Lidar)
+        .and_then(|s| s.lidar.as_ref().map(|m| (s, m)))
+}
+
+/// Whether the rig carries the LiDAR (with its scan model) and the IMU LiDAR
+/// odometry needs.
+pub fn has_lidar_imu(rig: &Rig, lidar: &str, imu: &str) -> bool {
+    lidar_sensor(rig, lidar).is_some()
+        && rig
+            .sensors
+            .iter()
+            .any(|s| s.id == imu && s.kind == RigSensorKind::Imu)
 }
 
 /// The rig's first GNSS sensor id, else `gnss0`.

@@ -50,7 +50,14 @@ export interface CaptureState {
   room: string | null;
   segment: number | null;
   frames: { total: number | null; droppedPct: number | null; perCamera: CameraFrames[] };
-  pose: { source: string | null; health: string | null; trackedFeatures: number | null; driftHintM: number | null };
+  pose: {
+    source: string | null;
+    health: string | null;
+    trackedFeatures: number | null;
+    driftHintM: number | null;
+    /** The pose provider holds one floor only (planar LiDAR odometry). */
+    singleFloor: boolean;
+  };
   coverage: {
     voxels: number | null;
     roomPct: number | null;
@@ -126,6 +133,7 @@ export function coerceCaptureState(raw: unknown): CaptureState | null {
       health: str(pose.health),
       trackedFeatures: num(pose.tracked_features),
       driftHintM: num(pose.drift_hint_m),
+      singleFloor: pose.single_floor === true,
     },
     coverage: {
       voxels: num(coverage.voxels),

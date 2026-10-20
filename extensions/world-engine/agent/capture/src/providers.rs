@@ -4,14 +4,15 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use ados_capture_contract::Rig;
+use ados_capture_contract::{LidarModelPattern, Rig};
 use tokio::sync::mpsc;
 use world_engine_protocol::atlas::PoseSource;
 
 use crate::lidar_scan::LidarScan;
-use crate::lidar_source::{LidarSource, LidarSourceConfig};
+use crate::lidar_source::{self, LidarDriver, LidarSourceError};
 use crate::pose::fc_ekf::FcEkfPose;
-use crate::pose::lidar::{default_kiss_config, Launcher, LidarPose, LidarPoseConfig};
+use crate::pose::lidar::{kiss_config, Launcher, LidarPose, LidarPoseConfig};
+use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
 use crate::pose::vio::{VioConfig, VioPose};
 use crate::pose::PoseProvider;
 use crate::rig_source;
@@ -46,7 +47,9 @@ pub fn pose_provider(
     let stereo = rig.is_some_and(|r| {
         rig_source::has_stereo_imu(r, &cfg.vio.left, &cfg.vio.right, &cfg.vio.imu)
     });
-    let want = resolve_pose_provider(cfg.pose_provider, profile, stereo);
+    let lidar_imu =
+        rig.is_some_and(|r| rig_source::has_lidar_imu(r, &cfg.lidar.lidar_id, &cfg.lidar.imu));
+    let want = resolve_pose_provider(cfg.pose_provider, profile, stereo, lidar_imu);
     let fallback = |why: String| {
         tracing::warn!(wanted = ?want, reason = %why, "pose_provider_fallback_fc_ekf");
         Chosen {
@@ -70,19 +73,9 @@ pub fn pose_provider(
             },
             Err(e) => fallback(e.to_string()),
         },
-        (PoseSource::Lidar, Some(rig)) => match LidarPose::spawn(LidarPoseConfig {
-            launcher: Launcher::Uv(install_path(&cfg.lidar.uv)),
-            project_dir: install_path(&cfg.lidar.project_dir),
-            rig: rig.clone(),
-            lidar_id: cfg.lidar.lidar_id.clone(),
-            work_dir: work_dir.join("lidar"),
-            kiss: default_kiss_config(),
-        }) {
-            Ok(l) => Chosen {
-                pose: Arc::new(l),
-                fc: None,
-            },
-            Err(e) => fallback(e.to_string()),
+        (PoseSource::Lidar, Some(rig)) => match lidar_pose(cfg, rig, work_dir) {
+            Ok(pose) => Chosen { pose, fc: None },
+            Err(why) => fallback(why),
         },
         (PoseSource::Vio | PoseSource::Lidar, None) => fallback("no rig document".into()),
         _ => Chosen {
@@ -92,30 +85,57 @@ pub fn pose_provider(
     }
 }
 
-/// Start the live LiDAR driver when the rig has the configured LiDAR and a
-/// host address is set.
+/// LiDAR odometry for the rig's configured LiDAR, picked by its scan pattern:
+/// 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one.
+fn lidar_pose(
+    cfg: &AtlasRuntimeConfig,
+    rig: &Rig,
+    work_dir: &Path,
+) -> Result<Arc<dyn PoseProvider>, String> {
+    let id = &cfg.lidar.lidar_id;
+    let (_, model) = rig_source::lidar_sensor(rig, id)
+        .ok_or_else(|| format!("rig has no lidar sensor `{id}` with a scan model"))?;
+    match model.pattern {
+        LidarModelPattern::Planar => PlanarLidarPose::spawn(PlanarLidarConfig {
+            rig: rig.clone(),
+            lidar_id: id.clone(),
+            imu_id: cfg.lidar.imu.clone(),
+        })
+        .map(|p| Arc::new(p) as Arc<dyn PoseProvider>)
+        .map_err(|e| e.to_string()),
+        LidarModelPattern::Solid | LidarModelPattern::Spinning => {
+            LidarPose::spawn(LidarPoseConfig {
+                launcher: Launcher::Uv(install_path(&cfg.lidar.uv)),
+                project_dir: install_path(&cfg.lidar.project_dir),
+                rig: rig.clone(),
+                lidar_id: id.clone(),
+                work_dir: work_dir.join("lidar"),
+                kiss: kiss_config(model),
+            })
+            .map(|p| Arc::new(p) as Arc<dyn PoseProvider>)
+            .map_err(|e| e.to_string())
+        }
+    }
+}
+
+/// Start the live LiDAR driver for the rig's configured LiDAR, chosen by its
+/// `lidar.model`. `None` when the rig has no such sensor, the driver's device
+/// setting is empty, or the driver cannot start (logged).
 pub fn lidar_source(
     cfg: &AtlasRuntimeConfig,
     rig: Option<&Rig>,
     work_dir: &Path,
-) -> Option<(LidarSource, mpsc::Receiver<LidarScan>)> {
-    let host_ip = cfg.lidar.host_ip.clone()?;
-    let rig = rig?;
-    if !rig_source::lidar_ids(rig).contains(&cfg.lidar.lidar_id) {
-        return None;
-    }
-    let mut net = ados_livox::SdkNetConfig::new(host_ip);
-    net.lidar_ips = cfg.lidar.lidar_ips.clone();
-    match LidarSource::start(LidarSourceConfig {
-        sensor_id: cfg.lidar.lidar_id.clone(),
-        sdk_library: install_path(&cfg.lidar.sdk_library),
-        net,
-        work_dir: work_dir.join("livox"),
-        period_ns: 100_000_000,
-    }) {
+) -> Option<(Box<dyn LidarDriver>, mpsc::Receiver<LidarScan>)> {
+    let id = &cfg.lidar.lidar_id;
+    let (_, model) = rig_source::lidar_sensor(rig?, id)?;
+    match lidar_source::start(model, &cfg.lidar, id, work_dir) {
         Ok(s) => Some(s),
+        Err(LidarSourceError::NotConfigured(key)) => {
+            tracing::info!(sensor = %id, key, "lidar_source_not_configured");
+            None
+        }
         Err(e) => {
-            tracing::warn!(error = %e, "lidar_source_unavailable");
+            tracing::warn!(sensor = %id, model = %model.model, error = %e, "lidar_source_unavailable");
             None
         }
     }

@@ -215,6 +215,12 @@ agent:
     - id: video.whep.relay
     - id: sensors.rig.write
     - id: camera.control.write
+    # capture (visor): a serial-port LiDAR such as an RPLIDAR, opened through
+    # its USB serial bridge. Optional: without it the LiDAR driver cannot open
+    # the port and the visor captures without live LiDAR scans.
+    - id: hardware.uart
+      required: false
+      degraded_behavior: "No live serial LiDAR: the visor captures without LiDAR scans or LiDAR pose."
   contributes:
     services:
       - name: capture

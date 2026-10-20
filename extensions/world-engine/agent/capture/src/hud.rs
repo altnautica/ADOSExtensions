@@ -24,6 +24,8 @@ pub const PASSTHROUGH: &str = "passthrough";
 /// Front-panel labels of the REC and MARK buttons.
 pub const REC_LABEL: &str = "B1";
 pub const MARK_LABEL: &str = "B2";
+/// The static hint under a planar-LiDAR pose.
+pub const PLANAR_SINGLE_FLOOR: &str = "Planar LiDAR pose: single floor only";
 
 /// What a front-panel press asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +81,9 @@ pub fn page_rows(st: &CaptureStateView) -> Vec<(String, String)> {
         "Pose".into(),
         format!("{} {}", st.pose.source, st.pose.health),
     ));
+    if st.pose.single_floor {
+        rows.push(("Note".into(), PLANAR_SINGLE_FLOOR.into()));
+    }
     if let Some(pct) = st.coverage.room_pct {
         rows.push(("Coverage".into(), format!("{pct:.0}%")));
     }
@@ -161,6 +166,7 @@ mod tests {
                 health: "ok".into(),
                 tracked_features: None,
                 drift_hint_m: None,
+                single_floor: false,
             },
             coverage: CoverageSummary {
                 room_pct: Some(72.0),
@@ -203,5 +209,16 @@ mod tests {
         assert!(rows
             .iter()
             .any(|(k, v)| k == "Storage" && v == "812 GiB free"));
+        // A VIO pose carries no single-floor note; a planar LiDAR pose does.
+        assert!(!rows.iter().any(|(k, _)| k == "Note"));
+        let mut planar = st.clone();
+        planar.pose.source = "lidar".into();
+        planar.pose.single_floor = true;
+        let rows = page_rows(&planar);
+        let pose = rows.iter().position(|(k, _)| k == "Pose").unwrap();
+        assert_eq!(
+            rows[pose + 1],
+            ("Note".to_string(), PLANAR_SINGLE_FLOOR.to_string())
+        );
     }
 }

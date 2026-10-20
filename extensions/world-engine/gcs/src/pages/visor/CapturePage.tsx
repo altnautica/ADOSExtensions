@@ -56,6 +56,11 @@ export function CapturePage() {
             {state.coverage.roomPct !== null && t("roomCoverage", { pct: state.coverage.roomPct.toFixed(0) })}
             {state.pose.source && ` · ${t("pose", { source: state.pose.source, health: state.pose.health ?? "–" })}`}
           </p>
+          {state.pose.singleFloor && (
+            <p role="note" className="we:text-[11px] we:text-status-warning">
+              {t("hud.planar_single_floor")}
+            </p>
+          )}
         </Section>
       </div>
       <Section title={t("healthTitle")}>

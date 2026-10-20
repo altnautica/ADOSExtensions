@@ -48,6 +48,7 @@ impl Engine {
             .to_string(),
             tracked_features: self.quality.tracked_features(),
             drift_hint_m: self.pose.quality().drift_hint_m,
+            single_floor: self.pose.single_floor(),
         };
         let sc = crate::storage::read_sidecar(&self.paths.storage_sidecar);
         let free = sc

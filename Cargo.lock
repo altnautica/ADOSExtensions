@@ -7019,6 +7019,8 @@ dependencies = [
  "ados-config",
  "ados-livox",
  "ados-protocol",
+ "ados-rplidar",
+ "ados-scan2d",
  "ados-sdk",
  "ados-sensorbus",
  "anyhow",

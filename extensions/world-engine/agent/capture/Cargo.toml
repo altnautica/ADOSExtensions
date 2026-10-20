@@ -32,6 +32,8 @@ ados-protocol = { workspace = true }
 ados-sensorbus = { workspace = true }
 ados-config = { workspace = true }
 ados-livox = { path = "livox" }
+ados-rplidar = { path = "rplidar" }
+ados-scan2d = { path = "../scan2d" }
 prost = "0.14"
 prost-types = "0.14"
 # Kalibr calibration YAML import.

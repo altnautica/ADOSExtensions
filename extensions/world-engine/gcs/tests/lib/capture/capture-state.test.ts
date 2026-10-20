@@ -55,6 +55,13 @@ describe("coerceCaptureState", () => {
       reason: null,
     });
     expect(s.storage.freeBytes).toBe(812345678901);
+    expect(s.pose.singleFloor).toBe(false);
+  });
+
+  it("reads the single-floor flag of a planar LiDAR pose", () => {
+    const s = coerceCaptureState({ ...RAW, pose: { source: "lidar", health: "ok", single_floor: true } })!;
+    expect(s.pose.singleFloor).toBe(true);
+    expect(coerceCaptureState({ ...RAW, pose: { single_floor: "yes" } })!.pose.singleFloor).toBe(false);
   });
 
   it("reads absent fields as unknown, never zero", () => {

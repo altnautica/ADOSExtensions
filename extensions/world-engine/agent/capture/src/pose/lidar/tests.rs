@@ -132,14 +132,35 @@ fn health_follows_init_and_degeneracy() {
 }
 
 pub(super) fn config(dir: &Path, lidar_id: &str) -> LidarPoseConfig {
+    let rig = rig();
+    let model = rig.sensors[0].lidar.clone().expect("lidar model");
     LidarPoseConfig {
         launcher: Launcher::Python("python3".into()),
         project_dir: dir.to_path_buf(),
-        rig: rig(),
+        rig,
         lidar_id: lidar_id.into(),
         work_dir: dir.join("work"),
-        kiss: default_kiss_config(),
+        kiss: kiss_config(&model),
     }
+}
+
+#[test]
+fn kiss_ranges_come_from_the_lidar_model() {
+    let mut model = rig().sensors[0].lidar.clone().unwrap();
+    let k = kiss_config(&model);
+    assert_eq!(k["data"]["max_range"], 40.0);
+    // The rig itself is inside 0.5 m whatever the sensor's own minimum.
+    assert_eq!(k["data"]["min_range"], 0.5);
+    model.min_range_m = 0.8;
+    model.max_range_m = 70.0;
+    let k = kiss_config(&model);
+    assert_eq!(
+        (
+            k["data"]["min_range"].as_f64(),
+            k["data"]["max_range"].as_f64()
+        ),
+        (Some(0.8), Some(70.0))
+    );
 }
 
 #[tokio::test]

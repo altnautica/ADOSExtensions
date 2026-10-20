@@ -98,7 +98,8 @@ Per-node plugin configuration (`config-schema.json`):
 |---|---|
 | `atlas.enabled` | Run the capture service on this drone |
 | `atlas.capture_profile` | Keyframe selection profile |
-| `atlas.pose_provider` | Pose provider: `auto`, `fc_ekf` (flight controller), `vio` (on-device visual-inertial) or `lidar` (on-device LiDAR odometry) |
+| `atlas.pose_provider` | Pose provider: `auto`, `fc_ekf` (flight controller), `vio` (on-device visual-inertial) or `lidar` (on-device LiDAR odometry: 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one). `auto` on a visor picks `lidar` when the rig has the configured LiDAR and IMU, else `vio` with a front stereo pair and IMU |
+| `atlas.lidar` | LiDAR input: `lidar_id` (rig sensor; its `lidar.model` picks the driver, `rplidar-c1` or `livox-mid360`), `imu`, and per-driver blocks `rplidar` (`device`: serial port, `tcp:<host>:<port>` or `auto`; `baud`) and `livox` (`sdk_library`, `host_ip`, `lidar_ips`) |
 | `atlas.auto_upload` | Upload finished sessions to the paired compute node over the LAN when the device is idle or charging and not recording (default `false`) |
 | `atlas.rig_id` | Rig whose calibrations `GET /atlas/calib` lists; empty uses the only rig in the device calibration store |
 | `atlas.reconstruct_steps` | Training steps for the reconstruction (the detail level) |

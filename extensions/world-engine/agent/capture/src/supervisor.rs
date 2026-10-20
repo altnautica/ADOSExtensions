@@ -122,7 +122,7 @@ pub struct CaptureRun {
     tasks: Vec<JoinHandle<()>>,
     capture: JoinHandle<()>,
     control_path: PathBuf,
-    _lidar: Option<crate::lidar_source::LidarSource>,
+    _lidar: Option<Box<dyn crate::lidar_source::LidarDriver>>,
 }
 
 impl CaptureRun {

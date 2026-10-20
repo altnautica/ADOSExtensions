@@ -193,6 +193,9 @@ pub struct PoseView {
     pub health: String,
     pub tracked_features: Option<u32>,
     pub drift_hint_m: Option<f64>,
+    /// The pose provider holds one floor only (planar LiDAR odometry).
+    #[serde(default)]
+    pub single_floor: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

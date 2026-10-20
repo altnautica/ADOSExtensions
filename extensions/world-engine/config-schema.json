@@ -358,8 +358,14 @@
       "additionalProperties": false,
       "properties": {
         "lidar_id": {
+          "description": "Rig sensor id of the LiDAR; its `lidar.model` picks the driver.",
           "type": "string",
           "default": "lidar0"
+        },
+        "imu": {
+          "description": "Rig IMU a planar LiDAR's scans are levelled with.",
+          "type": "string",
+          "default": "imu0"
         },
         "uv": {
           "type": "string"
@@ -367,22 +373,47 @@
         "project_dir": {
           "type": "string"
         },
-        "sdk_library": {
-          "type": "string"
+        "rplidar": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "device": {
+              "description": "Serial port path, `tcp:<host>:<port>`, or `auto` (USB discovery); empty turns the driver off.",
+              "type": "string",
+              "default": "auto"
+            },
+            "baud": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 460800
+            }
+          }
         },
-        "host_ip": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "lidar_ips": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": []
+        "livox": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "sdk_library": {
+              "type": "string"
+            },
+            "host_ip": {
+              "description": "Host address on the LiDAR's subnet; null turns the driver off.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "lidar_ips": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            }
+          }
         }
       }
     },
