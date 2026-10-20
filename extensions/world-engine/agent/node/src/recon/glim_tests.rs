@@ -203,6 +203,7 @@ fn frame(t_ns: u64) -> FrameRecord {
         model: CameraModelModel::Pinhole,
         dist: vec![],
         calibrated: false,
+        t_body_cam: None,
     }
 }
 

@@ -4,7 +4,10 @@
 //! (fixed for a LiDAR-odometry track, refined by bundle adjustment for a
 //! visual-inertial or flight-controller track), so the model lands in the
 //! session's ENU world frame. A session without poses runs incremental (or,
-//! for large sites, hierarchical) mapping and stays in COLMAP's own frame.
+//! for large sites, hierarchical) mapping and stays in COLMAP's own frame;
+//! a calibrated multi-camera rig is configured as a COLMAP rig first, so the
+//! frames of one instant are matched to each other and mapped as one rigid
+//! frame with the session's camera mounts.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -13,6 +16,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use super::colmap::{self, camera_params, params_arg};
+use super::geom;
 use super::prepare::{read_frames, FrameRecord};
 use super::{StageError, ToolInvocation, ToolRunner};
 
@@ -25,6 +29,9 @@ pub struct SfmSummary {
     pub world_frame: bool,
     pub registered_images: usize,
     pub points: usize,
+    /// Cameras tied together as one COLMAP rig (0 when each camera mapped on its own).
+    #[serde(default)]
+    pub rig_cameras: usize,
 }
 
 /// A prior-posed session needs at least this share of posed keyframes.
@@ -84,6 +91,28 @@ pub fn run(
         progress(0.25 * (i as f32 + 1.0) / n_cams);
     }
 
+    let posed = frames.iter().filter(|f| f.t_world_cam.is_some()).count();
+    let use_priors = posed >= 3 && posed as f64 >= MIN_POSED_SHARE * frames.len() as f64;
+    // The rig goes into the database before matching: the sequential matcher
+    // then also pairs the images of neighbouring frames across cameras.
+    let rig = match use_priors {
+        true => None,
+        false => rig_config(&by_cam),
+    };
+    if let Some((config, _)) = &rig {
+        let path = sfm_dir.join("rig_config.json");
+        fs::write(&path, serde_json::to_vec_pretty(config)?)?;
+        runner.run(
+            &ToolInvocation::new("colmap", sfm_dir)
+                .arg("rig_configurator")
+                .arg("--database_path")
+                .arg(&db)
+                .arg("--rig_config_path")
+                .arg(&path),
+            &mut |_| {},
+        )?;
+    }
+
     let matcher = if frames.len() <= 150 {
         ToolInvocation::new("colmap", sfm_dir).arg("exhaustive_matcher")
     } else {
@@ -97,8 +126,6 @@ pub fn run(
 
     let model0 = sparse.join("0");
     fs::create_dir_all(&model0)?;
-    let posed = frames.iter().filter(|f| f.t_world_cam.is_some()).count();
-    let use_priors = posed >= 3 && posed as f64 >= MIN_POSED_SHARE * frames.len() as f64;
     // Calibrated intrinsics are kept: refining focal length against nearly
     // fixed poses can trade it for scene scale along one axis.
     let calibrated = !frames.is_empty() && frames.iter().all(|f| f.calibrated);
@@ -168,6 +195,11 @@ pub fn run(
                 "0",
             ]);
         }
+        if rig.is_some() {
+            // The mounts are calibrated: keep them, so the model takes their
+            // metric baseline instead of trading it for drift.
+            map = map.args(["--Mapper.ba_refine_sensor_from_rig", "0"]);
+        }
         runner.run(&map, &mut |_| {})?;
         let best = largest_model(&mapped)?;
         for entry in fs::read_dir(&best)? {
@@ -201,7 +233,41 @@ pub fn run(
         world_frame: use_priors,
         registered_images: registered,
         points,
+        rig_cameras: rig.map_or(0, |(_, n)| n),
     })
+}
+
+/// The COLMAP `rig_configurator` config (and its camera count) for one rig made
+/// of every camera: the first camera is the reference sensor, each other camera
+/// carries `cam_from_rig = T_body_cam⁻¹ · T_body_ref` from the session mounts.
+/// Frames of one instant share a file name across camera folders, which is how
+/// COLMAP groups them. `None` for a single camera, or when any frame is
+/// uncalibrated or lacks its mount (then each camera maps on its own).
+fn rig_config(by_cam: &BTreeMap<&str, Vec<&FrameRecord>>) -> Option<(serde_json::Value, usize)> {
+    if by_cam.len() < 2 {
+        return None;
+    }
+    let mut mounts = Vec::with_capacity(by_cam.len());
+    for (cam, list) in by_cam {
+        if !list.iter().all(|f| f.calibrated) {
+            return None;
+        }
+        mounts.push((*cam, list.first()?.t_body_cam?));
+    }
+    let (ref_cam, body_ref) = mounts[0];
+    let mut cameras = vec![serde_json::json!({
+        "image_prefix": format!("{ref_cam}/"),
+        "ref_sensor": true,
+    })];
+    for (cam, body_cam) in &mounts[1..] {
+        let cam_from_rig = geom::mul(&geom::inverse_rigid(body_cam), &body_ref);
+        cameras.push(serde_json::json!({
+            "image_prefix": format!("{cam}/"),
+            "cam_from_rig_rotation": geom::quat_of(&cam_from_rig),
+            "cam_from_rig_translation": geom::translation(&cam_from_rig),
+        }));
+    }
+    Some((serde_json::json!([{ "cameras": cameras }]), mounts.len()))
 }
 
 /// The sub-model with the most images (by `images.bin` size) under a mapper
@@ -247,6 +313,7 @@ mod tests {
                 model: CameraModelModel::Pinhole,
                 dist: vec![],
                 calibrated,
+                t_body_cam: None,
             })
             .collect()
     }
@@ -335,5 +402,110 @@ mod tests {
             .position(|a| a == "--Mapper.ba_refine_focal_length")
             .expect("focal length pinned");
         assert_eq!(args[pos + 1], "0");
+    }
+
+    /// The stereo mounts of the sim Visor rig (body FLU, OpenCV cameras 10 cm apart).
+    fn stereo_mount(y: f64) -> geom::Mat4 {
+        [
+            0.0, 0.0, 1.0, 0.1, -1.0, 0.0, 0.0, y, 0.0, -1.0, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0,
+        ]
+    }
+
+    /// Six unposed stereo frames; `cam_fr` at `fr_calibrated`.
+    fn stereo_frames(fr_calibrated: bool) -> Vec<FrameRecord> {
+        let mut out = Vec::new();
+        for (cam, y, calibrated) in [("cam_fl", 0.05, true), ("cam_fr", -0.05, fr_calibrated)] {
+            for t in [300_000_000u64, 9_900_000_000, 10_200_000_000] {
+                out.push(FrameRecord {
+                    name: crate::recon::prepare::frame_name(cam, t),
+                    camera_id: cam.into(),
+                    t_ns: t,
+                    t_world_cam: None,
+                    t_body_cam: Some(stereo_mount(y)),
+                    calibrated,
+                    ..frames(true).remove(0)
+                });
+            }
+        }
+        out
+    }
+
+    fn run_stereo(
+        frames: &[FrameRecord],
+    ) -> (SfmSummary, Vec<Vec<String>>, Option<serde_json::Value>) {
+        let dir = tempfile::tempdir().unwrap();
+        let dataset = dir.path().join("dataset");
+        fs::create_dir_all(dataset.join("images")).unwrap();
+        fs::write(
+            dataset.join("frames.json"),
+            serde_json::to_vec(frames).unwrap(),
+        )
+        .unwrap();
+        let runner = StandInRunner::default();
+        let sfm = dir.path().join("sfm");
+        let s = run(&runner, &dataset, &sfm, false, true, false, &mut |_| {}).unwrap();
+        let config = fs::read(sfm.join("rig_config.json"))
+            .ok()
+            .map(|b| serde_json::from_slice(&b).unwrap());
+        let runs = runner
+            .runs_of("colmap")
+            .into_iter()
+            .map(|i| i.args_lossy())
+            .collect();
+        (s, runs, config)
+    }
+
+    #[test]
+    fn frame_names_sort_in_time_order() {
+        let a = crate::recon::prepare::frame_name("cam_fl", 10_152_000_000);
+        let b = crate::recon::prepare::frame_name("cam_fl", 100_152_000_000);
+        assert!(a < b, "{a} vs {b}");
+        assert_eq!(a, "cam_fl/00000000010152000000.png");
+    }
+
+    #[test]
+    fn a_calibrated_stereo_rig_is_configured_before_matching_and_kept_in_mapping() {
+        let (s, runs, config) = run_stereo(&stereo_frames(true));
+        assert_eq!(s.rig_cameras, 2);
+        let cmd = |name: &str| runs.iter().position(|a| a[0] == name).unwrap_or(usize::MAX);
+        assert!(cmd("rig_configurator") < cmd("exhaustive_matcher"));
+        let config = config.expect("rig config written");
+        let cams = config[0]["cameras"].as_array().unwrap();
+        assert_eq!(cams[0]["image_prefix"], "cam_fl/");
+        assert_eq!(cams[0]["ref_sensor"], true);
+        assert_eq!(cams[1]["image_prefix"], "cam_fr/");
+        // cam_fr sits 10 cm to the right of cam_fl (+x of the OpenCV camera).
+        let t: Vec<f64> =
+            serde_json::from_value(cams[1]["cam_from_rig_translation"].clone()).unwrap();
+        let q: Vec<f64> = serde_json::from_value(cams[1]["cam_from_rig_rotation"].clone()).unwrap();
+        assert!(
+            (t[0] + 0.1).abs() < 1e-12 && t[1].abs() < 1e-12 && t[2].abs() < 1e-12,
+            "{t:?}"
+        );
+        assert!((q[0] - 1.0).abs() < 1e-12, "{q:?}");
+        let mapper = &runs[cmd("mapper")];
+        let pos = mapper
+            .iter()
+            .position(|a| a == "--Mapper.ba_refine_sensor_from_rig")
+            .expect("mounts kept");
+        assert_eq!(mapper[pos + 1], "0");
+    }
+
+    #[test]
+    fn no_rig_for_an_uncalibrated_camera_or_a_posed_session() {
+        let (s, runs, config) = run_stereo(&stereo_frames(false));
+        assert_eq!(s.rig_cameras, 0);
+        assert!(config.is_none());
+        assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
+        let posed: Vec<FrameRecord> = stereo_frames(true)
+            .into_iter()
+            .map(|f| FrameRecord {
+                t_world_cam: Some(geom::IDENTITY),
+                ..f
+            })
+            .collect();
+        let (s, runs, _) = run_stereo(&posed);
+        assert_eq!((s.rig_cameras, s.method.as_str()), (0, "known_poses"));
+        assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
     }
 }

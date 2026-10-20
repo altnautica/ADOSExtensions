@@ -188,6 +188,7 @@ mod tests {
             model: CameraModelModel::Opencv,
             dist: vec![0.1, -0.01, 0.001, 0.002, 0.0],
             calibrated: true,
+            t_body_cam: None,
         }
     }
 

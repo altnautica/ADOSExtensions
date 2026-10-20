@@ -21,7 +21,9 @@ use crate::products::cloud::{write_laz, PointCloud as Cloud};
 /// One exported keyframe (`dataset/frames.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FrameRecord {
-    /// Path under `dataset/images/`, `/`-separated.
+    /// Path under `dataset/images/`, `/`-separated: `<camera>/<t_ns, 20 digits>.png`. The
+    /// zero padding keeps name order equal to time order (COLMAP's sequential matcher pairs
+    /// images in name order) and gives the frames of one instant one file name across cameras.
     pub name: String,
     pub camera_id: String,
     pub t_ns: u64,
@@ -39,6 +41,19 @@ pub struct FrameRecord {
     /// The intrinsics come from a calibration (bundle adjustment keeps them).
     #[serde(default)]
     pub calibrated: bool,
+    /// Body-from-camera mount (OpenCV camera), row-major, from the session rig. SfM ties the
+    /// cameras of a calibrated multi-camera rig together with it.
+    #[serde(
+        rename = "T_body_cam",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub t_body_cam: Option<[f64; 16]>,
+}
+
+/// The dataset name of camera `cam`'s frame at `t_ns` (see [`FrameRecord::name`]).
+pub fn frame_name(cam: &str, t_ns: u64) -> String {
+    format!("{cam}/{t_ns:020}.png")
 }
 
 /// One operator room with the body trajectory recorded inside it.
@@ -167,11 +182,11 @@ pub fn run(
                 _ => return Ok(()),
             }
             .map_err(|e| ados_capture_contract::Error::Invalid(e.message))?;
-            let name = format!("{cam}/{}.png", m.t_ns);
-            let path = dataset_dir.join("images").join(cam);
-            fs::create_dir_all(&path)?;
+            let name = frame_name(cam, m.t_ns);
+            let path = dataset_dir.join("images").join(&name);
+            fs::create_dir_all(path.parent().expect("camera folder"))?;
             decoded
-                .write_png(&path.join(format!("{}.png", m.t_ns)))
+                .write_png(&path)
                 .map_err(|e| ados_capture_contract::Error::Invalid(e.message))?;
             let model = sensor.camera.as_ref().expect("filtered on camera");
             let t_sensor = (m.t_ns as i64 + sensor.time_offset_ns).max(0) as u64;
@@ -195,6 +210,7 @@ pub fn run(
                     model: model.model,
                     dist: model.dist.clone(),
                     calibrated: model.calibrated,
+                    t_body_cam: Some(sensor.t_body_sensor.0),
                 },
                 decoded.blur_score(),
             ));
