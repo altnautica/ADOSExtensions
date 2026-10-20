@@ -27,6 +27,7 @@ members = [
   "extensions/world-engine/agent/capture/rplidar",
   "extensions/world-engine/agent/node",
   "extensions/world-engine/agent/link",
+  "extensions/world-engine/agent/scan2d",
 ]
 
 [workspace.package]
