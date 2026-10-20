@@ -37,7 +37,8 @@ function reading(id: HealthId, value: number | null): string | null {
   if (value === null) return null;
   switch (id) {
     case "blur":
-      return value.toFixed(0);
+      // The frame's sharpness relative to its camera's running average.
+      return `${value.toFixed(2)}×`;
     case "texture":
       return `${Math.round(value)} pts`;
     case "flicker":

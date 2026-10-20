@@ -6,6 +6,8 @@ use world_engine_protocol::capture_ctl::StartArgs;
 
 use super::{Engine, SLOW_TICKS};
 use crate::lidar_scan::LidarScan;
+use crate::pose::se3;
+use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::{ClockReading, Level, StorageReading};
 use crate::recorder::{convert, Item};
 use crate::recording::Phase;
@@ -24,7 +26,12 @@ impl Engine {
 
     pub(super) fn on_bus(&mut self, ev: BusEvent) {
         match &ev {
-            BusEvent::Imu { src, batch } => self.pose.feed_imu(src, batch),
+            BusEvent::Imu { src, batch } => {
+                self.pose.feed_imu(src, batch);
+                if let Some(s) = batch.samples.last() {
+                    self.quality.on_gyro(crate::clock::mono_ns(), &s.gyro);
+                }
+            }
             // The open session's map follows its own timebase, paused or not.
             BusEvent::Clock(s) => {
                 if let Some(session) = self.session.as_mut() {
@@ -78,6 +85,15 @@ impl Engine {
 
     pub(super) fn on_lidar(&mut self, scan: LidarScan) {
         self.pose.feed_lidar(&scan);
+        let r_world_sensor = self.pose.pose_at(scan.t_ns).map(|e| {
+            let mount = self
+                .rig
+                .as_ref()
+                .and_then(|r| r.sensors.iter().find(|s| s.id == scan.sensor_id))
+                .map_or(se3::IDENTITY, |s| se3::from_mat4(&s.t_body_sensor.0).0);
+            se3::mat_mul(&e.r, &mount)
+        });
+        self.lidar_depth = Some(LidarDepth::from_scan(&scan, r_world_sensor.as_ref()));
         let t = self.to_session(scan.t_ns);
         if let Some(r) = self.recorder() {
             let cloud = crate::lidar_record::scan_to_point_cloud(&scan, t, &scan.sensor_id);

@@ -2,15 +2,21 @@
 //! `flicker`, `corridor`, `storage`, `clock`.
 //!
 //! [`QualityMonitor`] folds each frame's quarter-resolution luma (sharpness,
-//! FAST corners, mean intensity for flicker), the pose provider's degeneracy
-//! ratio, the capture-storage reading and the clock lock, and renders
-//! [`HealthView`]s with levels `ok|warn|bad`. Thresholds follow the indoor
-//! capture rules: blur and texture only turn a chip after holding for
+//! FAST corners, mean intensity for flicker), the latest gyro rate, the pose
+//! provider's degeneracy ratio, the capture-storage reading and the clock
+//! lock, and renders [`HealthView`]s with levels `ok|warn|bad`.
+//!
+//! The blur chip is the worse of two measures: the motion blur the gyro rate
+//! predicts over the exposure (`|ω| · t_exp · fx` pixels), and the frame's
+//! Laplacian score relative to a running average of that camera's score (a
+//! sharp but bare wall is not blur; a sudden drop is). Its value is that
+//! relative score. Blur and texture only turn a chip after holding for
 //! [`HOLD_NS`] (one bad frame while turning is not a problem).
 
 pub mod coverage;
 pub mod flicker;
 pub mod image;
+pub mod lidar_depth;
 
 use std::collections::HashMap;
 
@@ -21,9 +27,17 @@ use flicker::{FlickerDetector, FLICKER_BAD_PCT, FLICKER_WARN_PCT};
 
 /// A blur or texture condition must hold this long to raise its chip.
 pub const HOLD_NS: u64 = 1_000_000_000;
-/// Variance-of-Laplacian (¼-res) under which a frame is blurred ("slow down").
-pub const BLUR_WARN: f64 = 50.0;
-pub const BLUR_BAD: f64 = 20.0;
+/// Predicted motion blur, pixels, over which the blur chip warns / is bad.
+pub const MOTION_BLUR_WARN_PX: f64 = 1.0;
+pub const MOTION_BLUR_BAD_PX: f64 = 2.5;
+/// Laplacian score relative to the camera's running average under which
+/// the blur chip warns / is bad.
+pub const BLUR_REL_WARN: f64 = 0.5;
+pub const BLUR_REL_BAD: f64 = 0.3;
+/// Weight of each frame in the running average of its camera's score.
+pub const BLUR_EMA_ALPHA: f64 = 0.01;
+/// A gyro sample older than this predicts nothing.
+pub const GYRO_STALE_NS: u64 = 500_000_000;
 /// FAST corners (¼-res) under which a frame is low-texture.
 pub const TEXTURE_WARN: usize = 60;
 pub const TEXTURE_BAD: usize = 20;
@@ -42,6 +56,32 @@ pub struct FrameQuality {
     pub blur: f64,
     pub corners: usize,
     pub mean: f64,
+}
+
+/// What turns an angular rate into image motion for one frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Optics {
+    /// Focal length in this frame's pixels.
+    pub fx_px: f64,
+    /// Exposure time, seconds.
+    pub exposure_s: f64,
+}
+
+/// The motion blur, pixels, of a rotation at `rate_rad_s` over the exposure.
+pub fn predicted_blur_px(rate_rad_s: f64, optics: Optics) -> f64 {
+    rate_rad_s * optics.exposure_s * optics.fx_px
+}
+
+/// The level of a measure with held bad and warn conditions.
+fn held_level(bad: &mut Held, warn: &mut Held, is_bad: bool, is_warn: bool, t_ns: u64) -> Level {
+    let (b, w) = (bad.update(is_bad, t_ns), warn.update(is_warn, t_ns));
+    if b {
+        Level::Bad
+    } else if w {
+        Level::Warn
+    } else {
+        Level::Ok
+    }
 }
 
 /// Measure one frame; `None` for a buffer that does not match its format.
@@ -81,8 +121,14 @@ struct CameraQuality {
     last: Option<FrameQuality>,
     /// Host ns of the last frame measured.
     last_t_ns: u64,
+    /// Running average of the Laplacian score.
+    blur_ema: Option<f64>,
+    /// The last frame's score relative to the running average before it.
+    blur_rel: Option<f64>,
     blur_warn: Held,
     blur_bad: Held,
+    motion_warn: Held,
+    motion_bad: Held,
     tex_warn: Held,
     tex_bad: Held,
     flicker: FlickerDetector,
@@ -128,6 +174,8 @@ pub struct QualityMonitor {
     cameras: HashMap<String, CameraQuality>,
     degeneracy: Option<f64>,
     tracked_features: Option<u32>,
+    /// Host ns and magnitude (rad/s) of the latest gyro sample.
+    gyro: Option<(u64, f64)>,
     pub storage: StorageReading,
     pub clock: ClockReading,
     /// Raised at any point of the session (the manifest's health flags).
@@ -151,26 +199,60 @@ impl QualityMonitor {
         Self::default()
     }
 
-    /// Fold one frame's measures at `t_ns`.
-    pub fn on_frame(&mut self, camera: &str, t_ns: u64, q: FrameQuality) {
+    /// The latest gyro sample (rad/s, body axes), received at host `t_ns`.
+    pub fn on_gyro(&mut self, t_ns: u64, gyro: &[f64]) {
+        if let [x, y, z] = gyro {
+            self.gyro = Some((t_ns, (x * x + y * y + z * z).sqrt()));
+        }
+    }
+
+    /// The motion blur, pixels, a frame at host `t_ns` with `optics` gets
+    /// from the latest gyro rate; `None` without a recent gyro sample.
+    pub fn motion_blur_px(&self, t_ns: u64, optics: Optics) -> Option<f64> {
+        let (t, rate) = self.gyro?;
+        (t.abs_diff(t_ns) <= GYRO_STALE_NS).then(|| predicted_blur_px(rate, optics))
+    }
+
+    /// Fold one frame's measures at `t_ns`; `optics` (when known) turns the
+    /// gyro rate into the frame's motion blur.
+    pub fn on_frame(&mut self, camera: &str, t_ns: u64, q: FrameQuality, optics: Option<Optics>) {
+        let motion = optics.and_then(|o| self.motion_blur_px(t_ns, o));
         let c = self.cameras.entry(camera.to_string()).or_default();
         c.last = Some(q);
         c.last_t_ns = t_ns;
         c.flicker.push(t_ns, q.mean);
-        let blur = if c.blur_bad.update(q.blur < BLUR_BAD, t_ns) {
-            Level::Bad
-        } else if c.blur_warn.update(q.blur < BLUR_WARN, t_ns) {
-            Level::Warn
-        } else {
-            Level::Ok
+        let rel = match c.blur_ema {
+            Some(ema) if ema > 0.0 => q.blur / ema,
+            _ => 1.0,
         };
-        let tex = if c.tex_bad.update(q.corners < TEXTURE_BAD, t_ns) {
-            Level::Bad
-        } else if c.tex_warn.update(q.corners < TEXTURE_WARN, t_ns) {
-            Level::Warn
-        } else {
-            Level::Ok
-        };
+        c.blur_ema = Some(
+            c.blur_ema
+                .map_or(q.blur, |e| e + BLUR_EMA_ALPHA * (q.blur - e)),
+        );
+        c.blur_rel = Some(rel);
+        let laplacian = held_level(
+            &mut c.blur_bad,
+            &mut c.blur_warn,
+            rel < BLUR_REL_BAD,
+            rel < BLUR_REL_WARN,
+            t_ns,
+        );
+        let px = motion.unwrap_or(0.0);
+        let moving = held_level(
+            &mut c.motion_bad,
+            &mut c.motion_warn,
+            px > MOTION_BLUR_BAD_PX,
+            px > MOTION_BLUR_WARN_PX,
+            t_ns,
+        );
+        let blur = laplacian.max(moving);
+        let tex = held_level(
+            &mut c.tex_bad,
+            &mut c.tex_warn,
+            q.corners < TEXTURE_BAD,
+            q.corners < TEXTURE_WARN,
+            t_ns,
+        );
         c.levels = (blur, tex);
         if self.recording {
             self.raised.blur |= blur != Level::Ok;
@@ -211,7 +293,7 @@ impl QualityMonitor {
                 .filter_map(|c| c.last.as_ref().map(f))
                 .reduce(f64::min)
         };
-        let blur_v = min_of(&|q| q.blur);
+        let blur_v = live.iter().filter_map(|c| c.blur_rel).reduce(f64::min);
         let tex_v = min_of(&|q| q.corners as f64);
         let flicker_v = live
             .iter()

@@ -199,8 +199,15 @@ pub struct PoseView {
 pub struct CoverageSummary {
     pub voxels: u64,
     pub room_pct: Option<f64>,
+    /// The walk has come back near a point it passed at least 30 s before.
     pub loop_closed: bool,
     pub distance_from_start_m: Option<f64>,
+    /// Raised after 40 m walked without such a revisit; a revisit clears it.
+    #[serde(default)]
+    pub close_loop_prompt: bool,
+    /// Times the close-loop prompt was raised this session (once per 40 m).
+    #[serde(default)]
+    pub close_loop_prompts: u64,
 }
 
 /// One health chip; ids exactly `blur|texture|flicker|corridor|storage|clock`.

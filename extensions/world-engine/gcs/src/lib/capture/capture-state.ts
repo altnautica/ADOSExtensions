@@ -51,7 +51,14 @@ export interface CaptureState {
   segment: number | null;
   frames: { total: number | null; droppedPct: number | null; perCamera: CameraFrames[] };
   pose: { source: string | null; health: string | null; trackedFeatures: number | null; driftHintM: number | null };
-  coverage: { voxels: number | null; roomPct: number | null; loopClosed: boolean | null; distanceFromStartM: number | null };
+  coverage: {
+    voxels: number | null;
+    roomPct: number | null;
+    loopClosed: boolean | null;
+    distanceFromStartM: number | null;
+    /** 40 m walked without coming back near earlier ground; a revisit clears it. */
+    closeLoopPrompt: boolean | null;
+  };
   health: HealthSignal[];
   exposure: ExposureState;
   storage: { freeBytes: number | null; estRemainingS: number | null };
@@ -125,6 +132,7 @@ export function coerceCaptureState(raw: unknown): CaptureState | null {
       roomPct: num(coverage.room_pct),
       loopClosed: bool(coverage.loop_closed),
       distanceFromStartM: num(coverage.distance_from_start_m),
+      closeLoopPrompt: bool(coverage.close_loop_prompt),
     },
     health: coerceHealth(e.health),
     exposure: coerceExposure(e.exposure),

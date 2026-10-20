@@ -126,12 +126,16 @@ impl Engine {
         let recording = self.is_recording();
         self.quality.recording = recording;
         if let Some(q) = quality::measure(f.format, f.width, f.height, &f.pixels) {
-            self.quality.on_frame(&f.camera_id, host_t, q);
+            let optics = self.optics(&f);
+            self.quality.on_frame(&f.camera_id, host_t, q, optics);
         }
         let est = self.pose.pose_at(host_t);
+        let depth = self.lidar_depth.as_ref().filter(|d| d.fresh_at(host_t));
+        self.keyframes
+            .set_scene_depth(depth.and_then(|d| d.median_m));
         if recording {
             if let Some(e) = &est {
-                self.observe_coverage(&f.camera_id, e);
+                self.observe_coverage(&f.camera_id, e, host_t);
             }
         }
         if let Some(e) = &est {
@@ -159,7 +163,39 @@ impl Engine {
         }
     }
 
-    fn observe_coverage(&mut self, camera: &str, e: &PoseEstimate) {
+    /// Focal length (in this frame's pixels) and exposure for the motion
+    /// blur prediction: the frame's exposure when the source reports it,
+    /// else half the frame period.
+    fn optics(&self, f: &CapturedFrame) -> Option<quality::Optics> {
+        let exposure_s = match f.exposure_ns.filter(|e| *e > 0) {
+            Some(e) => e as f64 * 1e-9,
+            None => {
+                let fps = self.cams.get(&f.camera_id).map_or(0.0, |c| c.fps);
+                if fps <= 0.0 {
+                    return None;
+                }
+                0.5 / fps
+            }
+        };
+        let rig_model = self
+            .rig
+            .as_ref()
+            .and_then(|r| r.sensors.iter().find(|s| s.id == f.camera_id))
+            .and_then(|s| s.camera.as_ref());
+        let (fx, width) = match rig_model {
+            Some(c) => (c.fx, c.width),
+            None => {
+                let c = self.cfg.intrinsics_for(&f.camera_id, f.width, f.height);
+                (c.fx, c.width)
+            }
+        };
+        (width > 0 && fx > 0.0).then(|| quality::Optics {
+            fx_px: fx * f.width as f64 / width as f64,
+            exposure_s,
+        })
+    }
+
+    fn observe_coverage(&mut self, camera: &str, e: &PoseEstimate, host_t: u64) {
         let Some(rig) = &self.rig else { return };
         let Some(sensor) = rig
             .sensors
@@ -178,8 +214,9 @@ impl Engine {
                 (c.height as f64 / 2.0 / c.fy).atan(),
             )
         });
-        self.coverage.observe_camera(&r_wc, pos, hh, vh);
-        self.coverage.observe_body(&e.r, e.t);
+        let depth = self.lidar_depth.as_ref().filter(|d| d.fresh_at(host_t));
+        self.coverage.observe_camera(&r_wc, pos, hh, vh, depth);
+        self.coverage.observe_body(&e.r, e.t, host_t);
     }
 
     /// Feed the keyframe selector; encode, publish and keep a keyframe when it

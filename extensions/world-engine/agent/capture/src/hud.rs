@@ -82,6 +82,9 @@ pub fn page_rows(st: &CaptureStateView) -> Vec<(String, String)> {
     if let Some(pct) = st.coverage.room_pct {
         rows.push(("Coverage".into(), format!("{pct:.0}%")));
     }
+    if st.coverage.close_loop_prompt {
+        rows.push(("Loop".into(), "walk back via a cross-aisle".into()));
+    }
     // Only chips that need the operator: an all-ok HUD stays short.
     let alerts: Vec<String> = st
         .health
@@ -161,6 +164,7 @@ mod tests {
             },
             coverage: CoverageSummary {
                 room_pct: Some(72.0),
+                close_loop_prompt: true,
                 ..Default::default()
             },
             health: vec![
@@ -193,6 +197,9 @@ mod tests {
         assert_eq!(rows[1].1, "Kitchen F1");
         assert!(rows.iter().any(|(k, v)| k == "Health" && v == "slow down"));
         assert!(rows.iter().any(|(k, v)| k == "Coverage" && v == "72%"));
+        assert!(rows
+            .iter()
+            .any(|(k, v)| k == "Loop" && v == "walk back via a cross-aisle"));
         assert!(rows
             .iter()
             .any(|(k, v)| k == "Storage" && v == "812 GiB free"));

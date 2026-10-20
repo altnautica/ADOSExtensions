@@ -125,7 +125,7 @@
     "atlas.selection.min_translation_m": {
       "type": "number",
       "title": "Keyframe distance (m)",
-      "description": "Minimum travel between keyframes of one camera.",
+      "description": "Minimum travel between keyframes of one camera while no LiDAR scan gives the scene depth; with one, the distance is 0.08 x the median LiDAR range, 0.15 to 0.50 m.",
       "minimum": 0,
       "default": 0.5
     },

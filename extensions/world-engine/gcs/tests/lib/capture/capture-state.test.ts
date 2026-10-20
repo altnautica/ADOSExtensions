@@ -25,7 +25,14 @@ const RAW = {
   segment: 3,
   frames: { total: 12480, dropped_pct: 0.2, per_camera: [{ id: "cam_fl", fps: 20.0, dropped: 3 }, { fps: 1 }] },
   pose: { source: "vio", health: "ok", tracked_features: 143, drift_hint_m: 0.04 },
-  coverage: { voxels: 18420, room_pct: 72.0, loop_closed: false, distance_from_start_m: 38.2 },
+  coverage: {
+    voxels: 18420,
+    room_pct: 72.0,
+    loop_closed: false,
+    distance_from_start_m: 38.2,
+    close_loop_prompt: true,
+    close_loop_prompts: 2,
+  },
   health: [{ id: "blur", level: "ok", value: 182.0 }],
   exposure: { locked: true, exposure_us: 4000, gain: 2.0, mode: "walking" },
   storage: { free_bytes: 812345678901, est_remaining_s: 14400 },
@@ -38,6 +45,7 @@ describe("coerceCaptureState", () => {
     expect(s.frames.perCamera).toEqual([{ id: "cam_fl", fps: 20, dropped: 3 }]);
     expect(s.pose.trackedFeatures).toBe(143);
     expect(s.coverage.distanceFromStartM).toBe(38.2);
+    expect(s.coverage.closeLoopPrompt).toBe(true);
     expect(s.exposure).toEqual({
       locked: true,
       exposureUs: 4000,
@@ -54,6 +62,7 @@ describe("coerceCaptureState", () => {
     expect(s.durationS).toBeNull();
     expect(s.frames.total).toBeNull();
     expect(s.coverage.roomPct).toBeNull();
+    expect(s.coverage.closeLoopPrompt).toBeNull();
     expect(s.exposure.exposureUs).toBeNull();
     expect(coerceCaptureState({})).toBeNull();
   });

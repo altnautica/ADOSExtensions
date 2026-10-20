@@ -105,6 +105,18 @@ All notable changes to the World Engine extension.
 
 - `atlas.pose_tier` and the offloaded-SLAM pose lane are removed; `atlas.pose_provider` (`auto|fc_ekf|vio|lidar`) replaces them. `PoseSource` is `fc_ekf|vio|lidar|replay`. Checksums skip dot-file markers.
 
+- **Keyframes and capture QA.** The node's `prepare` stage keeps the sharpest
+  frame within 0.3 s of each threshold crossing (relative to its camera's
+  median) and drops a pick only when even that frame is under 0.35 × the
+  median; with a LiDAR the baseline is 0.08 × the median range of the nearest
+  scan (0.05–0.50 m), and the live selector uses the same rule clamped to
+  0.15–0.50 m. The blur chip combines the gyro-predicted motion blur
+  (warn > 1 px, bad > 2.5 px) with the Laplacian score relative to the
+  camera's running average (its reading); coverage rays stop at the LiDAR
+  range around their azimuth; the single 20 m loop check is replaced by a
+  revisit rule (back within 2 m of a pose at least 30 s old) and a
+  `close_loop_prompt` raised every 40 m walked without one.
+
 - **Atlas envelope version 2.** Keyframes carry the contract camera model,
   geo anchor, a timebase-stamped exposure time and IMU samples with `t_ns` and
   `seq`; every artifact descriptor carries a placement. Version 1 frames are

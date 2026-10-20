@@ -95,6 +95,9 @@ pub struct CaptureSession {
     // documented rate onto the same bus that carries multi-MB keyframes.
     pose_interval_ms: i64,
     last_pose_pub_ms: Option<i64>,
+    /// Median scene depth from the latest fresh LiDAR scan; scales the
+    /// keyframe baseline.
+    scene_depth_m: Option<f64>,
 }
 
 impl CaptureSession {
@@ -123,6 +126,7 @@ impl CaptureSession {
             pairing_rejected: 0,
             pose_interval_ms: pose_interval_ms.max(0),
             last_pose_pub_ms: None,
+            scene_depth_m: None,
         }
     }
 
@@ -145,6 +149,13 @@ impl CaptureSession {
         self.frame_fixed = false;
         self.anchored = false;
         tracing::info!(session_id = %self.session_id, cameras = self.enabled_camera_count(), "atlas capture started");
+    }
+
+    /// The median scene depth from a fresh LiDAR scan (`None` without one):
+    /// keyframe selection scales its baseline with it
+    /// ([`crate::SelectionParams::baseline_m`]).
+    pub fn set_scene_depth(&mut self, depth_m: Option<f64>) {
+        self.scene_depth_m = depth_m;
     }
 
     /// Pause capture (drops out of [`CaptureState::Capturing`]); a no-op from
@@ -304,7 +315,7 @@ impl CaptureSession {
             return false;
         }
         match self.selectors.get(camera_id) {
-            Some(sel) => sel.peek_select(pose, ts_ms, &self.config.selection),
+            Some(sel) => sel.peek_select(pose, ts_ms, &self.config.selection, self.scene_depth_m),
             // A camera with no selector yet: its first frame always selects.
             None => true,
         }
@@ -412,7 +423,12 @@ impl CaptureSession {
             self.selectors
                 .entry(camera_id.to_string())
                 .or_default()
-                .should_select(&frame.pose, ts_ms, &self.config.selection)
+                .should_select(
+                    &frame.pose,
+                    ts_ms,
+                    &self.config.selection,
+                    self.scene_depth_m,
+                )
         };
 
         let keyframe = if selected {

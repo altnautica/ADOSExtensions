@@ -1,7 +1,7 @@
 /**
  * @module capture/CaptureControls
  * @description REC / STOP, MARK with the room name and the floor stepper,
- * the "return to start" prompt and the storage left. MARK starts a new
+ * the "return to start" and "close a loop" prompts and the storage left. MARK starts a new
  * segment named after the room; changing floor while recording marks a
  * transition segment on the new floor.
  */
@@ -137,6 +137,12 @@ export function CaptureControls({
           <span className="we:flex we:items-center we:gap-1 we:text-status-success">
             <CornerDownLeft size={12} />
             {t("closeLoop")}
+          </span>
+        )}
+        {state.state === "recording" && state.coverage.closeLoopPrompt === true && (
+          <span className="we:flex we:items-center we:gap-1 we:text-status-warning" role="status">
+            <CornerDownLeft size={12} />
+            {t("prompt.closeLoop")}
           </span>
         )}
       </div>

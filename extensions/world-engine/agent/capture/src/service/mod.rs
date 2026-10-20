@@ -40,6 +40,7 @@ use crate::pose::fc_ekf::FcEkfPose;
 use crate::pose::PoseProvider;
 use crate::publish::AtlasPublisher;
 use crate::quality::coverage::Coverage;
+use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::QualityMonitor;
 use crate::recording::ActiveSession;
 use crate::runtime::AtlasRuntimeConfig;
@@ -137,6 +138,9 @@ pub(crate) struct Engine {
     closing: Option<Closing>,
     quality: QualityMonitor,
     coverage: Coverage,
+    /// The latest LiDAR scan's depth summary (keyframe baseline, coverage
+    /// rays).
+    lidar_depth: Option<LidarDepth>,
     exposure: ExposureView,
     camera: Option<Arc<dyn CameraControl>>,
     /// Bumped per apply; only the latest one's result is kept.
@@ -218,6 +222,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         closing: None,
         quality: QualityMonitor::new(),
         coverage: Coverage::new(),
+        lidar_depth: None,
         cams: HashMap::new(),
         last_fix_seq: 0,
         kf_seq: 0,
