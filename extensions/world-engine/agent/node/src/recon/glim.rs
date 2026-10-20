@@ -18,7 +18,7 @@
 use std::fs;
 use std::path::Path;
 
-use ados_capture_contract::{Rig, RigSensorKind, SessionReader};
+use ados_capture_contract::{LidarModelPattern, Rig, RigSensorKind, SessionReader};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -98,9 +98,18 @@ pub struct GlimSummary {
     pub frames_dropped: usize,
 }
 
-/// Whether the rig carries a LiDAR (its session needs GLIM).
-pub fn rig_has_lidar(rig: &Rig) -> bool {
-    rig.sensors.iter().any(|s| s.kind == RigSensorKind::Lidar)
+/// Whether the rig carries a 3D LiDAR (pattern `solid` or `spinning`): its
+/// session is posed by GLIM. A planar LiDAR needs no external tool.
+pub fn rig_has_3d_lidar(rig: &Rig) -> bool {
+    rig.sensors.iter().any(|s| {
+        s.kind == RigSensorKind::Lidar
+            && s.lidar.as_ref().is_some_and(|l| {
+                matches!(
+                    l.pattern,
+                    LidarModelPattern::Solid | LidarModelPattern::Spinning
+                )
+            })
+    })
 }
 
 /// The runtime docker needs for `--gpus` (GPU odometry).

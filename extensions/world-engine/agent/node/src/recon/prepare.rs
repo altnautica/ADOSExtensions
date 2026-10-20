@@ -28,7 +28,6 @@ use super::geom::{self, Mat4};
 use super::preset::PresetSpec;
 use super::session_data::{self, DecodedImage, SessionIndex};
 use super::StageError;
-use crate::products::cloud::{write_laz, PointCloud as Cloud};
 
 /// One exported keyframe (`dataset/frames.json`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -107,16 +106,17 @@ pub struct PrepareSummary {
     pub rig_frames_dropped: usize,
 }
 
-/// The LiDAR world cloud is kept at this voxel size.
-const LIDAR_VOXEL_M: f64 = 0.02;
 /// The LiDAR scan origins in the world frame (`[[x, y, z], ...]`), one per
 /// sweep: the floor plan carves free space along rays from them.
 pub const LIDAR_ORIGINS_FILE: &str = "lidar_origins.json";
 
 #[path = "prepare_keyframes.rs"]
 pub mod keyframes;
+#[path = "prepare_sweeps.rs"]
+pub mod sweeps;
 
 use keyframes::{DepthTrack, Selection};
+use sweeps::Sweeps;
 
 /// Run the stage into `dataset_dir`.
 pub fn run(
@@ -174,9 +174,7 @@ pub fn run(
         .collect();
 
     let mut records: Vec<(FrameRecord, f64)> = Vec::new();
-    let mut voxels: HashSet<[i64; 3]> = HashSet::new();
-    let mut lidar: Vec<[f64; 3]> = Vec::new();
-    let mut lidar_origins: Vec<[f64; 3]> = Vec::new();
+    let mut sweeps = Sweeps::default();
     let total = wanted.len().max(1) as f32;
     reader.for_each_message(|m| {
         if let Some(cam) = image_camera(m.topic) {
@@ -231,23 +229,7 @@ pub fn run(
             let pc = m.decode::<PointCloud>()?;
             let pts = session_data::decode_points(&pc)
                 .map_err(|e| ados_capture_contract::Error::Invalid(e.message))?;
-            if let Some(body) = track.at(m.t_ns) {
-                lidar_origins.push(geom::apply(&geom::mul(&body, mount), [0.0; 3]));
-            }
-            for (p, dt) in pts {
-                let Some(body) = track.at(m.t_ns + dt) else {
-                    continue;
-                };
-                let w = geom::apply(&geom::mul(&body, mount), p);
-                let key = [
-                    (w[0] / LIDAR_VOXEL_M).floor() as i64,
-                    (w[1] / LIDAR_VOXEL_M).floor() as i64,
-                    (w[2] / LIDAR_VOXEL_M).floor() as i64,
-                ];
-                if voxels.insert(key) {
-                    lidar.push(w);
-                }
-            }
+            sweeps.add(track, mount, m.t_ns, &pts);
         }
         Ok(())
     })?;
@@ -278,22 +260,7 @@ pub fn run(
         dataset_dir.join("rooms.json"),
         serde_json::to_vec_pretty(&rooms)?,
     )?;
-    if !lidar.is_empty() {
-        write_laz(
-            &dataset_dir.join("lidar_points.laz"),
-            &Cloud {
-                points: lidar.clone(),
-                colors: None,
-            },
-        )
-        .map_err(StageError::io)?;
-    }
-    if !lidar_origins.is_empty() {
-        fs::write(
-            dataset_dir.join(LIDAR_ORIGINS_FILE),
-            serde_json::to_vec(&lidar_origins)?,
-        )?;
-    }
+    sweeps.write(dataset_dir)?;
     let mut cameras: Vec<String> = frames.iter().map(|f| f.camera_id.clone()).collect();
     cameras.sort();
     cameras.dedup();
@@ -303,7 +270,7 @@ pub fn run(
         frames_dropped_blur: dropped,
         cameras,
         pose_prior: index.poses.as_ref().map(|p| p.source.clone()),
-        lidar_points: lidar.len(),
+        lidar_points: sweeps.len(),
         rooms: rooms.len(),
         rig_frames_paired,
         rig_frames_dropped: match rig_cams {
@@ -324,7 +291,7 @@ fn lidar_sensor(topic: &str) -> Option<&str> {
 }
 
 /// Decode an image message; `None` for a schema that is not an image.
-fn decode_image(
+pub fn decode_image(
     m: &SessionMessage<'_>,
 ) -> Result<Option<DecodedImage>, ados_capture_contract::Error> {
     let decoded = match m.schema_name {

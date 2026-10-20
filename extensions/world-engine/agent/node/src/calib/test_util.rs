@@ -15,6 +15,15 @@ pub fn mid360() -> serde_json::Value {
     })
 }
 
+/// An RPLIDAR C1-class planar LiDAR model block for test rigs.
+pub fn rplidar_c1() -> serde_json::Value {
+    json!({
+        "model": "rplidar-c1", "pattern": "planar", "h_fov_deg": 360.0,
+        "v_min_deg": 0.0, "v_max_deg": 0.0, "rate_hz": 10.0, "points_per_s": 5000.0,
+        "min_range_m": 0.05, "max_range_m": 12.0, "range_sigma_m": 0.03
+    })
+}
+
 /// `node/tests/fixtures/calib/<name>` as text.
 pub fn fixture(name: &str) -> String {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -89,5 +98,85 @@ pub fn assert_close(got: &[f64], want: &[f64], tol: f64) {
     assert_eq!(got.len(), want.len());
     for (i, (g, w)) in got.iter().zip(want).enumerate() {
         assert!((g - w).abs() <= tol, "[{i}] got {g}, want {w}\n{got:?}");
+    }
+}
+
+/// The AprilGrid `grid` as `cam` (pinhole) sees it with the board at
+/// `p_cam = r · p_board + t`: white paper one tag wide around the tags on a
+/// mid-grey background, 3x3 supersampled grey pixels. Tags are drawn upright
+/// (data bits row-major from the top left, most significant first) with a
+/// two-cell black border, and a black square fills every gap crossing.
+pub fn render_board(
+    grid: &super::AprilGrid,
+    cam: &ados_capture_contract::CameraModel,
+    r: &nalgebra::Matrix3<f64>,
+    t: &nalgebra::Vector3<f64>,
+) -> crate::recon::session_data::DecodedImage {
+    use nalgebra::Vector3;
+    let s = grid.tag_size_m;
+    let g = s * grid.tag_spacing;
+    let pitch = s + g;
+    let (cols, rows) = (grid.tag_cols as i64, grid.tag_rows as i64);
+    let (w, h) = (cols as f64 * pitch - g, rows as f64 * pitch - g);
+    let codes = &aprilgrid::tag_families::T36H11;
+    let shade = |bx: f64, by: f64| -> f64 {
+        if bx < -g - s || by < -g - s || bx > w + g + s || by > h + g + s {
+            return 128.0;
+        }
+        // Gap crossings, including the outer ones.
+        let (ci, cj) = (((bx + g) / pitch).floor(), ((by + g) / pitch).floor());
+        let (ox, oy) = (bx - (ci * pitch - g), by - (cj * pitch - g));
+        if (0.0..=cols as f64).contains(&ci)
+            && (0.0..=rows as f64).contains(&cj)
+            && ox < g
+            && oy < g
+        {
+            return 20.0;
+        }
+        let (c, r) = ((bx / pitch).floor() as i64, (by / pitch).floor() as i64);
+        let (u, v) = (bx - c as f64 * pitch, by - r as f64 * pitch);
+        if c < 0 || r < 0 || c >= cols || r >= rows || u >= s || v >= s {
+            return 235.0;
+        }
+        let cell = s / 10.0;
+        let (cu, cv) = ((u / cell) as i64, (v / cell) as i64);
+        if !(2..8).contains(&cu) || !(2..8).contains(&cv) {
+            return 20.0;
+        }
+        let code = codes[(r * cols + c) as usize];
+        match (code >> (35 - ((cv - 2) * 6 + (cu - 2)))) & 1 {
+            1 => 235.0,
+            _ => 20.0,
+        }
+    };
+    let n = r.column(2).into_owned();
+    let rt = r.transpose();
+    let mut data = Vec::with_capacity((cam.width * cam.height) as usize);
+    for py in 0..cam.height {
+        for px in 0..cam.width {
+            let mut acc = 0.0;
+            for sy in 0..3 {
+                for sx in 0..3 {
+                    let u = px as f64 + (sx as f64 + 0.5) / 3.0 - 0.5;
+                    let v = py as f64 + (sy as f64 + 0.5) / 3.0 - 0.5;
+                    let d = Vector3::new((u - cam.cx) / cam.fx, (v - cam.cy) / cam.fy, 1.0);
+                    let depth = n.dot(t) / n.dot(&d);
+                    acc += match depth.is_finite() && depth > 0.0 {
+                        true => {
+                            let b = rt * (d * depth - t);
+                            shade(b.x, b.y)
+                        }
+                        false => 128.0,
+                    };
+                }
+            }
+            data.push((acc / 9.0).round() as u8);
+        }
+    }
+    crate::recon::session_data::DecodedImage {
+        width: cam.width,
+        height: cam.height,
+        channels: 1,
+        data,
     }
 }

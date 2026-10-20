@@ -1,5 +1,7 @@
 //! A synthetic LiDAR + IMU + camera session walking along +x in a box room,
-//! for the LiDAR pipeline tests.
+//! for the LiDAR pipeline tests: a solid-state 3D LiDAR, or a planar one.
+// Each test crate uses one of the two builders.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 
@@ -17,6 +19,8 @@ const IDENTITY: [f64; 16] = [
 const T_BODY_CAM: [f64; 16] = [
     0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
+/// Translation (x, z) of the planar LiDAR in the body frame.
+const PLANAR_MOUNT: (f64, f64) = (0.30, 0.25);
 
 fn sensor(id: &str, kind: RigSensorKind, role: RigSensorRole, t: [f64; 16]) -> RigSensor {
     RigSensor {
@@ -32,7 +36,9 @@ fn sensor(id: &str, kind: RigSensorKind, role: RigSensorRole, t: [f64; 16]) -> R
     }
 }
 
-fn rig() -> Rig {
+/// The rig; `planar`: an RPLIDAR C1-class planar LiDAR 0.30 m ahead of and
+/// 0.25 m above the body origin, else a Mid-360-class 3D LiDAR at the origin.
+fn rig(planar: bool) -> Rig {
     let mut cam = sensor(
         "cam0",
         RigSensorKind::Camera,
@@ -51,20 +57,49 @@ fn rig() -> Rig {
         calibrated: false,
         readout_ns: 0,
     });
-    let mut lidar = sensor("lidar0", RigSensorKind::Lidar, RigSensorRole::Up, IDENTITY);
-    lidar.lidar = Some(LidarModel {
-        model: "livox-mid360".into(),
-        pattern: LidarModelPattern::Solid,
-        h_fov_deg: 360.0,
-        v_min_deg: -7.0,
-        v_max_deg: 52.0,
-        rate_hz: 10.0,
-        points_per_s: 200_000.0,
-        min_range_m: 0.1,
-        max_range_m: 40.0,
-        range_sigma_m: 0.02,
-        blocked_azimuth_deg: vec![],
-    });
+    let lidar = match planar {
+        true => {
+            let mut mount = IDENTITY;
+            (mount[3], mount[11]) = PLANAR_MOUNT;
+            let mut s = sensor(
+                "lidar0",
+                RigSensorKind::Lidar,
+                RigSensorRole::FrontLeft,
+                mount,
+            );
+            s.lidar = Some(LidarModel {
+                model: "rplidar-c1".into(),
+                pattern: LidarModelPattern::Planar,
+                h_fov_deg: 360.0,
+                v_min_deg: 0.0,
+                v_max_deg: 0.0,
+                rate_hz: 10.0,
+                points_per_s: 5000.0,
+                min_range_m: 0.05,
+                max_range_m: 12.0,
+                range_sigma_m: 0.03,
+                blocked_azimuth_deg: vec![],
+            });
+            s
+        }
+        false => {
+            let mut s = sensor("lidar0", RigSensorKind::Lidar, RigSensorRole::Up, IDENTITY);
+            s.lidar = Some(LidarModel {
+                model: "livox-mid360".into(),
+                pattern: LidarModelPattern::Solid,
+                h_fov_deg: 360.0,
+                v_min_deg: -7.0,
+                v_max_deg: 52.0,
+                rate_hz: 10.0,
+                points_per_s: 200_000.0,
+                min_range_m: 0.1,
+                max_range_m: 40.0,
+                range_sigma_m: 0.02,
+                blocked_azimuth_deg: vec![],
+            });
+            s
+        }
+    };
     Rig {
         contract: ContractId::AdosCapture1,
         rig_id: "lidar_rig".into(),
@@ -109,9 +144,42 @@ fn room_points(at: [f64; 3]) -> Vec<u8> {
     data
 }
 
+/// One planar revolution (500 beams, counter-clockwise from +x) of a LiDAR
+/// at `at` (level, facing +x) inside the 6 x 4 m room: the wall hit of every
+/// beam, in the LiDAR frame at z = 0.
+fn ring_points(at: [f64; 3]) -> Vec<u8> {
+    let mut data = Vec::new();
+    for k in 0..500 {
+        let a = k as f64 * std::f64::consts::TAU / 500.0;
+        let (s, c) = a.sin_cos();
+        let range = [
+            (c < 0.0).then(|| -at[0] / c),
+            (c > 0.0).then(|| (6.0 - at[0]) / c),
+            (s < 0.0).then(|| -at[1] / s),
+            (s > 0.0).then(|| (4.0 - at[1]) / s),
+        ]
+        .into_iter()
+        .flatten()
+        .fold(f64::INFINITY, f64::min);
+        for v in [range * c, range * s, 0.0] {
+            data.extend_from_slice(&(v as f32).to_le_bytes());
+        }
+    }
+    data
+}
+
 /// The session (geo-anchored) under `root`; `track` records the body walk on
-/// `/pose/lidar`.
+/// `/pose/lidar`. The 3D LiDAR sweeps every fifth frame.
 pub fn build_session(root: &Path, track: bool) -> PathBuf {
+    build(root, track, false)
+}
+
+/// [`build_session`] with the planar LiDAR, one revolution per frame.
+pub fn build_planar_session(root: &Path, track: bool) -> PathBuf {
+    build(root, track, true)
+}
+
+fn build(root: &Path, track: bool, planar: bool) -> PathBuf {
     let manifest = Manifest {
         contract: ContractId::AdosCapture1,
         session_id: session_id("visor-1", 1_792_368_000, 7),
@@ -152,7 +220,7 @@ pub fn build_session(root: &Path, track: bool) -> PathBuf {
             frames_dropped_pct: 0.0,
         },
     };
-    let mut w = SessionWriter::create(root, manifest, &rig()).unwrap();
+    let mut w = SessionWriter::create(root, manifest, &rig(planar)).unwrap();
     for i in 0..30u64 {
         let t = T0 + i * 100_000_000;
         let p = body_at(i);
@@ -200,7 +268,7 @@ pub fn build_session(root: &Path, track: bool) -> PathBuf {
             .collect();
         w.write_proto(&topics::imu("imu0"), t, &ImuBatch { samples })
             .unwrap();
-        if i % 5 == 0 {
+        if planar || i % 5 == 0 {
             let field = |name: &str, offset: u32| PackedElementField {
                 name: name.into(),
                 offset,
@@ -212,7 +280,13 @@ pub fn build_session(root: &Path, track: bool) -> PathBuf {
                 pose: None,
                 point_stride: 12,
                 fields: vec![field("x", 0), field("y", 4), field("z", 8)],
-                data: room_points(p),
+                data: match planar {
+                    true => {
+                        let (dx, dz) = PLANAR_MOUNT;
+                        ring_points([p[0] + dx, p[1], p[2] + dz])
+                    }
+                    false => room_points(p),
+                },
             };
             w.write_proto(&topics::lidar_points("lidar0"), t, &pc)
                 .unwrap();

@@ -326,11 +326,14 @@ pub struct MaskSummary {
     pub off: Vec<String>,
 }
 
-/// Dynamic-object and mirror/glass masks (`dataset/masks/`).
+/// Dynamic-object and mirror/glass masks (`dataset/masks/`). `lidar_max_range_m`
+/// is the rig LiDAR's maximum range: the mirror/glass pass ignores cloud points
+/// farther from a camera than the LiDAR could have measured.
 pub fn masks(
     runner: &dyn ToolRunner,
     dataset: &Path,
     person_model: Option<&Path>,
+    lidar_max_range_m: Option<f64>,
     progress: &mut dyn FnMut(f32),
 ) -> Result<MaskSummary, StageError> {
     let out = dataset.join("masks");
@@ -363,18 +366,21 @@ pub fn masks(
     }
     let lidar = dataset.join("lidar_points.laz");
     let depths = dataset.join("depths");
-    if lidar.is_file() && depths.is_dir() {
-        args.extend([
-            "--depths".into(),
-            depths.into(),
-            "--lidar".into(),
-            lidar.into(),
-        ]);
-        summary.mirror_glass = true;
-    } else {
-        summary
+    match lidar_max_range_m {
+        Some(range) if lidar.is_file() && depths.is_dir() => {
+            args.extend([
+                "--depths".into(),
+                depths.into(),
+                "--lidar".into(),
+                lidar.into(),
+                "--lidar-max-range".into(),
+                range.to_string().into(),
+            ]);
+            summary.mirror_glass = true;
+        }
+        _ => summary
             .off
-            .push("mirror_glass: needs LiDAR and depth".into());
+            .push("mirror_glass: needs LiDAR and depth".into()),
     }
     run_script(runner, "masks.py", args, dataset, progress)?;
     Ok(summary)

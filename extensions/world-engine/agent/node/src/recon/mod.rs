@@ -13,6 +13,7 @@ pub mod export;
 pub mod geom;
 pub mod glim;
 pub mod glim_bag;
+pub mod lidar_poses;
 pub mod mesh;
 pub mod pairs;
 pub mod pipeline;
@@ -22,6 +23,7 @@ pub mod process;
 pub mod products_stage;
 pub mod products_tour;
 pub mod runner;
+pub mod scan2d;
 pub mod session_data;
 pub mod sfm;
 #[cfg(any(test, feature = "mock"))]
@@ -256,7 +258,7 @@ pub fn check_tools(runner: &dyn ToolRunner, tools: &[&str]) -> Result<(), StageE
 
 /// The submit-time tool check of a resolved staged job: the preset's tools,
 /// plus GLIM (and, for GPU odometry, the NVIDIA runtime) when the session's
-/// rig has a LiDAR.
+/// rig has a 3D LiDAR. A planar LiDAR is matched in-process.
 pub fn check_staged_tools(
     runner: &dyn ToolRunner,
     job: &JobRecord,
@@ -272,7 +274,7 @@ pub fn check_staged_tools(
         let rig: ados_capture_contract::Rig =
             serde_json::from_slice(&std::fs::read(session_dir.join("rig.json"))?)
                 .map_err(|e| StageError::input(format!("rig.json: {e}")))?;
-        if glim::rig_has_lidar(&rig) {
+        if glim::rig_has_3d_lidar(&rig) {
             glim::check_available(runner, session_dir, *glim_odometry)?;
         }
     }

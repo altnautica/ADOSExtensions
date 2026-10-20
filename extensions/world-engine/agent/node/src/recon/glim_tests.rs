@@ -43,6 +43,25 @@ fn close(a: &[f64], b: &[f64], tol: f64) {
 }
 
 #[test]
+fn only_solid_or_spinning_lidar_rigs_are_3d() {
+    let with = |lidar: Value| {
+        let mut r = serde_json::to_value(rig()).unwrap();
+        r["sensors"][1]["lidar"] = lidar;
+        serde_json::from_value::<Rig>(r).unwrap()
+    };
+    let mut spinning = crate::calib::test_util::mid360();
+    spinning["pattern"] = "spinning".into();
+    assert!(rig_has_3d_lidar(&rig()));
+    assert!(rig_has_3d_lidar(&with(spinning)));
+    assert!(!rig_has_3d_lidar(&with(
+        crate::calib::test_util::rplidar_c1()
+    )));
+    let mut camera_only = rig();
+    camera_only.sensors.truncate(1);
+    assert!(!rig_has_3d_lidar(&camera_only));
+}
+
+#[test]
 fn comments_are_stripped_outside_strings() {
     let s =
         "{\"url\": \"http://x/*y*/\", /* block\n */ \"a\": 1, // tail \"q\"\n \"b\": \"\\\"//\"}";
@@ -240,7 +259,7 @@ fn frames_are_reposed_from_the_trajectory() {
     assert_eq!(
         n,
         Reposed {
-            glim: 2,
+            posed: 2,
             recorded: 1,
             dropped: 0
         }
@@ -258,7 +277,7 @@ fn frames_are_reposed_from_the_trajectory() {
 
     // Without one, it is dropped with its image.
     let n = rewrite_frames(dir.path(), &rig, &traj, false).unwrap();
-    assert_eq!((n.glim, n.dropped), (2, 1));
+    assert_eq!((n.posed, n.dropped), (2, 1));
     let back = read_frames(dir.path()).unwrap();
     assert_eq!(back.len(), 2);
     assert!(!dir.path().join("images/cam0/9000000000.png").exists());

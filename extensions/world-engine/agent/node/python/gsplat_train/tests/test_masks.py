@@ -95,13 +95,7 @@ def test_mirror_rectangle_masked(tmp_path: Path) -> None:
 
     truth = _build(tmp_path)
     out = tmp_path / "masks"
-    cmd = [
-        sys.executable, str(HERE / "masks.py"),
-        "--images", str(tmp_path / "images"), "--frames", str(tmp_path / "frames.json"),
-        "--out", str(out), "--depths", str(tmp_path / "depths"),
-        "--lidar", str(tmp_path / "lidar.laz"), "--no-motion",
-    ]
-    run = subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)
+    run = _run_masks(tmp_path, "--lidar-max-range", "12.0")
     assert run.returncode == 0, run.stdout + run.stderr
     done = json.loads(run.stdout.strip().splitlines()[-1])
     assert done["event"] == "done" and done["frames_with_mirror"] == len(truth)
@@ -113,3 +107,24 @@ def test_mirror_rectangle_masked(tmp_path: Path) -> None:
         kept = float((mask[~mirror] == 255).mean())
         assert zeroed >= 0.90, f"{name}: only {zeroed:.3f} of the mirror masked"
         assert kept >= 0.95, f"{name}: only {kept:.3f} of the wall kept"
+
+
+def _run_masks(root: Path, *extra: str) -> subprocess.CompletedProcess:
+    cmd = [
+        sys.executable, str(HERE / "masks.py"),
+        "--images", str(root / "images"), "--frames", str(root / "frames.json"),
+        "--out", str(root / "masks"), "--depths", str(root / "depths"),
+        "--lidar", str(root / "lidar.laz"), "--no-motion", *extra,
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, cwd=HERE)
+
+
+def test_lidar_beyond_the_rig_range_is_ignored(tmp_path: Path) -> None:
+    _build(tmp_path)
+    # The wall is 5 m away: a 4 m LiDAR cannot have seen it, so nothing contradicts the priors.
+    run = _run_masks(tmp_path, "--lidar-max-range", "4.0")
+    assert run.returncode == 0, run.stdout + run.stderr
+    done = json.loads(run.stdout.strip().splitlines()[-1])
+    assert done["frames_with_mirror"] == 0
+    refused = _run_masks(tmp_path)
+    assert refused.returncode != 0 and "--lidar-max-range" in refused.stderr
