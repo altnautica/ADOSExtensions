@@ -15,8 +15,7 @@ use tokio::sync::Mutex;
 use tower::ServiceExt;
 use world_engine_node::recon::{StandInRunner, ToolRunner};
 use world_engine_node::{
-    standalone, ApiState, Cluster, ComputeAuth, Engine, JobStore, MockDetector, MockReconstructor,
-    NodeCredentialStore, Scheduler,
+    standalone, ApiState, Cluster, Engine, JobStore, MockDetector, MockReconstructor, Scheduler,
 };
 use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
@@ -29,31 +28,27 @@ fn fixture() -> PathBuf {
         .join(SESSION)
 }
 
-/// A standalone node router over `data` (the credential store at the path
-/// the standalone node uses).
-fn node(data: &Path) -> Router {
+/// A standalone node over `data`, with the id, owner bearer and credential
+/// store the standalone node uses; returns its router and node id.
+fn node(data: &Path) -> (Router, String) {
     let node = data.join("node");
     let work = node.join("work");
     let sessions = node.join("sessions");
     std::fs::create_dir_all(&sessions).unwrap();
+    let id = standalone::node_id(&node).unwrap();
     let scheduler = Scheduler::new(
         JobStore::open(&node.join("jobs.db").to_string_lossy()).unwrap(),
         Arc::new(MockReconstructor),
         Arc::new(MockDetector),
     )
     .with_sessions_root(sessions.clone());
-    let mut engine = Engine::new(scheduler, Cluster::new_master("standalone"), 1);
+    let mut engine = Engine::new(scheduler, Cluster::new_master(id.clone()), 1);
     let runner: Arc<dyn ToolRunner> = Arc::new(StandInRunner::default());
     engine.set_runner(runner);
     let state: ApiState = Arc::new(Mutex::new(engine));
-    let auth = Arc::new(
-        ComputeAuth::new(NodeCredentialStore::open(
-            node.join("node-credentials.json"),
-            "standalone",
-        ))
-        .with_owner_token(TOKEN.into()),
-    );
-    standalone::router(state, auth, "http://127.0.0.1:8092", work, sessions)
+    let auth = Arc::new(standalone::auth(&node, &id, TOKEN.into()));
+    let router = standalone::router(state, auth, "http://127.0.0.1:8092", work, sessions);
+    (router, id)
 }
 
 enum As<'a> {
@@ -111,7 +106,12 @@ async fn mint(router: &Router, peer: &str, lanes: Option<&[&str]>) -> serde_json
     )
     .await;
     assert_eq!(s, StatusCode::CREATED, "{m}");
-    assert_eq!(m["workstation_node_id"], "standalone");
+    assert!(
+        m["workstation_node_id"]
+            .as_str()
+            .is_some_and(|id| id.starts_with("standalone-")),
+        "{m}"
+    );
     m
 }
 
@@ -144,12 +144,13 @@ async fn upload(router: &Router, who: &As<'_>) -> StatusCode {
 #[tokio::test]
 async fn an_issued_device_credential_uploads_and_reconstructs_on_the_standalone_node() {
     let dir = tempfile::tempdir().unwrap();
-    let router = node(dir.path());
+    let (router, id) = node(dir.path());
 
     // Nothing gets in without a credential.
     assert_eq!(upload(&router, &As::Nobody).await, StatusCode::UNAUTHORIZED);
 
     let device = mint(&router, "visor-1", None).await;
+    assert_eq!(device["workstation_node_id"], id.as_str());
     let cred = device["credential"].as_str().unwrap().to_string();
     let other = mint(&router, "drone-2", None).await;
     let other_cred = other["credential"].as_str().unwrap().to_string();
@@ -223,7 +224,8 @@ async fn an_issued_device_credential_uploads_and_reconstructs_on_the_standalone_
     // The issued store lives in the data directory: a restarted node admits
     // the device, and a revoked credential is refused.
     drop(router);
-    let router = node(dir.path());
+    let (router, restarted_id) = node(dir.path());
+    assert_eq!(restarted_id, id);
     let (s, _) = call(&router, &As::Node(&cred), "GET", &job_uri, vec![]).await;
     assert_eq!(s, StatusCode::OK);
     let revoke = format!(
@@ -233,5 +235,28 @@ async fn an_issued_device_credential_uploads_and_reconstructs_on_the_standalone_
     let (s, r) = call(&router, &As::Owner, "POST", &revoke, vec![]).await;
     assert_eq!((s, r["revoked"].as_bool()), (StatusCode::OK, Some(true)));
     let (s, _) = call(&router, &As::Node(&cred), "GET", &job_uri, vec![]).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn two_standalone_nodes_have_their_own_ids_and_credentials() {
+    let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let (node_a, id_a) = node(a.path());
+    let (node_b, id_b) = node(b.path());
+    assert_ne!(id_a, id_b);
+    let from_a = mint(&node_a, "visor-1", None).await;
+    let from_b = mint(&node_b, "visor-1", None).await;
+    assert_eq!(from_a["workstation_node_id"], id_a.as_str());
+    assert_eq!(from_b["workstation_node_id"], id_b.as_str());
+    // Node A's credential means nothing to node B.
+    let cred_a = from_a["credential"].as_str().unwrap();
+    let (s, _) = call(
+        &node_b,
+        &As::Node(cred_a),
+        "POST",
+        &format!("/api/compute/sessions/{SESSION}"),
+        std::fs::read(fixture().join("manifest.json")).unwrap(),
+    )
+    .await;
     assert_eq!(s, StatusCode::UNAUTHORIZED);
 }

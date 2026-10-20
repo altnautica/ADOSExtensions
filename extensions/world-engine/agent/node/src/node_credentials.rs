@@ -254,7 +254,8 @@ fn digest(secret: &str) -> String {
     hex::encode(Sha256::digest(secret.as_bytes()))
 }
 
-/// Atomic, owner-only write (temp sibling, fsync, rename).
+/// Atomic, owner-only write (temp sibling restricted before the write, fsync,
+/// rename; the restriction travels with the file).
 fn persist(path: &Path, records: &[IssuedRecord]) -> std::io::Result<()> {
     let body = serde_json::to_vec_pretty(&StoreFile {
         credentials: records.to_vec(),
@@ -264,14 +265,7 @@ fn persist(path: &Path, records: &[IssuedRecord]) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let tmp = path.with_extension("json.tmp");
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(&tmp)?;
+    let mut f = crate::owner_only::create(&tmp)?;
     f.write_all(&body)?;
     f.sync_all()?;
     drop(f);
@@ -344,12 +338,10 @@ mod tests {
         let on_disk = std::fs::read_to_string(&path).unwrap();
         let secret = m.credential.rsplit('.').next().unwrap();
         assert!(!on_disk.contains(secret));
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-            assert_eq!(mode, 0o600);
-        }
+        crate::owner_only::assert_owner_only(&path);
+        // A rewrite (revoke) keeps it owner-only.
+        assert!(s.revoke(&m.id).unwrap());
+        crate::owner_only::assert_owner_only(&path);
     }
 
     #[test]

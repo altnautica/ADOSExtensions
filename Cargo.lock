@@ -7022,6 +7022,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.61.2",
  "world-engine-node",
  "world-engine-protocol",
  "world-engine-transport",

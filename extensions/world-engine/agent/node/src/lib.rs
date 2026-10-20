@@ -43,6 +43,7 @@ mod offload;
 mod offload_session_manager;
 mod offload_stream;
 mod offload_ws;
+mod owner_only;
 /// Products built from a finished reconstruction (floorplan, rooms, aisles,
 /// change detection, measurement, tour bundle, point-cloud I/O).
 pub mod products;

@@ -139,7 +139,9 @@ the owner bearer token in `<dir>/node/owner-token`. The owner issues a capture
 device its credential with `POST /api/compute/node-credentials
 {"peer_device_id": "<id>"}` (bearer); the issued set is kept in
 `<dir>/node/node-credentials.json`, listed with `GET` and revoked with
-`POST /api/compute/node-credentials/<id>/revoke`.
+`POST /api/compute/node-credentials/<id>/revoke`. Both files are readable by
+the node's user only. The node's id (the issuer named in a credential) is
+generated once into `<dir>/node/node-id`.
 
 ## Building the GCS module
 

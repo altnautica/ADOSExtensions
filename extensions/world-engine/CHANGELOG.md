@@ -30,7 +30,9 @@ All notable changes to the World Engine extension.
   standalone node issues node credentials (`/api/compute/node-credentials`,
   owner bearer only) kept in its data directory, and admits a capture device
   presenting one on the lanes it was issued for (session upload, job submit
-  and reads of its own jobs, artifacts).
+  and reads of its own jobs, artifacts). Its owner token and credential store
+  are owner-only (mode 0600, or a protected single-user DACL on Windows), and
+  each standalone node has its own persisted id.
 - **Device capture surface.** The link serves `POST /atlas/capture/{start,
   stop,pause,resume,mark}`, `GET /atlas/capture/{state,coverage}`,
   `PUT /atlas/capture/exposure`, `GET /atlas/sessions`,

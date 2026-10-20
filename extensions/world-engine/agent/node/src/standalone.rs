@@ -6,6 +6,7 @@
 //! nodes credentials (`/api/compute/node-credentials`), kept in
 //! `node/node-credentials.json`, which admit them to their lanes.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,7 +29,8 @@ use crate::{
 pub struct StandaloneOptions {
     /// State directory: `node/jobs.db`, `node/work/` (job outputs),
     /// `node/sessions/` (uploaded capture sessions), `node/owner-token`,
-    /// `node/node-credentials.json` (credentials issued to other nodes).
+    /// `node/node-credentials.json` (credentials issued to other nodes),
+    /// `node/node-id`.
     pub data_dir: PathBuf,
     /// Listen address, e.g. `0.0.0.0:8092`.
     pub listen: String,
@@ -85,13 +87,15 @@ impl StandaloneOptions {
     }
 }
 
-/// The owner token: given, else read from (or generated into) `path`.
+/// The owner token: given, else read from (or generated into) `path`. The
+/// file is owner-only (an older, wider one is narrowed when read).
 fn owner_token(given: Option<String>, path: &Path) -> std::io::Result<String> {
     if let Some(t) = given.filter(|t| !t.trim().is_empty()) {
         return Ok(t.trim().to_string());
     }
     if let Ok(t) = std::fs::read_to_string(path) {
         if !t.trim().is_empty() {
+            crate::owner_only::restrict(path)?;
             return Ok(t.trim().to_string());
         }
     }
@@ -101,13 +105,37 @@ fn owner_token(given: Option<String>, path: &Path) -> std::io::Result<String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, &token)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    crate::owner_only::create(path)?.write_all(token.as_bytes())?;
     Ok(token)
+}
+
+/// This node's id (`standalone-<16 hex>`), generated once into
+/// `<node>/node-id` and stable across restarts: the issuer a capture device
+/// files its credential under, distinct for every standalone node.
+pub fn node_id(node: &Path) -> std::io::Result<String> {
+    let path = node.join("node-id");
+    if let Ok(id) = std::fs::read_to_string(&path) {
+        if !id.trim().is_empty() {
+            return Ok(id.trim().to_string());
+        }
+    }
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(e.to_string()))?;
+    let id = format!("standalone-{}", hex::encode(bytes));
+    std::fs::create_dir_all(node)?;
+    std::fs::write(&path, &id)?;
+    Ok(id)
+}
+
+/// The standalone node's auth over `<node>`: the owner bearer `token`, and the
+/// credentials this node (`node_id`) issued, kept in
+/// `<node>/node-credentials.json`.
+pub fn auth(node: &Path, node_id: &str, token: String) -> ComputeAuth {
+    ComputeAuth::new(crate::NodeCredentialStore::open(
+        node.join("node-credentials.json"),
+        node_id,
+    ))
+    .with_owner_token(token)
 }
 
 fn hostname() -> Option<String> {
@@ -153,6 +181,7 @@ pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Erro
     let sessions_root = node.join("sessions");
     std::fs::create_dir_all(&sessions_root)?;
     let token = owner_token(opts.token.clone(), &node.join("owner-token"))?;
+    let node_id = node_id(&node)?;
     let public_base = derive_public_base(
         &opts.listen,
         opts.public_url.as_deref(),
@@ -166,7 +195,11 @@ pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Erro
         Arc::new(NoDetector),
     )
     .with_sessions_root(sessions_root.clone());
-    let engine = Engine::new(scheduler, Cluster::new_master("standalone"), opts.workers);
+    let engine = Engine::new(
+        scheduler,
+        Cluster::new_master(node_id.clone()),
+        opts.workers,
+    );
     let runner = engine.runner();
     let state = Arc::new(Mutex::new(engine));
     {
@@ -180,13 +213,7 @@ pub async fn run(opts: StandaloneOptions) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    let auth = Arc::new(
-        ComputeAuth::new(crate::NodeCredentialStore::open(
-            node.join("node-credentials.json"),
-            "standalone",
-        ))
-        .with_owner_token(token),
-    );
+    let auth = Arc::new(auth(&node, &node_id, token));
     let router = router(
         state.clone(),
         auth,
@@ -297,6 +324,29 @@ mod tests {
         let a = owner_token(None, &p).unwrap();
         assert_eq!(a.len(), 48);
         assert_eq!(owner_token(None, &p).unwrap(), a);
+        crate::owner_only::assert_owner_only(&p);
         assert_eq!(owner_token(Some("given".into()), &p).unwrap(), "given");
+    }
+
+    #[test]
+    fn an_existing_wider_owner_token_is_narrowed_when_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("owner-token");
+        std::fs::write(&p, "abc").unwrap();
+        assert_eq!(owner_token(None, &p).unwrap(), "abc");
+        crate::owner_only::assert_owner_only(&p);
+    }
+
+    #[test]
+    fn each_node_keeps_its_own_stable_id() {
+        let (a, b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let id_a = node_id(a.path()).unwrap();
+        let id_b = node_id(b.path()).unwrap();
+        assert!(
+            id_a.starts_with("standalone-") && id_a.len() == 27,
+            "{id_a}"
+        );
+        assert_ne!(id_a, id_b);
+        assert_eq!(node_id(a.path()).unwrap(), id_a);
     }
 }

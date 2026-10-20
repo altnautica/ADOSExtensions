@@ -65,6 +65,15 @@ mcap = { version = "0.25", default-features = false }
 # Commit-time validation of uploaded session documents against the contract.
 jsonschema = { version = "0.59", default-features = false }
 
+# Owner-only DACLs on the standalone node's secret files.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_Threading",
+] }
+
 # The plugin host, the agent wire and the Atlas transport are unix-only (they
 # speak unix sockets); a Windows build is the standalone reconstruction node.
 [target.'cfg(unix)'.dependencies]
