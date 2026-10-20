@@ -224,12 +224,16 @@ def needs_ut(views: list[View], requested: bool) -> bool:
 
 
 def load_frames_json(path: Path) -> list[dict]:
-    """frames.json entries with `w2c` (4x4) and `K` (3x3) added."""
+    """frames.json entries with `w2c` (4x4) and `K` (3x3) added; `c2w`/`w2c` are None for a
+    frame without a pose prior (`T_world_cam: null`, a session with no recorded pose)."""
     frames = json.loads(Path(path).read_text())
     for fr in frames:
-        T = np.asarray(fr["T_world_cam"], np.float64).reshape(4, 4)
-        fr["c2w"] = T
-        fr["w2c"] = np.linalg.inv(T)
+        if fr.get("T_world_cam") is None:
+            fr["c2w"] = fr["w2c"] = None
+        else:
+            T = np.asarray(fr["T_world_cam"], np.float64).reshape(4, 4)
+            fr["c2w"] = T
+            fr["w2c"] = np.linalg.inv(T)
         fr["K"] = np.array([[fr["fx"], 0, fr["cx"]], [0, fr["fy"], fr["cy"]], [0, 0, 1]], np.float64)
     return frames
 

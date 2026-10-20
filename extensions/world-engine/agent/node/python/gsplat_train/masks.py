@@ -250,24 +250,28 @@ def main(args) -> None:
         for k, i in enumerate(idx):
             if len(idx) > 1:
                 neighbour[i] = idx[k - 1] if k > 0 else idx[1]
-    counts = {"person": 0, "motion": 0, "mirror": 0}
+    counts = {"person": 0, "motion": 0, "mirror": 0, "unposed": 0}
     for i, fr in enumerate(frames):
         ignore = np.zeros((fr["height"], fr["width"]), bool)
+        posed = fr["w2c"] is not None
+        counts["unposed"] += int(not posed)
         if detector is not None:
             m = detector.mask(common.read_image(args.images / fr["name"]))
             counts["person"] += int(m.any())
             ignore |= m[: ignore.shape[0], : ignore.shape[1]]
-        if not args.no_motion and i in neighbour:
+        # The ego-motion flow residual and the LiDAR mirror test both need the frame's pose.
+        if not args.no_motion and i in neighbour and posed and frames[neighbour[i]]["w2c"] is not None:
             m = motion_mask(fr, frames[neighbour[i]], args.images, args.depths)
             counts["motion"] += int(m.any())
             ignore |= m[: ignore.shape[0], : ignore.shape[1]]
-        if use_mirror and common.depth_path(args.depths, fr["name"]).is_file():
+        if use_mirror and posed and common.depth_path(args.depths, fr["name"]).is_file():
             m = mirror_mask(fr, lidar, np.load(common.depth_path(args.depths, fr["name"])))
             counts["mirror"] += int(m.any())
             ignore |= m
         common.write_png(common.mask_path(args.out, fr["name"]), np.where(ignore, 0, 255).astype(np.uint8))
         common.progress((i + 1) / len(frames), f"mask {i + 1}/{len(frames)}")
-    common.done(masks=len(frames), frames_with_person=counts["person"], frames_with_motion=counts["motion"], frames_with_mirror=counts["mirror"])
+    common.done(masks=len(frames), frames_with_person=counts["person"], frames_with_motion=counts["motion"],
+                frames_with_mirror=counts["mirror"], frames_unposed=counts["unposed"])
 
 
 if __name__ == "__main__":
