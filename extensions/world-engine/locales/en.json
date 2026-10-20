@@ -362,7 +362,8 @@
       "lockExposure": "Flicker: lock exposure at 10 ms.",
       "turnToCorner": "Corridor: turn to face a corner.",
       "storageFull": "Storage nearly full: new sessions will be refused.",
-      "clockUnlocked": "Clock unlocked: check the sensor hub link."
+      "clockUnlocked": "Clock unlocked: check the sensor hub link.",
+      "closeLoop": "Walk back through a cross-aisle to close a loop; frame a distinctive aisle-end feature."
     },
     "rec": "Record",
     "stop": "Stop",

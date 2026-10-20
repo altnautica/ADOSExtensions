@@ -1,8 +1,9 @@
 //! Stage `prepare`: turn an uploaded session into a COLMAP dataset directory —
-//! keyframes chosen by baseline/rotation/time and blur, written as PNG per
-//! camera; their pose priors (`frames.json`); the operator's rooms with the
-//! trajectory inside each; and the LiDAR sweeps registered into one world
-//! cloud.
+//! keyframes chosen by a depth-scaled baseline, rotation and time, the
+//! sharpest of each short window, blurred picks dropped (see [`keyframes`]),
+//! written as PNG per camera; their pose priors (`frames.json`); the
+//! operator's rooms with the trajectory inside each; and the LiDAR sweeps
+//! registered into one world cloud.
 //!
 //! A multi-camera session is selected per time instant, not per camera: the
 //! frames of one instant (one trigger sequence and within half a frame period
@@ -15,17 +16,17 @@
 //! (unsynchronised cameras, different rates), every frame is exported on its
 //! own, outside a rig, and SfM maps each camera separately.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use ados_capture_contract::foxglove::{CompressedImage, PointCloud, RawImage};
-use ados_capture_contract::{CameraModelModel, RigSensorKind, SessionReader};
+use ados_capture_contract::{CameraModelModel, RigSensorKind, SessionMessage, SessionReader};
 use serde::{Deserialize, Serialize};
 
 use super::geom::{self, Mat4};
 use super::preset::PresetSpec;
-use super::session_data::{self, DecodedImage, FrameRef, PoseTrack, SessionIndex};
+use super::session_data::{self, DecodedImage, SessionIndex};
 use super::StageError;
 use crate::products::cloud::{write_laz, PointCloud as Cloud};
 
@@ -103,223 +104,11 @@ pub struct PrepareSummary {
 
 /// The LiDAR world cloud is kept at this voxel size.
 const LIDAR_VOXEL_M: f64 = 0.02;
-/// A frame is dropped when its blur score is under this fraction of its
-/// camera's median.
-const BLUR_KEEP_FRACTION: f64 = 0.35;
-/// A multi-camera session is selected as a rig only while at least this share
-/// of its sparsest camera's frames fall in instants that hold every camera.
-const RIG_MIN_PAIRED_SHARE: f64 = 0.5;
 
-/// The frames of one time instant: one per rig camera, or, outside a rig,
-/// one camera's frame.
-#[derive(Debug, Clone, PartialEq)]
-pub struct FrameSet {
-    /// The reference (first by id) camera's frame time; a rig instant's
-    /// frames are all named by it, each keeping its own time in its record.
-    pub t_ns: u64,
-    /// Ordered by camera.
-    pub frames: Vec<FrameRef>,
-}
+#[path = "prepare_keyframes.rs"]
+pub mod keyframes;
 
-/// The keyframes chosen from a session.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct Selection {
-    pub sets: Vec<FrameSet>,
-    /// The sets are rig instants holding every camera's frame.
-    pub rig: bool,
-    /// Recorded instants dropped because a camera had no frame in them.
-    pub incomplete: usize,
-}
-
-/// Choose keyframes from the time-sorted `frames`: group a multi-camera
-/// session into instants and keep only those holding every camera (see the
-/// module docs for the fallback), pick the instants far enough from the last
-/// picked one in position, rotation or time (per camera outside a rig), then
-/// thin uniformly to the preset's image cap, whole instants at a time.
-pub fn select_keyframes(
-    frames: &[FrameRef],
-    poses: Option<&PoseTrack>,
-    spec: &PresetSpec,
-) -> Selection {
-    let mut cams: Vec<&str> = frames.iter().map(|f| f.cam.as_str()).collect();
-    cams.sort_unstable();
-    cams.dedup();
-    let mut selection = Selection::default();
-    if cams.len() >= 2 {
-        let sparsest = cams
-            .iter()
-            .map(|c| frames.iter().filter(|f| f.cam == *c).count())
-            .min()
-            .unwrap_or(0);
-        let period = frame_period(frames);
-        let by_seq = frames
-            .iter()
-            .all(|f| f.trigger_seq.is_some())
-            .then(|| group_by_trigger(frames, period));
-        for grouped in by_seq
-            .into_iter()
-            .chain(std::iter::once_with(|| group_by_time(frames, period)))
-        {
-            let (complete, incomplete): (Vec<FrameSet>, Vec<FrameSet>) = grouped
-                .into_iter()
-                .partition(|s| s.frames.len() == cams.len());
-            if complete.len() as f64 >= RIG_MIN_PAIRED_SHARE * sparsest as f64 {
-                selection = Selection {
-                    sets: complete,
-                    rig: true,
-                    incomplete: incomplete.len(),
-                };
-                break;
-            }
-        }
-    }
-    if !selection.rig {
-        selection.sets = frames
-            .iter()
-            .map(|f| FrameSet {
-                t_ns: f.t_ns,
-                frames: vec![f.clone()],
-            })
-            .collect();
-    }
-
-    let min_rot = spec.min_rotation_deg.to_radians();
-    let mut last: HashMap<&str, (u64, Option<Mat4>)> = HashMap::new();
-    let mut picked: Vec<usize> = Vec::new();
-    for (i, s) in selection.sets.iter().enumerate() {
-        let key = if selection.rig {
-            ""
-        } else {
-            s.frames[0].cam.as_str()
-        };
-        let pose = poses.and_then(|p| p.at(s.t_ns));
-        let take = match last.get(key) {
-            None => true,
-            Some((t_prev, prev)) => {
-                let dt = s.t_ns.saturating_sub(*t_prev);
-                match (prev, pose) {
-                    (Some(a), Some(b)) => {
-                        geom::dist(geom::translation(a), geom::translation(&b))
-                            >= spec.min_baseline_m
-                            || geom::rotation_angle(a, &b) >= min_rot
-                            || dt >= 2_000_000_000
-                    }
-                    _ => dt >= 250_000_000,
-                }
-            }
-        };
-        if take {
-            last.insert(key, (s.t_ns, pose));
-            picked.push(i);
-        }
-    }
-    let per_set = if selection.rig { cams.len() } else { 1 };
-    let cap = (spec.max_images / per_set).max(1);
-    if picked.len() > cap {
-        let stride = picked.len() as f64 / cap as f64;
-        picked = (0..cap)
-            .map(|i| picked[(i as f64 * stride) as usize])
-            .collect();
-    }
-    let mut sets = std::mem::take(&mut selection.sets);
-    let mut keep = picked.into_iter().peekable();
-    let mut i = 0;
-    sets.retain(|_| {
-        let k = keep.next_if_eq(&i).is_some();
-        i += 1;
-        k
-    });
-    selection.sets = sets;
-    selection
-}
-
-/// `2·dt` under a frame period: two frames of one instant.
-fn same_instant(dt: u64, period: u64) -> bool {
-    dt.saturating_mul(2) < period
-}
-
-/// Group frames into instants by trigger sequence; a frame more than half a
-/// frame period from its sequence's earliest frame, or a camera's second
-/// frame under one sequence, stands alone.
-fn group_by_trigger(frames: &[FrameRef], period: u64) -> Vec<FrameSet> {
-    let mut by_seq: BTreeMap<u64, Vec<FrameRef>> = BTreeMap::new();
-    for f in frames {
-        by_seq
-            .entry(f.trigger_seq.unwrap_or_default())
-            .or_default()
-            .push(f.clone());
-    }
-    let mut sets = Vec::new();
-    for mut group in by_seq.into_values() {
-        group.sort_by_key(|f| f.t_ns);
-        let t0 = group[0].t_ns;
-        let mut set: Vec<FrameRef> = Vec::new();
-        for f in group {
-            if set.iter().all(|g| g.cam != f.cam) && same_instant(f.t_ns - t0, period) {
-                set.push(f);
-            } else {
-                sets.push(vec![f]);
-            }
-        }
-        sets.push(set);
-    }
-    finish_sets(sets)
-}
-
-/// Group time-sorted frames into instants by time: a frame joins the open
-/// instant while within half a frame period of its first frame and its
-/// camera is not in it yet.
-fn group_by_time(frames: &[FrameRef], period: u64) -> Vec<FrameSet> {
-    let mut sets: Vec<Vec<FrameRef>> = Vec::new();
-    for f in frames {
-        match sets.last_mut() {
-            Some(s)
-                if s.iter().all(|g| g.cam != f.cam)
-                    && same_instant(f.t_ns.saturating_sub(s[0].t_ns), period) =>
-            {
-                s.push(f.clone())
-            }
-            _ => sets.push(vec![f.clone()]),
-        }
-    }
-    finish_sets(sets)
-}
-
-/// Order each instant's frames by camera, time it by its reference camera,
-/// and order the instants by time.
-fn finish_sets(groups: Vec<Vec<FrameRef>>) -> Vec<FrameSet> {
-    let mut sets: Vec<FrameSet> = groups
-        .into_iter()
-        .map(|mut frames| {
-            frames.sort_by(|a, b| a.cam.cmp(&b.cam));
-            FrameSet {
-                t_ns: frames[0].t_ns,
-                frames,
-            }
-        })
-        .collect();
-    sets.sort_by_key(|s| s.t_ns);
-    sets
-}
-
-/// The shortest per-camera median frame interval (0 with no camera recording
-/// two frames).
-fn frame_period(frames: &[FrameRef]) -> u64 {
-    let mut by_cam: HashMap<&str, Vec<u64>> = HashMap::new();
-    for f in frames {
-        by_cam.entry(&f.cam).or_default().push(f.t_ns);
-    }
-    by_cam
-        .into_values()
-        .filter_map(|mut ts| {
-            ts.sort_unstable();
-            let mut dts: Vec<u64> = ts.windows(2).map(|w| w[1] - w[0]).collect();
-            dts.sort_unstable();
-            dts.get(dts.len() / 2).copied()
-        })
-        .min()
-        .unwrap_or(0)
-}
+use keyframes::{DepthTrack, Selection};
 
 /// Run the stage into `dataset_dir`.
 pub fn run(
@@ -340,29 +129,40 @@ pub fn run(
         return Err(StageError::input("the session has no camera frames"));
     }
     progress(0.1);
-    let selection = select_keyframes(&index.frames, index.poses.as_ref(), spec);
-    // (camera, frame time) → the time of the instant it is exported in.
-    let wanted: HashMap<(String, u64), u64> = selection
-        .sets
-        .iter()
-        .flat_map(|s| s.frames.iter().map(|f| ((f.cam.clone(), f.t_ns), s.t_ns)))
-        .collect();
-    let rig_cams = match selection.rig {
-        true => selection.sets.first().map_or(0, |s| s.frames.len()),
-        false => 0,
-    };
     let rig = &index.rig;
-    let cams: HashMap<&str, &ados_capture_contract::RigSensor> = rig
-        .sensors
-        .iter()
-        .filter(|s| matches!(s.kind, RigSensorKind::Camera) && s.camera.is_some())
-        .map(|s| (s.id.as_str(), s))
-        .collect();
     let lidar_mount: HashMap<&str, Mat4> = rig
         .sensors
         .iter()
         .filter(|s| matches!(s.kind, RigSensorKind::Lidar))
         .map(|s| (s.id.as_str(), s.t_body_sensor.0))
+        .collect();
+    let depth = match lidar_mount.is_empty() {
+        true => None,
+        false => Some(scene_depth(reader, &lidar_mount)?).filter(|d| !d.is_empty()),
+    };
+    progress(0.15);
+    let selection =
+        keyframes::select_keyframes(&index.frames, index.poses.as_ref(), depth.as_ref(), spec);
+    let mut scores = score_candidates(reader, &selection, &mut |f| progress(0.15 + 0.3 * f))?;
+    let picks = keyframes::pick_sharpest(
+        &selection,
+        &scores,
+        &keyframes::camera_medians(scores.iter().map(|((c, _), s)| (c.as_str(), *s))),
+    );
+    // (camera, frame time) → the time of the instant it is exported in.
+    let wanted: HashMap<(String, u64), u64> = picks
+        .iter()
+        .flat_map(|s| s.frames.iter().map(|f| ((f.cam.clone(), f.t_ns), s.t_ns)))
+        .collect();
+    let rig_cams = match selection.rig {
+        true => picks.first().map_or(0, |s| s.frames.len()),
+        false => 0,
+    };
+    let cams: HashMap<&str, &ados_capture_contract::RigSensor> = rig
+        .sensors
+        .iter()
+        .filter(|s| matches!(s.kind, RigSensorKind::Camera) && s.camera.is_some())
+        .map(|s| (s.id.as_str(), s))
         .collect();
 
     let mut records: Vec<(FrameRecord, f64)> = Vec::new();
@@ -370,25 +170,16 @@ pub fn run(
     let mut lidar: Vec<[f64; 3]> = Vec::new();
     let total = wanted.len().max(1) as f32;
     reader.for_each_message(|m| {
-        if let Some(cam) = m
-            .topic
-            .strip_prefix("/cam/")
-            .and_then(|r| r.strip_suffix("/image"))
-        {
+        if let Some(cam) = image_camera(m.topic) {
             let Some(&instant) = wanted.get(&(cam.to_string(), m.t_ns)) else {
                 return Ok(());
             };
             let Some(sensor) = cams.get(cam) else {
                 return Ok(());
             };
-            let decoded: DecodedImage = match m.schema_name {
-                Some("foxglove.RawImage") => session_data::decode_raw(&m.decode::<RawImage>()?),
-                Some("foxglove.CompressedImage") => {
-                    session_data::decode_compressed(&m.decode::<CompressedImage>()?)
-                }
-                _ => return Ok(()),
-            }
-            .map_err(|e| ados_capture_contract::Error::Invalid(e.message))?;
+            let Some(decoded) = decode_image(&m)? else {
+                return Ok(());
+            };
             let name = frame_name(cam, instant);
             let path = dataset_dir.join("images").join(&name);
             fs::create_dir_all(path.parent().expect("camera folder"))?;
@@ -422,12 +213,8 @@ pub fn run(
                 },
                 decoded.blur_score(),
             ));
-            progress(0.1 + 0.8 * records.len() as f32 / total);
-        } else if let Some(id) = m
-            .topic
-            .strip_prefix("/lidar/")
-            .and_then(|r| r.strip_suffix("/points"))
-        {
+            progress(0.45 + 0.5 * records.len() as f32 / total);
+        } else if let Some(id) = lidar_sensor(m.topic) {
             let (Some(track), Some(mount)) = (index.poses.as_ref(), lidar_mount.get(id)) else {
                 return Ok(());
             };
@@ -452,7 +239,13 @@ pub fn run(
         Ok(())
     })?;
 
-    let (dropped, rig_dropped) = drop_unusable(dataset_dir, &mut records, rig_cams);
+    // Medians over every scored frame: the window candidates and the picks.
+    for (r, s) in &records {
+        scores.insert((r.camera_id.clone(), r.t_ns), *s);
+    }
+    let medians = keyframes::camera_medians(scores.iter().map(|((c, _), s)| (c.as_str(), *s)));
+    let (dropped, rig_dropped) =
+        keyframes::drop_unusable(dataset_dir, &mut records, rig_cams, &medians);
     let frames: Vec<FrameRecord> = records.into_iter().map(|(r, _)| r).collect();
     if frames.is_empty() {
         return Err(StageError::input(
@@ -501,6 +294,86 @@ pub fn run(
     })
 }
 
+/// The camera of a `/cam/<id>/image` topic.
+fn image_camera(topic: &str) -> Option<&str> {
+    topic.strip_prefix("/cam/")?.strip_suffix("/image")
+}
+
+/// The sensor of a `/lidar/<id>/points` topic.
+fn lidar_sensor(topic: &str) -> Option<&str> {
+    topic.strip_prefix("/lidar/")?.strip_suffix("/points")
+}
+
+/// Decode an image message; `None` for a schema that is not an image.
+fn decode_image(
+    m: &SessionMessage<'_>,
+) -> Result<Option<DecodedImage>, ados_capture_contract::Error> {
+    let decoded = match m.schema_name {
+        Some("foxglove.RawImage") => session_data::decode_raw(&m.decode::<RawImage>()?),
+        Some("foxglove.CompressedImage") => {
+            session_data::decode_compressed(&m.decode::<CompressedImage>()?)
+        }
+        _ => return Ok(None),
+    };
+    decoded
+        .map(Some)
+        .map_err(|e| ados_capture_contract::Error::Invalid(e.message))
+}
+
+/// The median range of every scan of the rig LiDARs in `lidars`.
+fn scene_depth(
+    reader: &SessionReader,
+    lidars: &HashMap<&str, Mat4>,
+) -> Result<DepthTrack, StageError> {
+    let mut depth = DepthTrack::default();
+    reader.for_each_message(|m| {
+        if lidar_sensor(m.topic).is_some_and(|id| lidars.contains_key(id)) {
+            let pc = m.decode::<PointCloud>()?;
+            let pts = session_data::decode_points(&pc)
+                .map_err(|e| ados_capture_contract::Error::Invalid(e.message))?;
+            depth.push_scan(m.t_ns, pts.into_iter().map(|(p, _)| p));
+        }
+        Ok(())
+    })?;
+    Ok(depth)
+}
+
+/// Blur scores of every frame in a keyframe window of more than one instant
+/// (a single-instant window has nothing to choose between).
+fn score_candidates(
+    reader: &SessionReader,
+    selection: &Selection,
+    progress: &mut dyn FnMut(f32),
+) -> Result<HashMap<(String, u64), f64>, StageError> {
+    let wanted: HashSet<(String, u64)> = selection
+        .windows
+        .iter()
+        .filter(|w| w.len() > 1)
+        .flatten()
+        .flat_map(|s| s.frames.iter().map(|f| (f.cam.clone(), f.t_ns)))
+        .collect();
+    let mut scores = HashMap::with_capacity(wanted.len());
+    if wanted.is_empty() {
+        return Ok(scores);
+    }
+    let total = wanted.len() as f32;
+    reader.for_each_message(|m| {
+        let Some(cam) = image_camera(m.topic) else {
+            return Ok(());
+        };
+        let key = (cam.to_string(), m.t_ns);
+        if !wanted.contains(&key) {
+            return Ok(());
+        }
+        if let Some(decoded) = decode_image(&m)? {
+            scores.insert(key, decoded.blur_score());
+            progress(scores.len() as f32 / total);
+        }
+        Ok(())
+    })?;
+    Ok(scores)
+}
+
 /// Every rig id the pipeline uses as a path component or a list entry must be
 /// a plain contract id.
 pub fn check_ids(rig: &ados_capture_contract::Rig) -> Result<(), StageError> {
@@ -514,49 +387,6 @@ pub fn check_ids(rig: &ados_capture_contract::Rig) -> Result<(), StageError> {
         }
     }
     Ok(())
-}
-
-/// Drop frames whose blur score is far under their camera's median, and with
-/// `rig_cams` > 0 every rig instant left without all `rig_cams` usable frames
-/// (deleting their PNGs). Returns how many frames were dropped for blur and
-/// how many rig instants were dropped.
-fn drop_unusable(
-    dataset_dir: &Path,
-    records: &mut Vec<(FrameRecord, f64)>,
-    rig_cams: usize,
-) -> (usize, usize) {
-    let mut medians: HashMap<String, f64> = HashMap::new();
-    let mut by_cam: HashMap<&str, Vec<f64>> = HashMap::new();
-    for (r, s) in records.iter() {
-        by_cam.entry(&r.camera_id).or_default().push(*s);
-    }
-    for (cam, mut scores) in by_cam {
-        scores.sort_by(|a, b| a.total_cmp(b));
-        medians.insert(cam.to_string(), scores[scores.len() / 2]);
-    }
-    let sharp = |r: &FrameRecord, s: f64| s >= BLUR_KEEP_FRACTION * medians[&r.camera_id];
-    let blurred = records.iter().filter(|(r, s)| !sharp(r, *s)).count();
-    // Usable frames per rig instant; an instant short of a camera goes whole.
-    let mut usable: HashMap<u64, usize> = HashMap::new();
-    let mut instants: HashSet<u64> = HashSet::new();
-    for (r, s) in records.iter() {
-        if let Some(t) = r.rig_instant {
-            instants.insert(t);
-            if sharp(r, *s) {
-                *usable.entry(t).or_default() += 1;
-            }
-        }
-    }
-    let complete = |t: u64| usable.get(&t).copied().unwrap_or(0) == rig_cams;
-    let rig_dropped = instants.iter().filter(|t| !complete(**t)).count();
-    let (keep, gone): (Vec<_>, Vec<_>) = records
-        .drain(..)
-        .partition(|(r, s)| sharp(r, *s) && r.rig_instant.is_none_or(complete));
-    for (r, _) in gone {
-        let _ = fs::remove_file(dataset_dir.join("images").join(&r.name));
-    }
-    *records = keep;
-    (blurred, rig_dropped)
 }
 
 /// The operator's rooms with the body positions recorded inside each
@@ -613,7 +443,3 @@ pub fn read_rooms(dataset_dir: &Path) -> Result<Vec<RoomRecord>, StageError> {
         Err(e) => Err(e.into()),
     }
 }
-
-#[cfg(test)]
-#[path = "prepare_tests.rs"]
-mod tests;

@@ -67,6 +67,12 @@ fn default_max_keyframes() -> u64 {
     0
 }
 
+/// With a LiDAR scan, the baseline is this times the median scene depth ...
+pub const DEPTH_BASELINE_PER_M: f64 = 0.08;
+/// ... clamped to this range, metres.
+pub const DEPTH_BASELINE_MIN_M: f64 = 0.15;
+pub const DEPTH_BASELINE_MAX_M: f64 = 0.50;
+
 /// Thresholds the [`crate::KeyframeSelector`] uses to decide when the camera has
 /// moved enough to be worth a new keyframe. A frame is selected when it crosses
 /// ANY one of these (translation, rotation, or elapsed time).
@@ -76,7 +82,8 @@ fn default_max_keyframes() -> u64 {
 /// others sane instead of zeroing them.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct SelectionParams {
-    /// Minimum baseline (metres) from the last keyframe's position.
+    /// Minimum baseline (metres) from the last keyframe's position, while no
+    /// LiDAR scan gives the scene depth (see [`Self::baseline_m`]).
     #[serde(default = "default_min_translation_m")]
     pub min_translation_m: f64,
     /// Minimum viewing-angle change (radians) from the last keyframe.
@@ -103,6 +110,20 @@ impl Default for SelectionParams {
             min_rotation_rad: default_min_rotation_rad(),
             max_interval_ms: default_max_interval_ms(),
             max_keyframes: default_max_keyframes(),
+        }
+    }
+}
+
+impl SelectionParams {
+    /// The translation baseline at median scene depth `scene_depth_m`:
+    /// `0.08 × depth` clamped to [0.15, 0.50] m, or `min_translation_m`
+    /// without a depth.
+    pub fn baseline_m(&self, scene_depth_m: Option<f64>) -> f64 {
+        match scene_depth_m {
+            Some(d) if d.is_finite() && d > 0.0 => {
+                (DEPTH_BASELINE_PER_M * d).clamp(DEPTH_BASELINE_MIN_M, DEPTH_BASELINE_MAX_M)
+            }
+            _ => self.min_translation_m,
         }
     }
 }

@@ -42,14 +42,14 @@ describe("healthChips", () => {
 
   it("formats each reading in its unit", () => {
     const chips = healthChips([
-      { id: "blur", level: "ok", value: 182.4 },
+      { id: "blur", level: "ok", value: 0.874 },
       { id: "texture", level: "ok", value: 54 },
       { id: "flicker", level: "ok", value: 0.8 },
       { id: "corridor", level: "ok", value: 0.123 },
       { id: "storage", level: "ok", value: 61 },
       { id: "clock", level: "ok", value: 0.42 },
     ]);
-    expect(chips.map((c) => c.reading)).toEqual(["182", "54 pts", "0.8 %", "0.12", "61 %", "σ 0.42 ms"]);
+    expect(chips.map((c) => c.reading)).toEqual(["0.87×", "54 pts", "0.8 %", "0.12", "61 %", "σ 0.42 ms"]);
   });
 
   it("raises the operator prompt only on a red chip", () => {

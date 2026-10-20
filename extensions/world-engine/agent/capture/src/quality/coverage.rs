@@ -1,16 +1,24 @@
 //! Live coverage: which space the rig's cameras have seen, as a 0.25 m voxel
-//! hash of frustum hits, its top-down projection, and the walked trajectory.
+//! hash of frustum hits, its top-down projection, the walked trajectory, and
+//! the loop prompt.
 //!
-//! Without depth the frustum is sampled as a fan of rays (a 5x3 grid across
-//! the field of view) stepped every voxel out to [`RANGE_M`]; every voxel a
-//! ray crosses is a hit. Per room, `room_pct` is the share of the top-down
-//! cells inside the room's walked footprint (trajectory bounding box grown by
-//! [`ROOM_MARGIN_M`]) that have been hit.
+//! The frustum is sampled as a fan of rays (a 5x3 grid across the field of
+//! view) stepped every voxel out to [`RANGE_M`], or, with a fresh LiDAR scan,
+//! out to the median LiDAR range around the ray's azimuth when that is
+//! nearer; every voxel a ray crosses is a hit. Per room, `room_pct` is the
+//! share of the top-down cells inside the room's walked footprint (trajectory
+//! bounding box grown by [`ROOM_MARGIN_M`]) that have been hit.
+//!
+//! A revisit is the walk coming back within [`REVISIT_RADIUS_M`] of a point
+//! it passed at least [`REVISIT_MIN_AGE_NS`] earlier: that closes a loop for
+//! the reconstruction. Every [`LOOP_PROMPT_EVERY_M`] walked without one, the
+//! close-loop prompt is raised; a revisit clears it.
 
 use std::collections::{HashMap, HashSet};
 
 use world_engine_protocol::capture_ctl::{CoverageSummary, CoverageView};
 
+use super::lidar_depth::LidarDepth;
 use crate::pose::se3;
 
 /// Voxel edge, metres.
@@ -21,10 +29,13 @@ pub const RANGE_M: f64 = 4.0;
 pub const ROOM_MARGIN_M: f64 = 1.0;
 /// Trajectory points are kept at most this far apart, metres.
 const TRAJ_STEP_M: f64 = 0.2;
-/// The loop is closed once back within this of the start after walking at
-/// least [`LOOP_MIN_WALK_M`].
-pub const LOOP_RADIUS_M: f64 = 2.0;
-pub const LOOP_MIN_WALK_M: f64 = 20.0;
+/// A revisit comes back within this of an earlier trajectory point, metres.
+pub const REVISIT_RADIUS_M: f64 = 2.0;
+/// ... a point passed at least this long before.
+pub const REVISIT_MIN_AGE_NS: u64 = 30_000_000_000;
+/// Walked distance without a revisit at which the close-loop prompt is
+/// raised, and again every further this much.
+pub const LOOP_PROMPT_EVERY_M: f64 = 40.0;
 
 type Key = (i64, i64, i64);
 
@@ -36,15 +47,30 @@ fn key(p: [f64; 3]) -> Key {
     )
 }
 
+/// The revisit-radius cell of `p`.
+fn revisit_cell(p: [f64; 3]) -> Key {
+    let c = |v: f64| (v / REVISIT_RADIUS_M).floor() as i64;
+    (c(p[0]), c(p[1]), c(p[2]))
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Coverage {
     voxels: HashSet<Key>,
     cells: HashMap<(i64, i64), u32>,
     trajectory: Vec<[f64; 3]>,
-    walked_m: f64,
+    /// Host ns of each trajectory point.
+    trajectory_t: Vec<u64>,
+    /// Trajectory point indices by [`revisit_cell`].
+    by_cell: HashMap<Key, Vec<usize>>,
     heading_deg: Option<f64>,
     room_start: usize,
-    loop_closed: bool,
+    revisits: u64,
+    since_revisit_m: f64,
+    /// Close-loop prompts raised since the last revisit.
+    prompts_since_revisit: u64,
+    /// Close-loop prompts raised this session.
+    loop_prompts: u64,
+    loop_prompt: bool,
 }
 
 impl Coverage {
@@ -58,13 +84,14 @@ impl Coverage {
     }
 
     /// Fold a camera pose (`R_world_cam` OpenCV axes, position) with half
-    /// fields of view in radians.
+    /// fields of view in radians; `depth` (a fresh scan) bounds the rays.
     pub fn observe_camera(
         &mut self,
         r_world_cam: &[f64; 9],
         pos: [f64; 3],
         hfov_half: f64,
         vfov_half: f64,
+        depth: Option<&LidarDepth>,
     ) {
         let mut crossed: HashSet<Key> = HashSet::new();
         for iy in -1i32..=1 {
@@ -76,8 +103,12 @@ impl Coverage {
                 ];
                 let n = (dir_cam[0].powi(2) + dir_cam[1].powi(2) + 1.0).sqrt();
                 let d = se3::mat_vec(r_world_cam, [dir_cam[0] / n, dir_cam[1] / n, 1.0 / n]);
+                let az = d[1].atan2(d[0]).to_degrees();
+                let range = depth
+                    .and_then(|l| l.range_at(az))
+                    .map_or(RANGE_M, |r| r.min(RANGE_M));
                 let mut s = VOXEL_M;
-                while s <= RANGE_M {
+                while s <= range {
                     crossed.insert(key([
                         pos[0] + d[0] * s,
                         pos[1] + d[1] * s,
@@ -94,30 +125,59 @@ impl Coverage {
         }
     }
 
-    /// Fold a body pose: extends the trajectory and the heading.
-    pub fn observe_body(&mut self, r_world_body: &[f64; 9], pos: [f64; 3]) {
+    /// Fold a body pose at host `t_ns`: extends the trajectory and the
+    /// heading, and tracks revisits and the close-loop prompt.
+    pub fn observe_body(&mut self, r_world_body: &[f64; 9], pos: [f64; 3], t_ns: u64) {
         let fwd = se3::mat_vec(r_world_body, [1.0, 0.0, 0.0]);
         if fwd[0].hypot(fwd[1]) > 1e-6 {
             self.heading_deg = Some(fwd[0].atan2(fwd[1]).to_degrees().rem_euclid(360.0));
         }
-        match self.trajectory.last() {
-            Some(last) => {
-                let d = dist(*last, pos);
-                if d >= TRAJ_STEP_M {
-                    self.walked_m += d;
-                    self.trajectory.push(pos);
-                }
-            }
-            None => self.trajectory.push(pos),
+        let step = match self.trajectory.last() {
+            Some(last) => dist(*last, pos),
+            None => 0.0,
+        };
+        if !self.trajectory.is_empty() && step < TRAJ_STEP_M {
+            return;
         }
-        if !self.loop_closed
-            && self.walked_m >= LOOP_MIN_WALK_M
-            && self
-                .distance_from_start()
-                .is_some_and(|d| d <= LOOP_RADIUS_M)
+        self.since_revisit_m += step;
+        if self.is_revisit(pos, t_ns) {
+            self.revisits += 1;
+            self.since_revisit_m = 0.0;
+            self.prompts_since_revisit = 0;
+            self.loop_prompt = false;
+        } else if self.since_revisit_m
+            >= LOOP_PROMPT_EVERY_M * (self.prompts_since_revisit + 1) as f64
         {
-            self.loop_closed = true;
+            self.prompts_since_revisit += 1;
+            self.loop_prompts += 1;
+            self.loop_prompt = true;
         }
+        self.by_cell
+            .entry(revisit_cell(pos))
+            .or_default()
+            .push(self.trajectory.len());
+        self.trajectory.push(pos);
+        self.trajectory_t.push(t_ns);
+    }
+
+    /// `pos` is within [`REVISIT_RADIUS_M`] of a trajectory point at least
+    /// [`REVISIT_MIN_AGE_NS`] older than `t_ns`.
+    fn is_revisit(&self, pos: [f64; 3], t_ns: u64) -> bool {
+        let (cx, cy, cz) = revisit_cell(pos);
+        (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                (-1..=1).any(|dz| {
+                    self.by_cell
+                        .get(&(cx + dx, cy + dy, cz + dz))
+                        .is_some_and(|idx| {
+                            idx.iter().any(|&i| {
+                                t_ns.saturating_sub(self.trajectory_t[i]) >= REVISIT_MIN_AGE_NS
+                                    && dist(self.trajectory[i], pos) <= REVISIT_RADIUS_M
+                            })
+                        })
+                })
+            })
+        })
     }
 
     pub fn voxels(&self) -> usize {
@@ -152,8 +212,10 @@ impl Coverage {
         CoverageSummary {
             voxels: self.voxels.len() as u64,
             room_pct: self.room_pct(),
-            loop_closed: self.loop_closed,
+            loop_closed: self.revisits > 0,
             distance_from_start_m: self.distance_from_start(),
+            close_loop_prompt: self.loop_prompt,
+            close_loop_prompts: self.loop_prompts,
         }
     }
 
@@ -181,59 +243,5 @@ fn dist(a: [f64; 3], b: [f64; 3]) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// OpenCV camera looking along world +x (ENU east), y down = world −z.
-    const LOOK_EAST: [f64; 9] = [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0];
-
-    #[test]
-    fn a_frustum_hits_voxels_ahead_and_none_behind() {
-        let mut c = Coverage::new();
-        c.observe_camera(&LOOK_EAST, [0.1, 0.1, 1.5], 0.6, 0.4);
-        let n = c.voxels();
-        assert!(n > 40, "{n}");
-        let v = c.view();
-        assert!(
-            v.cells.iter().all(|[x, _, _]| *x >= 0),
-            "nothing behind the camera"
-        );
-        assert!(v.cells.iter().any(|[x, _, _]| *x >= 15), "reaches ~4 m");
-        // Re-observing the same view adds nothing.
-        c.observe_camera(&LOOK_EAST, [0.1, 0.1, 1.5], 0.6, 0.4);
-        assert_eq!(c.voxels(), n);
-    }
-
-    #[test]
-    fn trajectory_heading_room_share_and_loop_closure() {
-        let mut c = Coverage::new();
-        let body_east = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
-        // Walk a 6 m x 4 m rectangle twice, looking forward.
-        let corners = [[0.0, 0.0], [6.0, 0.0], [6.0, 4.0], [0.0, 4.0], [0.0, 0.0]];
-        for _ in 0..2 {
-            for w in corners.windows(2) {
-                for k in 0..=20 {
-                    let s = k as f64 / 20.0;
-                    let p = [
-                        w[0][0] + s * (w[1][0] - w[0][0]),
-                        w[0][1] + s * (w[1][1] - w[0][1]),
-                        1.5,
-                    ];
-                    c.observe_body(&body_east, p);
-                    c.observe_camera(&LOOK_EAST, p, 0.6, 0.4);
-                }
-            }
-        }
-        let s = c.summary();
-        assert!(s.loop_closed);
-        assert!(s.distance_from_start_m.unwrap() < 0.3);
-        let pct = s.room_pct.unwrap();
-        assert!(pct > 30.0 && pct <= 100.0, "{pct}");
-        let v = c.view();
-        assert_eq!(v.heading_deg, Some(90.0));
-        assert_eq!(v.cell_m, 0.25);
-        assert!(v.trajectory.len() > 20);
-        c.mark_room();
-        assert!(c.room_pct().is_some());
-    }
-}
+#[path = "coverage_tests.rs"]
+mod tests;
