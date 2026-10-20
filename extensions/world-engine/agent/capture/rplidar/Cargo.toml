@@ -1,0 +1,27 @@
+# RPLIDAR serial protocol driver for the World Engine capture service: the
+# standard-scan byte protocol, serial and TCP transports, USB discovery, and a
+# reader thread that turns the node stream into timed 360-degree revolutions.
+[package]
+name = "ados-rplidar"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RPLIDAR standard-scan protocol, transports and revolution assembly for World Engine capture."
+
+[lib]
+name = "ados_rplidar"
+path = "src/lib.rs"
+
+[dependencies]
+serialport = { version = "4.9", default-features = false }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+# CLOCK_MONOTONIC, the host timebase revolutions are stamped on.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", default-features = false, features = ["time"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
