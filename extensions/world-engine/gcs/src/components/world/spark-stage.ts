@@ -22,6 +22,7 @@ import { aisleLinesViewer, type Aisle } from "../../lib/world/aisles";
 import type { FloorplanFloor } from "../../lib/world/floorplan";
 import { floorLinesViewer } from "../../lib/world/floorplan";
 import { artifactToViewerMatrix, type ArtifactFrame, type Vec3 } from "../../lib/world/placement";
+import { splatFramingBounds } from "../../lib/world/splat-bounds";
 import { followCanvasSize } from "../atlas/viewers/cloud-view";
 import { disposeMaterials, disposeObject } from "./scene-resources";
 import { WalkControls } from "./walk-controls";
@@ -40,6 +41,26 @@ const AISLE_COLOUR = 0xf97316;
 const MEASURE_COLOUR = 0xfacc15;
 /** Overlays draw after the (transparent, depth-less) splat so they stay visible. */
 const OVERLAY_ORDER = 10;
+
+/** The Spark mesh for `input`, its file type from the name's extension:
+ * bytes are decoded whole, a URL is streamed as a paged LOD file. */
+export function splatMesh(SPARK: Spark, input: SplatInput): SplatMesh {
+  const ext = input.fileName.toLowerCase().split(".").pop() ?? "";
+  const fileType = Object.values(SPARK.SplatFileType).find((t) => t === ext);
+  return "bytes" in input
+    ? new SPARK.SplatMesh({ fileBytes: input.bytes, fileType, fileName: input.fileName })
+    : new SPARK.SplatMesh({ url: input.url, fileType, paged: true });
+}
+
+/** The framing box of an initialized mesh in viewer coordinates (empty when
+ * the mesh has no finite centre; floaters trimmed, see `splat-bounds`) and
+ * whether any of its splats is solid. */
+export function splatViewerBounds(THREE: Three, mesh: SplatMesh): { box: T.Box3; solid: boolean } {
+  const f = splatFramingBounds((cb) => mesh.forEachSplat(cb), mesh.splats?.getNumSplats() ?? 0);
+  if (!f) return { box: new THREE.Box3(), solid: false };
+  const box = new THREE.Box3(new THREE.Vector3(...f.min), new THREE.Vector3(...f.max)).applyMatrix4(mesh.matrix);
+  return { box, solid: f.solid };
+}
 
 export class SparkStage {
   readonly camera: T.PerspectiveCamera;
@@ -115,15 +136,11 @@ export class SparkStage {
   };
 
   /** Load the splat in `frame`; it replaces any previous splat, and the
-   * camera frames the new one alone. */
-  async loadSplat(input: SplatInput, frame: ArtifactFrame): Promise<void> {
-    const { SplatMesh, SplatFileType } = this.SPARK;
-    const ext = input.fileName.toLowerCase().split(".").pop() ?? "";
-    const fileType = Object.values(SplatFileType).find((t) => t === ext);
-    const mesh =
-      "bytes" in input
-        ? new SplatMesh({ fileBytes: input.bytes, fileType, fileName: input.fileName })
-        : new SplatMesh({ url: input.url, fileType, paged: true });
+   * camera frames the new one alone. Resolves whether any splat in it is
+   * solid: false means an empty or fully transparent model, nothing to see
+   * (also resolves true when a later load replaced this one). */
+  async loadSplat(input: SplatInput, frame: ArtifactFrame): Promise<boolean> {
+    const mesh = splatMesh(this.SPARK, input);
     mesh.matrixAutoUpdate = false;
     mesh.matrix.set(...(artifactToViewerMatrix(frame) as Matrix16));
     mesh.updateMatrixWorld(true);
@@ -134,9 +151,11 @@ export class SparkStage {
     this.splat = mesh;
     this.scene.add(mesh);
     await mesh.initialized;
-    if (this.splat !== mesh) return;
-    this.bounds = mesh.getBoundingBox(true).applyMatrix4(mesh.matrix);
+    if (this.splat !== mesh) return true;
+    const { box, solid } = splatViewerBounds(this.THREE, mesh);
+    this.bounds = box;
     this.frame();
+    return solid;
   }
 
   /** Load the collision mesh (GLB, local ENU, Z up) used for picking. */

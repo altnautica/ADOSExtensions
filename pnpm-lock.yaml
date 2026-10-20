@@ -165,8 +165,8 @@ importers:
         specifier: ^0.33.1
         version: 0.33.1
       '@sparkjsdev/spark':
-        specifier: ^2.3.1
-        version: 2.3.1(three@0.183.2)
+        specifier: ^2.4.0
+        version: 2.4.0(three@0.183.2)
       lucide-react:
         specifier: ^0.570.0
         version: 0.570.0(react@19.2.3)
@@ -1048,8 +1048,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@sparkjsdev/spark@2.3.1':
-    resolution: {integrity: sha512-K+SyIbkO/dx1TLLudK8Jp3/noS13z/kdNPo6OK2waxQaGy81HBmKGnNBT/t/K9Ew3dsIXmWqsJXxGfmAu1T5Jg==}
+  '@sparkjsdev/spark@2.4.0':
+    resolution: {integrity: sha512-aUjgBfhwDRcF3nUwiAD6Nh7IwvxEmW9liz2qrAXIm2BlPYBmn81QbXIpGFLBSr/o0TKGvEXbNIsKujgPGV/7QQ==}
     peerDependencies:
       three: '>=0.180.0'
 
@@ -2307,9 +2307,8 @@ snapshots:
   '@rollup/rollup-win32-x64-msvc@4.60.2':
     optional: true
 
-  '@sparkjsdev/spark@2.3.1(three@0.183.2)':
+  '@sparkjsdev/spark@2.4.0(three@0.183.2)':
     dependencies:
-      fflate: 0.8.3
       three: 0.183.2
 
   '@tailwindcss/cli@4.3.3':

@@ -202,4 +202,9 @@ async fn a_real_session_reconstructs_with_the_pinned_tools() {
     for f in ["scene.spz", "scene.ply", "cloud.laz", "outputs.json"] {
         assert!(out.join(f).is_file(), "{f} missing");
     }
+    // The SPZ is version 4 (plaintext `NGSP` header, then the version), the
+    // layout the viewer's Spark and the world-engine tiler read.
+    let spz = std::fs::read(out.join("scene.spz")).unwrap();
+    assert_eq!(&spz[..4], b"NGSP", "scene.spz is not a version 4 SPZ");
+    assert_eq!(u32::from_le_bytes(spz[4..8].try_into().unwrap()), 4);
 }

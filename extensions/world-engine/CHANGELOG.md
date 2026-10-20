@@ -156,6 +156,13 @@ All notable changes to the World Engine extension.
   would take list `upload.state: "blocked"` with `error` `no_credential` or
   `ambiguous_credential` in `GET /atlas/sessions`, the GCS shows "Auto-upload
   blocked", and the link logs a warning once per reason.
+- The world and tour viewers read SPZ version 4 (Spark 2.4), the version the
+  products stage writes (`splat-transform --spz-version 4`, named rather
+  than left to the converter's default); versions 1 to 3 still load. The
+  viewer frames a splat on its solid splats (opacity at least 0.05, thickness
+  at least 1e-4), the 1st to 99th percentile per axis, so far floaters no
+  longer push the camera out until the scene is sub-pixel, and a model with
+  no solid splat shows "empty or fully transparent" instead of a blank view.
 
 ### Removed
 

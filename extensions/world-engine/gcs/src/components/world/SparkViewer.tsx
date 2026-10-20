@@ -190,6 +190,7 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
       {mode === "walk" && <TouchJoystick label={t("joystick")} onChange={(f, s) => stage?.setStick(f, s)} />}
       {load.phase === "loading" && <ViewerLoading percent={load.percent ?? undefined} label={t("loading")} />}
       {load.phase === "failed" && <ViewerError what={t("splat")} />}
+      {load.phase === "empty" && <ViewerError message={t("empty")} />}
     </div>
   );
 }

@@ -15,7 +15,7 @@
     "@loaders.gl/core": "^4.3.4",
     "@loaders.gl/las": "^4.3.4",
     "@rerun-io/web-viewer": "^0.33.1",
-    "@sparkjsdev/spark": "^2.3.1",
+    "@sparkjsdev/spark": "^2.4.0",
     "lucide-react": "^0.570.0",
     "three": "^0.183.2",
     "zustand": "^5.0.5"

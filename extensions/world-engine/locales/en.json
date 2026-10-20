@@ -325,7 +325,8 @@
     "measureHint": "Click two points to measure",
     "onSurface": "on surface {d}",
     "joystick": "Walk joystick",
-    "loading": "Loading splat"
+    "loading": "Loading splat",
+    "empty": "The splat world model is empty or fully transparent: nothing to show."
   },
   "capture": {
     "loading": "Reading capture state",

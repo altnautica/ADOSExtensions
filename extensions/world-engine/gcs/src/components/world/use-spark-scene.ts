@@ -31,9 +31,12 @@ export interface WorldScene {
   aisles?: Aisle[];
 }
 
+/** `empty`: the splat loaded but no splat in it is solid (an empty or fully
+ * transparent model), so the view would be blank. */
 export type SceneLoad =
   | { phase: "loading"; percent: number | null }
   | { phase: "ready" }
+  | { phase: "empty" }
   | { phase: "failed" };
 
 function isLod(name: string): boolean {
@@ -91,18 +94,19 @@ export function useSparkScene(
     setLoad({ phase: "loading", percent: null });
     void (async () => {
       try {
+        let solid: boolean;
         if (isLod(splat.name)) {
           route = serveLod(splat);
-          await stage.loadSplat({ url: route.url, fileName: splat.name }, frame);
+          solid = await stage.loadSplat({ url: route.url, fileName: splat.name }, frame);
         } else {
           const buf = await fetchArrayBufferWithProgress(splat, {
             signal: abort.signal,
             onProgress: (p) => setLoad({ phase: "loading", percent: p.percent }),
           });
           if (abort.signal.aborted) return;
-          await stage.loadSplat({ bytes: new Uint8Array(buf), fileName: splat.name }, frame);
+          solid = await stage.loadSplat({ bytes: new Uint8Array(buf), fileName: splat.name }, frame);
         }
-        if (!abort.signal.aborted) setLoad({ phase: "ready" });
+        if (!abort.signal.aborted) setLoad({ phase: solid ? "ready" : "empty" });
       } catch {
         if (!abort.signal.aborted) setLoad({ phase: "failed" });
       }
