@@ -61,6 +61,10 @@ export class WalkControls {
   yaw = 0;
   pitch = 0;
   floorY = 0;
+  /** Limits a step `[dx, dz]` from the eye (viewer coordinates, the floor at
+   * `floorY`) against the scene's surfaces; null walks through everything. */
+  collide: ((eye: [number, number, number], floorY: number, step: [number, number]) => [number, number]) | null =
+    null;
   stick: StickInput = { forward: 0, strafe: 0 };
   private keys = new Set<string>();
   private fast = false;
@@ -132,7 +136,9 @@ export class WalkControls {
       input.forward += axis?.forward ?? 0;
       input.strafe += axis?.strafe ?? 0;
     }
-    const [dx, dz] = walkStep(input, this.yaw, dt, WALK_SPEED_MPS * (this.fast ? 2 : 1));
+    const step = walkStep(input, this.yaw, dt, WALK_SPEED_MPS * (this.fast ? 2 : 1));
+    const eye: [number, number, number] = [this.camera.position.x, this.floorY + EYE_HEIGHT_M, this.camera.position.z];
+    const [dx, dz] = this.collide ? this.collide(eye, this.floorY, step) : step;
     this.camera.position.x += dx;
     this.camera.position.z += dz;
     this.camera.position.y = this.floorY + EYE_HEIGHT_M;

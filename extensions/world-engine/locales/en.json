@@ -325,6 +325,7 @@
     "measureHint": "Click two points to measure",
     "onSurface": "on surface {d}",
     "joystick": "Walk joystick",
+    "navNode": "Walk to point {id}",
     "loading": "Loading splat",
     "empty": "The splat world model is empty or fully transparent: nothing to show."
   },

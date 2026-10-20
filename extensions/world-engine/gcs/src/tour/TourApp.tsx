@@ -37,6 +37,8 @@ export async function loadTour(pageUrl: string): Promise<{ manifest: TourManifes
   const manifest = coerceTourManifest(await fetchJson(at("tour.json")));
   if (!manifest) return null;
   const floorplan = manifest.floorplan ? coerceFloorplan(await fetchJson(at(manifest.floorplan))) : null;
+  // The ESDF's header is the `.json` of the grid's stem, as the node writes it.
+  const esdfHeader = manifest.esdf ? await fetchJson(at(manifest.esdf.replace(/\.[^./]+$/, "") + ".json")) : null;
   return {
     manifest,
     scene: {
@@ -45,6 +47,8 @@ export async function loadTour(pageUrl: string): Promise<{ manifest: TourManifes
       collision: manifest.mesh ? urlSource(at(manifest.mesh)) : null,
       floorplan,
       rooms: manifest.rooms.map((r) => ({ name: r.name, floor: r.floor, hotspot: r.hotspot })),
+      esdf: manifest.esdf && esdfHeader ? { header: esdfHeader, grid: urlSource(at(manifest.esdf)) } : null,
+      nodes: manifest.nodes,
     },
   };
 }

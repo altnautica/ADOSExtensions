@@ -2,6 +2,7 @@
 
 mod aisles;
 mod align;
+mod auto_rooms;
 mod change;
 mod cloud_io;
 mod floorplan;

@@ -9,6 +9,7 @@
 
 use super::super::floorplan::{build, to_svg, FloorplanOptions, RoomTrack};
 use super::super::geom::Rng;
+use super::super::slice::ceiling_height;
 use super::super::PointCloud;
 use super::jitter;
 
@@ -140,9 +141,19 @@ fn has_wall(walls: &[[f64; 4]], vertical: bool, v: f64, range: (f64, f64)) -> bo
     covered >= 0.8 * (range.1 - range.0)
 }
 
+/// Where the operator walked: the sensor origins of the capture.
+fn origins() -> Vec<[f64; 3]> {
+    tracks().into_iter().flat_map(|t| t.positions).collect()
+}
+
 #[test]
 fn two_rooms_walls_door_and_areas() {
-    let plan = build(&scene(), &tracks(), &FloorplanOptions::default());
+    let plan = build(
+        &scene(),
+        &tracks(),
+        &origins(),
+        &FloorplanOptions::default(),
+    );
     assert_eq!(plan.contract, "ados.capture/1");
     assert_eq!(plan.floors.len(), 1);
     let f = &plan.floors[0];
@@ -211,12 +222,108 @@ fn two_rooms_walls_door_and_areas() {
 }
 
 #[test]
-fn no_tracks_gives_one_floor_without_rooms() {
-    let plan = build(&scene(), &[], &FloorplanOptions::default());
+fn no_marked_rooms_are_found_automatically() {
+    let plan = build(&scene(), &[], &[], &FloorplanOptions::default());
     assert_eq!(plan.floors.len(), 1);
     let f = &plan.floors[0];
     assert_eq!(f.floor, 0);
     assert!(f.z_m.abs() < 0.03, "floor z {}", f.z_m);
-    assert!(f.rooms.is_empty());
     assert!(f.walls.len() >= 6);
+    // Largest first: the 20 m² room, then the 12 m² one.
+    let names: Vec<&str> = f.rooms.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, ["Room 1", "Room 2"], "{:?}", f.rooms);
+    for (r, truth, inside) in [
+        (&f.rooms[0], 20.0, [2.5, 2.0]),
+        (&f.rooms[1], 12.0, [6.6, 2.0]),
+    ] {
+        assert!(
+            (r.area_m2 - truth).abs() / truth < 0.08,
+            "{} area {} vs {truth}",
+            r.name,
+            r.area_m2
+        );
+        assert!(super::super::geom::point_in_polygon(inside, &r.polygon));
+        assert!(super::super::geom::point_in_polygon(
+            [r.hotspot[0], r.hotspot[1]],
+            &r.polygon
+        ));
+        assert!((r.hotspot[2] - 1.6).abs() < 0.05, "hotspot {:?}", r.hotspot);
+    }
+}
+
+#[test]
+fn ceiling_band_detected() {
+    // A 2.6 m ceiling over walls running from the floor to it.
+    let walls = (0..2600).map(|k| k as f64 * 0.001);
+    let ceiling = std::iter::repeat_n(2.6, 2000);
+    let c = ceiling_height(walls.clone().chain(ceiling.clone()), None).unwrap();
+    assert!((c - 2.6).abs() <= 0.02, "ceiling {c}");
+    // Nothing scanned above 2 m: no ceiling.
+    assert_eq!(
+        ceiling_height((0..2000).map(|k| k as f64 * 0.001), None),
+        None
+    );
+    // The next floor's walking surface above the limit is not this ceiling.
+    let upstairs = std::iter::repeat_n(3.0, 4000);
+    let c = ceiling_height(walls.chain(ceiling).chain(upstairs), Some(2.85)).unwrap();
+    assert!((c - 2.6).abs() <= 0.02, "ceiling {c}");
+
+    // Walls seen only near the ceiling (furniture hides the body-height
+    // band) are still found through the band under the ceiling.
+    let cloud = PointCloud {
+        points: scene()
+            .points
+            .into_iter()
+            .filter(|p| p[2] < 0.05 || p[2] > 2.15)
+            .collect(),
+        colors: None,
+    };
+    let plan = build(&cloud, &[], &[], &FloorplanOptions::default());
+    let f = &plan.floors[0];
+    assert!(has_wall(&f.walls, true, 0.0, (0.0, 4.0)), "{:?}", f.walls);
+    assert!(has_wall(&f.walls, false, 4.0, (0.0, 8.1)), "{:?}", f.walls);
+}
+
+/// A sparse 1.5 m run of returns at body height in the middle of the living
+/// room (a person walking by, a lamp): enough points for a wall line.
+fn with_clutter() -> PointCloud {
+    let mut cloud = scene();
+    let mut rng = Rng::new(9);
+    for i in 0..75 {
+        for z in [1.05, 1.25, 1.45] {
+            cloud
+                .points
+                .push([2.0 + i as f64 * 0.02, 2.0 + jitter(&mut rng, 0.005), z]);
+        }
+    }
+    cloud
+}
+
+#[test]
+fn free_space_removes_furniture_hits() {
+    let clutter_wall = |walls: &[[f64; 4]]| has_wall(walls, false, 2.0, (2.0, 3.5));
+    // Without sensor origins nothing is carved and the clutter is a wall.
+    let plan = build(
+        &with_clutter(),
+        &tracks(),
+        &[],
+        &FloorplanOptions::default(),
+    );
+    assert!(
+        clutter_wall(&plan.floors[0].walls),
+        "{:?}",
+        plan.floors[0].walls
+    );
+    // Rays from the walked path cross it on their way to the room's walls.
+    let plan = build(
+        &with_clutter(),
+        &tracks(),
+        &origins(),
+        &FloorplanOptions::default(),
+    );
+    let f = &plan.floors[0];
+    assert!(!clutter_wall(&f.walls), "{:?}", f.walls);
+    assert!(has_wall(&f.walls, true, 0.0, (0.0, 4.0)), "{:?}", f.walls);
+    assert!(has_wall(&f.walls, false, 0.0, (0.0, 8.1)), "{:?}", f.walls);
+    assert_eq!(f.rooms.len(), 2);
 }

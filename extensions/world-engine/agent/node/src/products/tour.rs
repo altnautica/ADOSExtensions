@@ -21,9 +21,17 @@ pub struct TourManifest {
     pub lod: Option<String>,
     pub mesh: Option<String>,
     pub floorplan: Option<String>,
+    /// The occupancy ESDF (`f32` little-endian, x fastest) walking collides
+    /// with; its header (origin, resolution, dims) is the `.json` of the same
+    /// stem beside it.
+    #[serde(default)]
+    pub esdf: Option<String>,
     pub anchor: Option<GeoAnchor>,
     pub placement: Option<Placement>,
     pub rooms: Vec<TourRoom>,
+    /// Places along the walked path the viewer offers as jump targets.
+    #[serde(default)]
+    pub nodes: Vec<TourNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,6 +40,15 @@ pub struct TourRoom {
     pub floor: i32,
     pub hotspot: [f64; 3],
     pub still: Option<String>,
+}
+
+/// A navigation node: a keyframe camera position (local ENU metres) and the
+/// heading it looked along (degrees counter-clockwise from east).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TourNode {
+    pub id: String,
+    pub position: [f64; 3],
+    pub yaw_deg: f64,
 }
 
 fn safe_rel(rel: &str) -> Result<PathBuf, ProductError> {

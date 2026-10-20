@@ -13,9 +13,15 @@ pub mod geo;
 pub mod measure;
 pub mod tour;
 
+mod auto_rooms;
+mod carve;
+mod floorplan_svg;
 mod geom;
+mod grid2d;
 mod ply;
 mod rooms;
+mod skeleton;
+mod slice;
 mod walls;
 
 #[cfg(test)]

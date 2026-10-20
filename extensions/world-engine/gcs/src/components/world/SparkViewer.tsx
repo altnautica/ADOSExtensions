@@ -38,6 +38,7 @@ export interface SparkViewerProps {
 export function SparkViewer({ scene, measureRemote, className }: SparkViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hotspotRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const nodeRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const { stage, load } = useSparkScene(canvasRef, scene);
   const [mode, setMode] = useState<ViewMode>("orbit");
   const floors = scene.floorplan?.floors ?? [];
@@ -51,6 +52,17 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
   const rooms = useMemo(
     () => scene.rooms.filter((r) => r.hotspot && (!floor || r.floor === floor.floor)),
     [scene.rooms, floor],
+  );
+  // Navigation nodes on the shown floor, each with the floor point its disc
+  // sits on (the floor plane, else eye height below the node).
+  const nodes = useMemo(
+    () =>
+      (scene.nodes ?? []).flatMap((n) => {
+        const ground = floor ? floor.zM : n.position[2] - EYE_HEIGHT_M;
+        if (floor && Math.abs(n.position[2] - EYE_HEIGHT_M - floor.zM) > 1.2) return [];
+        return [{ ...n, disc: enuToViewer([n.position[0], n.position[1], ground]) }];
+      }),
+    [scene.nodes, floor],
   );
 
   useEffect(() => {
@@ -73,6 +85,13 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
         el.style.display = p.visible ? "" : "none";
         el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -100%)`;
       });
+      nodes.forEach((n, i) => {
+        const el = nodeRefs.current[i];
+        if (!el) return;
+        const p = stage.project(n.disc);
+        el.style.display = p.visible ? "" : "none";
+        el.style.transform = `translate(${p.x}px, ${p.y}px) translate(-50%, -50%)`;
+      });
       const now = performance.now();
       if (now - lastHere > 200) {
         lastHere = now;
@@ -80,7 +99,7 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
         setHere({ x: e, y: n, heading: stage.camera.rotation.y });
       }
     });
-  }, [stage, rooms]);
+  }, [stage, rooms, nodes]);
 
   const jumpTo = (hotspot: Vec3) => {
     if (!stage) return;
@@ -111,6 +130,20 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
         className={cn("we:absolute we:inset-0 we:w-full we:h-full", measuring && "we:cursor-crosshair")}
         onClick={(e) => void onCanvasClick(e)}
       />
+      {mode !== "dollhouse" &&
+        nodes.map((n, i) => (
+          <button
+            key={n.id}
+            ref={(el) => {
+              nodeRefs.current[i] = el;
+            }}
+            type="button"
+            aria-label={t("navNode", { id: n.id })}
+            title={t("navNode", { id: n.id })}
+            onClick={() => jumpTo(n.position)}
+            className="we:absolute we:left-0 we:top-0 we:h-3 we:w-5 we:rounded-[50%] we:bg-on-media/40 we:border we:border-on-media/70 we:hover:bg-on-media/70"
+          />
+        ))}
       {rooms.map((r, i) => (
         <button
           key={`${r.name}-${i}`}

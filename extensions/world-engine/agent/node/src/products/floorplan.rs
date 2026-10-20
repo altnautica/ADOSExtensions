@@ -1,21 +1,27 @@
 //! 2-D floor plans from an indoor cloud and the operator's room-marked
-//! trajectory: per-floor ground plane, a wall-height slice, RANSAC wall lines,
-//! door gaps, and room polygons from an occupancy-grid flood fill.
+//! trajectory: per-floor ground plane, a wall slice (body height, plus under
+//! the ceiling when there is one) carved by the sensors' free-space rays,
+//! RANSAC wall lines, door gaps, and room polygons from an occupancy-grid
+//! flood fill (marked rooms) or a morphological segmentation (no marks).
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
+use super::auto_rooms;
+use super::carve::wall_mask;
 use super::cloud::PointCloud;
 use super::geom::{centroid, dedupe2d, point_in_polygon, ransac_horizontal_plane, Plane, Rng};
 use super::rooms::{polygon_from_boundary, Grid};
+use super::slice::{ceiling_height, SliceBands};
 use super::walls::{
     complete_corners, doors, extract_lines, manhattan_snap, merge_collinear, WallParams,
 };
 
+pub use super::floorplan_svg::to_svg;
+
 /// Square feet per square metre.
-const FT2_PER_M2: f64 = 10.763_910_416_709_722;
+pub(super) const FT2_PER_M2: f64 = 10.763_910_416_709_722;
 
 /// The operator's trajectory while inside one marked room.
 #[derive(Debug, Clone, PartialEq)]
@@ -94,7 +100,7 @@ pub struct FloorplanRoom {
 }
 
 /// Rounds to millimetres (and folds `-0.0` into `0.0`).
-fn mm(v: f64) -> f64 {
+pub(super) fn mm(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0 + 0.0
 }
 
@@ -139,8 +145,16 @@ fn floor_plane(cloud: &PointCloud, track_z: Option<f64>, rng: &mut Rng) -> Optio
 }
 
 /// Builds the floor plan. Floors are the distinct `RoomTrack::floor` values
-/// (one floor 0 without tracks); only marked rooms are reported.
-pub fn build(cloud: &PointCloud, rooms: &[RoomTrack], opts: &FloorplanOptions) -> Floorplan {
+/// (one floor 0 without tracks). Marked rooms are reported by name; a floor
+/// without marked rooms gets its rooms found automatically. `origins` are the
+/// sensor positions (keyframe camera centres, LiDAR scan origins) whose rays
+/// carve free space out of the wall slice.
+pub fn build(
+    cloud: &PointCloud,
+    rooms: &[RoomTrack],
+    origins: &[[f64; 3]],
+    opts: &FloorplanOptions,
+) -> Floorplan {
     let mut by_floor: BTreeMap<i32, Vec<&RoomTrack>> = BTreeMap::new();
     for r in rooms {
         by_floor.entry(r.floor).or_default().push(r);
@@ -148,10 +162,28 @@ pub fn build(cloud: &PointCloud, rooms: &[RoomTrack], opts: &FloorplanOptions) -
     if by_floor.is_empty() {
         by_floor.insert(0, Vec::new());
     }
+    let track_z: BTreeMap<i32, Option<f64>> = by_floor
+        .iter()
+        .map(|(f, tracks)| (*f, track_median_z(tracks)))
+        .collect();
     let mut rng = Rng::new(opts.seed);
     let floors = by_floor
-        .into_iter()
-        .filter_map(|(floor, tracks)| build_floor(cloud, floor, &tracks, opts, &mut rng))
+        .iter()
+        .filter_map(|(&floor, tracks)| {
+            // The next floor up bounds this floor's ceiling search: just under
+            // its walking surface (body height 1.5 m below its track).
+            let above = track_z
+                .range(floor + 1..)
+                .find_map(|(_, z)| *z)
+                .map(|z| z - 1.5 - 0.15);
+            let ctx = FloorCtx {
+                floor,
+                tracks,
+                origins,
+                ceiling_limit_z: above,
+            };
+            build_floor(cloud, &ctx, opts, &mut rng)
+        })
         .collect();
     Floorplan {
         contract: ados_capture_contract::CONTRACT_ID.to_string(),
@@ -161,19 +193,32 @@ pub fn build(cloud: &PointCloud, rooms: &[RoomTrack], opts: &FloorplanOptions) -
     }
 }
 
-fn build_floor(
-    cloud: &PointCloud,
-    floor: i32,
-    tracks: &[&RoomTrack],
-    opts: &FloorplanOptions,
-    rng: &mut Rng,
-) -> Option<FloorLevel> {
-    let track_z = median(
+fn track_median_z(tracks: &[&RoomTrack]) -> Option<f64> {
+    median(
         tracks
             .iter()
             .flat_map(|t| t.positions.iter().map(|p| p[2]))
             .collect(),
-    );
+    )
+}
+
+/// What one floor is built from besides the cloud.
+struct FloorCtx<'a> {
+    floor: i32,
+    tracks: &'a [&'a RoomTrack],
+    origins: &'a [[f64; 3]],
+    /// Absolute height the ceiling search stays below.
+    ceiling_limit_z: Option<f64>,
+}
+
+fn build_floor(
+    cloud: &PointCloud,
+    ctx: &FloorCtx<'_>,
+    opts: &FloorplanOptions,
+    rng: &mut Rng,
+) -> Option<FloorLevel> {
+    let (floor, tracks) = (ctx.floor, ctx.tracks);
+    let track_z = track_median_z(tracks);
     let plane = match floor_plane(cloud, track_z, rng) {
         Some(p) => p,
         None => {
@@ -181,11 +226,16 @@ fn build_floor(
             Plane::horizontal(track_z? - 1.5)
         }
     };
+    let ceiling = ceiling_height(
+        cloud.points.iter().map(|p| plane.height(*p)),
+        ctx.ceiling_limit_z.map(|z| z - plane.z_at(0.0, 0.0)),
+    );
+    let bands = SliceBands::new((opts.slice_min_m, opts.slice_max_m), ceiling);
     let (mut slice, mut low, mut ground) = (Vec::new(), Vec::new(), Vec::new());
     for p in &cloud.points {
         let h = plane.height(*p);
         let xy = [p[0], p[1]];
-        if h >= opts.slice_min_m && h <= opts.slice_max_m {
+        if bands.contains(h) {
             slice.push(xy);
         } else if (0.2..=0.9).contains(&h) {
             low.push(xy);
@@ -193,7 +243,20 @@ fn build_floor(
             ground.push(xy);
         }
     }
-    let slice = dedupe2d(slice.into_iter(), 0.02);
+    let origins: Vec<[f64; 2]> = ctx
+        .origins
+        .iter()
+        .filter(|o| (0.3..=2.5).contains(&plane.height(**o)))
+        .map(|o| [o[0], o[1]])
+        .collect();
+    let keep = wall_mask(&slice, &origins);
+    let slice = dedupe2d(
+        slice
+            .into_iter()
+            .zip(keep)
+            .filter_map(|(p, k)| k.then_some(p)),
+        0.02,
+    );
     let low = dedupe2d(low.into_iter(), 0.02);
     let ground = dedupe2d(ground.into_iter(), opts.cell_m);
 
@@ -304,6 +367,9 @@ fn room_polygons(
     if ground.len() >= 100 {
         grid.set_walkable(ground, 3);
     }
+    if tracks.is_empty() {
+        return auto_rooms::rooms(&grid, lines, plane, opts);
+    }
     let labels = grid.label();
 
     let mut names: Vec<&str> = Vec::new();
@@ -356,74 +422,4 @@ fn room_polygons(
         });
     }
     out
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// SVG drawing of one floor (100 px per metre, north up); `None` when the
-/// plan has no such floor.
-pub fn to_svg(plan: &Floorplan, floor: i32) -> Option<String> {
-    let level = plan.floors.iter().find(|f| f.floor == floor)?;
-    let mut xs: Vec<f64> = Vec::new();
-    let mut ys: Vec<f64> = Vec::new();
-    for s in level.walls.iter().chain(&level.doors) {
-        xs.extend([s[0], s[2]]);
-        ys.extend([s[1], s[3]]);
-    }
-    for r in &level.rooms {
-        xs.extend(r.polygon.iter().map(|p| p[0]));
-        ys.extend(r.polygon.iter().map(|p| p[1]));
-    }
-    let fold = |v: &[f64], f: fn(f64, f64) -> f64, init: f64| v.iter().copied().fold(init, f);
-    let (x0, x1) = (fold(&xs, f64::min, 0.0), fold(&xs, f64::max, 1.0));
-    let (y0, y1) = (fold(&ys, f64::min, 0.0), fold(&ys, f64::max, 1.0));
-    let (px, pad) = (100.0, 0.5);
-    let (w, h) = ((x1 - x0 + 2.0 * pad) * px, (y1 - y0 + 2.0 * pad) * px);
-    let tx = |x: f64| (x - x0 + pad) * px;
-    let ty = |y: f64| (y1 - y + pad) * px;
-    let mut svg = String::new();
-    let _ = write!(
-        svg,
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w:.0}\" height=\"{h:.0}\" viewBox=\"0 0 {w:.1} {h:.1}\">\n<rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n"
-    );
-    for r in &level.rooms {
-        let pts: Vec<String> = r
-            .polygon
-            .iter()
-            .map(|p| format!("{:.1},{:.1}", tx(p[0]), ty(p[1])))
-            .collect();
-        let _ = writeln!(
-            svg,
-            "<polygon points=\"{}\" fill=\"#e8eef7\" stroke=\"#8aa0c0\" stroke-width=\"2\"/>",
-            pts.join(" ")
-        );
-    }
-    for s in &level.walls {
-        let _ = writeln!(
-            svg,
-            "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#202020\" stroke-width=\"6\" stroke-linecap=\"square\"/>",
-            tx(s[0]), ty(s[1]), tx(s[2]), ty(s[3])
-        );
-    }
-    for s in &level.doors {
-        let _ = writeln!(
-            svg,
-            "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#d08020\" stroke-width=\"4\" stroke-dasharray=\"8 6\"/>",
-            tx(s[0]), ty(s[1]), tx(s[2]), ty(s[3])
-        );
-    }
-    for r in &level.rooms {
-        let _ = writeln!(
-            svg,
-            "<text x=\"{:.1}\" y=\"{:.1}\" font-family=\"sans-serif\" font-size=\"22\" text-anchor=\"middle\">{} ({:.1} m²)</text>",
-            tx(r.hotspot[0]), ty(r.hotspot[1]), xml_escape(&r.name), r.area_m2
-        );
-    }
-    svg.push_str("</svg>\n");
-    Some(svg)
 }
