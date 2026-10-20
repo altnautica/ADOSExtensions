@@ -28,6 +28,24 @@ All notable changes to the World Engine extension.
   show as floor discs that jump the walker there. The plugin viewer walks
   against the job's ESDF too.
 - The prepare stage records the LiDAR scan origins (`lidar_origins.json`).
+- **Planar LiDAR sessions on the node.** A rig whose LiDAR is `planar`
+  (RPLIDAR C1 class) is scan-matched in-process ahead of SfM (`ados-scan2d`:
+  local SLAM, loop search, pose graph). Its body trajectory goes to
+  `lidar2d/trajectory.tum` with `lidar2d/summary.json`, is aligned onto a
+  recorded pose track when there is one, re-poses the keyframes as `lidar2d`
+  priors (0.03 m across, 0.25 m in height) for the pose-prior mapper (never
+  fixed poses), and re-registers the sweeps and scan origins. The sfm stage
+  detail carries `lidar2d` and `prior_source`. GLIM and its submit-time check
+  apply to 3D (solid-state or spinning) LiDAR rigs only, and a planar rig
+  keeps the monocular depth prior in training.
+- **Planar LiDAR-camera calibration.** `lidar_camera` on a planar-LiDAR rig
+  runs natively: the AprilGrid board is found in each frame paired with a
+  scan (within 50 ms), the scan points on the board are line-fitted, and the
+  extrinsic is solved linearly and refined with a Huber loss. It needs at
+  least 10 views spanning 30° of tilt about both camera axes and fails above
+  2 cm RMS point-to-board error. 3D LiDARs keep the container method.
+- The mirror/glass mask pass ignores cloud points beyond the rig LiDAR's
+  maximum range (`masks.py --lidar-max-range`).
 
 ## [2.0.0]
 

@@ -74,7 +74,7 @@ pub fn max_speed(poses: &[(u64, Mat4)]) -> Option<(f64, u64, u64)> {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Reposed {
     /// Frames posed from the trajectory.
-    pub glim: usize,
+    pub posed: usize,
     /// Frames outside the trajectory that kept their recorded pose.
     pub recorded: usize,
     /// Frames outside the trajectory removed from the dataset.
@@ -120,7 +120,7 @@ pub fn rewrite_frames(
                 f.t_world_cam = Some(geom::mul(&body, &cam.t_body_sensor.0));
                 // The recorded track's covariance no longer describes this pose.
                 f.prior_sigma_m = None;
-                n.glim += 1;
+                n.posed += 1;
             }
             None if keep_recorded => n.recorded += 1,
             None => {
@@ -195,7 +195,7 @@ pub fn apply_trajectory(
     };
     let n = rewrite_frames(dataset, rig, &traj, track.is_some())?;
     summary.used = true;
-    summary.frames_glim = n.glim;
+    summary.frames_glim = n.posed;
     summary.frames_recorded = n.recorded;
     summary.frames_dropped = n.dropped;
     Ok(summary)

@@ -68,6 +68,8 @@ jsonschema = { version = "0.59", default-features = false }
 # and the small dense solves (board pose, extrinsic least squares).
 aprilgrid = "0.8"
 nalgebra = "0.33"
+# A planar LiDAR session's trajectory (scan matching, loop closure).
+ados-scan2d = { path = "../scan2d" }
 
 # Owner-only DACLs on the standalone node's secret files.
 [target.'cfg(windows)'.dependencies]

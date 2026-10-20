@@ -13,6 +13,7 @@ pub mod export;
 pub mod geom;
 pub mod glim;
 pub mod glim_bag;
+pub mod lidar_poses;
 pub mod mesh;
 pub mod pairs;
 pub mod pipeline;
@@ -22,6 +23,7 @@ pub mod process;
 pub mod products_stage;
 pub mod products_tour;
 pub mod runner;
+pub mod scan2d;
 pub mod session_data;
 pub mod sfm;
 #[cfg(any(test, feature = "mock"))]

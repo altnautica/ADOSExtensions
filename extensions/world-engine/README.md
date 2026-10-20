@@ -125,14 +125,18 @@ takes a tool from `PATH`; `ADOS_TOOL_<NAME>` overrides one explicitly.
 
 - **COLMAP 4.2** for structure-from-motion: with a pose track, pose-chosen
   image pairs, verified pairs that contradict the track dropped, and
-  prior-weighted mapping (or triangulation against a fixed LiDAR trajectory);
-  without one, incremental / hierarchical mapping.
+  prior-weighted mapping (or triangulation against a fixed 3D LiDAR
+  trajectory); without one, incremental / hierarchical mapping.
+- **GLIM** (docker) for the LiDAR-inertial trajectory of a 3D LiDAR rig. A
+  planar LiDAR rig (RPLIDAR C1 class) needs no external tool: its scans are
+  matched in-process and pose the keyframes as priors.
 - **Brush** for the `preview` preset; **gsplat** (the `gsplat_train` uv project)
   for `hq`, `tour` and `warehouse`. Without working gsplat kernels the node
   trains with Brush at full length and records why.
 - **splat-transform** (SPZ) and the **Spark LoD builder** (`.rad`).
 - **Kalibr** and **direct_visual_lidar_calibration** containers (docker; WSL
-  on Windows) for calibration jobs.
+  on Windows) for calibration jobs. A planar LiDAR's LiDAR–camera
+  calibration runs natively from the AprilGrid board its scan line crosses.
 
 A preset whose tools are not installed is refused with `E_TOOL_MISSING` and
 the missing tool's name. On Windows the node runs standalone:

@@ -259,7 +259,7 @@ fn frames_are_reposed_from_the_trajectory() {
     assert_eq!(
         n,
         Reposed {
-            glim: 2,
+            posed: 2,
             recorded: 1,
             dropped: 0
         }
@@ -277,7 +277,7 @@ fn frames_are_reposed_from_the_trajectory() {
 
     // Without one, it is dropped with its image.
     let n = rewrite_frames(dir.path(), &rig, &traj, false).unwrap();
-    assert_eq!((n.glim, n.dropped), (2, 1));
+    assert_eq!((n.posed, n.dropped), (2, 1));
     let back = read_frames(dir.path()).unwrap();
     assert_eq!(back.len(), 2);
     assert!(!dir.path().join("images/cam0/9000000000.png").exists());
