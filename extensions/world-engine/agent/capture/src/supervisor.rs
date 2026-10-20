@@ -6,7 +6,10 @@
 //! the pose provider, the HUD page and the capture loop running. A changed
 //! config stops the run (closing an open session) and starts a new one; a
 //! disabled or invalid config leaves nothing bound, so the link reports the
-//! service as not running.
+//! service as not running. The pose provider and LiDAR source are chosen
+//! from the rig document when a run starts, so a run that is not recording
+//! is restarted when `rig.json` changes (a rig pushed after the service
+//! started would otherwise never get its stereo VIO).
 //!
 //! Subscriptions that cannot be withdrawn (frames, vehicle state, the FC
 //! EKF messages, front-panel buttons) are made once and routed to whichever
@@ -113,6 +116,8 @@ pub struct Feeds {
 /// One running capture.
 pub struct CaptureRun {
     config: AtlasRuntimeConfig,
+    /// The `rig.json` bytes the pose provider was chosen from (`None`: absent).
+    rig_doc: Option<Vec<u8>>,
     cancel: Shutdown,
     tasks: Vec<JoinHandle<()>>,
     capture: JoinHandle<()>,
@@ -142,6 +147,7 @@ impl CaptureRun {
             .clone()
             .unwrap_or_else(std::env::temp_dir)
             .join("capture");
+        let rig_doc = std::fs::read(&paths.rig).ok();
         let rig = crate::rig_source::load_rig(&paths.rig);
         let chosen =
             crate::providers::pose_provider(&config, &profile, rig.as_ref(), &feeds.fc, &work_dir);
@@ -194,6 +200,7 @@ impl CaptureRun {
         let capture = tokio::spawn(run_capture_loop(deps, cancel.clone()));
         Ok(Self {
             config,
+            rig_doc,
             cancel,
             tasks,
             capture,
@@ -210,6 +217,18 @@ impl CaptureRun {
         self.capture.is_finished()
     }
 
+    /// The rig document changed since the run started and no session is
+    /// recording (the capture-active marker is absent), so the run should be
+    /// restarted to pick its pose provider from the new rig.
+    pub fn rig_stale(&self, paths: &Paths) -> bool {
+        let recording = paths.active_marker.as_ref().is_some_and(|m| m.exists());
+        rig_restart_due(
+            self.rig_doc.as_deref(),
+            std::fs::read(&paths.rig).ok().as_deref(),
+            recording,
+        )
+    }
+
     /// Stop: the loop closes an open session, then everything is torn down.
     pub async fn stop(self, feeds: &Feeds) {
         self.cancel.trigger();
@@ -224,6 +243,12 @@ impl CaptureRun {
         feeds.router.detach();
         let _ = std::fs::remove_file(&self.control_path);
     }
+}
+
+/// Whether a run started with rig document `started` should restart now that
+/// the document reads `now`: only when it changed and nothing is recording.
+pub fn rig_restart_due(started: Option<&[u8]>, now: Option<&[u8]>, recording: bool) -> bool {
+    !recording && started != now
 }
 
 /// Keep the display's plugin page in step with the capture state (about 1 Hz,
@@ -368,7 +393,13 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             last_idle = idle;
         }
         if run.as_ref().map(CaptureRun::config) == desired.as_ref().ok() {
-            continue;
+            if !run
+                .as_ref()
+                .is_some_and(|r| r.rig_stale(&Paths::from_env()))
+            {
+                continue;
+            }
+            tracing::info!("atlas capture restarting for a changed rig document");
         }
         if let Some(r) = run.take() {
             tracing::info!("atlas capture stopping for a config change");
@@ -434,6 +465,22 @@ mod tests {
         }))
         .unwrap_err();
         assert!(why.contains("atlas.cameras"), "{why}");
+    }
+
+    #[test]
+    fn a_changed_rig_restarts_only_an_idle_run() {
+        let (a, b): (&[u8], &[u8]) = (b"{\"rig_id\":\"a\"}", b"{\"rig_id\":\"b\"}");
+        assert!(!rig_restart_due(Some(a), Some(a), false), "unchanged");
+        assert!(
+            rig_restart_due(None, Some(a), false),
+            "rig pushed after start"
+        );
+        assert!(rig_restart_due(Some(a), Some(b), false), "rig replaced");
+        assert!(rig_restart_due(Some(a), None, false), "rig removed");
+        assert!(
+            !rig_restart_due(None, Some(a), true),
+            "never under a recording session"
+        );
     }
 
     #[test]
