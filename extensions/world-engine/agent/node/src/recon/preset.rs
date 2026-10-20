@@ -152,6 +152,57 @@ pub fn stage_weight(stage: &str) -> f32 {
     }
 }
 
+/// Per-job switches that can only turn a preset's optional products off (job
+/// param `products`, e.g. `{"stills": false, "lod": false}`); an absent key
+/// keeps what the preset makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProductSwitches {
+    /// Hero stills and the static tour bundle built from them.
+    pub stills: bool,
+    /// The Spark LoD (`.rad`) splat.
+    pub lod: bool,
+}
+
+impl Default for ProductSwitches {
+    fn default() -> Self {
+        Self {
+            stills: true,
+            lod: true,
+        }
+    }
+}
+
+impl ProductSwitches {
+    /// Read the `products` param (`None` = the preset's products).
+    pub fn parse(v: Option<&serde_json::Value>) -> Result<Self, String> {
+        let mut s = Self::default();
+        let Some(v) = v else { return Ok(s) };
+        let obj = v
+            .as_object()
+            .ok_or("`products` must be an object like {\"stills\": false, \"lod\": false}")?;
+        for (k, val) in obj {
+            let on = val
+                .as_bool()
+                .ok_or_else(|| format!("`products.{k}` must be true or false"))?;
+            match k.as_str() {
+                "stills" => s.stills = on,
+                "lod" => s.lod = on,
+                _ => return Err(format!("unknown product switch `{k}` (stills, lod)")),
+            }
+        }
+        Ok(s)
+    }
+
+    /// `spec` with the switched-off products removed.
+    pub fn apply(self, spec: PresetSpec) -> PresetSpec {
+        PresetSpec {
+            tour: spec.tour && self.stills,
+            lod: spec.lod && self.lod,
+            ..spec
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,5 +218,23 @@ mod tests {
         assert!(Preset::Warehouse.spec().aisles && Preset::Tour.spec().tour);
         let total: f32 = RECONSTRUCT_STAGES.iter().map(|s| stage_weight(s)).sum();
         assert!((total - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn product_switches_only_turn_preset_products_off() {
+        use serde_json::json;
+        let tour = Preset::Tour.spec();
+        let off = ProductSwitches::parse(Some(&json!({"stills": false, "lod": false}))).unwrap();
+        let s = off.apply(tour);
+        assert!(!s.tour && !s.lod && s.floorplan && s.mesh && s.train_steps == tour.train_steps);
+        assert_eq!(ProductSwitches::parse(None).unwrap().apply(tour), tour);
+        let on = ProductSwitches::parse(Some(&json!({"lod": true}))).unwrap();
+        assert!(
+            !on.apply(Preset::Hq.spec()).lod,
+            "a switch cannot add a product"
+        );
+        assert!(ProductSwitches::parse(Some(&json!({"mesh": false}))).is_err());
+        assert!(ProductSwitches::parse(Some(&json!({"lod": "no"}))).is_err());
+        assert!(ProductSwitches::parse(Some(&json!(false))).is_err());
     }
 }

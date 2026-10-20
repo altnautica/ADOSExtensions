@@ -52,6 +52,8 @@ pub enum StagedJob {
         /// GLIM odometry of a LiDAR session (job param `glim_odometry`,
         /// `cpu` when absent).
         glim_odometry: glim::GlimOdometry,
+        /// Optional products switched off for this job (job param `products`).
+        products: preset::ProductSwitches,
     },
     Change {
         a: String,
@@ -163,6 +165,8 @@ pub fn prepare_staged(
                         StageError::input("`glim_odometry` must be \"cpu\" or \"gpu\"")
                     })?,
             };
+            let products = preset::ProductSwitches::parse(job.params.get("products"))
+                .map_err(StageError::input)?;
             Ok(StagedJob::Reconstruct {
                 session_id,
                 session_dir,
@@ -170,6 +174,7 @@ pub fn prepare_staged(
                 generation,
                 chunk_frames,
                 glim_odometry,
+                products,
             })
         }
         ComputeJobKind::Change => {

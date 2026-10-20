@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use ados_capture_contract::{CameraModelModel, RigSensorKind, SessionReader};
 
-use super::preset::{stage_weight, CALIBRATE_STAGES, CHANGE_STAGES, RECONSTRUCT_STAGES};
+use super::preset::{
+    stage_weight, ProductSwitches, CALIBRATE_STAGES, CHANGE_STAGES, RECONSTRUCT_STAGES,
+};
 use super::products_stage::{self, ArtifactOut, ProductsInput, OUTPUTS_FILE};
 use super::{
     check_tools, chunks, glim, job_dir, prepare, sfm, train, Preset, StageError, StagedJob,
@@ -141,6 +143,7 @@ pub fn run_staged(
             generation,
             chunk_frames,
             glim_odometry,
+            products,
         } => reconstruct(
             &dir,
             session_id,
@@ -148,6 +151,7 @@ pub fn run_staged(
             *preset,
             *chunk_frames,
             *glim_odometry,
+            *products,
             *generation,
             ctx,
         ),
@@ -179,12 +183,13 @@ fn reconstruct(
     preset: Preset,
     chunk_frames: Option<usize>,
     glim_odometry: glim::GlimOdometry,
+    products: ProductSwitches,
     generation: u32,
     ctx: &RunCtx<'_>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
     let stages = Stages::new(ctx.sink, &RECONSTRUCT_STAGES);
     check_tools(ctx.runner, &preset.required_tools())?;
-    let spec = preset.spec();
+    let spec = products.apply(preset.spec());
     let reader = SessionReader::open(session_dir)?;
     fs::write(
         dir.join("session-rig.json"),
