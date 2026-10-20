@@ -97,6 +97,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ados-rplidar"
+version = "0.1.0"
+dependencies = [
+ "nix 0.29.0",
+ "serialport",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "ados-sdk"
 version = "0.104.0"
 dependencies = [

@@ -24,6 +24,7 @@ members = [
   "extensions/world-engine/agent/transport",
   "extensions/world-engine/agent/capture",
   "extensions/world-engine/agent/capture/livox",
+  "extensions/world-engine/agent/capture/rplidar",
   "extensions/world-engine/agent/node",
   "extensions/world-engine/agent/link",
 ]
