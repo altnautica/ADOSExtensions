@@ -2,9 +2,12 @@
 //!
 //! Two frames pair when both carry a `trigger_seq` and the sequences are
 //! equal, or, when either lacks one, when their host timestamps are within
-//! [`PAIR_TOLERANCE_NS`]. Only Gray8 frames of equal size pair. The newest
-//! unmatched frame of each side is held until its partner arrives or a newer
-//! frame of the same side replaces it.
+//! [`PAIR_TOLERANCE_NS`]. Basalt tracks on 8-bit luma, so each frame is
+//! reduced to Gray8 first ([`luma`]): Gray8 as is, the Y plane of NV12 and
+//! YUV 4:2:0, BT.601 luma of RGB24, the high byte of Gray16. A Bayer mosaic
+//! or a buffer that does not match its size is rejected. The newest unmatched
+//! frame of each side is held until its partner arrives or a newer frame of
+//! the same side replaces it.
 
 use std::borrow::Cow;
 
@@ -14,6 +17,40 @@ use crate::frame_source::CapturedFrame;
 
 /// Largest timestamp gap of an untriggered pair.
 pub const PAIR_TOLERANCE_NS: u64 = 1_000_000;
+
+/// The 8-bit luma plane of `f`, or `None` for a Bayer mosaic or a buffer
+/// whose length does not match its format and size.
+pub fn luma(f: &CapturedFrame) -> Option<Cow<'_, [u8]>> {
+    let px = f.width as usize * f.height as usize;
+    if px == 0 || f.pixels.len() != f.format.frame_bytes(f.width, f.height) {
+        return None;
+    }
+    match f.format {
+        FrameFormat::Gray8 => Some(Cow::Borrowed(f.pixels.as_slice())),
+        FrameFormat::Nv12 | FrameFormat::Yuv420p => Some(Cow::Borrowed(&f.pixels[..px])),
+        // BT.601 luma in 8.8 fixed point: 77 R + 150 G + 29 B (sum 256).
+        FrameFormat::Rgb24 => Some(Cow::Owned(
+            f.pixels
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|[r, g, b]| {
+                    ((77 * u32::from(*r) + 150 * u32::from(*g) + 29 * u32::from(*b) + 128) >> 8)
+                        as u8
+                })
+                .collect(),
+        )),
+        FrameFormat::Gray16 => Some(Cow::Owned(
+            f.pixels
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|[_, hi]| *hi)
+                .collect(),
+        )),
+        FrameFormat::BayerRggb8 | FrameFormat::BayerRggb16 => None,
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Pending {
@@ -25,13 +62,13 @@ struct Pending {
 }
 
 impl Pending {
-    fn of(f: &CapturedFrame) -> Self {
+    fn of(f: &CapturedFrame, gray: Cow<'_, [u8]>) -> Self {
         Self {
             ts_ns: f.ts_ns,
             trigger_seq: f.trigger_seq,
             width: f.width,
             height: f.height,
-            pixels: f.pixels.clone(),
+            pixels: gray.into_owned(),
         }
     }
 
@@ -61,7 +98,7 @@ pub struct StereoPair<'a> {
 pub enum PairOutcome<'a> {
     /// Not one of the two cameras.
     Ignored,
-    /// Not Gray8, or the pixel buffer does not match the size: dropped.
+    /// A Bayer mosaic, or the pixel buffer does not match the size: dropped.
     Rejected,
     /// Held for its partner.
     Held,
@@ -91,10 +128,9 @@ impl StereoPairer {
         if !is_left && f.camera_id != self.right_id {
             return PairOutcome::Ignored;
         }
-        let plane = f.width as usize * f.height as usize;
-        if f.format != FrameFormat::Gray8 || f.pixels.len() != plane || plane == 0 {
+        let Some(gray) = luma(f) else {
             return PairOutcome::Rejected;
-        }
+        };
         let (mine, other) = if is_left {
             (&mut self.left, &mut self.right)
         } else {
@@ -104,17 +140,9 @@ impl StereoPairer {
             Some(p) => {
                 *mine = None;
                 let (t_ns, left, right) = if is_left {
-                    (
-                        f.ts_ns,
-                        Cow::Borrowed(f.pixels.as_slice()),
-                        Cow::Owned(p.pixels),
-                    )
+                    (f.ts_ns, gray, Cow::Owned(p.pixels))
                 } else {
-                    (
-                        p.ts_ns,
-                        Cow::Owned(p.pixels),
-                        Cow::Borrowed(f.pixels.as_slice()),
-                    )
+                    (p.ts_ns, Cow::Owned(p.pixels), gray)
                 };
                 PairOutcome::Paired(StereoPair {
                     t_ns,
@@ -125,7 +153,7 @@ impl StereoPairer {
                 })
             }
             None => {
-                *mine = Some(Pending::of(f));
+                *mine = Some(Pending::of(f, gray));
                 PairOutcome::Held
             }
         }

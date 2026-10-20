@@ -1,7 +1,7 @@
 //! [`VioPose`]: Basalt stereo-inertial VIO as a supervised `basalt-ados`
 //! child process.
 //!
-//! Inputs: [`PoseProvider::feed_frame`] pairs the left and right Gray8 frames
+//! Inputs: [`PoseProvider::feed_frame`] pairs the left and right frames as Gray8 luma
 //! ([`pairing`]) and [`PoseProvider::feed_imu`] rotates the sensor-bus IMU
 //! samples from body FLU into the IMU frame (`v_imu = R_imu_body * v_body`;
 //! the samples are the IMU's own measurements expressed in body axes, so no
@@ -98,7 +98,7 @@ pub struct VioStats {
     pub imu_dropped: u64,
     /// Stereo pairs dropped on a full queue.
     pub pairs_dropped: u64,
-    /// Frames of the stereo cameras that were not Gray8 or were malformed.
+    /// Frames of the stereo cameras with no luma plane (Bayer) or a malformed buffer.
     pub frames_rejected: u64,
     /// Child exits (each followed by a restart).
     pub restarts: u64,

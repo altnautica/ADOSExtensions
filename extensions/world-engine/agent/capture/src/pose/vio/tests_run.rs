@@ -85,10 +85,10 @@ fn pairs_untriggered_within_one_ms() {
 }
 
 #[test]
-fn pairing_rejects_non_gray_and_ignores_other_cameras() {
+fn pairing_reduces_colour_to_luma_rejects_bayer_and_ignores_other_cameras() {
     let mut p = StereoPairer::new("cam_l", "cam_r");
     assert!(matches!(
-        p.push(&frame("cam_l", 1, None, FrameFormat::Nv12, 1)),
+        p.push(&frame("cam_l", 1, None, FrameFormat::BayerRggb8, 1)),
         PairOutcome::Rejected
     ));
     assert!(matches!(
@@ -98,6 +98,23 @@ fn pairing_rejects_non_gray_and_ignores_other_cameras() {
     let mut short = frame("cam_r", 1, None, FrameFormat::Gray8, 1);
     short.pixels.pop();
     assert!(matches!(p.push(&short), PairOutcome::Rejected));
+    // RGB24 (what a simulated or RTSP camera delivers) pairs as BT.601 luma:
+    // pure red 255 → 77, pure white → 255; 3 bytes per pixel in, 1 out.
+    let mut l = frame("cam_l", 10, Some(4), FrameFormat::Rgb24, 0);
+    l.pixels = [255u8, 0, 0].repeat(8);
+    let mut r = frame("cam_r", 10, Some(4), FrameFormat::Rgb24, 0);
+    r.pixels = vec![255; 24];
+    assert!(matches!(p.push(&l), PairOutcome::Held));
+    let (_, left, right) = paired(p.push(&r));
+    assert_eq!((left.len(), left[0], right[0]), (8, 77, 255));
+    // NV12 pairs on its Y plane; Gray16 on its high byte.
+    let mut l = frame("cam_l", 20, Some(5), FrameFormat::Nv12, 0);
+    l.pixels = [vec![9u8; 8], vec![128u8; 4]].concat();
+    let mut r = frame("cam_r", 20, Some(5), FrameFormat::Gray16, 0);
+    r.pixels = [0x34u8, 0x12].repeat(8);
+    assert!(matches!(p.push(&l), PairOutcome::Held));
+    let (_, left, right) = paired(p.push(&r));
+    assert_eq!((left, right), (vec![9u8; 8], vec![0x12u8; 8]));
 }
 
 async fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
