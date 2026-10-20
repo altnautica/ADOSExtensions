@@ -160,6 +160,17 @@ pub fn run_staged(
     }
 }
 
+/// Whether training takes the monocular depth prior: only for a camera-only
+/// session SfM mapped without prior poses. A posed session (VIO, flight
+/// controller or LiDAR odometry track) already has its geometry from the
+/// track, and on such sessions the prior cost about 3 dB of training PSNR;
+/// where it is used the trainer still drops each view whose prior disagrees
+/// with the sparse points. `prepare` computes the priors either way (the
+/// motion and mirror masks use them).
+fn train_depth_prior(preset_wants: bool, has_lidar: bool, sfm_detail: &serde_json::Value) -> bool {
+    preset_wants && !has_lidar && sfm_detail["method"].as_str() != Some("known_poses")
+}
+
 #[allow(clippy::too_many_arguments)]
 fn reconstruct(
     dir: &Path,
@@ -284,6 +295,7 @@ fn reconstruct(
     });
     let max_splats = train::max_splats_for(spec.max_splats_8gb, ctx.vram_mb);
     let train_dir = dir.join("train");
+    let depth_prior = train_depth_prior(spec.depth_priors, has_lidar, &sfm_detail);
     stages.run("train", |p| {
         // `Some(reason)`: train with Brush, which stands in at full length
         // (and the stage says why) when the gsplat kernels do not run on this
@@ -301,17 +313,20 @@ fn reconstruct(
         let train_one = |ds: &Path, out: &Path, p: &mut dyn FnMut(f32)| match &brush {
             Some(reason) => train::brush(runner, ds, out, steps, max_splats, reason.as_deref(), p),
             None => {
-                // The depth priors `prepare` computed for a camera-only session.
                 let depths = ds.join("depths");
-                let depths = (spec.depth_priors && !has_lidar && depths.is_dir()).then_some(depths);
+                let depths = (depth_prior && depths.is_dir()).then_some(depths);
                 let p = &mut |f| p(0.1 + 0.9 * f);
                 train::gsplat(runner, ds, out, steps, max_splats, ut, depths.as_deref(), p)
             }
         };
-        match &chunk_plan {
-            Some(plan) => chunks::run_train(plan, &dataset, &train_dir, &sfm_detail, &train_one, p),
-            None => Ok(serde_json::to_value(train_one(&dataset, &train_dir, p)?)?),
-        }
+        let mut detail = match &chunk_plan {
+            Some(plan) => {
+                chunks::run_train(plan, &dataset, &train_dir, &sfm_detail, &train_one, p)?
+            }
+            None => serde_json::to_value(train_one(&dataset, &train_dir, p)?)?,
+        };
+        detail["depth_prior"] = depth_prior.into();
+        Ok(detail)
     })?;
 
     if spec.mesh {
@@ -495,4 +510,25 @@ pub fn read_outputs(job_dir: &Path) -> Result<Vec<ArtifactOut>, StageError> {
     Ok(serde_json::from_slice(&fs::read(
         job_dir.join("out").join(OUTPUTS_FILE),
     )?)?)
+}
+
+#[cfg(test)]
+mod depth_prior_tests {
+    use super::train_depth_prior;
+    use serde_json::json;
+
+    #[test]
+    fn the_mono_depth_prior_trains_only_pose_free_camera_sessions() {
+        let mapped = json!({"method": "mapper"});
+        let posed = json!({"method": "known_poses"});
+        assert!(train_depth_prior(true, false, &mapped));
+        assert!(train_depth_prior(
+            true,
+            false,
+            &json!({"method": "hierarchical_mapper"})
+        ));
+        assert!(!train_depth_prior(true, false, &posed));
+        assert!(!train_depth_prior(true, true, &mapped));
+        assert!(!train_depth_prior(false, false, &mapped));
+    }
 }

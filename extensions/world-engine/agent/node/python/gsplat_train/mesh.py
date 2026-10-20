@@ -40,7 +40,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 class TsdfFuser:
     """TSDF fusion of depth + colour views into a sparse voxel block grid."""
 
-    def __init__(self, voxel: float, device: str | None = None):
+    def __init__(self, voxel: float, device: str | None = None, max_blocks: int | None = None):
         import open3d as o3d
         import open3d.core as o3c
 
@@ -56,7 +56,9 @@ class TsdfFuser:
             device=self.device,
         )
         self.voxel = voxel
+        self.max_blocks = max_blocks
         self.used = 0
+        self.capped = 0  # views skipped because they would grow the grid past max_blocks
 
     def integrate(self, rgb: np.ndarray, depth: np.ndarray, K: np.ndarray, w2c: np.ndarray) -> bool:
         """rgb HxWx3 float 0..1, depth HxW metres (0 = none). False when the view has too little depth."""
@@ -72,6 +74,9 @@ class TsdfFuser:
         K_t = o3c.Tensor(np.asarray(K, np.float64))
         w2c_t = o3c.Tensor(np.asarray(w2c, np.float64))
         blocks = self.grid.compute_unique_block_coordinates(depth_t, K_t, w2c_t, 1.0, depth_max)
+        if self.max_blocks is not None and self.grid.hashmap().size() + len(blocks) > self.max_blocks:
+            self.capped += 1
+            return False
         self.grid.integrate(blocks, depth_t, color_t, K_t, w2c_t, 1.0, depth_max)
         self.used += 1
         return True
@@ -84,28 +89,52 @@ def is_out_of_memory(e: BaseException) -> bool:
     return "out of memory" in str(e).lower()
 
 
+# Fusion attempts in order: the GPU at the asked voxel, the GPU at twice the voxel (an
+# eighth of the blocks), then the host at twice the voxel with a block cap
+# (CPU_MAX_BLOCKS x 16^3 voxels x 20 B is about 8 GB).
+CPU_MAX_BLOCKS = 100_000
+
+
+def fusion_attempts(voxel: float) -> list[dict]:
+    return [
+        {"device": None, "voxel": voxel, "max_blocks": None},
+        {"device": None, "voxel": 2 * voxel, "max_blocks": None},
+        {"device": "CPU:0", "voxel": 2 * voxel, "max_blocks": CPU_MAX_BLOCKS},
+    ]
+
+
 def tsdf_mesh(args, splat, views):
+    """`(mesh, fusion)`: the surface and which fusion attempt produced it."""
     renderer = common.SplatRenderer(splat)
-    try:
-        return fuse(args, renderer, views, None)
-    except RuntimeError as e:
-        # A large site at a fine voxel outgrows the GPU next to the splat; host memory holds it.
-        if not is_out_of_memory(e):
-            raise
-    # Outside the handler, so the traceback no longer pins the GPU grid.
+    attempts = fusion_attempts(args.voxel)
+    for k, a in enumerate(attempts):
+        try:
+            mesh, fuser = fuse(renderer, views, **a)
+            return mesh, {"device": str(fuser.device), "voxel_m": a["voxel"], "attempt": k + 1,
+                          "views_capped": fuser.capped}
+        except RuntimeError as e:
+            if not is_out_of_memory(e) or k == len(attempts) - 1:
+                raise
+        # Outside the handler, so the traceback no longer pins the GPU grid.
+        release_gpu()
+        nxt = attempts[k + 1]
+        common.progress(0.05, f"TSDF grid out of GPU memory: retrying on {nxt['device'] or 'the GPU'} "
+                              f"at voxel {nxt['voxel']:.3f} m")
+    raise AssertionError("unreachable")
+
+
+def release_gpu() -> None:
     import gc
 
-    gc.collect()
     import open3d.core as o3c
 
+    gc.collect()
     if o3c.cuda.is_available():
         o3c.cuda.release_cache()
-    common.progress(0.05, "TSDF grid out of GPU memory: fusing on the CPU")
-    return fuse(args, renderer, views, "CPU:0")
 
 
-def fuse(args, renderer, views, device: str | None):
-    fuser = TsdfFuser(args.voxel, device)
+def fuse(renderer, views, device: str | None, voxel: float, max_blocks: int | None):
+    fuser = TsdfFuser(voxel, device, max_blocks)
     for i, v in enumerate(views):
         s = min(1.0, MAX_RENDER_SIDE / max(v.width, v.height))
         w, h = max(1, round(v.width * s)), max(1, round(v.height * s))
@@ -119,7 +148,7 @@ def fuse(args, renderer, views, device: str | None):
     if fuser.used == 0:
         raise RuntimeError("no view rendered usable depth")
     common.progress(0.82, "extracting surface")
-    return fuser.mesh()
+    return fuser.mesh(), fuser
 
 
 def poisson_mesh(args, splat, views):
@@ -152,7 +181,7 @@ def poisson_mesh(args, splat, views):
     return mesh
 
 
-def finish(args, mesh, method: str) -> None:
+def finish(args, mesh, method: str, **extra) -> None:
     import open3d as o3d
 
     mesh.remove_degenerate_triangles()
@@ -172,7 +201,7 @@ def finish(args, mesh, method: str) -> None:
         raise IOError(f"cannot write {ply}")
     if not o3d.io.write_triangle_mesh(str(glb), mesh):
         raise IOError(f"cannot write {glb}")
-    common.done(triangles=int(len(mesh.triangles)), method=method, ply=str(ply), glb=str(glb))
+    common.done(triangles=int(len(mesh.triangles)), method=method, ply=str(ply), glb=str(glb), **extra)
 
 
 def main(args) -> None:
@@ -181,11 +210,11 @@ def main(args) -> None:
     views, _, _ = common.load_colmap_views(args.colmap)
     reason = common.gsplat_unavailable_reason()
     if reason is None:
-        mesh, method = tsdf_mesh(args, splat, views), "tsdf"
+        mesh, fusion = tsdf_mesh(args, splat, views)
+        finish(args, mesh, "tsdf", fusion=fusion)
     else:
         print(f"{reason}; using Poisson over splat centres", file=sys.stderr)
-        mesh, method = poisson_mesh(args, splat, views), "poisson"
-    finish(args, mesh, method)
+        finish(args, poisson_mesh(args, splat, views), "poisson")
 
 
 if __name__ == "__main__":

@@ -46,25 +46,38 @@ def test_flat_wall_fuses_to_triangles() -> None:
     assert abs(float(np.median(z)) - WALL_Z) < 0.05
 
 
-def test_tsdf_falls_back_to_the_cpu_when_the_gpu_grid_runs_out_of_memory(monkeypatch):
+def test_tsdf_retries_coarser_on_the_gpu_then_capped_on_the_cpu(monkeypatch):
+    import types
+
+    import pytest
+
     calls = []
+    oom = RuntimeError("[Open3D Error] MemoryManagerCUDA.cpp:24 CUDA runtime error: out of memory")
 
-    def fake_fuse(args, renderer, views, device):
-        calls.append(device)
+    def fake_fuse(renderer, views, device, voxel, max_blocks):
+        calls.append((device, voxel, max_blocks))
         if device is None:
-            raise RuntimeError("[Open3D Error] MemoryManagerCUDA.cpp:24 CUDA runtime error: out of memory")
-        return "cpu-mesh"
+            raise oom
+        return "cpu-mesh", types.SimpleNamespace(device="CPU:0", capped=3)
 
+    args = types.SimpleNamespace(voxel=0.02)
     monkeypatch.setattr(mesh.common, "SplatRenderer", lambda splat: object())
+    monkeypatch.setattr(mesh, "release_gpu", lambda: None)
     monkeypatch.setattr(mesh, "fuse", fake_fuse)
-    assert mesh.tsdf_mesh(None, "splat.ply", []) == "cpu-mesh"
-    assert calls == [None, "CPU:0"]
+    out, fusion = mesh.tsdf_mesh(args, "splat.ply", [])
+    assert out == "cpu-mesh"
+    assert calls == [(None, 0.02, None), (None, 0.04, None), ("CPU:0", 0.04, mesh.CPU_MAX_BLOCKS)]
+    assert fusion == {"device": "CPU:0", "voxel_m": 0.04, "attempt": 3, "views_capped": 3}
 
-    def other_error(args, renderer, views, device):
+    def other_error(renderer, views, device, voxel, max_blocks):
         raise RuntimeError("no view rendered usable depth")
 
     monkeypatch.setattr(mesh, "fuse", other_error)
-    import pytest
-
     with pytest.raises(RuntimeError, match="usable depth"):
-        mesh.tsdf_mesh(None, "splat.ply", [])
+        mesh.tsdf_mesh(args, "splat.ply", [])
+
+
+def test_the_cpu_grid_stops_growing_at_its_block_cap() -> None:
+    fuser = mesh.TsdfFuser(0.02, "CPU:0", max_blocks=1)
+    assert not fuser.integrate(*_view(0.0, 0.0))
+    assert fuser.capped == 1 and fuser.used == 0
