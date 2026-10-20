@@ -25,6 +25,7 @@ fn sensor(id: &str, kind: RigSensorKind, role: RigSensorRole, t: [f64; 16]) -> R
         role,
         t_body_sensor: t.into(),
         camera: None,
+        lidar: None,
         imu_noise: None,
         time_offset_ns: 0,
         lever_arm_m: None,
@@ -50,13 +51,27 @@ fn rig() -> Rig {
         calibrated: false,
         readout_ns: 0,
     });
+    let mut lidar = sensor("lidar0", RigSensorKind::Lidar, RigSensorRole::Up, IDENTITY);
+    lidar.lidar = Some(LidarModel {
+        model: "livox-mid360".into(),
+        pattern: LidarModelPattern::Solid,
+        h_fov_deg: 360.0,
+        v_min_deg: -7.0,
+        v_max_deg: 52.0,
+        rate_hz: 10.0,
+        points_per_s: 200_000.0,
+        min_range_m: 0.1,
+        max_range_m: 40.0,
+        range_sigma_m: 0.02,
+        blocked_azimuth_deg: vec![],
+    });
     Rig {
         contract: ContractId::AdosCapture1,
         rig_id: "lidar_rig".into(),
         calib_version: "1".into(),
         sensors: vec![
             cam,
-            sensor("lidar0", RigSensorKind::Lidar, RigSensorRole::Up, IDENTITY),
+            lidar,
             sensor("imu0", RigSensorKind::Imu, RigSensorRole::Nav, IDENTITY),
         ],
     }

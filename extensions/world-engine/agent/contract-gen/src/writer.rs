@@ -124,6 +124,7 @@ impl SessionWriter {
                 "manifest rig does not match rig.json".into(),
             ));
         }
+        rig.check()?;
         let dir = root.join(&manifest.session_id);
         if dir.join("manifest.json").exists() || dir.join("rig.json").exists() {
             return Err(Error::Invalid(format!(

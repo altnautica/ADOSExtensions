@@ -15,7 +15,8 @@ fn rig() -> Rig {
                         "cx": 32.0, "cy": 24.0, "dist": [], "calibrated": false, "readout_ns": 0}},
             {"id": "lidar0", "kind": "lidar", "role": "up", "time_offset_ns": 0,
              "T_body_sensor": [0.0, -1.0, 0.0, 0.05, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.3,
-                               0.0, 0.0, 0.0, 1.0]}
+                               0.0, 0.0, 0.0, 1.0],
+             "lidar": crate::calib::test_util::mid360()}
         ]
     }))
     .unwrap()

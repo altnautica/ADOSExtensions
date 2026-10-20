@@ -23,7 +23,7 @@ pub mod ros2_bag;
 mod stand_in;
 
 #[cfg(test)]
-mod test_util;
+pub(crate) mod test_util;
 #[cfg(test)]
 mod tests;
 

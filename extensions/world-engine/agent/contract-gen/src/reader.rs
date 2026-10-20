@@ -54,6 +54,7 @@ impl SessionReader {
     pub fn open(dir: &Path) -> Result<Self> {
         let manifest: Manifest = serde_json::from_slice(&fs::read(dir.join("manifest.json"))?)?;
         let rig: Rig = serde_json::from_slice(&fs::read(dir.join("rig.json"))?)?;
+        rig.check()?;
         for seg in &manifest.segments {
             let ok = seg.file.strip_prefix("segments/").is_some_and(|f| {
                 f.len() == 11 && f.ends_with(".mcap") && f[..6].bytes().all(|b| b.is_ascii_digit())

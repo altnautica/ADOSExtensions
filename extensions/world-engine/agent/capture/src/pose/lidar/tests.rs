@@ -21,7 +21,11 @@ pub(super) fn rig() -> Rig {
         "rig_id": "test",
         "calib_version": "1",
         "sensors": [
-            { "id": "mid360", "kind": "lidar", "role": "up", "T_body_sensor": T_BODY_LIDAR, "time_offset_ns": 0 },
+            { "id": "mid360", "kind": "lidar", "role": "up", "T_body_sensor": T_BODY_LIDAR, "time_offset_ns": 0,
+              "lidar": { "model": "livox-mid360", "pattern": "solid", "h_fov_deg": 360.0,
+                         "v_min_deg": -7.0, "v_max_deg": 52.0, "rate_hz": 10.0,
+                         "points_per_s": 200000.0, "min_range_m": 0.1, "max_range_m": 40.0,
+                         "range_sigma_m": 0.02 } },
             { "id": "cam", "kind": "camera", "role": "primary",
               "T_body_sensor": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1], "time_offset_ns": 0 }
         ]

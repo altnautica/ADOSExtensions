@@ -34,6 +34,7 @@ pub mod foxglove {
 mod checksums;
 mod geometry;
 mod reader;
+mod rig;
 mod session_id;
 pub mod topics;
 mod writer;
@@ -74,6 +75,10 @@ pub const SCHEMA_FILES: &[(&str, &str)] = &[
     (
         "geo_anchor.schema.json",
         include_str!("../../../contract/schema/geo_anchor.schema.json"),
+    ),
+    (
+        "lidar_model.schema.json",
+        include_str!("../../../contract/schema/lidar_model.schema.json"),
     ),
     (
         "manifest.schema.json",

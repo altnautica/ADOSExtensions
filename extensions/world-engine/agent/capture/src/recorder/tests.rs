@@ -32,6 +32,7 @@ pub fn rig() -> Rig {
             calibrated: true,
             readout_ns: 0,
         }),
+        lidar: None,
         imu_noise: None,
         time_offset_ns: 0,
         lever_arm_m: None,

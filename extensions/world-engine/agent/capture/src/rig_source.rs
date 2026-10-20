@@ -29,13 +29,18 @@ pub fn rig_path() -> PathBuf {
 /// The stored rig, if present and parseable.
 pub fn load_rig(path: &Path) -> Option<Rig> {
     let bytes = std::fs::read(path).ok()?;
-    match serde_json::from_slice(&bytes) {
-        Ok(r) => Some(r),
+    let rig: Rig = match serde_json::from_slice(&bytes) {
+        Ok(r) => r,
         Err(e) => {
             tracing::warn!(path = %path.display(), error = %e, "rig_document_unreadable");
-            None
+            return None;
         }
+    };
+    if let Err(e) = rig.check() {
+        tracing::warn!(path = %path.display(), error = %e, "rig_document_unreadable");
+        return None;
     }
+    Some(rig)
 }
 
 const I4: [f64; 16] = [
@@ -84,6 +89,7 @@ pub fn derive_rig(
             role: role(cam.role),
             t_body_sensor: t.into(),
             camera: Some(model),
+            lidar: None,
             imu_noise: None,
             time_offset_ns: 0,
             lever_arm_m: None,
@@ -96,6 +102,7 @@ pub fn derive_rig(
             role: RigSensorRole::Nav,
             t_body_sensor: I4.into(),
             camera: None,
+            lidar: None,
             imu_noise: None,
             time_offset_ns: 0,
             lever_arm_m: None,

@@ -62,6 +62,7 @@ fn camera(
             width: 640,
         }),
         id: id.into(),
+        lidar: None,
         imu_noise: None,
         kind: RigSensorKind::Camera,
         lever_arm_m: None,
@@ -82,6 +83,7 @@ pub(super) fn rig(model: CameraModelModel, dist: Vec<f64>, imu_noise: Option<Imu
             RigSensor {
                 camera: None,
                 id: "imu0".into(),
+                lidar: None,
                 imu_noise,
                 kind: RigSensorKind::Imu,
                 lever_arm_m: None,

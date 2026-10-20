@@ -101,6 +101,47 @@ fn rig_fixture_validates_and_round_trips() {
 }
 
 #[test]
+fn lidar_sensor_needs_its_model_block() {
+    let mut doc = fixture("rig.json");
+    let lidar = json!({
+        "id": "lidar0", "kind": "lidar", "role": "front_left", "time_offset_ns": 0,
+        "T_body_sensor": [1.0, 0.0, 0.0, 0.3, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.25,
+                          0.0, 0.0, 0.0, 1.0],
+        "lidar": {
+            "model": "rplidar-c1", "pattern": "planar", "h_fov_deg": 360.0,
+            "v_min_deg": 0.0, "v_max_deg": 0.0, "rate_hz": 10.0, "points_per_s": 5000.0,
+            "min_range_m": 0.05, "max_range_m": 12.0, "range_sigma_m": 0.03,
+            "blocked_azimuth_deg": [[130.0, 230.0]]
+        }
+    });
+    doc["sensors"].as_array_mut().unwrap().push(lidar);
+    assert_valid("rig.schema.json", &doc);
+    round_trip::<Rig>(&doc);
+    let rig: Rig = serde_json::from_value(doc.clone()).unwrap();
+    rig.check().unwrap();
+
+    let last = doc["sensors"].as_array().unwrap().len() - 1;
+    let mut bad = doc.clone();
+    bad["sensors"][last]["lidar"]["pattern"] = json!("conical");
+    assert_invalid("rig.schema.json", &bad, "an unknown scan pattern");
+    let mut bad = doc.clone();
+    bad["sensors"][last]["lidar"]["blocked_azimuth_deg"] = json!([[130.0]]);
+    assert_invalid("rig.schema.json", &bad, "a one-ended blocked sector");
+    let mut bad = doc;
+    bad["sensors"][last]
+        .as_object_mut()
+        .unwrap()
+        .remove("lidar");
+    assert_invalid("rig.schema.json", &bad, "a lidar sensor without a model");
+    let rig: Rig = serde_json::from_value(bad).unwrap();
+    assert!(rig
+        .check()
+        .unwrap_err()
+        .to_string()
+        .contains("rig sensor lidar0: a lidar sensor needs a \"lidar\" model block"));
+}
+
+#[test]
 fn placement_fixture_validates_and_round_trips() {
     let doc = fixture("placement.json");
     assert_valid("placement.schema.json", &doc);

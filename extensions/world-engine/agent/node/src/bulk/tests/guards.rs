@@ -116,6 +116,27 @@ fn validate_session_docs_reports_the_field() {
     assert!(validate_session_docs(b"{", &fixture("rig.json")).is_err());
 }
 
+#[test]
+fn lidar_sensor_without_its_model_is_refused() {
+    let mut rig = doc("rig.json");
+    let mut lidar = json!({
+        "id": "lidar0", "kind": "lidar", "role": "up", "time_offset_ns": 0,
+        "T_body_sensor": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                          0.0, 0.0, 0.0, 1.0]
+    });
+    rig["sensors"].as_array_mut().unwrap().push(lidar.clone());
+    let err = validate_session_docs(&fixture(MANIFEST_FILE), &bytes(&rig)).unwrap_err();
+    assert!(
+        err.contains("rig sensor lidar0: a lidar sensor needs a \"lidar\" model block"),
+        "{err}"
+    );
+
+    lidar["lidar"] = crate::calib::test_util::mid360();
+    rig["sensors"].as_array_mut().unwrap().pop();
+    rig["sensors"].as_array_mut().unwrap().push(lidar);
+    validate_session_docs(&fixture(MANIFEST_FILE), &bytes(&rig)).unwrap();
+}
+
 #[tokio::test]
 async fn case_variant_ids_share_a_lock_and_conflict() {
     let h = harness();

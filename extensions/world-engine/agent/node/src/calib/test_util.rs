@@ -6,6 +6,15 @@ use std::path::{Path, PathBuf};
 use ados_capture_contract::Rig;
 use serde_json::json;
 
+/// A Mid-360-class solid-state LiDAR model block for test rigs.
+pub fn mid360() -> serde_json::Value {
+    json!({
+        "model": "livox-mid360", "pattern": "solid", "h_fov_deg": 360.0,
+        "v_min_deg": -7.0, "v_max_deg": 52.0, "rate_hz": 10.0, "points_per_s": 200000.0,
+        "min_range_m": 0.1, "max_range_m": 40.0, "range_sigma_m": 0.02
+    })
+}
+
 /// `node/tests/fixtures/calib/<name>` as text.
 pub fn fixture(name: &str) -> String {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -68,7 +77,8 @@ pub fn two_camera_rig() -> Rig {
             cam("cam_r", "front_right", -0.05),
             {"id": "lidar0", "kind": "lidar", "role": "up", "time_offset_ns": 0,
              "T_body_sensor": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.12,
-                               0.0, 0.0, 0.0, 1.0]}
+                               0.0, 0.0, 0.0, 1.0],
+             "lidar": mid360()}
         ]
     }))
     .unwrap()

@@ -126,7 +126,9 @@ fn gen_schema_types(dir: &Path, out: &Path) {
     fs::write(out.join("schema_types.rs"), prettyplease::unparse(&file)).unwrap();
 }
 
-/// Rewrite `$ref`s to local definitions and strip value constraints.
+/// Rewrite `$ref`s to local definitions and strip value constraints. The keys
+/// of a name -> schema map (`properties`, `definitions`) are field or type
+/// names, never keywords, so a field named like a keyword survives.
 fn structural(v: &mut Value, titles: &BTreeMap<String, String>) {
     match v {
         Value::Object(map) => {
@@ -137,8 +139,13 @@ fn structural(v: &mut Value, titles: &BTreeMap<String, String>) {
                 *r = rewrite_ref(r, titles);
             }
             drop_empty_all_of(map);
-            for child in map.values_mut() {
-                structural(child, titles);
+            for (k, child) in map.iter_mut() {
+                match (k.as_str(), child) {
+                    ("properties" | "definitions" | "$defs", Value::Object(named)) => named
+                        .values_mut()
+                        .for_each(|schema| structural(schema, titles)),
+                    (_, child) => structural(child, titles),
+                }
             }
             drop_empty_all_of(map);
         }

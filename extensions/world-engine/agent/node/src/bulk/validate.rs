@@ -109,6 +109,9 @@ pub fn validate_session_docs(manifest: &[u8], rig: &[u8]) -> Result<(), String> 
     let manifest = parse(manifest, "manifest.json")?;
     let rig = parse(rig, "rig.json")?;
     check_schema(&validators.manifest, &manifest, "manifest.json")?;
+    if let Ok(typed) = serde_json::from_value::<ados_capture_contract::Rig>(rig.clone()) {
+        typed.check().map_err(|e| format!("rig.json: {e}"))?;
+    }
     check_schema(&validators.rig, &rig, "rig.json")?;
 
     check_id(&rig, "/rig_id", "rig.json")?;

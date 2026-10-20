@@ -227,6 +227,7 @@ pub fn import_kalibr(
         sensors.push(RigSensor {
             camera: Some(camera_model(cam, id)?),
             id: id.clone(),
+            lidar: None,
             imu_noise: None,
             kind: RigSensorKind::Camera,
             lever_arm_m: None,
@@ -239,6 +240,7 @@ pub fn import_kalibr(
         sensors.push(RigSensor {
             camera: None,
             id: IMU_ID.to_string(),
+            lidar: None,
             imu_noise: imu.as_ref().map(|i| ImuNoise {
                 accel_nd: i.accelerometer_noise_density,
                 accel_rw: i.accelerometer_random_walk,

@@ -141,6 +141,56 @@ export interface ImuNoise {
 }
 
 /**
+ * Scan model of a `lidar` rig sensor. Angles are in the sensor frame (FLU): azimuth counter-clockwise from +x, elevation positive up.
+ */
+export interface LidarModel {
+  /**
+   * Device model id the drivers dispatch on, e.g. `rplidar-c1`, `livox-mid360`.
+   */
+  model: string;
+  /**
+   * Scan geometry. `planar` is a single level ring (z = 0 in the sensor frame); `spinning` is a multi-beam rotating head; `solid` is a non-repetitive solid-state pattern.
+   */
+  pattern: "planar" | "spinning" | "solid";
+  /**
+   * Horizontal field of view, degrees.
+   */
+  h_fov_deg: number;
+  /**
+   * Lowest beam elevation, degrees.
+   */
+  v_min_deg: number;
+  /**
+   * Highest beam elevation, degrees.
+   */
+  v_max_deg: number;
+  /**
+   * Scans (revolutions or frames) per second.
+   */
+  rate_hz: number;
+  /**
+   * Range samples per second.
+   */
+  points_per_s: number;
+  /**
+   * Shortest valid range, metres.
+   */
+  min_range_m: number;
+  /**
+   * Longest valid range, metres.
+   */
+  max_range_m: number;
+  /**
+   * One-sigma range noise, metres.
+   */
+  range_sigma_m: number;
+  /**
+   * Azimuth sectors `[start, end]` the rig itself occludes, degrees counter-clockwise from +x; a sector may wrap through 0. Default empty.
+   */
+  blocked_azimuth_deg?: number[][];
+}
+
+/**
  * `manifest.json` at the root of a capture session directory.
  */
 export interface Manifest {
@@ -259,6 +309,7 @@ export interface RigSensor {
   role: "front_left" | "front_right" | "left" | "right" | "down" | "up" | "back" | "nav" | "texture" | "primary";
   T_body_sensor: Transform;
   camera?: CameraModel;
+  lidar?: LidarModel;
   imu_noise?: ImuNoise;
   /**
    * Added to the sensor's own time to reach the session timebase, nanoseconds.

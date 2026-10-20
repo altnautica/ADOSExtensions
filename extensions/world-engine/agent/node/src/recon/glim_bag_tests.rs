@@ -23,7 +23,8 @@ fn session(root: &Path) -> std::path::PathBuf {
         serde_json::from_value(serde_json::json!({
             "id": "lidar0", "kind": "lidar", "role": "up", "time_offset_ns": 1000,
             "T_body_sensor": [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.1,
-                              0.0, 0.0, 0.0, 1.0]
+                              0.0, 0.0, 0.0, 1.0],
+            "lidar": crate::calib::test_util::mid360()
         }))
         .unwrap(),
     );

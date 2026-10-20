@@ -48,11 +48,20 @@ Foxglove message schemas (`foxglove.RawImage`, `foxglove.CompressedImage`, `foxg
 
 `readout_ns = 0` means global shutter.
 
+### LidarModel
+`{model, pattern, h_fov_deg, v_min_deg, v_max_deg, rate_hz, points_per_s, min_range_m, max_range_m, range_sigma_m, blocked_azimuth_deg?: [[start, end], ...]}`
+
+- `model`: device model id the drivers dispatch on (`rplidar-c1`, `livox-mid360`, ...).
+- `pattern`: `planar` (one level ring), `spinning` (multi-beam rotating head) or `solid` (solid-state pattern).
+- Angles are degrees in the sensor FLU frame; azimuth is counter-clockwise from +x.
+- `blocked_azimuth_deg`: sectors the rig itself occludes (for example the operator behind a handheld); a sector may wrap through 0. Default empty.
+
 ### Rig (`rig.json`)
-`{rig_id, calib_version, sensors: [{id, kind, role, T_body_sensor, camera?, imu_noise?: {gyro_nd, accel_nd, gyro_rw, accel_rw}, time_offset_ns: i64, lever_arm_m?}]}`
+`{rig_id, calib_version, sensors: [{id, kind, role, T_body_sensor, camera?, lidar?, imu_noise?: {gyro_nd, accel_nd, gyro_rw, accel_rw}, time_offset_ns: i64, lever_arm_m?}]}`
 
 - `kind`: `camera`, `imu`, `lidar`, `gnss`, `thermal`, `baro`, `mag`.
 - `role`: `front_left`, `front_right`, `left`, `right`, `down`, `up`, `back`, `nav`, `texture`, `primary` (the vehicle's main camera).
+- A `lidar` sensor must carry its `lidar` LidarModel; readers reject the rig otherwise (`rig sensor <id>: a lidar sensor needs a "lidar" model block`).
 
 ### Manifest (`manifest.json`)
 `{contract, session_id, device_id, profile: "drone" | "visor" | "sim", timebase, t0_ns, utc_at_t0_ns, sigma_ns, anchor: GeoAnchor | null, rig: {rig_id, calib_version}, operator: {site?, floor?, rooms: [{name, floor, t_start_ns, t_end_ns}]}, segments: [{file, t_start_ns, t_end_ns, bytes}], health: {blur, texture, flicker, corridor, frames_dropped_pct}}`
@@ -84,7 +93,7 @@ Protobuf message encoding, lz4-compressed chunks. Every message's MCAP log and p
 |`/imu/<id>`|`ados.capture.v1.ImuBatch {samples[{t_ns, seq, gyro[3] rad/s, accel[3] m/s², temp_c}]}`, body FLU|
 |`/gnss/<id>/raw`|`ados.capture.v1.GnssRaw {t_ns, bytes}` (receiver binary passthrough)|
 |`/gnss/<id>/fix`|`foxglove.LocationFix`|
-|`/lidar/<id>/points`|`foxglove.PointCloud`, frame `<id>`, with a per-point `t_offset_ns` field (`UINT32`, nanoseconds after the message time)|
+|`/lidar/<id>/points`|`foxglove.PointCloud`, frame `<id>`, with a per-point `t_offset_ns` field (`UINT32`, nanoseconds after the message time); a `planar` LiDAR's cloud has z = 0 in the sensor frame|
 |`/pose/<source>`|`foxglove.PoseInFrame`, frame `world`; `<source>` is `truth` (simulation), `fc_ekf`, `vio` or `lidar`|
 |`/pose/<source>/cov`|`ados.capture.v1.PoseCov {t_ns, cov[36], health}` for the pose with the same `t_ns`|
 |`/clock`|`ados.capture.v1.ClockSample {t_ns, host_mono_ns, utc_ns, locked, sigma_ns}`; producers always set `sigma_ns` (`-1` = unmeasured), since an absent field decodes as `0` (exact)|
