@@ -420,7 +420,7 @@ pub fn run_sfm(
         world_frame: true,
         registered_images: merged.images,
         points: merged.points,
-        rig_cameras: 0,
+        rig_frames_paired: 0,
     })?;
     if let (Some(d), serde_json::Value::Object(extra)) = (detail.as_object_mut(), plan.detail()) {
         d.extend(extra);

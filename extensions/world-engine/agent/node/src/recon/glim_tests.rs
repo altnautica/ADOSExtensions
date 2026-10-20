@@ -204,6 +204,7 @@ fn frame(t_ns: u64) -> FrameRecord {
         dist: vec![],
         calibrated: false,
         t_body_cam: None,
+        rig_instant: None,
     }
 }
 

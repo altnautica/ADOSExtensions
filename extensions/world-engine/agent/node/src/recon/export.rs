@@ -154,6 +154,7 @@ mod tests {
             dist: vec![0.1, 0.0, 0.0, 0.0, 0.0],
             calibrated: false,
             t_body_cam: None,
+            rig_instant: None,
         };
         let mut poses = BTreeMap::new();
         poses.insert("cam0/5.png".to_string(), t);

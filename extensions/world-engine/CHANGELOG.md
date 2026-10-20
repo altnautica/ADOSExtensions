@@ -135,6 +135,14 @@ All notable changes to the World Engine extension.
   not sent as a keyframe; the count is logged.
 - Front-panel presses are matched on the host's button label (`B1` REC, `B2`
   MARK) instead of a GPIO pin.
+- Reconstruction `prepare` selects a multi-camera session per time instant
+  (one trigger sequence, else within half a frame period): keyframe picks,
+  blur drops and the image cap keep or drop an instant's frames together, and
+  an instant missing a camera's frame is dropped whole, so the COLMAP rig
+  stays paired after a missed frame. Cameras with too few common instants are
+  exported outside a rig. The `prepare` and `sfm` stage details report
+  `rig_frames_paired` (and `prepare` `rig_frames_dropped`) in place of the
+  `sfm` camera count.
 
 ### Removed
 

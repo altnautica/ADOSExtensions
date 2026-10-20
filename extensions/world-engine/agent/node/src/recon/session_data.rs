@@ -2,7 +2,10 @@
 //! as the SfM prior, the camera frames, the LiDAR sweeps, and decoding of the
 //! recorded image messages.
 
+use std::collections::HashMap;
+
 use ados_capture_contract::foxglove::{CompressedImage, PointCloud, PoseInFrame, RawImage};
+use ados_capture_contract::v1::TriggerRecord;
 use ados_capture_contract::{Manifest, Rig, RigSensorKind, SessionReader};
 
 use super::geom::{self, Mat4};
@@ -17,6 +20,10 @@ pub const PRIOR_SOURCES: [&str; 4] = ["vio", "lidar", "fc_ekf", "truth"];
 const MAX_GAP_NS: u64 = 500_000_000;
 /// The furthest a pose may be extrapolated past the track's ends.
 const MAX_EXTRAPOLATION_NS: u64 = 50_000_000;
+/// A frame takes the sequence of the camera's `/cam/<id>/trigger` record
+/// stamped within this of it (the recorder writes both at the joined
+/// trigger's mid-exposure time).
+const TRIGGER_MATCH_NS: u64 = 1_000_000;
 
 /// A recorded `T_world_body` track from one `/pose/<source>` channel.
 #[derive(Debug, Clone, Default)]
@@ -52,6 +59,8 @@ impl PoseTrack {
 pub struct FrameRef {
     pub cam: String,
     pub t_ns: u64,
+    /// The hardware trigger that exposed it, when the session recorded one.
+    pub trigger_seq: Option<u64>,
 }
 
 /// The first-pass index of a session.
@@ -75,8 +84,9 @@ pub fn pose_matrix(p: &PoseInFrame) -> Option<Mat4> {
     ))
 }
 
-/// Pass one: every camera frame's time, every pose of every source (the
-/// preferred source becomes the prior track), and the LiDAR sweep count.
+/// Pass one: every camera frame's time and trigger sequence, every pose of
+/// every source (the preferred source becomes the prior track), and the LiDAR
+/// sweep count.
 pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
     let cameras: Vec<String> = reader
         .rig()
@@ -87,6 +97,7 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
         .collect();
     let mut tracks: Vec<PoseTrack> = Vec::new();
     let mut frames = Vec::new();
+    let mut triggers: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
     let mut lidar_sweeps = 0usize;
     reader.for_each_message(|m| {
         if let Some(rest) = m.topic.strip_prefix("/cam/") {
@@ -95,7 +106,17 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
                     frames.push(FrameRef {
                         cam: cam.to_string(),
                         t_ns: m.t_ns,
+                        trigger_seq: None,
                     });
+                }
+            } else if let Some(cam) = rest.strip_suffix("/trigger") {
+                if cameras.iter().any(|c| c == cam) {
+                    if let Ok(rec) = m.decode::<TriggerRecord>() {
+                        triggers
+                            .entry(cam.to_string())
+                            .or_default()
+                            .push((m.t_ns, rec.seq));
+                    }
                 }
             }
         } else if let Some(source) = m.topic.strip_prefix("/pose/") {
@@ -119,6 +140,14 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
         tr.samples.sort_by_key(|(t, _)| *t);
         tr.samples.dedup_by_key(|(t, _)| *t);
     }
+    for list in triggers.values_mut() {
+        list.sort_unstable();
+    }
+    for f in &mut frames {
+        f.trigger_seq = triggers
+            .get(&f.cam)
+            .and_then(|list| nearest_trigger(list, f.t_ns));
+    }
     frames.sort_by(|a, b| a.t_ns.cmp(&b.t_ns).then_with(|| a.cam.cmp(&b.cam)));
     let poses = PRIOR_SOURCES
         .iter()
@@ -135,6 +164,19 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
         frames,
         lidar_sweeps,
     })
+}
+
+/// The sequence of the trigger in `list` (sorted `(t_ns, seq)`) nearest `t_ns`,
+/// if within [`TRIGGER_MATCH_NS`].
+fn nearest_trigger(list: &[(u64, u64)], t_ns: u64) -> Option<u64> {
+    let i = list.partition_point(|(t, _)| *t < t_ns);
+    [i.checked_sub(1), Some(i)]
+        .into_iter()
+        .flatten()
+        .filter_map(|j| list.get(j))
+        .min_by_key(|(t, _)| t.abs_diff(t_ns))
+        .filter(|(t, _)| t.abs_diff(t_ns) <= TRIGGER_MATCH_NS)
+        .map(|(_, seq)| *seq)
 }
 
 /// A decoded frame: 8-bit grey or RGB pixels.

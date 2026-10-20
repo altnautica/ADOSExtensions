@@ -29,9 +29,9 @@ pub struct SfmSummary {
     pub world_frame: bool,
     pub registered_images: usize,
     pub points: usize,
-    /// Cameras tied together as one COLMAP rig (0 when each camera mapped on its own).
+    /// Rig instants mapped as one rigid frame each (0 when each camera mapped on its own).
     #[serde(default)]
-    pub rig_cameras: usize,
+    pub rig_frames_paired: usize,
 }
 
 /// A prior-posed session needs at least this share of posed keyframes.
@@ -233,26 +233,35 @@ pub fn run(
         world_frame: use_priors,
         registered_images: registered,
         points,
-        rig_cameras: rig.map_or(0, |(_, n)| n),
+        rig_frames_paired: rig.map_or(0, |(_, n)| n),
     })
 }
 
-/// The COLMAP `rig_configurator` config (and its camera count) for one rig made
-/// of every camera: the first camera is the reference sensor, each other camera
-/// carries `cam_from_rig = T_body_cam⁻¹ · T_body_ref` from the session mounts.
-/// Frames of one instant share a file name across camera folders, which is how
-/// COLMAP groups them. `None` for a single camera, or when any frame is
-/// uncalibrated or lacks its mount (then each camera maps on its own).
+/// The COLMAP `rig_configurator` config (and its rig frame count) for one rig
+/// made of every camera: the first camera is the reference sensor, each other
+/// camera carries `cam_from_rig = T_body_cam⁻¹ · T_body_ref` from the session
+/// mounts. `prepare` exported every rig instant with each camera's frame under
+/// one file name, which is how COLMAP groups them. `None` for a single camera,
+/// when `prepare` exported the frames outside a rig or an instant lacks a
+/// camera, or when any frame is uncalibrated or lacks its mount (then each
+/// camera maps on its own).
 fn rig_config(by_cam: &BTreeMap<&str, Vec<&FrameRecord>>) -> Option<(serde_json::Value, usize)> {
     if by_cam.len() < 2 {
         return None;
     }
+    let mut instants = BTreeMap::<u64, usize>::new();
     let mut mounts = Vec::with_capacity(by_cam.len());
     for (cam, list) in by_cam {
         if !list.iter().all(|f| f.calibrated) {
             return None;
         }
+        for f in list {
+            *instants.entry(f.rig_instant?).or_default() += 1;
+        }
         mounts.push((*cam, list.first()?.t_body_cam?));
+    }
+    if instants.values().any(|n| *n != by_cam.len()) {
+        return None;
     }
     let (ref_cam, body_ref) = mounts[0];
     let mut cameras = vec![serde_json::json!({
@@ -267,7 +276,7 @@ fn rig_config(by_cam: &BTreeMap<&str, Vec<&FrameRecord>>) -> Option<(serde_json:
             "cam_from_rig_translation": geom::translation(&cam_from_rig),
         }));
     }
-    Some((serde_json::json!([{ "cameras": cameras }]), mounts.len()))
+    Some((serde_json::json!([{ "cameras": cameras }]), instants.len()))
 }
 
 /// The sub-model with the most images (by `images.bin` size) under a mapper
@@ -314,6 +323,7 @@ mod tests {
                 dist: vec![],
                 calibrated,
                 t_body_cam: None,
+                rig_instant: None,
             })
             .collect()
     }
@@ -411,7 +421,8 @@ mod tests {
         ]
     }
 
-    /// Six unposed stereo frames; `cam_fr` at `fr_calibrated`.
+    /// Six unposed stereo frames, exported by `prepare` as three rig instants;
+    /// `cam_fr` at `fr_calibrated`.
     fn stereo_frames(fr_calibrated: bool) -> Vec<FrameRecord> {
         let mut out = Vec::new();
         for (cam, y, calibrated) in [("cam_fl", 0.05, true), ("cam_fr", -0.05, fr_calibrated)] {
@@ -423,6 +434,7 @@ mod tests {
                     t_world_cam: None,
                     t_body_cam: Some(stereo_mount(y)),
                     calibrated,
+                    rig_instant: Some(t),
                     ..frames(true).remove(0)
                 });
             }
@@ -466,7 +478,7 @@ mod tests {
     #[test]
     fn a_calibrated_stereo_rig_is_configured_before_matching_and_kept_in_mapping() {
         let (s, runs, config) = run_stereo(&stereo_frames(true));
-        assert_eq!(s.rig_cameras, 2);
+        assert_eq!(s.rig_frames_paired, 3);
         let cmd = |name: &str| runs.iter().position(|a| a[0] == name).unwrap_or(usize::MAX);
         assert!(cmd("rig_configurator") < cmd("exhaustive_matcher"));
         let config = config.expect("rig config written");
@@ -492,11 +504,27 @@ mod tests {
     }
 
     #[test]
-    fn no_rig_for_an_uncalibrated_camera_or_a_posed_session() {
+    fn no_rig_for_an_uncalibrated_camera_unpaired_frames_or_a_posed_session() {
         let (s, runs, config) = run_stereo(&stereo_frames(false));
-        assert_eq!(s.rig_cameras, 0);
+        assert_eq!(s.rig_frames_paired, 0);
         assert!(config.is_none());
         assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
+        // Exported outside a rig, or an instant short of a camera.
+        let unpaired: Vec<FrameRecord> = stereo_frames(true)
+            .into_iter()
+            .map(|f| FrameRecord {
+                rig_instant: None,
+                ..f
+            })
+            .collect();
+        let mut short = stereo_frames(true);
+        short.pop();
+        for frames in [unpaired, short] {
+            let (s, runs, config) = run_stereo(&frames);
+            assert_eq!(s.rig_frames_paired, 0);
+            assert!(config.is_none());
+            assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
+        }
         let posed: Vec<FrameRecord> = stereo_frames(true)
             .into_iter()
             .map(|f| FrameRecord {
@@ -505,7 +533,7 @@ mod tests {
             })
             .collect();
         let (s, runs, _) = run_stereo(&posed);
-        assert_eq!((s.rig_cameras, s.method.as_str()), (0, "known_poses"));
+        assert_eq!((s.rig_frames_paired, s.method.as_str()), (0, "known_poses"));
         assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
     }
 }
