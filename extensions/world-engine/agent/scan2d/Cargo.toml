@@ -1,0 +1,19 @@
+# Planar (2D) LiDAR scan matching and mapping for World Engine: a pure-Rust
+# local SLAM front end (IMU-levelled scans matched into probability-grid
+# submaps) and an offline pose-graph back end with branch-and-bound loop
+# search. No threads, no I/O; callers feed scans and IMU samples.
+[package]
+name = "ados-scan2d"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Planar LiDAR scan matching, submap mapping and loop closure for World Engine capture and reconstruction."
+
+[lib]
+name = "ados_scan2d"
+path = "src/lib.rs"
+
+[dependencies]
+nalgebra = "0.33"
