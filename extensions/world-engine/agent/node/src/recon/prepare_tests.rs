@@ -62,12 +62,28 @@ fn a_frame_missed_mid_session_keeps_every_later_instant_paired() {
 }
 
 #[test]
-fn cameras_without_common_instants_are_exported_outside_a_rig() {
-    // Separate trigger counters: no sequence holds both cameras.
+fn cameras_with_their_own_trigger_counters_pair_by_time() {
+    // Each camera counts its own triggers: no sequence holds both cameras.
     let mut frames = stereo(40, PERIOD_NS, &[], true);
     for f in frames.iter_mut().filter(|f| f.cam == "cam_fr") {
         f.trigger_seq = f.trigger_seq.map(|s| s + 10_000);
     }
+    let sel = select_keyframes(&frames, None, &spec(1000));
+    assert_paired(&sel);
+    assert_eq!(sel.incomplete, 0);
+    assert!(!sel.sets.is_empty());
+}
+
+#[test]
+fn one_trigger_sequence_300_ms_apart_is_not_an_instant() {
+    // Same sequences at 25 Hz, but cam_fr stamped 300 ms (7.5 frames) late:
+    // neither the sequence nor the time pairs them, so the frames leave the rig.
+    const PERIOD: u64 = 40_000_000;
+    let mut frames = stereo(40, PERIOD, &[], true);
+    for f in frames.iter_mut().filter(|f| f.cam == "cam_fr") {
+        f.t_ns += 300_000_000 - SKEW_NS;
+    }
+    frames.sort_by_key(|f| f.t_ns);
     let sel = select_keyframes(&frames, None, &spec(1000));
     assert!(!sel.rig);
     assert_eq!(sel.incomplete, 0);

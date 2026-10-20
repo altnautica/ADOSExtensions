@@ -5,13 +5,15 @@
 //! cloud.
 //!
 //! A multi-camera session is selected per time instant, not per camera: the
-//! frames of one instant (one trigger sequence, else within half a frame
-//! period) are kept or dropped together, and an instant missing any camera's
-//! frame is dropped as a whole, so the rig frames COLMAP groups by file name
-//! stay paired however many frames a camera missed. When so few instants hold
-//! every camera that dropping them would collapse coverage (unsynchronised
-//! cameras, different rates), every frame is exported on its own, outside a
-//! rig, and SfM maps each camera separately.
+//! frames of one instant (one trigger sequence and within half a frame period
+//! of each other, else within half a frame period alone) are kept or dropped
+//! together, and an instant missing any camera's frame is dropped as a whole,
+//! so the rig frames COLMAP groups by file name stay paired however many
+//! frames a camera missed. Trigger sequences that pair too few instants
+//! (cameras counting their own triggers) give way to time grouping. When so
+//! few instants hold every camera that dropping them would collapse coverage
+//! (unsynchronised cameras, different rates), every frame is exported on its
+//! own, outside a rig, and SfM maps each camera separately.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -112,7 +114,8 @@ const RIG_MIN_PAIRED_SHARE: f64 = 0.5;
 /// one camera's frame.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrameSet {
-    /// The earliest frame's time; a rig instant's frames are named by it.
+    /// The reference (first by id) camera's frame time; a rig instant's
+    /// frames are all named by it, each keeping its own time in its record.
     pub t_ns: u64,
     /// Ordered by camera.
     pub frames: Vec<FrameRef>,
@@ -143,20 +146,31 @@ pub fn select_keyframes(
     cams.dedup();
     let mut selection = Selection::default();
     if cams.len() >= 2 {
-        let (complete, incomplete): (Vec<FrameSet>, Vec<FrameSet>) = group_instants(frames)
-            .into_iter()
-            .partition(|s| s.frames.len() == cams.len());
         let sparsest = cams
             .iter()
             .map(|c| frames.iter().filter(|f| f.cam == *c).count())
             .min()
             .unwrap_or(0);
-        if complete.len() as f64 >= RIG_MIN_PAIRED_SHARE * sparsest as f64 {
-            selection = Selection {
-                sets: complete,
-                rig: true,
-                incomplete: incomplete.len(),
-            };
+        let period = frame_period(frames);
+        let by_seq = frames
+            .iter()
+            .all(|f| f.trigger_seq.is_some())
+            .then(|| group_by_trigger(frames, period));
+        for grouped in by_seq
+            .into_iter()
+            .chain(std::iter::once_with(|| group_by_time(frames, period)))
+        {
+            let (complete, incomplete): (Vec<FrameSet>, Vec<FrameSet>) = grouped
+                .into_iter()
+                .partition(|s| s.frames.len() == cams.len());
+            if complete.len() as f64 >= RIG_MIN_PAIRED_SHARE * sparsest as f64 {
+                selection = Selection {
+                    sets: complete,
+                    rig: true,
+                    incomplete: incomplete.len(),
+                };
+                break;
+            }
         }
     }
     if !selection.rig {
@@ -219,48 +233,72 @@ pub fn select_keyframes(
     selection
 }
 
-/// Group time-sorted frames into instants: by trigger sequence when every
-/// frame carries one, else by time, a frame joining the open instant while
-/// within half a frame period of it and its camera is not in it yet.
-fn group_instants(frames: &[FrameRef]) -> Vec<FrameSet> {
-    let mut sets: Vec<FrameSet> = Vec::new();
-    if frames.iter().all(|f| f.trigger_seq.is_some()) {
-        let mut by_seq: BTreeMap<u64, Vec<FrameRef>> = BTreeMap::new();
-        for f in frames {
-            let set = by_seq.entry(f.trigger_seq.unwrap_or_default()).or_default();
-            // A camera recorded twice under one trigger is not a rig instant.
-            if set.iter().all(|g| g.cam != f.cam) {
-                set.push(f.clone());
+/// `2·dt` under a frame period: two frames of one instant.
+fn same_instant(dt: u64, period: u64) -> bool {
+    dt.saturating_mul(2) < period
+}
+
+/// Group frames into instants by trigger sequence; a frame more than half a
+/// frame period from its sequence's earliest frame, or a camera's second
+/// frame under one sequence, stands alone.
+fn group_by_trigger(frames: &[FrameRef], period: u64) -> Vec<FrameSet> {
+    let mut by_seq: BTreeMap<u64, Vec<FrameRef>> = BTreeMap::new();
+    for f in frames {
+        by_seq
+            .entry(f.trigger_seq.unwrap_or_default())
+            .or_default()
+            .push(f.clone());
+    }
+    let mut sets = Vec::new();
+    for mut group in by_seq.into_values() {
+        group.sort_by_key(|f| f.t_ns);
+        let t0 = group[0].t_ns;
+        let mut set: Vec<FrameRef> = Vec::new();
+        for f in group {
+            if set.iter().all(|g| g.cam != f.cam) && same_instant(f.t_ns - t0, period) {
+                set.push(f);
+            } else {
+                sets.push(vec![f]);
             }
         }
-        sets = by_seq
-            .into_values()
-            .map(|frames| FrameSet {
-                t_ns: frames.iter().map(|f| f.t_ns).min().unwrap_or_default(),
+        sets.push(set);
+    }
+    finish_sets(sets)
+}
+
+/// Group time-sorted frames into instants by time: a frame joins the open
+/// instant while within half a frame period of its first frame and its
+/// camera is not in it yet.
+fn group_by_time(frames: &[FrameRef], period: u64) -> Vec<FrameSet> {
+    let mut sets: Vec<Vec<FrameRef>> = Vec::new();
+    for f in frames {
+        match sets.last_mut() {
+            Some(s)
+                if s.iter().all(|g| g.cam != f.cam)
+                    && same_instant(f.t_ns.saturating_sub(s[0].t_ns), period) =>
+            {
+                s.push(f.clone())
+            }
+            _ => sets.push(vec![f.clone()]),
+        }
+    }
+    finish_sets(sets)
+}
+
+/// Order each instant's frames by camera, time it by its reference camera,
+/// and order the instants by time.
+fn finish_sets(groups: Vec<Vec<FrameRef>>) -> Vec<FrameSet> {
+    let mut sets: Vec<FrameSet> = groups
+        .into_iter()
+        .map(|mut frames| {
+            frames.sort_by(|a, b| a.cam.cmp(&b.cam));
+            FrameSet {
+                t_ns: frames[0].t_ns,
                 frames,
-            })
-            .collect();
-        sets.sort_by_key(|s| s.t_ns);
-    } else {
-        let period = frame_period(frames);
-        for f in frames {
-            match sets.last_mut() {
-                Some(s)
-                    if s.frames.iter().all(|g| g.cam != f.cam)
-                        && f.t_ns.saturating_sub(s.t_ns).saturating_mul(2) < period =>
-                {
-                    s.frames.push(f.clone())
-                }
-                _ => sets.push(FrameSet {
-                    t_ns: f.t_ns,
-                    frames: vec![f.clone()],
-                }),
             }
-        }
-    }
-    for s in &mut sets {
-        s.frames.sort_by(|a, b| a.cam.cmp(&b.cam));
-    }
+        })
+        .collect();
+    sets.sort_by_key(|s| s.t_ns);
     sets
 }
 
