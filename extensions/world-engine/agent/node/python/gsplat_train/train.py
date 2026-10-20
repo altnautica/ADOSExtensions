@@ -6,6 +6,7 @@ Output: <out>/splat.ply (standard 3DGS PLY). Events: JSON lines on stdout.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import random
 import sys
@@ -22,6 +23,9 @@ SH_DEGREE = 3
 DEPTH_MIN_POINTS = 50
 DEPTH_MAX_MEDIAN_REL = 0.05
 DEPTH_MAX_P90_REL = 0.25
+INIT_SCALE = 0.1  # initial size: 0.1 x the RMS distance to the 3 nearest sparse points (gsplat MCMC)
+INIT_KEEP_PERCENTILE = 99.0  # sparse points farther from the cameras' centroid than this percentile start nothing
+EXPORT_MIN_OPACITY = 1.0 / 255.0  # fainter gaussians do not show and are not exported
 
 
 def depth_prior_scale(prior: np.ndarray, obs_xy: np.ndarray | None, z: np.ndarray | None) -> float | None:
@@ -46,6 +50,40 @@ def depth_prior_scale(prior: np.ndarray, obs_xy: np.ndarray | None, z: np.ndarra
     return s
 
 
+def scene_normalisation(views) -> tuple[np.ndarray, float]:
+    """(centre, scale) of the similarity x -> scale * (x - centre) that centres the camera
+    positions on the origin at a median distance of 1.
+
+    gsplat's learning rates, regularisers, near plane and MCMC position noise are tuned for that
+    frame: the noise moves a gaussian by lr * noise_lr * its covariance, so in a raw SfM or
+    odometry frame (tens of metres, arbitrary units) it grows with the square of the scene size
+    and sends faint gaussians kilometres away while the rest fade out. Only translation and a
+    uniform scale are used, so rotations and the splat's orientation are untouched."""
+    centers = np.stack([np.linalg.inv(v.w2c)[:3, 3] for v in views])
+    centre = centers.mean(0)
+    radius = float(np.median(np.linalg.norm(centers - centre, axis=1)))
+    if not math.isfinite(radius) or radius <= 1e-9:
+        radius = float(np.linalg.norm(centers - centre, axis=1).max())
+    return centre, (1.0 / radius if math.isfinite(radius) and radius > 1e-9 else 1.0)
+
+
+def normalise_views(views, centre: np.ndarray, scale: float):
+    """The views with their poses and sparse observations in the normalised frame. A camera
+    point scales by `scale` too, so rendered depths are in normalised units."""
+    out = []
+    for v in views:
+        w2c = v.w2c.copy()
+        w2c[:3, 3] = scale * (v.w2c[:3, :3] @ centre + v.w2c[:3, 3])
+        obs = None if v.obs_xyz is None else scale * (v.obs_xyz - centre)
+        out.append(dataclasses.replace(v, w2c=w2c, obs_xyz=obs))
+    return out
+
+
+def denormalise_splats(means, log_scales, centre: np.ndarray, scale: float):
+    """Gaussian means and log scales back in the model frame (quaternions are unchanged)."""
+    return means / scale + centre, log_scales - math.log(scale)
+
+
 def parse_args(argv=None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--colmap", required=True, type=Path, help="dir containing sparse/0 (BIN model)")
@@ -56,7 +94,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--masks", type=Path, help="<masks>/<image rel>.png, 0 = ignore, 255 = keep")
     p.add_argument("--depths", type=Path, help="<depths>/<image rel>.npy, float32 metres")
     p.add_argument("--ut", action="store_true", help="3DGUT: unscented transform for distorted/fisheye cameras")
-    p.add_argument("--bilateral-grid", action="store_true", help="per-image bilateral colour grids")
+    p.add_argument("--appearance", choices=("affine", "grid", "none"), default="affine",
+                   help="per-image appearance model: a 3x4 colour affine, a bilateral grid, or none")
     p.add_argument("--seed", type=int, default=0)
     return p.parse_args(argv)
 
@@ -153,7 +192,17 @@ def init_params(pts: np.ndarray, cols: np.ndarray, views, max_splats: int, devic
     import torch
     from scipy.spatial import cKDTree
 
+    from strategy import MAX_DISTANCE
+
     centers = np.stack([np.linalg.inv(v.w2c)[:3, 3] for v in views])
+    scene_scale = float(np.linalg.norm(centers - centers.mean(0), axis=1).max()) * 1.1 or 1.0
+    # Sparse points far outside the scene (low-parallax triangulations) would start lost, and
+    # the farthest percent are mostly such points even inside the bound.
+    r = np.linalg.norm(pts, axis=1)
+    keep = np.isfinite(pts).all(1) & (r <= MAX_DISTANCE * scene_scale)
+    if keep.sum() >= 100:
+        keep &= r <= np.percentile(r[keep], INIT_KEEP_PERCENTILE)
+    pts, cols = pts[keep], cols[keep]
     if len(pts) < 100:
         lo, hi = centers.min(0) - 1.0, centers.max(0) + 1.0
         n = min(100_000, max_splats)
@@ -168,13 +217,12 @@ def init_params(pts: np.ndarray, cols: np.ndarray, views, max_splats: int, devic
     t = lambda a: torch.tensor(a, dtype=torch.float32, device=device)  # noqa: E731
     params = {
         "means": t(pts),
-        "scales": t(np.log(dist))[:, None].repeat(1, 3),
+        "scales": t(np.log(INIT_SCALE * dist))[:, None].repeat(1, 3),
         "quats": torch.rand((n, 4), device=device),
         "opacities": torch.logit(torch.full((n,), 0.5, device=device)),
         "sh0": t((cols - 0.5) / common.SH_C0)[:, None, :],
         "shN": torch.zeros((n, (SH_DEGREE + 1) ** 2 - 1, 3), device=device),
     }
-    scene_scale = float(np.linalg.norm(centers - centers.mean(0), axis=1).max()) * 1.1 or 1.0
     return torch.nn.ParameterDict({k: torch.nn.Parameter(v) for k, v in params.items()}), scene_scale
 
 
@@ -219,29 +267,109 @@ def render(params, item, sh_degree, use_ut, mode, device):
     return out[0], alpha[0, ..., 0], info
 
 
-def evaluate(params, data: Dataset, use_ut: bool, device) -> float | None:
+def colour_corrected(render, gt, mask=None):
+    """`render` after the least-squares 3x4 colour affine onto `gt` (over `mask` > 0 pixels).
+    PSNR after it shows how well the geometry fits apart from per-view colour, the part the
+    bilateral grid learns in training but the exported splat does not carry."""
     import torch
 
+    x = torch.cat([render.reshape(-1, 3), torch.ones_like(render[..., :1]).reshape(-1, 1)], 1).double()
+    y = gt.reshape(-1, 3).double()
+    sel = (mask.reshape(-1) > 0) if mask is not None else torch.ones(len(x), dtype=torch.bool, device=x.device)
+    if int(sel.sum()) < 4:
+        return render
+    a = torch.linalg.lstsq(x[sel], y[sel]).solution
+    return (x @ a).reshape(render.shape).clamp(0, 1).to(render.dtype)
+
+
+def evaluate(params, data: Dataset, use_ut: bool, device) -> tuple[float | None, float | None]:
+    """Mean training-view PSNR of the splat as rendered (black background, no colour grid), and
+    after a per-view colour affine (colour_corrected)."""
+    import torch
+
+    def psnr(img, gt, mask):
+        err = (img - gt).pow(2).mean(-1)
+        err = (err * mask).sum() / mask.sum().clamp_min(1) if mask is not None else err.mean()
+        return float(-10 * torch.log10(err.clamp_min(1e-10)))
+
     idx = np.linspace(0, len(data.items) - 1, min(32, len(data.items))).round().astype(int)
-    vals = []
+    raw, cc = [], []
     with torch.no_grad():
         for i in sorted(set(idx.tolist())):
             b = data.get(i, device)
             out, _, _ = render(params, b["item"], SH_DEGREE, use_ut, "RGB", device)
-            err = (out.clamp(0, 1) - b["rgb"]).pow(2).mean(-1)
-            if "mask" in b:
-                err = (err * b["mask"]).sum() / b["mask"].sum().clamp_min(1)
-            else:
-                err = err.mean()
-            vals.append(float(-10 * torch.log10(err.clamp_min(1e-10))))
-    return round(float(np.mean(vals)), 3) if vals else None
+            out = out.clamp(0, 1)
+            mask = b.get("mask")
+            raw.append(psnr(out, b["rgb"], mask))
+            cc.append(psnr(colour_corrected(out, b["rgb"], mask), b["rgb"], mask))
+    mean = lambda v: round(float(np.mean(v)), 3) if v and math.isfinite(float(np.mean(v))) else None  # noqa: E731
+    return mean(raw), mean(cc)
+
+
+def apply_step(loss, optimizers) -> bool:
+    """Back-propagate `loss` and step every optimiser, or skip the step (no update, gradients
+    cleared either way) when the loss is not finite: one NaN step would poison Adam's moments.
+    True when the step was applied."""
+    import torch
+
+    ok = bool(torch.isfinite(loss))
+    if ok:
+        loss.backward()
+        for opt in optimizers:
+            opt.step()
+    for opt in optimizers:
+        opt.zero_grad(set_to_none=True)
+    return ok
+
+
+def export_splat(path: Path, params, scene_scale: float, centre: np.ndarray, norm: float) -> tuple[int, int]:
+    """Write the gaussians inside the bounds (strategy.invalid_gaussians) and at least
+    EXPORT_MIN_OPACITY opaque to `path` in the model frame. (written, culled)."""
+    import torch
+
+    from strategy import invalid_gaussians
+
+    with torch.no_grad():
+        keep = ~invalid_gaussians(params, scene_scale) & (torch.sigmoid(params["opacities"]) >= EXPORT_MIN_OPACITY)
+        if not bool(keep.any()):
+            raise RuntimeError("training left no visible gaussian inside the scene bounds")
+        q = torch.nn.functional.normalize(params["quats"][keep], dim=-1)
+        means, log_scales = denormalise_splats(params["means"][keep].double().cpu().numpy(),
+                                               params["scales"][keep].double().cpu().numpy(), centre, norm)
+        common.write_splat_ply(
+            path,
+            means.astype(np.float32),
+            log_scales.astype(np.float32),
+            q.cpu().numpy(),
+            params["opacities"][keep].cpu().numpy(),
+            params["sh0"][keep].cpu().numpy(),
+            params["shN"][keep].cpu().numpy(),
+        )
+    n_keep = int(keep.sum())
+    return n_keep, int(len(keep)) - n_keep
+
+
+def load_normalised(args):
+    """(views, sparse points, colours, centre, scale) of the COLMAP model in the normalised
+    training frame (see scene_normalisation); sets args.ut when the model's cameras need 3DGUT."""
+    views, pts, cols = common.load_colmap_views(args.colmap)
+    # The model SfM produced decides, not the rig alone: an uncalibrated `opencv` camera comes
+    # back with refined distortion, which only the 3DGUT path renders.
+    ut = common.needs_ut(views, args.ut)
+    if ut and not args.ut:
+        common.progress(0.01, "distorted cameras in the SfM model: training with 3DGUT")
+    args.ut = ut
+    centre, norm = scene_normalisation(views)
+    views = normalise_views(views, centre, norm)
+    pts = (norm * (pts.astype(np.float64) - centre)).astype(np.float32)
+    return views, pts, cols, centre, norm
 
 
 def train(args) -> None:
     import torch
-    from gsplat.strategy import MCMCStrategy
 
     import losses
+    from strategy import BoundedMCMCStrategy
 
     common.progress(0.0, "loading model")
     common.require_gsplat()
@@ -250,39 +378,26 @@ def train(args) -> None:
     torch.manual_seed(args.seed)
     device = "cuda"
 
-    views, pts, cols = common.load_colmap_views(args.colmap)
-    # The model SfM produced decides, not the rig alone: an uncalibrated `opencv` camera comes
-    # back with refined distortion, which only the 3DGUT path renders.
-    ut = common.needs_ut(views, args.ut)
-    if ut and not args.ut:
-        common.progress(0.01, "distorted cameras in the SfM model: training with 3DGUT")
-    args.ut = ut
+    # Train in a normalised frame; splat.ply is written in the model frame.
+    views, pts, cols, centre, norm = load_normalised(args)
     data = Dataset(args, views)
     common.progress(0.02, f"{len(data.items)} views, {len(pts)} sparse points, depth prior on "
                           f"{data.depth_used} views ({data.depth_rejected} disagree with the sparse points)")
     params, scene_scale = init_params(pts, cols, data.views, args.max_splats, device)
     optimizers = make_optimizers(params, scene_scale)
     steps = max(1, args.steps)
-    gamma = 0.01 ** (1.0 / steps)
-    sched = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], gamma=gamma)
-    strategy = MCMCStrategy(
-        cap_max=args.max_splats,
-        refine_start_iter=min(500, steps // 10),
-        refine_stop_iter=int(steps * 0.83),
-        refine_every=100,
-    )
+    sched = torch.optim.lr_scheduler.ExponentialLR(optimizers["means"], gamma=0.01 ** (1.0 / steps))
+    strategy = BoundedMCMCStrategy.for_run(args.max_splats, steps, scene_scale)
     strategy.check_sanity(params, optimizers)
     state = strategy.initialize_state()
-
-    bilagrid = bil_opt = None
-    if args.bilateral_grid:
-        bilagrid = losses.BilateralGrid(len(data.items)).to(device)
-        bil_opt = torch.optim.Adam(bilagrid.parameters(), lr=2e-3, eps=1e-15)
+    appearance = losses.make_appearance(args.appearance, len(data.items), steps, device)
+    all_opts = list(optimizers.values()) + ([appearance.opt] if appearance is not None else [])
 
     use_depth = any("depth_path" in it for it in data.items)
     mode = "RGB+ED" if use_depth else "RGB"
     order: list[int] = []
     report_every = max(1, steps // 100)
+    nonfinite = 0
     for step in range(steps):
         if not order:
             order = np.random.permutation(len(data.items)).tolist()
@@ -291,49 +406,41 @@ def train(args) -> None:
         sh_degree = min(step // 1000, SH_DEGREE)
         out, alpha, info = render(params, b["item"], sh_degree, args.ut, mode, device)
         rgb = out[..., :3]
-        if bilagrid is not None:
-            rgb = bilagrid(rgb, i)
+        if appearance is not None:
+            rgb = appearance(rgb, i)
+        # A random background behind the splat: the images are opaque everywhere, so fading
+        # gaussians out never matches them.
+        rgb = rgb + torch.rand(3, device=device) * (1.0 - alpha[..., None])
         weight = b.get("mask")
         loss = losses.photometric_loss(rgb, b["rgb"], weight)
         if use_depth and "depth" in b:
-            w_depth = 0.05 * max(0.0, 1.0 - step / steps)
-            loss = loss + w_depth * losses.depth_loss(out[..., 3], b["depth"], alpha, weight)
+            loss = loss + losses.depth_weight(step, steps) * losses.depth_loss(
+                out[..., 3], b["depth"], alpha, weight, b["rgb"])
         loss = loss + 0.01 * torch.sigmoid(params["opacities"]).mean() + 0.01 * torch.exp(params["scales"]).mean()
-        if bilagrid is not None:
-            loss = loss + 10.0 * bilagrid.total_variation()
-        loss.backward()
-        for opt in optimizers.values():
-            opt.step()
-            opt.zero_grad(set_to_none=True)
-        if bil_opt is not None:
-            bil_opt.step()
-            bil_opt.zero_grad(set_to_none=True)
+        if appearance is not None:
+            loss = loss + appearance.regulariser()
+        if not apply_step(loss, all_opts):
+            nonfinite += 1
+        if appearance is not None and appearance.sched is not None:
+            appearance.sched.step()
         sched.step()
         strategy.step_post_backward(params, optimizers, state, step, info, lr=sched.get_last_lr()[0])
         if step % report_every == 0 or step == steps - 1:
             common.progress(
                 0.03 + 0.9 * (step + 1) / steps,
-                f"step {step + 1}/{steps} loss {float(loss):.4f} splats {len(params['means'])}",
+                f"step {step + 1}/{steps} loss {float(loss.detach()):.4f} splats {len(params['means'])}",
             )
 
     common.progress(0.94, "evaluating")
-    psnr = evaluate(params, data, args.ut, device)
+    psnr, psnr_cc = evaluate(params, data, args.ut, device)
     common.progress(0.97, "writing splat.ply")
     ply = args.out / "splat.ply"
-    with torch.no_grad():
-        q = torch.nn.functional.normalize(params["quats"], dim=-1)
-        common.write_splat_ply(
-            ply,
-            params["means"].cpu().numpy(),
-            params["scales"].cpu().numpy(),
-            q.cpu().numpy(),
-            params["opacities"].cpu().numpy(),
-            params["sh0"].cpu().numpy(),
-            params["shN"].cpu().numpy(),
-        )
-    psnr_out = psnr if psnr is not None and math.isfinite(psnr) else None
-    common.done(ply=str(ply), gaussians=int(len(params["means"])), psnr=psnr_out, ut=bool(args.ut),
-                depth_views=data.depth_used, depth_rejected=data.depth_rejected)
+    n_keep, culled = export_splat(ply, params, scene_scale, centre, norm)
+    common.emit({"event": "export_culled", "count": culled})
+    common.done(ply=str(ply), gaussians=n_keep, culled=culled, psnr=psnr, psnr_cc=psnr_cc,
+                appearance=args.appearance, ut=bool(args.ut), depth_views=data.depth_used,
+                depth_rejected=data.depth_rejected, nonfinite_steps=nonfinite,
+                killed=int(state.get("killed", 0)))
 
 
 if __name__ == "__main__":

@@ -460,10 +460,14 @@ pub fn run_train(
     }
     let counts = chunks_merge::merge_splats(&parts, plan, &train_dir.join("splat.ply"))?;
     progress(1.0);
-    let psnrs: Vec<f64> = summaries.iter().filter_map(|s| s.psnr).collect();
+    let mean = |v: Vec<f64>| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
+    let sum = |v: Vec<u64>| (!v.is_empty()).then(|| v.iter().sum::<u64>());
     let merged = TrainSummary {
         gaussians: Some(counts.iter().map(|c| c.core).sum()),
-        psnr: (!psnrs.is_empty()).then(|| psnrs.iter().sum::<f64>() / psnrs.len() as f64),
+        psnr: mean(summaries.iter().filter_map(|s| s.psnr).collect()),
+        psnr_cc: mean(summaries.iter().filter_map(|s| s.psnr_cc).collect()),
+        culled: sum(summaries.iter().filter_map(|s| s.culled).collect()),
+        nonfinite_steps: sum(summaries.iter().filter_map(|s| s.nonfinite_steps).collect()),
         ..summaries[0].clone()
     };
     let mut detail = serde_json::to_value(merged)?;
