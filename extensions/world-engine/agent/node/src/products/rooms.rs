@@ -93,6 +93,11 @@ impl Grid {
         !self.wall[k] && self.walk[k]
     }
 
+    /// Per-cell free flags (row-major, `w × h`).
+    pub fn free_mask(&self) -> Vec<bool> {
+        (0..self.w * self.h).map(|k| self.free(k)).collect()
+    }
+
     /// 4-connected component labels of free cells (0 = blocked).
     pub fn label(&self) -> Vec<u32> {
         let mut labels = vec![0u32; self.w * self.h];

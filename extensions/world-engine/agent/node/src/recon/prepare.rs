@@ -103,6 +103,9 @@ pub struct PrepareSummary {
 
 /// The LiDAR world cloud is kept at this voxel size.
 const LIDAR_VOXEL_M: f64 = 0.02;
+/// The LiDAR scan origins in the world frame (`[[x, y, z], ...]`), one per
+/// sweep: the floor plan carves free space along rays from them.
+pub const LIDAR_ORIGINS_FILE: &str = "lidar_origins.json";
 /// A frame is dropped when its blur score is under this fraction of its
 /// camera's median.
 const BLUR_KEEP_FRACTION: f64 = 0.35;
@@ -368,6 +371,7 @@ pub fn run(
     let mut records: Vec<(FrameRecord, f64)> = Vec::new();
     let mut voxels: HashSet<[i64; 3]> = HashSet::new();
     let mut lidar: Vec<[f64; 3]> = Vec::new();
+    let mut lidar_origins: Vec<[f64; 3]> = Vec::new();
     let total = wanted.len().max(1) as f32;
     reader.for_each_message(|m| {
         if let Some(cam) = m
@@ -434,6 +438,9 @@ pub fn run(
             let pc = m.decode::<PointCloud>()?;
             let pts = session_data::decode_points(&pc)
                 .map_err(|e| ados_capture_contract::Error::Invalid(e.message))?;
+            if let Some(body) = track.at(m.t_ns) {
+                lidar_origins.push(geom::apply(&geom::mul(&body, mount), [0.0; 3]));
+            }
             for (p, dt) in pts {
                 let Some(body) = track.at(m.t_ns + dt) else {
                     continue;
@@ -481,6 +488,12 @@ pub fn run(
             },
         )
         .map_err(StageError::io)?;
+    }
+    if !lidar_origins.is_empty() {
+        fs::write(
+            dataset_dir.join(LIDAR_ORIGINS_FILE),
+            serde_json::to_vec(&lidar_origins)?,
+        )?;
     }
     let mut cameras: Vec<String> = frames.iter().map(|f| f.camera_id.clone()).collect();
     cameras.sort();

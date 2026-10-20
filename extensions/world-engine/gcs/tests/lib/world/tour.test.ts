@@ -37,4 +37,16 @@ describe("coerceTourManifest", () => {
     expect(coerceTourManifest({ splat: "../x.spz" })).toBeNull();
     expect(coerceTourManifest({})).toBeNull();
   });
+
+  it("reads the ESDF and the navigation nodes, dropping malformed nodes", () => {
+    const m = coerceTourManifest({
+      splat: "scene.spz",
+      esdf: "occupancy.esdf",
+      nodes: [{ id: "n0", position: [1, 2, 1.6], yaw_deg: 90 }, { id: "n1", position: [1, 2] }, { position: [0, 0, 0] }],
+    })!;
+    expect(m.esdf).toBe("occupancy.esdf");
+    expect(m.nodes).toEqual([{ id: "n0", position: [1, 2, 1.6], yawDeg: 90 }]);
+    const old = coerceTourManifest({ splat: "scene.spz" })!;
+    expect([old.esdf, old.nodes]).toEqual([null, []]);
+  });
 });

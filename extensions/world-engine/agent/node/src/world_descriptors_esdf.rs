@@ -225,7 +225,7 @@ pub fn esdf_from_points(
 /// contributes the parabola `(q - p)^2 + f[p]`, the algorithm walks the
 /// envelope's breakpoints in one forward pass and samples it in one backward
 /// pass, so the whole line is O(n) rather than O(n^2).
-pub(super) fn transform_1d(f: &[f32], out: &mut [f32]) {
+pub(crate) fn transform_1d(f: &[f32], out: &mut [f32]) {
     let n = f.len();
     debug_assert_eq!(out.len(), n);
     if n == 0 {

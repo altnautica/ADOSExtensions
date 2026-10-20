@@ -146,3 +146,50 @@ pub fn voxel_downsample(cloud: &PointCloud, voxel_m: f64) -> PointCloud {
     });
     PointCloud { points, colors }
 }
+
+/// Points spread uniformly over the mesh surface, one per `area_per_point`
+/// square metres (a triangle's fractional share carries into the next, so
+/// small triangles are not lost). Deterministic per mesh.
+pub fn sample_surface(mesh: &TriMesh, area_per_point: f64) -> Vec<[f64; 3]> {
+    if area_per_point.is_nan() || area_per_point <= 0.0 {
+        return Vec::new();
+    }
+    let mut rng = super::geom::Rng::new(0x5eed);
+    let mut unit = || (rng.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
+    let mut out = Vec::new();
+    let mut carry = 0.0;
+    for t in &mesh.triangles {
+        let vertex = |i: u32| mesh.vertices.get(i as usize).copied();
+        let (Some(a), Some(b), Some(c)) = (vertex(t[0]), vertex(t[1]), vertex(t[2])) else {
+            continue;
+        };
+        let (u, v) = (sub(b, a), sub(c, a));
+        let n = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        let area = 0.5 * (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if !area.is_finite() {
+            continue;
+        }
+        carry += area / area_per_point;
+        while carry >= 1.0 {
+            carry -= 1.0;
+            let (mut s, mut r) = (unit(), unit());
+            if s + r > 1.0 {
+                (s, r) = (1.0 - s, 1.0 - r);
+            }
+            out.push([
+                a[0] + s * u[0] + r * v[0],
+                a[1] + s * u[1] + r * v[1],
+                a[2] + s * u[2] + r * v[2],
+            ]);
+        }
+    }
+    out
+}
+
+fn sub(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}

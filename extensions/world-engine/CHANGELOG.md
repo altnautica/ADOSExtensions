@@ -2,6 +2,33 @@
 
 All notable changes to the World Engine extension.
 
+## [Unreleased]
+
+### Changed
+
+- **Floor plans.** The wall slice adds a band 0.4–0.1 m under a detected
+  ceiling to the body-height band; points sampled from the extracted mesh
+  join the cloud, so plain camera-only walls are found; rays from the
+  keyframe cameras and LiDAR scan origins carve free space, so sparse clutter
+  crossed by many rays no longer becomes a wall. A floor nobody marked rooms
+  on gets its rooms found automatically (`Room 1..n`, largest first) by
+  morphological segmentation of the free map.
+- **Aisles.** Corridors come from the medial axis of the free floor between
+  0.2 m and 2.0 m, split into straight runs; `aisles.geojson` features carry
+  `kind` (`aisle` or `cross_aisle`), and the aisles output reports both counts.
+- **Splat delivery.** Before SPZ and LoD, the trained splat drops non-finite
+  splats, everything outside the keyframe bounds (±3 m across, 1 m below,
+  3 m above) and floaters (splat-transform's GPU floater filter at 5 cm).
+
+### Added
+
+- `tour.json` names the occupancy ESDF (`esdf`, its header beside it) and
+  navigation `nodes` thinned from the keyframe poses to one per 1.5 m. The
+  viewer's walk mode slides along walls with a 0.25 m clearance, and nodes
+  show as floor discs that jump the walker there. The plugin viewer walks
+  against the job's ESDF too.
+- The prepare stage records the LiDAR scan origins (`lidar_origins.json`).
+
 ## [2.0.0]
 
 ### Added

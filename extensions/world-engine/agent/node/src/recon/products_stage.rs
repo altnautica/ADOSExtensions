@@ -1,10 +1,11 @@
 //! Stage `products`: the deliverables of a session reconstruction in `out/`
-//! — the splat as SPZ (and `.rad` LoD), the collision mesh, the LAZ point
-//! cloud, the ESDF, the indoor products the preset asks for, a placement
-//! sidecar per georeferenced artifact, and `outputs.json` listing them.
+//! — the splat filtered and as SPZ (and `.rad` LoD), the collision mesh, the
+//! LAZ point cloud, the ESDF, the indoor products the preset asks for, the
+//! tour (`products_tour`), a placement sidecar per georeferenced artifact,
+//! and `outputs.json` listing them.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use ados_capture_contract::{
     ArtifactDescriptor, ArtifactDescriptorFormat as Fmt, ArtifactDescriptorKind as Kind, GeoAnchor,
@@ -13,11 +14,12 @@ use ados_capture_contract::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::prepare::read_rooms;
+use super::prepare::{read_rooms, LIDAR_ORIGINS_FILE};
 use super::preset::PresetSpec;
-use super::{colmap, train, StageError, ToolInvocation, ToolRunner};
-use crate::products::cloud::{read_laz, write_laz, PointCloud};
-use crate::products::{aisles, floorplan, tour};
+use super::products_tour::{self, Keyframe};
+use super::{colmap, StageError, ToolInvocation, ToolRunner};
+use crate::products::cloud::{read_laz, read_ply_mesh, sample_surface, write_laz, PointCloud};
+use crate::products::{aisles, floorplan};
 
 /// One deliverable listed in `out/outputs.json`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,27 +108,27 @@ fn world_cloud(job_dir: &Path) -> Result<PointCloud, StageError> {
     Ok(cloud)
 }
 
-/// A camera at `eye` looking horizontally at `target` (OpenCV axes: x right,
-/// y down, z forward) as row-major `T_world_cam`.
-pub fn look_at(eye: [f64; 3], target: [f64; 3]) -> [f64; 16] {
-    let mut f = [target[0] - eye[0], target[1] - eye[1], 0.0];
-    let n = (f[0] * f[0] + f[1] * f[1]).sqrt();
-    if n < 1e-9 {
-        f = [1.0, 0.0, 0.0];
-    } else {
-        f = [f[0] / n, f[1] / n, 0.0];
-    }
-    let y = [0.0, 0.0, -1.0];
-    // x = y × z
-    let x = [
-        y[1] * f[2] - y[2] * f[1],
-        y[2] * f[0] - y[0] * f[2],
-        y[0] * f[1] - y[1] * f[0],
-    ];
-    [
-        x[0], y[0], f[0], eye[0], x[1], y[1], f[1], eye[1], x[2], y[2], f[2], eye[2], 0.0, 0.0,
-        0.0, 1.0,
-    ]
+/// The splat box kept by the export filter: the keyframe camera centres'
+/// bounds widened by 3 m across and from 1 m below to 3 m above, as
+/// splat-transform's `min,max` corner list. `None` without keyframes.
+pub fn splat_box(keyframes: &[Keyframe]) -> Option<String> {
+    let first = keyframes.first()?.centre;
+    let (lo, hi) = keyframes.iter().fold((first, first), |(lo, hi), k| {
+        (
+            [0, 1, 2].map(|i| lo[i].min(k.centre[i])),
+            [0, 1, 2].map(|i| hi[i].max(k.centre[i])),
+        )
+    });
+    let r = |v: f64| (v * 1000.0).round() / 1000.0 + 0.0;
+    Some(format!(
+        "{},{},{},{},{},{}",
+        r(lo[0] - 3.0),
+        r(lo[1] - 3.0),
+        r(lo[2] - 1.0),
+        r(hi[0] + 3.0),
+        r(hi[1] + 3.0),
+        r(hi[2] + 3.0)
+    ))
 }
 
 /// Run the stage.
@@ -147,20 +149,32 @@ pub fn run(
     let place = |file: &str, kind: Kind, fmt: Fmt| {
         write_sidecar(&out, file, kind, fmt, &placement, generation, sid)
     };
+    let keyframes = products_tour::keyframes(job);
 
-    // Splat: the trained PLY, its SPZ, and the LoD tree when asked for.
+    // Splat: the trained PLY filtered, its SPZ, and the LoD tree when asked
+    // for. The filter drops non-finite splats, everything outside the walked
+    // box, and floaters that add to no solid 5 cm voxel at 0.1 opacity.
     let splat_ply = job.join("train").join("splat.ply");
-    fs::copy(&splat_ply, out.join("scene.ply"))?;
+    let mut filter = ToolInvocation::new("splat-transform", &out)
+        .args(["-w", "--no-tty"])
+        .arg(&splat_ply)
+        .arg("-N");
+    if let Some(b) = splat_box(&keyframes) {
+        filter = filter.arg("-B").arg(b);
+    }
+    runner.run(
+        &filter.args(["-F", "0.05,0.1"]).arg(out.join("scene.ply")),
+        &mut |_| {},
+    )?;
     let sidecar = place("scene.ply", Kind::Splat, Fmt::Ply)?;
     arts.push(art("splat", "scene.ply", "ply", Some(sidecar)));
-    // PLY -> SPZ, dropping non-finite splats. Version 4 (ZSTD streams) is
-    // named, not left to the converter's default: the viewer (Spark >= 2.4)
-    // and the world-engine tiler read it.
+    // PLY -> SPZ. Version 4 (ZSTD streams) is named, not left to the
+    // converter's default: the viewer (Spark >= 2.4) and the world-engine
+    // tiler read it.
     runner.run(
         &ToolInvocation::new("splat-transform", &out)
             .args(["-w", "--no-tty", "--spz-version", "4"])
-            .arg(&splat_ply)
-            .arg("-N")
+            .arg(out.join("scene.ply"))
             .arg(out.join("scene.spz")),
         &mut |_| {},
     )?;
@@ -238,7 +252,15 @@ pub fn run(
                 positions: r.positions.clone(),
             })
             .collect();
-        let plan = floorplan::build(&cloud, &tracks, &floorplan::FloorplanOptions::default());
+        let plan_cloud = floorplan_cloud(job, &cloud);
+        let mut origins: Vec<[f64; 3]> = keyframes.iter().map(|k| k.centre).collect();
+        origins.extend(read_lidar_origins(&job.join("dataset"))?);
+        let plan = floorplan::build(
+            &plan_cloud,
+            &tracks,
+            &origins,
+            &floorplan::FloorplanOptions::default(),
+        );
         let value = serde_json::to_value(&plan)?;
         fs::write(
             out.join("floorplan.json"),
@@ -265,17 +287,22 @@ pub fn run(
             out.join("aisles.geojson"),
             serde_json::to_vec_pretty(&aisles::to_geojson(&found))?,
         )?;
+        let cross = found
+            .iter()
+            .filter(|a| a.kind == aisles::AisleKind::CrossAisle)
+            .count();
         let mut a = art("aisles", "aisles.geojson", "geojson", None);
-        a.meta = serde_json::json!({ "aisles": found.len() });
+        a.meta = serde_json::json!({ "aisles": found.len() - cross, "cross_aisles": cross });
         arts.push(a);
     }
     progress(0.7);
     if input.spec.tour {
-        arts.push(build_tour(
+        arts.push(products_tour::build_tour(
             runner,
             input,
             &out,
             plan_json.as_ref(),
+            &keyframes,
             &placement,
             progress,
         )?);
@@ -306,7 +333,7 @@ pub fn run(
     Ok(arts)
 }
 
-fn art(kind: &str, file: &str, format: &str, place_json: Option<String>) -> ArtifactOut {
+pub(super) fn art(kind: &str, file: &str, format: &str, place_json: Option<String>) -> ArtifactOut {
     ArtifactOut {
         kind: kind.into(),
         file: file.into(),
@@ -323,118 +350,35 @@ fn low_percentile_z(cloud: &PointCloud) -> f64 {
     z[z.len() / 50]
 }
 
-/// Hero stills at each room hotspot, then the static tour bundle.
-fn build_tour(
-    runner: &dyn ToolRunner,
-    input: &ProductsInput<'_>,
-    out: &Path,
-    plan: Option<&serde_json::Value>,
-    placement: &Placement,
-    progress: &mut dyn FnMut(f32),
-) -> Result<ArtifactOut, StageError> {
-    let mut rooms = Vec::new();
-    let mut poses = Vec::new();
-    for fl in plan
-        .and_then(|p| p["floors"].as_array())
-        .cloned()
-        .unwrap_or_default()
-    {
-        for r in fl["rooms"].as_array().cloned().unwrap_or_default() {
-            let h: Vec<f64> = r["hotspot"]
-                .as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_f64()).collect())
-                .unwrap_or_default();
-            if h.len() != 3 {
-                continue;
-            }
-            let poly: Vec<[f64; 2]> =
-                serde_json::from_value(r["polygon"].clone()).unwrap_or_default();
-            let n = poly.len().max(1) as f64;
-            let c = poly
-                .iter()
-                .fold([0.0, 0.0], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n]);
-            // Stand off the hotspot toward the room's far side for a wide view.
-            let eye = [h[0] - 0.5 * (c[0] - h[0]), h[1] - 0.5 * (c[1] - h[1]), h[2]];
-            let name = format!("room_{}", rooms.len());
-            poses.push(serde_json::json!({
-                "name": name, "T_world_cam": look_at(eye, [c[0], c[1], h[2]]),
-                "width": 1600, "height": 1000, "fx": 800.0, "fy": 800.0, "cx": 800.0, "cy": 500.0,
-            }));
-            rooms.push(serde_json::json!({
-                "name": r["name"], "floor": fl["floor"], "hotspot": h,
-                "still": format!("stills/{name}.jpg"),
-            }));
+/// Surface samples of the extracted mesh per square metre for the floor
+/// plan (one per 4 cm²): a camera-only capture of plain walls has few sparse
+/// points on them but a meshed surface.
+const PLAN_MESH_AREA_PER_POINT_M2: f64 = 0.0004;
+
+/// The floor plan's cloud: the world cloud plus points sampled from the mesh
+/// when the job has one.
+fn floorplan_cloud(job_dir: &Path, cloud: &PointCloud) -> PointCloud {
+    let mut points = cloud.points.clone();
+    let mesh_ply = job_dir.join("mesh").join("mesh.ply");
+    if mesh_ply.is_file() {
+        match read_ply_mesh(&mesh_ply) {
+            Ok(mesh) => points.extend(sample_surface(&mesh, PLAN_MESH_AREA_PER_POINT_M2)),
+            Err(e) => tracing::warn!(error = %e, "mesh samples skipped for the floor plan"),
         }
     }
-    let stills_dir = input.job_dir.join("stills");
-    let _ = fs::remove_dir_all(&stills_dir);
-    // Hero stills are rendered from the splat by gsplat. Brush renders only in
-    // its viewer, so on a node without the gsplat kernels (or when a render
-    // fails) the rooms carry `still: null` and the tour still ships.
-    if !poses.is_empty() {
-        let poses_json = input.job_dir.join("stills.json");
-        fs::write(&poses_json, serde_json::to_vec_pretty(&poses)?)?;
-        let rendered = train::gsplat_available(runner, input.job_dir).and_then(|()| {
-            train::stills(
-                runner,
-                &input.job_dir.join("train").join("splat.ply"),
-                &poses_json,
-                &stills_dir,
-                &mut |p| progress(0.7 + 0.2 * p),
-            )
-        });
-        if let Err(e) = rendered {
-            tracing::warn!(error = %e, "tour stills skipped");
-        }
+    PointCloud {
+        points,
+        colors: None,
     }
-    let mut files: Vec<(PathBuf, String)> = vec![(out.join("scene.spz"), "scene.spz".into())];
-    for (f, opt) in [
-        ("scene.rad", true),
-        ("collision.glb", true),
-        ("floorplan.json", true),
-    ] {
-        if opt && out.join(f).is_file() {
-            files.push((out.join(f), f.into()));
-        }
+}
+
+/// LiDAR scan origins the prepare stage recorded (empty without LiDAR).
+fn read_lidar_origins(dataset_dir: &Path) -> Result<Vec<[f64; 3]>, StageError> {
+    match fs::read(dataset_dir.join(LIDAR_ORIGINS_FILE)) {
+        Ok(b) => Ok(serde_json::from_slice(&b)?),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(e.into()),
     }
-    for r in &mut rooms {
-        let still = r["still"].as_str().unwrap_or_default().to_string();
-        let src = stills_dir.join(still.trim_start_matches("stills/"));
-        if src.is_file() {
-            files.push((src, still));
-        } else {
-            r["still"] = serde_json::Value::Null;
-        }
-    }
-    let manifest: tour::TourManifest = serde_json::from_value(serde_json::json!({
-        "contract": ados_capture_contract::CONTRACT_ID,
-        "title": input.title,
-        "splat": "scene.spz",
-        "lod": out.join("scene.rad").is_file().then_some("scene.rad"),
-        "mesh": out.join("collision.glb").is_file().then_some("collision.glb"),
-        "floorplan": out.join("floorplan.json").is_file().then_some("floorplan.json"),
-        "anchor": input.anchor,
-        "placement": placement,
-        "rooms": rooms,
-    }))?;
-    let zip =
-        tour::build_bundle(out, input.tour_viewer, &manifest, &files).map_err(|e| match e {
-            crate::products::ProductError::ViewerMissing(p) => StageError::tool_missing(
-                "tour-viewer",
-                format!("the tour viewer build is missing at {}", p.display()),
-            ),
-            other => StageError::io(other),
-        })?;
-    let mut a = art(
-        "tour",
-        &zip.file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "tour.zip".into()),
-        "zip",
-        None,
-    );
-    a.meta = serde_json::json!({ "rooms": manifest.rooms.len() });
-    Ok(a)
 }
 
 #[cfg(test)]
@@ -442,14 +386,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn look_at_points_the_optical_axis_at_the_target_with_y_down() {
-        let t = look_at([0.0, 0.0, 1.6], [3.0, 0.0, 1.6]);
-        // z (third column) is the forward axis.
-        assert_eq!([t[2], t[6], t[10]], [1.0, 0.0, 0.0]);
-        // y (second column) points down.
-        assert_eq!([t[1], t[5], t[9]], [0.0, 0.0, -1.0]);
-        // x = y × z is right-handed: looking +x with z up, right is -y.
-        assert_eq!([t[0], t[4], t[8]], [0.0, -1.0, 0.0]);
-        assert_eq!([t[3], t[7], t[11]], [0.0, 0.0, 1.6]);
+    fn splat_box_widens_the_walked_bounds() {
+        let k = |x: f64, y: f64, z: f64| Keyframe {
+            centre: [x, y, z],
+            yaw_deg: 0.0,
+        };
+        assert_eq!(splat_box(&[]), None);
+        assert_eq!(
+            splat_box(&[k(0.0, 0.0, 1.5), k(10.0, -4.0, 1.7)]).unwrap(),
+            "-3,-7,0.5,13,3,4.7"
+        );
     }
 }

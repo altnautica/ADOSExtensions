@@ -42,11 +42,15 @@ export async function loadJobWorld(client: ComputeAgentClient, jobId: string): P
   const placeJson = splatPlaceJson(outputs, splatOut);
   const plan = byKind(outputs, "floorplan");
   const aisles = byKind(outputs, "aisles");
-  const [placementRaw, planRaw, aislesRaw] = await Promise.all([
+  const occupancy = byKind(outputs, "occupancy");
+  const [placementRaw, planRaw, aislesRaw, esdfHeader] = await Promise.all([
     placeJson ? client.readJsonFile(jobId, placeJson) : Promise.resolve(null),
     plan?.file ? client.readJsonFile(jobId, plan.file) : Promise.resolve(null),
     aisles?.file ? client.readJsonFile(jobId, aisles.file) : Promise.resolve(null),
+    occupancy?.file ? client.readJsonFile(jobId, occupancy.file) : Promise.resolve(null),
   ]);
+  // The occupancy output is the ESDF's header; it names its grid file.
+  const grid = typeof occupancy?.meta?.grid === "string" ? occupancy.meta.grid : null;
   const floorplan = coerceFloorplan(planRaw);
   return {
     outputs,
@@ -59,6 +63,7 @@ export async function loadJobWorld(client: ComputeAgentClient, jobId: string): P
         f.rooms.map((r) => ({ name: r.name, floor: f.floor, hotspot: r.hotspot })),
       ),
       aisles: coerceAisles(aislesRaw),
+      esdf: esdfHeader && grid ? { header: esdfHeader, grid: client.fileSource(jobId, grid) } : null,
     },
     pointcloud: (byKind(outputs, "pointcloud") ?? byKind(outputs, "change"))?.source ?? null,
     tour: byKind(outputs, "tour")?.source ?? null,

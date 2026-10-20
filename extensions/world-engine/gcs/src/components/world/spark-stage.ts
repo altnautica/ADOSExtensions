@@ -26,6 +26,7 @@ import { splatFramingBounds } from "../../lib/world/splat-bounds";
 import { followCanvasSize } from "../atlas/viewers/cloud-view";
 import { disposeMaterials, disposeObject } from "./scene-resources";
 import { StreamedFraming } from "./streamed-framing";
+import { slideStep, type EsdfField } from "../../lib/world/esdf";
 import { WalkControls } from "./walk-controls";
 
 export type ViewMode = "orbit" | "dollhouse" | "walk";
@@ -259,6 +260,11 @@ export class SparkStage {
 
   setStick(forward: number, strafe: number): void {
     this.walk.stick = { forward, strafe };
+  }
+
+  /** Walls the walker slides along (null: walk through everything). */
+  setEsdf(field: EsdfField | null): void {
+    this.walk.collide = field ? (eye, floorY, step) => slideStep(field, eye, floorY, step) : null;
   }
 
   /** Fit the camera to the scene: a three-quarter view, or from above. */

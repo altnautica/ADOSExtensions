@@ -11,6 +11,7 @@ fn manifest() -> TourManifest {
         lod: None,
         mesh: Some("collision.glb".into()),
         floorplan: Some("floorplan.json".into()),
+        esdf: None,
         anchor: None,
         placement: None,
         rooms: vec![TourRoom {
@@ -19,6 +20,7 @@ fn manifest() -> TourManifest {
             hotspot: [2.5, 2.0, 1.6],
             still: Some("stills/0.jpg".into()),
         }],
+        nodes: Vec::new(),
     }
 }
 

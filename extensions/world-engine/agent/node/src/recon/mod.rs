@@ -18,6 +18,7 @@ pub mod prepare;
 pub mod preset;
 pub mod process;
 pub mod products_stage;
+pub mod products_tour;
 pub mod runner;
 pub mod session_data;
 pub mod sfm;

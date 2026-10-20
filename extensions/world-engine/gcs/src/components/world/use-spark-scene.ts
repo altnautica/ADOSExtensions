@@ -12,8 +12,10 @@ import type { ArtifactSource } from "../../lib/net/artifact-source";
 import { fetchArrayBufferWithProgress } from "../../lib/net/fetch-with-progress";
 import { honourRange, serveTreeAtSentinel, type SentinelRoute } from "../../lib/net/sentinel-fetch";
 import type { Aisle } from "../../lib/world/aisles";
+import { esdfField } from "../../lib/world/esdf";
 import type { Floorplan } from "../../lib/world/floorplan";
 import type { ArtifactFrame, Vec3 } from "../../lib/world/placement";
+import type { TourNode } from "../../lib/world/tour";
 import { SparkStage } from "./spark-stage";
 
 /** Everything the world viewer shows for one reconstruction. */
@@ -29,6 +31,11 @@ export interface WorldScene {
   rooms: { name: string; floor: number; hotspot: Vec3 | null }[];
   /** Warehouse aisles (local ENU), drawn on the floor. */
   aisles?: Aisle[];
+  /** The occupancy ESDF walking collides with: its `occupancy.json` header
+   * and the grid file. */
+  esdf?: { header: unknown; grid: ArtifactSource } | null;
+  /** Navigation nodes along the walked path (local ENU), jump targets. */
+  nodes?: TourNode[];
 }
 
 /** `empty`: the splat loaded but no splat in it is solid (an empty or fully
@@ -129,6 +136,22 @@ export function useSparkScene(
       .catch(() => undefined);
     return () => abort.abort();
   }, [stage, collision?.key]);
+
+  const esdf = scene.esdf;
+  useEffect(() => {
+    if (!stage || !esdf) return;
+    const abort = new AbortController();
+    fetchArrayBufferWithProgress(esdf.grid, { signal: abort.signal })
+      .then((buf) => {
+        if (!abort.signal.aborted) stage.setEsdf(esdfField(esdf.header, buf));
+      })
+      // Without the field the walker passes through walls, nothing more.
+      .catch(() => undefined);
+    return () => {
+      abort.abort();
+      stage.setEsdf(null);
+    };
+  }, [stage, esdf?.grid.key]);
 
   return { stage, load };
 }
