@@ -66,6 +66,14 @@ constexpr auto kInitExit = std::chrono::milliseconds(15000);
 // deadlock. So IMU before the first stereo pair is held to the last
 // kImuPreroll samples, and the queue holds kImuQueueCapacity (20 s at 1 kHz,
 // above the optical-flow queue's 10 frames of lag).
+//
+// The same holds the other way round: the estimator waits for IMU up to each
+// frame's time, and that IMU sits in the socket behind later frames. A reader
+// blocked on a full optical-flow queue (10 frames, which fills whenever flow
+// runs slower than the cameras) never reads it, so the estimator never
+// finishes the frame that would drain the queue. Stereo pairs are therefore
+// offered with try_push and dropped when the queue is full; the reader never
+// blocks on vision.
 constexpr size_t kImuPreroll = 200;
 constexpr int kImuQueueCapacity = 20000;
 
@@ -185,6 +193,7 @@ struct Shared {
   int low_feature_run = 0;
   std::atomic<int64_t> frames_in{0};
   std::atomic<int64_t> last_frame_ms{0};
+  uint64_t frames_dropped = 0;  // input thread only
 };
 
 int64_t now_ms() {
@@ -275,7 +284,13 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
         preroll.clear();
         seen_stereo = true;
       }
-      flow.input_queue.push(in);
+      if (!flow.input_queue.try_push(in)) {
+        // Optical flow is behind: drop this pair rather than block the reader.
+        if (++shared.frames_dropped % 100 == 1) {
+          std::fprintf(stderr, "basalt-ados: %llu stereo pairs dropped (flow behind)\n",
+                       static_cast<unsigned long long>(shared.frames_dropped));
+        }
+      }
     }
   }
   // End of input: drain the pipeline.
