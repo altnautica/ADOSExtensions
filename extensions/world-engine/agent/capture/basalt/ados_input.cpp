@@ -63,9 +63,16 @@ constexpr auto kInitExit = std::chrono::milliseconds(15000);
 // IMU that arrives before the first stereo pair, or while optical flow lags
 // by more than 0.3 s, would fill that queue and block the reader on push, so
 // the next stereo pair is never read and the estimator never consumes: a
-// deadlock. So IMU before the first stereo pair is held to the last
-// kImuPreroll samples, and the queue holds kImuQueueCapacity (20 s at 1 kHz,
-// above the optical-flow queue's 10 frames of lag).
+// deadlock. So IMU before the first stereo pair is held back in a pre-roll of
+// at most kImuPreroll samples, and the queue holds kImuQueueCapacity (20 s at
+// 1 kHz, above the optical-flow queue's 10 frames of lag).
+//
+// A frame reaches this process later than the IMU of its exposure (render,
+// encode, network and decode on a simulator; seconds on a loaded host), so the
+// first pair is usually older than the newest IMU. The pre-roll therefore
+// spans kImuPreroll samples (10 s at 1 kHz), and the first pair starts the
+// queue from kImuLeadNs before its own time: the estimator then integrates
+// from the first frame on instead of finding every IMU sample after it.
 //
 // The same holds the other way round: the estimator waits for IMU up to each
 // frame's time, and that IMU sits in the socket behind later frames. A reader
@@ -74,7 +81,8 @@ constexpr auto kInitExit = std::chrono::milliseconds(15000);
 // finishes the frame that would drain the queue. Stereo pairs are therefore
 // offered with try_push and dropped when the queue is full; the reader never
 // blocks on vision.
-constexpr size_t kImuPreroll = 200;
+constexpr size_t kImuPreroll = 10000;
+constexpr int64_t kImuLeadNs = 100'000'000;
 constexpr int kImuQueueCapacity = 20000;
 
 std::mutex g_out_mutex;
@@ -292,8 +300,10 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
                      (double(h.t_ns) - double(last_imu_t_ns)) * 1e-9);
       }
       if (!seen_stereo) {
-        // The IMU just before the first frame, so integration can start there.
-        for (auto& p : preroll) vio.imu_data_queue.push(p);
+        // The IMU from just before the first frame, so integration starts there.
+        for (auto& p : preroll) {
+          if (p->t_ns + kImuLeadNs >= int64_t(h.t_ns)) vio.imu_data_queue.push(p);
+        }
         preroll.clear();
         seen_stereo = true;
       }

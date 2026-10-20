@@ -142,6 +142,10 @@ def main():
     # 0.3 s IMU queue deadlocked the reader before the queue fix.
     ap.add_argument("--imu-lead-s", type=float, default=2.0,
                     help="seconds of IMU sent before the first stereo pair")
+    # A live frame arrives after the IMU of its exposure (seconds on the
+    # simulator bench), so the first pair is older than the newest IMU.
+    ap.add_argument("--frame-lag-s", type=float, default=0.0,
+                    help="send each stereo pair this long after its exposure")
     args = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     config = args.config or os.path.join(here, "vio_config.json")
@@ -178,19 +182,25 @@ def main():
     reader.start()
 
     n_imu = int(args.seconds * IMU_HZ)
+    lag_imu = round(args.frame_lag_s * IMU_HZ)
     start = time.monotonic()
     frames = 0
-    for k in range(n_imu + 1):
+    for k in range(n_imu + lag_imu + 1):
         t = k / IMU_HZ
         lag = start + t - time.monotonic()
         if lag > 0:
             time.sleep(lag)
-        g, a = imu_sample(t)
-        t_ns = T0_NS + round(t * 1e9)
-        conn.sendall(struct.pack("<BIQ6d", 1, 56, t_ns, *g, *a))
-        if k % (IMU_HZ // CAM_HZ) == 0 and k > 0 and t >= args.imu_lead_s:
-            left, right = render(t, 0), render(t, 1)
-            conn.sendall(struct.pack("<BIQII", 2, 16 + 2 * W * H, t_ns, W, H)
+        if k <= n_imu:
+            g, a = imu_sample(t)
+            t_ns = T0_NS + round(t * 1e9)
+            conn.sendall(struct.pack("<BIQ6d", 1, 56, t_ns, *g, *a))
+        # The pair exposed lag_imu samples ago.
+        e = k - lag_imu
+        te = e / IMU_HZ
+        if e > 0 and e % (IMU_HZ // CAM_HZ) == 0 and te >= args.imu_lead_s:
+            left, right = render(te, 0), render(te, 1)
+            te_ns = T0_NS + round(te * 1e9)
+            conn.sendall(struct.pack("<BIQII", 2, 16 + 2 * W * H, te_ns, W, H)
                          + left.tobytes() + right.tobytes())
             frames += 1
     conn.close()
