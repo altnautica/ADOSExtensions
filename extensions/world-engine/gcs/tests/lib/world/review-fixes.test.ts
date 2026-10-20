@@ -14,7 +14,7 @@ import type { ComputeOutput } from "../../../src/lib/agent/compute-client";
 import { coverageBounds } from "../../../src/components/capture/CoverageMap";
 import { walkKeyApplies } from "../../../src/components/world/walk-controls";
 import { applyPoll, STALE_AFTER_MISSES } from "../../../src/hooks/use-capture";
-import { wizardFor, type WizardStep } from "../../../src/lib/capture/calibration";
+import { rigCalibShape, wizardFor, type WizardStep } from "../../../src/lib/capture/calibration";
 import {
   manualCalibVersion,
   transformFromXyzRpy,
@@ -22,9 +22,40 @@ import {
   withLeverArm,
   xyzRpyFromTransform,
 } from "../../../src/lib/capture/rig-entry";
-import type { Rig } from "../../../src/lib/contract/generated";
+import type { LidarModel, Rig } from "../../../src/lib/contract/generated";
+import { translator } from "../../../src/host/i18n";
+import messages from "../../../../locales/en.json";
 import { aisleLinesViewer, coerceAisles } from "../../../src/lib/world/aisles";
 import { artifactToViewerMatrix } from "../../../src/lib/world/placement";
+
+const t = translator("calibration");
+
+const MID360: LidarModel = {
+  model: "livox-mid360",
+  pattern: "solid",
+  h_fov_deg: 360,
+  v_min_deg: -7,
+  v_max_deg: 52,
+  rate_hz: 10,
+  points_per_s: 200000,
+  min_range_m: 0.1,
+  max_range_m: 40,
+  range_sigma_m: 0.02,
+};
+
+const C1: LidarModel = {
+  model: "rplidar-c1",
+  pattern: "planar",
+  h_fov_deg: 360,
+  v_min_deg: 0,
+  v_max_deg: 0,
+  rate_hz: 10,
+  points_per_s: 5000,
+  min_range_m: 0.05,
+  max_range_m: 12,
+  range_sigma_m: 0.03,
+  blocked_azimuth_deg: [[130, 230]],
+};
 
 describe("pickSplatOutput", () => {
   const outs = [
@@ -136,7 +167,14 @@ describe("rig entry", () => {
     rig_id: "pro-01",
     calib_version: "v1",
     sensors: [
-      { id: "lidar0", kind: "lidar", role: "up", T_body_sensor: transformFromXyzRpy([0, 0, 0], [0, 0, 0]), time_offset_ns: 0 },
+      {
+        id: "lidar0",
+        kind: "lidar",
+        role: "up",
+        T_body_sensor: transformFromXyzRpy([0, 0, 0], [0, 0, 0]),
+        time_offset_ns: 0,
+        lidar: MID360,
+      },
       { id: "gnss0", kind: "gnss", role: "nav", T_body_sensor: transformFromXyzRpy([0, 0, 0], [0, 0, 0]), time_offset_ns: 0 },
     ],
   };
@@ -159,9 +197,10 @@ describe("rig entry", () => {
     expect(manualCalibVersion(new Date("2026-10-19T10:15:00.123Z"))).toBe("20261019T101500Z-m");
   });
 
+  const ids = (w: WizardStep[]) => w.map((s) => (s.kind === "job" ? s.step.target : s.kind === "entry" ? s.target : s.key));
+
   it("orders the wizard and keeps only the rig's sensors", () => {
-    const ids = (w: WizardStep[]) => w.map((s) => (s.kind === "job" ? s.step.target : s.target));
-    expect(ids(wizardFor({ hasLidar: true, hasGnss: true }))).toEqual([
+    expect(ids(wizardFor(rigCalibShape(rig)))).toEqual([
       "imu_noise",
       "intrinsics",
       "camera_imu",
@@ -169,6 +208,30 @@ describe("rig entry", () => {
       "lidar_camera",
       "gnss_lever_arm",
     ]);
-    expect(ids(wizardFor({ hasLidar: false, hasGnss: false }))).toEqual(["imu_noise", "intrinsics", "camera_imu"]);
+    expect(ids(wizardFor(rigCalibShape(null)))).toEqual(["imu_noise", "intrinsics", "camera_imu"]);
+  });
+
+  it("replaces the LiDAR–IMU entry with a note and asks for board views on a planar rig", () => {
+    const planar: Rig = {
+      ...rig,
+      sensors: [{ ...rig.sensors[0]!, lidar: C1 }, rig.sensors[1]!],
+    };
+    const w = wizardFor(rigCalibShape(planar));
+    expect(ids(w)).toEqual([
+      "imu_noise",
+      "intrinsics",
+      "camera_imu",
+      "lidar.planar_no_imu",
+      "lidar_camera",
+      "gnss_lever_arm",
+    ]);
+    const lidarCamera = w.find((s) => s.kind === "job" && s.step.target === "lidar_camera");
+    expect(lidarCamera?.kind === "job" && lidarCamera.hintKey).toBe("lidar_camera.planar_board");
+    expect(t(w[3]?.kind === "note" ? w[3].key : "")).toBe(messages.calibration.lidar.planar_no_imu);
+    expect(t("lidar_camera.planar_board")).toBe(messages.calibration.lidar_camera.planar_board);
+
+    // A 3D rig keeps the generic hint.
+    const generic = wizardFor(rigCalibShape(rig)).find((s) => s.kind === "job" && s.step.target === "lidar_camera");
+    expect(generic?.kind === "job" && generic.hintKey).toBe("hint.lidar_camera");
   });
 });

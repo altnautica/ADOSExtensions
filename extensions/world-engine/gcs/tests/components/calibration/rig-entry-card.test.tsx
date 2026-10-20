@@ -1,7 +1,8 @@
 /**
  * The measured LiDAR–IMU entry step starts from the picked sensor's stored
  * extrinsic and re-initialises when another sensor is picked; saving pushes a
- * new rig version with only that sensor changed.
+ * new rig version with only that sensor changed. A planar LiDAR is never
+ * offered: its mount comes from the LiDAR–camera board calibration.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,19 +12,58 @@ import { RigEntryCard } from "../../../src/components/calibration/RigEntryCard";
 import { ToastProvider } from "../../../src/components/ui/Toast";
 import { CaptureClient } from "../../../src/lib/agent/capture-client";
 import { transformFromXyzRpy } from "../../../src/lib/capture/rig-entry";
-import type { Rig } from "../../../src/lib/contract/generated";
+import type { LidarModel, Rig } from "../../../src/lib/contract/generated";
 import messages from "../../../../locales/en.json";
 import { callAt, json, stubAgent } from "../../helpers/agent";
 
 afterEach(cleanup);
+
+const MID360: LidarModel = {
+  model: "livox-mid360",
+  pattern: "solid",
+  h_fov_deg: 360,
+  v_min_deg: -7,
+  v_max_deg: 52,
+  rate_hz: 10,
+  points_per_s: 200000,
+  min_range_m: 0.1,
+  max_range_m: 40,
+  range_sigma_m: 0.02,
+};
 
 const RIG: Rig = {
   contract: "ados.capture/1",
   rig_id: "pro-01",
   calib_version: "v1",
   sensors: [
-    { id: "lidar_top", kind: "lidar", role: "up", T_body_sensor: transformFromXyzRpy([0.01, 0.02, 0.15], [0, 0, 0]), time_offset_ns: 0 },
-    { id: "lidar_back", kind: "lidar", role: "back", T_body_sensor: transformFromXyzRpy([-0.2, 0, 0.05], [0, 0, 180]), time_offset_ns: 0 },
+    {
+      id: "lidar_top",
+      kind: "lidar",
+      role: "up",
+      T_body_sensor: transformFromXyzRpy([0.01, 0.02, 0.15], [0, 0, 0]),
+      time_offset_ns: 0,
+      lidar: MID360,
+    },
+    {
+      id: "lidar_back",
+      kind: "lidar",
+      role: "back",
+      T_body_sensor: transformFromXyzRpy([-0.2, 0, 0.05], [0, 0, 180]),
+      time_offset_ns: 0,
+      lidar: MID360,
+    },
+  ],
+};
+
+/** The same rig with the back LiDAR a planar scanner. */
+const MIXED: Rig = {
+  ...RIG,
+  sensors: [
+    RIG.sensors[0]!,
+    {
+      ...RIG.sensors[1]!,
+      lidar: { ...MID360, model: "rplidar-c1", pattern: "planar", v_min_deg: 0, v_max_deg: 0, max_range_m: 12 },
+    },
   ],
 };
 
@@ -55,5 +95,17 @@ describe("RigEntryCard", () => {
     // The other sensor goes out exactly as stored (compared as the wire form).
     expect(pushed.sensors[0]).toEqual(JSON.parse(JSON.stringify(RIG.sensors[0])));
     expect(pushed.sensors[1]?.T_body_sensor[3]).toBeCloseTo(-0.2, 9);
+  });
+
+  it("offers only the 3D LiDARs for the LiDAR–IMU entry", () => {
+    const { agent } = stubAgent(() => json(200, {}));
+    render(
+      <ToastProvider>
+        <RigEntryCard index={3} target="lidar_imu" rig={MIXED} device={new CaptureClient(agent)} onApplied={() => {}} />
+      </ToastProvider>,
+    );
+    // One candidate left, so no picker; the fields show the 3D LiDAR.
+    expect(screen.queryByLabelText(messages.calibration.sensor)).toBeNull();
+    expect(offsetX()).toBeCloseTo(0.01, 9);
   });
 });

@@ -48,6 +48,7 @@ async function readResult(client: ComputeAgentClient, jobId: string): Promise<{ 
 export function CalibStepCard({
   index,
   step,
+  hintKey,
   progress,
   onProgress,
   device,
@@ -57,6 +58,8 @@ export function CalibStepCard({
 }: {
   index: number;
   step: CalibStep;
+  /** `calibration` locale key of the step's hint (from the wizard). */
+  hintKey: string;
   progress: StepProgress;
   onProgress: (p: StepProgress) => void;
   device: CaptureClient;
@@ -124,7 +127,7 @@ export function CalibStepCard({
         </span>
         <span className="we:text-[11px] we:text-text-tertiary">{t("recordFor", { d: formatDuration(step.recordS) })}</span>
       </div>
-      <p className="we:text-[11px] we:text-text-tertiary">{t(`hint.${step.target}`)}</p>
+      <p className="we:text-[11px] we:text-text-tertiary">{t(hintKey)}</p>
       <div className="we:flex we:flex-wrap we:items-center we:gap-2">
         {progress.recording ? (
           <Button size="sm" variant="danger" icon={<Square size={12} />} loading={busy} onClick={() => void stop()}>

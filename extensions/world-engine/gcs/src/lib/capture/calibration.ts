@@ -4,6 +4,7 @@
  * versions (`GET atlas/calib`) and a node `calibrate` job's report.
  */
 
+import type { Rig, RigSensor } from "../contract/generated";
 import { arr, num, obj, objOrNull, str } from "./coerce";
 
 /** Node `calibrate` job targets, in the order the wizard runs them. */
@@ -30,20 +31,58 @@ export const CALIB_STEPS: readonly CalibStep[] = [
  * extrinsic and the GNSS antenna lever arm. */
 export type EntryTarget = "lidar_imu" | "gnss_lever_arm";
 
-export type WizardStep = { kind: "job"; step: CalibStep } | { kind: "entry"; target: EntryTarget };
+/** A job step carries the `calibration` locale key of its hint. A note is a
+ * static, unnumbered line (its `calibration` locale key). */
+export type WizardStep =
+  | { kind: "job"; step: CalibStep; hintKey: string }
+  | { kind: "entry"; target: EntryTarget }
+  | { kind: "note"; key: string };
+
+/** What the wizard needs to know about a rig. */
+export interface RigCalibShape {
+  /** A solid-state or spinning (3D) LiDAR. */
+  has3dLidar: boolean;
+  /** A planar (single-ring 2D) LiDAR. */
+  hasPlanarLidar: boolean;
+  hasGnss: boolean;
+}
+
+/** The wizard shape of a rig, from each LiDAR's `lidar.pattern`. */
+export function rigCalibShape(rig: Rig | null): RigCalibShape {
+  const sensors = rig?.sensors ?? [];
+  const lidars = sensors.filter((s) => s.kind === "lidar");
+  return {
+    has3dLidar: lidars.some((s) => !isPlanarLidar(s)),
+    hasPlanarLidar: lidars.some(isPlanarLidar),
+    hasGnss: sensors.some((s) => s.kind === "gnss"),
+  };
+}
+
+/** A planar LiDAR has no IMU of its own: its mount comes from the LiDAR–camera
+ * board calibration, never from a measured LiDAR–IMU entry. */
+export function isPlanarLidar(sensor: RigSensor): boolean {
+  return sensor.kind === "lidar" && sensor.lidar?.pattern === "planar";
+}
 
 /** The whole wizard in order (IMU noise → intrinsics → camera–IMU → LiDAR–IMU
- * → LiDAR–camera → GNSS lever arm), keeping only what the rig carries. */
-export function wizardFor(rig: { hasLidar: boolean; hasGnss: boolean }): WizardStep[] {
+ * → LiDAR–camera → GNSS lever arm), keeping only what the rig carries. A
+ * planar LiDAR replaces the LiDAR–IMU entry with a note, and its LiDAR–camera
+ * step asks for board views. */
+export function wizardFor(rig: RigCalibShape): WizardStep[] {
+  const hasLidar = rig.has3dLidar || rig.hasPlanarLidar;
+  const planarOnly = rig.hasPlanarLidar && !rig.has3dLidar;
   const job = (target: CalibTarget): WizardStep[] => {
     const step = CALIB_STEPS.find((s) => s.target === target);
-    return step && (rig.hasLidar || !step.needsLidar) ? [{ kind: "job", step }] : [];
+    if (!step || (step.needsLidar && !hasLidar)) return [];
+    const hintKey = target === "lidar_camera" && planarOnly ? "lidar_camera.planar_board" : `hint.${target}`;
+    return [{ kind: "job", step, hintKey }];
   };
   return [
     ...job("imu_noise"),
     ...job("intrinsics"),
     ...job("camera_imu"),
-    ...(rig.hasLidar ? [{ kind: "entry" as const, target: "lidar_imu" as const }] : []),
+    ...(rig.has3dLidar ? [{ kind: "entry" as const, target: "lidar_imu" as const }] : []),
+    ...(rig.hasPlanarLidar ? [{ kind: "note" as const, key: "lidar.planar_no_imu" }] : []),
     ...job("lidar_camera"),
     ...(rig.hasGnss ? [{ kind: "entry" as const, target: "gnss_lever_arm" as const }] : []),
   ];

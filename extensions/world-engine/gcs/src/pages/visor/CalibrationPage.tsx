@@ -21,7 +21,7 @@ import { useToast } from "../../components/ui/Toast";
 import { translator } from "../../host/i18n";
 import { usePairedNodes } from "../../hooks/use-paired-nodes";
 import { useSessions } from "../../hooks/use-sessions";
-import { wizardFor, type CalibStore, type CalibTarget } from "../../lib/capture/calibration";
+import { rigCalibShape, wizardFor, type CalibStore, type CalibTarget } from "../../lib/capture/calibration";
 import type { Rig } from "../../lib/contract/generated";
 import { CalmState } from "../workstation/CalmState";
 
@@ -52,14 +52,7 @@ export function CalibrationPage() {
     () => nodes.find((n) => n.profile === "workstation" || n.profile === "compute")?.deviceId ?? null,
     [nodes],
   );
-  const wizard = useMemo(
-    () =>
-      wizardFor({
-        hasLidar: rig?.sensors.some((x) => x.kind === "lidar") ?? false,
-        hasGnss: rig?.sensors.some((x) => x.kind === "gnss") ?? false,
-      }),
-    [rig],
-  );
+  const wizard = useMemo(() => wizardFor(rigCalibShape(rig)), [rig]);
 
   if (store === undefined) return <ViewerLoading label={t("loading")} />;
   if (store === null) return <CalmState icon={Crosshair} message={t("absent")} />;
@@ -84,9 +77,18 @@ export function CalibrationPage() {
         </p>
         <ol className="we:flex we:flex-col we:gap-2">
           {wizard.map((w, i) => {
+            if (w.kind === "note") {
+              return (
+                <li key={w.key} className="we:border-t we:border-border-default we:pt-2 we:text-[11px] we:text-text-tertiary" data-note={w.key}>
+                  {t(w.key)}
+                </li>
+              );
+            }
+            // Notes are not numbered steps.
+            const index = wizard.slice(0, i).filter((x) => x.kind !== "note").length;
             if (w.kind === "entry") {
               return rig ? (
-                <RigEntryCard key={w.target} index={i} target={w.target} rig={rig} device={client} onApplied={() => void load()} />
+                <RigEntryCard key={w.target} index={index} target={w.target} rig={rig} device={client} onApplied={() => void load()} />
               ) : null;
             }
             const step = w.step;
@@ -95,8 +97,9 @@ export function CalibrationPage() {
             return (
               <CalibStepCard
                 key={step.target}
-                index={i}
+                index={index}
                 step={step}
+                hintKey={w.hintKey}
                 progress={p}
                 onProgress={(next) => {
                   setProgress((m) => ({ ...m, [step.target]: next }));

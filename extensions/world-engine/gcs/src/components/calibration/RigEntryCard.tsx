@@ -11,7 +11,7 @@ import { Ruler } from "lucide-react";
 
 import { translator } from "../../host/i18n";
 import type { CaptureClient } from "../../lib/agent/capture-client";
-import type { EntryTarget } from "../../lib/capture/calibration";
+import { isPlanarLidar, type EntryTarget } from "../../lib/capture/calibration";
 import {
   manualCalibVersion,
   transformFromXyzRpy,
@@ -113,8 +113,10 @@ export function RigEntryCard({
   device: CaptureClient;
   onApplied: () => void;
 }) {
-  const kind = target === "lidar_imu" ? "lidar" : "gnss";
-  const sensors = rig.sensors.filter((s) => s.kind === kind);
+  // A planar LiDAR's mount comes from the LiDAR–camera board job, not this entry.
+  const sensors = rig.sensors.filter((s) =>
+    target === "lidar_imu" ? s.kind === "lidar" && !isPlanarLidar(s) : s.kind === "gnss",
+  );
   const [sensorId, setSensorId] = useState(sensors[0]?.id ?? "");
   const sensor = sensors.find((s) => s.id === sensorId) ?? sensors[0];
 

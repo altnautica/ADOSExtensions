@@ -329,6 +329,9 @@
     "empty": "The splat world model is empty or fully transparent: nothing to show."
   },
   "capture": {
+    "hud": {
+      "planar_single_floor": "Planar LiDAR pose: single floor only"
+    },
     "loading": "Reading capture state",
     "absent": "No capture service is answering on this device.",
     "controls": "Capture",
@@ -505,7 +508,13 @@
     "rotation": "Rotation",
     "leverArm": "Lever arm",
     "saveToRig": "Save to rig",
-    "noActiveRig": "No active rig on the device; LiDAR–IMU and lever-arm entry need one."
+    "noActiveRig": "No active rig on the device; LiDAR–IMU and lever-arm entry need one.",
+    "lidar": {
+      "planar_no_imu": "A planar LiDAR has no IMU; its mount comes from the LiDAR–camera calibration."
+    },
+    "lidar_camera": {
+      "planar_board": "Hold the calibration board so the LiDAR's scan line crosses it; capture at least 10 tilts."
+    }
   },
   "tour": {
     "loading": "Loading tour…",
