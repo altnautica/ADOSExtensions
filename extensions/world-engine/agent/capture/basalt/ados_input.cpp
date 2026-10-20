@@ -224,6 +224,7 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
   bool hello = false;
   bool seen_stereo = false;
   std::deque<basalt::ImuData<double>::Ptr> preroll;
+  int64_t last_imu_t_ns = 0;
   while (read_exact(fd, header, sizeof header)) {
     const uint8_t type = header[0];
     const uint32_t len = ados::read_u32(header + 1);
@@ -243,6 +244,7 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
       const ados::ImuMsg m = ados::decode_imu(buf.data());
       basalt::ImuData<double>::Ptr d(new basalt::ImuData<double>);
       d->t_ns = m.t_ns;
+      last_imu_t_ns = m.t_ns;
       d->gyro = Eigen::Vector3d(m.gyro[0], m.gyro[1], m.gyro[2]);
       d->accel = Eigen::Vector3d(m.accel[0], m.accel[1], m.accel[2]);
       if (!seen_stereo) {
@@ -278,6 +280,17 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
       in->img_data[1].img = to_basalt_image(left + plane, h.width, h.height);
       shared.frames_in++;
       shared.last_frame_ms = now_ms();
+      if (shared.frames_in % 200 == 1) {
+        // Frame and IMU clocks must agree: a frame far ahead of the newest
+        // IMU, or far behind it, points at a timestamp mismatch upstream.
+        std::fprintf(stderr,
+                     "basalt-ados: pair %lld t_ns %lld, newest IMU %lld, "
+                     "frame minus IMU %.3f s\n",
+                     static_cast<long long>(shared.frames_in.load()),
+                     static_cast<long long>(h.t_ns),
+                     static_cast<long long>(last_imu_t_ns),
+                     (double(h.t_ns) - double(last_imu_t_ns)) * 1e-9);
+      }
       if (!seen_stereo) {
         // The IMU just before the first frame, so integration can start there.
         for (auto& p : preroll) vio.imu_data_queue.push(p);
