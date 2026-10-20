@@ -1,6 +1,5 @@
-//! Stage `train` (gaussian splat) and stage `mesh`, plus the python helper
-//! steps (masks, depth priors, hero stills) that run in the pinned
-//! `gsplat_train` project.
+//! Stage `train` (gaussian splat), plus the python helper steps (masks,
+//! depth priors, hero stills) that run in the pinned `gsplat_train` project.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,15 +19,57 @@ pub struct TrainSummary {
     /// Mean training-view PSNR of the exported splat as rendered.
     pub psnr: Option<f64>,
     /// The same after a per-view least-squares colour affine: the geometry
-    /// fit apart from per-view colour (which the bilateral grid absorbs in
-    /// training). A wide gap to `psnr` means the colours went into the grid.
+    /// fit apart from per-view colour (which the appearance model absorbs in
+    /// training). A wide gap to `psnr` means the colours went into it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub psnr_cc: Option<f64>,
+    /// The per-image appearance model gsplat trained with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub appearance: Option<Appearance>,
+    /// Gaussians left out of the exported splat (lost or invisible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culled: Option<u64>,
+    /// Steps skipped because their loss was not finite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nonfinite_steps: Option<u64>,
     /// 3DGUT (unscented transform) was on.
     pub ut: bool,
     /// Why the high-fidelity trainer did not run (Brush stood in).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_reason: Option<String>,
+}
+
+/// The per-image appearance model of gsplat training (job param
+/// `appearance`, `affine` when absent). It absorbs exposure and white balance
+/// in training only; the exported splat never carries it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    /// One 3x4 colour affine per image.
+    #[default]
+    Affine,
+    /// A bilateral grid of affines per image (position and luminance).
+    Grid,
+    None,
+}
+
+impl Appearance {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "affine" => Some(Self::Affine),
+            "grid" => Some(Self::Grid),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Affine => "affine",
+            Self::Grid => "grid",
+            Self::None => "none",
+        }
+    }
 }
 
 /// One JSON event line a project script prints.
@@ -140,9 +181,8 @@ pub fn brush(
         // counts only while it densifies.
         gaussians: ply_vertex_count(&splat),
         psnr: None,
-        psnr_cc: None,
-        ut: false,
         fallback_reason: reason.map(str::to_string),
+        ..Default::default()
     })
 }
 
@@ -188,7 +228,7 @@ fn parse_step(line: &str) -> Option<u64> {
 }
 
 /// Train with gsplat (MCMC; 3DGUT for fisheye or rolling-shutter cameras;
-/// bilateral grid for exposure variation).
+/// a per-image appearance model for exposure variation).
 #[allow(clippy::too_many_arguments)]
 pub fn gsplat(
     runner: &dyn ToolRunner,
@@ -197,6 +237,7 @@ pub fn gsplat(
     steps: u64,
     max_splats: u64,
     ut: bool,
+    appearance: Appearance,
     depths: Option<&Path>,
     progress: &mut dyn FnMut(f32),
 ) -> Result<TrainSummary, StageError> {
@@ -212,7 +253,8 @@ pub fn gsplat(
         steps.to_string().into(),
         "--max-splats".into(),
         max_splats.to_string().into(),
-        "--bilateral-grid".into(),
+        "--appearance".into(),
+        appearance.as_str().into(),
     ];
     let masks = dataset.join("masks");
     if masks.is_dir() {
@@ -231,13 +273,17 @@ pub fn gsplat(
             "no splat.ply written",
         ));
     }
+    let count = |k: &str| done.get(k).and_then(|v| v.as_u64());
     Ok(TrainSummary {
         trainer: "gsplat".into(),
         steps,
         max_splats,
-        gaussians: done.get("gaussians").and_then(|v| v.as_u64()),
+        gaussians: count("gaussians"),
         psnr: done.get("psnr").and_then(|v| v.as_f64()),
         psnr_cc: done.get("psnr_cc").and_then(|v| v.as_f64()),
+        appearance: Some(appearance),
+        culled: count("culled"),
+        nonfinite_steps: count("nonfinite_steps"),
         ut,
         fallback_reason: None,
     })
@@ -332,50 +378,6 @@ pub fn masks(
     }
     run_script(runner, "masks.py", args, dataset, progress)?;
     Ok(summary)
-}
-
-/// Stage `mesh`: depth renders of the splat fused by TSDF, decimated.
-pub fn mesh(
-    runner: &dyn ToolRunner,
-    dataset: &Path,
-    splat: &Path,
-    mesh_dir: &Path,
-    progress: &mut dyn FnMut(f32),
-) -> Result<serde_json::Value, StageError> {
-    fs::create_dir_all(mesh_dir)?;
-    let done = run_script(
-        runner,
-        "mesh.py",
-        vec![
-            "--colmap".into(),
-            dataset.into(),
-            "--images".into(),
-            dataset.join("images").into(),
-            "--splat".into(),
-            splat.into(),
-            "--out".into(),
-            mesh_dir.into(),
-            "--voxel".into(),
-            "0.02".into(),
-            "--max-tris".into(),
-            "300000".into(),
-        ],
-        mesh_dir,
-        progress,
-    )?;
-    for f in ["mesh.ply", "mesh.glb"] {
-        if !mesh_dir.join(f).is_file() {
-            return Err(StageError::tool_failed(
-                "gsplat_train",
-                format!("no {f} written"),
-            ));
-        }
-    }
-    // The script may run in WSL and report paths in its own form; the files
-    // are at known places in the job, so only the facts are kept.
-    let mut done = done;
-    done.retain(|k, _| !matches!(k.as_str(), "ply" | "glb" | "mesh" | "path"));
-    Ok(serde_json::Value::Object(done))
 }
 
 /// Hero stills rendered from the splat at the given camera poses.

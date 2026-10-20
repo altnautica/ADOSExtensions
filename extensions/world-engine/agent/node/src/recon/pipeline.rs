@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use ados_capture_contract::{CameraModelModel, RigSensorKind, SessionReader};
 
+use super::mesh::{self, MeshMethod};
 use super::preset::{
     stage_weight, ProductSwitches, CALIBRATE_STAGES, CHANGE_STAGES, RECONSTRUCT_STAGES,
 };
@@ -144,6 +145,8 @@ pub fn run_staged(
             chunk_frames,
             glim_odometry,
             products,
+            appearance,
+            mesh_method,
         } => reconstruct(
             &dir,
             session_id,
@@ -152,6 +155,8 @@ pub fn run_staged(
             *chunk_frames,
             *glim_odometry,
             *products,
+            *appearance,
+            *mesh_method,
             *generation,
             ctx,
         ),
@@ -184,6 +189,8 @@ fn reconstruct(
     chunk_frames: Option<usize>,
     glim_odometry: glim::GlimOdometry,
     products: ProductSwitches,
+    appearance: train::Appearance,
+    mesh_method: MeshMethod,
     generation: u32,
     ctx: &RunCtx<'_>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
@@ -301,7 +308,7 @@ fn reconstruct(
     let max_splats = train::max_splats_for(spec.max_splats_8gb, ctx.vram_mb);
     let train_dir = dir.join("train");
     let depth_prior = train_depth_prior(spec.depth_priors, has_lidar, &sfm_detail);
-    stages.run("train", |p| {
+    let train_detail = stages.run("train", |p| {
         // `Some(reason)`: train with Brush, which stands in at full length
         // (and the stage says why) when the gsplat kernels do not run on this
         // node (no CUDA toolkit, no GPU).
@@ -321,7 +328,17 @@ fn reconstruct(
                 let depths = ds.join("depths");
                 let depths = (depth_prior && depths.is_dir()).then_some(depths);
                 let p = &mut |f| p(0.1 + 0.9 * f);
-                train::gsplat(runner, ds, out, steps, max_splats, ut, depths.as_deref(), p)
+                train::gsplat(
+                    runner,
+                    ds,
+                    out,
+                    steps,
+                    max_splats,
+                    ut,
+                    appearance,
+                    depths.as_deref(),
+                    p,
+                )
             }
         };
         let mut detail = match &chunk_plan {
@@ -336,11 +353,14 @@ fn reconstruct(
 
     if spec.mesh {
         stages.run("mesh", |p| {
-            train::mesh(
+            let steps = spec.train_steps;
+            mesh::stage(
                 ctx.runner,
-                &dataset,
-                &train_dir.join("splat.ply"),
-                &dir.join("mesh"),
+                dir,
+                session_dir,
+                &train_detail,
+                mesh_method,
+                steps,
                 p,
             )
         })?;

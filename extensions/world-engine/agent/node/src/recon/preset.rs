@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 pub enum Preset {
     /// Field preview: COLMAP poses and a short Brush splat.
     Preview,
-    /// High fidelity: COLMAP + gsplat (MCMC, 3DGUT when needed, bilateral
-    /// grid) + mesh + point cloud.
+    /// High fidelity: COLMAP + gsplat (MCMC, 3DGUT when needed, per-image
+    /// appearance model) + mesh + point cloud.
     Hq,
     /// `hq` plus the floorplan, rooms, hero stills and the static tour bundle.
     Tour,

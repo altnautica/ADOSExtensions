@@ -13,6 +13,7 @@ pub mod export;
 pub mod geom;
 pub mod glim;
 pub mod glim_bag;
+pub mod mesh;
 pub mod pipeline;
 pub mod prepare;
 pub mod preset;
@@ -54,6 +55,11 @@ pub enum StagedJob {
         glim_odometry: glim::GlimOdometry,
         /// Optional products switched off for this job (job param `products`).
         products: preset::ProductSwitches,
+        /// gsplat's per-image appearance model (job param `appearance`,
+        /// `affine` when absent).
+        appearance: train::Appearance,
+        /// How the mesh is built (job param `mesh_method`, `tsdf` when absent).
+        mesh_method: mesh::MeshMethod,
     },
     Change {
         a: String,
@@ -84,6 +90,23 @@ fn param<'a>(job: &'a JobRecord, key: &str) -> Result<&'a str, StageError> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| StageError::input(format!("missing `{key}`")))
+}
+
+/// An optional string job param with a fixed set of values: `None` when
+/// absent, an input error naming the key when it is not one `parse` takes.
+fn enum_param<T>(
+    job: &JobRecord,
+    key: &str,
+    parse: fn(&str) -> Option<T>,
+) -> Result<Option<T>, StageError> {
+    job.params
+        .get(key)
+        .map(|v| {
+            v.as_str()
+                .and_then(parse)
+                .ok_or_else(|| StageError::input(format!("unknown `{key}` value {v}")))
+        })
+        .transpose()
 }
 
 /// The directory of a session committed through the upload lane under
@@ -167,6 +190,10 @@ pub fn prepare_staged(
             };
             let products = preset::ProductSwitches::parse(job.params.get("products"))
                 .map_err(StageError::input)?;
+            let appearance =
+                enum_param(job, "appearance", train::Appearance::parse)?.unwrap_or_default();
+            let mesh_method =
+                enum_param(job, "mesh_method", mesh::MeshMethod::parse)?.unwrap_or_default();
             Ok(StagedJob::Reconstruct {
                 session_id,
                 session_dir,
@@ -175,6 +202,8 @@ pub fn prepare_staged(
                 chunk_frames,
                 glim_odometry,
                 products,
+                appearance,
+                mesh_method,
             })
         }
         ComputeJobKind::Change => {

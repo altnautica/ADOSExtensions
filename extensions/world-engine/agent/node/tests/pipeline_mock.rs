@@ -214,6 +214,7 @@ async fn a_tour_reconstruction_runs_every_stage_and_resumes() {
     assert_eq!(train["trainer"], "gsplat", "{train}");
     assert_eq!(train["psnr"], 31.5, "{train}");
     assert_eq!(train["psnr_cc"], 32.25, "{train}");
+    assert_eq!(train["appearance"], "affine", "{train}");
 
     let (_, outs) = json(
         &n.router,
@@ -398,6 +399,23 @@ async fn submissions_are_refused_with_the_reason() {
     assert_eq!(s, StatusCode::CONFLICT);
     assert_eq!(body["error"], "E_NOT_UPLOADED");
     upload(&n.router).await;
+    for (key, bad) in [
+        ("mesh_method", serde_json::json!("marching_cubes")),
+        ("mesh_method", serde_json::json!(2)),
+        ("appearance", serde_json::json!("bilateral")),
+    ] {
+        let (s, body) = json(
+            &n.router,
+            "POST",
+            "/api/compute/jobs",
+            serde_json::json!({"kind": "reconstruct", "session_id": SESSION, "preset": "hq",
+                "params": {key: bad}}),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{key}={bad}: {body}");
+        assert_eq!(body["error"], "E_INPUT");
+        assert!(body["detail"].as_str().unwrap().contains(key), "{body}");
+    }
     let (s, body) = json(
         &n.router,
         "POST",
