@@ -5,7 +5,8 @@ use ados_capture_contract::{
 };
 use world_engine_protocol::atlas::VioHealth;
 
-use super::calib::{basalt_calib, basalt_config, CalibError, DEFAULT_IMU_NOISE};
+use super::calib::{basalt_calib, basalt_config, scaled_rig, CalibError, DEFAULT_IMU_NOISE};
+use super::pairing::VioScale;
 use super::supervise::{apply_line, nominal_cov, to_estimate};
 use super::wire::*;
 use super::*;
@@ -117,6 +118,40 @@ fn calib_extrinsics_are_imu_from_camera() {
     assert_eq!(v["calib_accel_bias"].as_array().unwrap().len(), 9);
     assert_eq!(v["calib_gyro_bias"].as_array().unwrap().len(), 12);
     assert_eq!(v["vignette"], serde_json::json!([]));
+}
+
+/// At half scale a scene point lands, under the scaled intrinsics, on the
+/// half-resolution pixel the 2×2 average puts it at: `u' = (u + ½)/2 − ½`.
+#[test]
+fn half_scale_calibration_projects_onto_the_halved_image() {
+    let full = rig(
+        CameraModelModel::Opencv,
+        vec![0.1, -0.05, 0.001, 0.002, 0.01],
+        None,
+    );
+    assert_eq!(scaled_rig(&full, ["cam_l", "cam_r"], VioScale::Full), full);
+    let half = scaled_rig(&full, ["cam_l", "cam_r"], VioScale::Half);
+    let c = basalt_calib(&half, "cam_l", "cam_r", "imu0").unwrap();
+    assert_eq!(
+        c["value0"]["resolution"],
+        serde_json::json!([[320, 240], [320, 240]])
+    );
+    for i in 0..2 {
+        let (f, h) = (
+            full.sensors[i].camera.as_ref().unwrap(),
+            half.sensors[i].camera.as_ref().unwrap(),
+        );
+        assert_eq!(h.dist, f.dist, "distortion is resolution-free");
+        // A distorted normalised point (any value; projection is linear in it).
+        let (x, y) = (0.31, -0.22);
+        let (u, v) = (f.fx * x + f.cx, f.fy * y + f.cy);
+        let (uh, vh) = (h.fx * x + h.cx, h.fy * y + h.cy);
+        assert!((uh - ((u + 0.5) / 2.0 - 0.5)).abs() < 1e-12);
+        assert!((vh - ((v + 0.5) / 2.0 - 0.5)).abs() < 1e-12);
+    }
+    // Sensors VIO does not read keep their models.
+    let other = scaled_rig(&full, ["cam_x", "cam_y"], VioScale::Half);
+    assert_eq!(other, full);
 }
 
 #[test]

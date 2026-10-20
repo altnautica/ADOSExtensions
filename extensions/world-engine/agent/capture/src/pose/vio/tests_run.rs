@@ -5,7 +5,7 @@ use ados_capture_contract::CameraModelModel;
 use ados_protocol::framebus::FrameFormat;
 use world_engine_protocol::atlas::VioHealth;
 
-use super::pairing::{PairOutcome, StereoPairer};
+use super::pairing::{PairOutcome, StereoPairer, VioScale};
 use super::tests::{assert_close, mat4_inv, mat4_mul, rig, POSE, R_Z90};
 use super::*;
 use crate::pose::{se3, PoseProvider};
@@ -42,7 +42,7 @@ fn paired(out: PairOutcome<'_>) -> (u64, Vec<u8>, Vec<u8>) {
 
 #[test]
 fn pairs_by_trigger_seq_before_time() {
-    let mut p = StereoPairer::new("cam_l", "cam_r");
+    let mut p = StereoPairer::new("cam_l", "cam_r", VioScale::Full);
     let l = frame("cam_l", 1_000_000_000, Some(7), FrameFormat::Gray8, 1);
     let r = frame("cam_r", 1_005_000_000, Some(7), FrameFormat::Gray8, 2);
     assert!(matches!(p.push(&l), PairOutcome::Held));
@@ -57,7 +57,7 @@ fn pairs_by_trigger_seq_before_time() {
 
 #[test]
 fn pairs_untriggered_within_one_ms() {
-    let mut p = StereoPairer::new("cam_l", "cam_r");
+    let mut p = StereoPairer::new("cam_l", "cam_r", VioScale::Full);
     // Right first: the pair is still (left, right) at the left time.
     assert!(matches!(
         p.push(&frame("cam_r", 5_000_900_000, None, FrameFormat::Gray8, 2)),
@@ -86,7 +86,7 @@ fn pairs_untriggered_within_one_ms() {
 
 #[test]
 fn pairing_reduces_colour_to_luma_rejects_bayer_and_ignores_other_cameras() {
-    let mut p = StereoPairer::new("cam_l", "cam_r");
+    let mut p = StereoPairer::new("cam_l", "cam_r", VioScale::Full);
     assert!(matches!(
         p.push(&frame("cam_l", 1, None, FrameFormat::BayerRggb8, 1)),
         PairOutcome::Rejected
@@ -115,6 +115,24 @@ fn pairing_reduces_colour_to_luma_rejects_bayer_and_ignores_other_cameras() {
     assert!(matches!(p.push(&l), PairOutcome::Held));
     let (_, left, right) = paired(p.push(&r));
     assert_eq!((left, right), (vec![9u8; 8], vec![0x12u8; 8]));
+}
+
+#[test]
+fn half_scale_pairs_carry_box_averaged_luma_at_half_size() {
+    let mut p = StereoPairer::new("cam_l", "cam_r", VioScale::Half);
+    // 4x2 Gray8: rows [0 2 10 20] / [4 6 30 41] -> 2x1 [(0+2+4+6+2)/4, (10+20+30+41+2)/4].
+    let mut l = frame("cam_l", 7, Some(1), FrameFormat::Gray8, 0);
+    l.pixels = vec![0, 2, 10, 20, 4, 6, 30, 41];
+    let r = frame("cam_r", 7, Some(1), FrameFormat::Gray8, 9);
+    assert!(matches!(p.push(&l), PairOutcome::Held));
+    match p.push(&r) {
+        PairOutcome::Paired(pair) => {
+            assert_eq!((pair.width, pair.height), (2, 1));
+            assert_eq!(pair.left.as_ref(), &[3, 25]);
+            assert_eq!(pair.right.as_ref(), &[9, 9]);
+        }
+        other => panic!("expected a pair, got {other:?}"),
+    }
 }
 
 async fn wait_for(what: &str, mut cond: impl FnMut() -> bool) {
@@ -146,6 +164,7 @@ async fn supervises_and_restarts_a_fake_child() {
     let vio = VioPose::spawn(VioConfig {
         binary: script,
         rig: rig(CameraModelModel::Kb4, vec![0.0; 4], None),
+        scale: VioScale::Full,
         left_id: "cam_l".into(),
         right_id: "cam_r".into(),
         imu_id: "imu0".into(),
@@ -193,6 +212,7 @@ fn spawn_refuses_same_camera_twice() {
     let err = VioPose::spawn(VioConfig {
         binary: "/nonexistent".into(),
         rig: rig(CameraModelModel::Kb4, vec![0.0; 4], None),
+        scale: VioScale::Full,
         left_id: "cam_l".into(),
         right_id: "cam_l".into(),
         imu_id: "imu0".into(),

@@ -19,6 +19,7 @@ use ados_capture_contract::{
 };
 use serde_json::{json, Value};
 
+use super::pairing::VioScale;
 use crate::pose::se3;
 
 /// IMU sample rate the noise densities are discretised at. The sensor bus
@@ -47,7 +48,9 @@ pub enum CalibError {
     },
     #[error("camera `{0}` has no camera model")]
     NoCameraModel(String),
-    #[error("camera `{id}`: model {model} with {len} distortion coefficients is not supported by Basalt")]
+    #[error(
+        "camera `{id}`: model {model} with {len} distortion coefficients is not supported by Basalt"
+    )]
     UnsupportedDistortion {
         id: String,
         model: String,
@@ -195,6 +198,30 @@ pub fn basalt_calib(
         "cam_time_offset_ns": 0,
         "vignette": []
     }}))
+}
+
+/// `rig` with the cameras `ids` described at the resolution VIO runs at
+/// ([`VioScale`]): the image size as [`VioScale::size`], focal lengths times
+/// the scale, and the principal point `c' = s·(c + ½) − ½` (pixel centres
+/// move with the 2×2 average). Distortion acts on normalised coordinates and
+/// is unchanged.
+pub fn scaled_rig(rig: &Rig, ids: [&str; 2], scale: VioScale) -> Rig {
+    let mut rig = rig.clone();
+    let s = scale.factor();
+    for sensor in rig
+        .sensors
+        .iter_mut()
+        .filter(|x| ids.contains(&x.id.as_str()))
+    {
+        if let Some(m) = sensor.camera.as_mut() {
+            (m.width, m.height) = scale.size(m.width, m.height);
+            m.fx *= s;
+            m.fy *= s;
+            m.cx = s * (m.cx + 0.5) - 0.5;
+            m.cy = s * (m.cy + 0.5) - 0.5;
+        }
+    }
+    rig
 }
 
 /// The estimator config: upstream's EuRoC tuning, with real-time mode on so a

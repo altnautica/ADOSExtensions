@@ -3,11 +3,25 @@ use serde_json::json;
 use world_engine_protocol::atlas::CameraRole;
 use world_engine_protocol::atlas::PoseSource;
 
+use crate::pose::vio::pairing::VioScale;
+
 fn values(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
     pairs
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect()
+}
+
+#[test]
+fn vio_scale_is_one_or_a_half() {
+    let load = |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_VIO, v)]));
+    assert_eq!(load(json!({})).unwrap().vio.scale, VioScale::Full);
+    assert_eq!(load(json!({"scale": 1})).unwrap().vio.scale, VioScale::Full);
+    assert_eq!(
+        load(json!({"scale": 0.5})).unwrap().vio.scale,
+        VioScale::Half
+    );
+    assert!(load(json!({"scale": 0.25})).is_err());
 }
 
 #[test]

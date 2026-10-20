@@ -343,6 +343,12 @@
         "imu": {
           "type": "string",
           "default": "imu0"
+        },
+        "scale": {
+          "description": "Resolution VIO tracks at: 1 (as captured) or 0.5 (half in each direction, a quarter of the optical-flow work).",
+          "type": "number",
+          "enum": [1, 0.5],
+          "default": 1
         }
       }
     },

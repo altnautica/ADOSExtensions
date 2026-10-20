@@ -58,6 +58,7 @@ pub fn pose_provider(
         (PoseSource::Vio, Some(rig)) => match VioPose::spawn(VioConfig {
             binary: install_path(&cfg.vio.binary),
             rig: rig.clone(),
+            scale: cfg.vio.scale,
             left_id: cfg.vio.left.clone(),
             right_id: cfg.vio.right.clone(),
             imu_id: cfg.vio.imu.clone(),

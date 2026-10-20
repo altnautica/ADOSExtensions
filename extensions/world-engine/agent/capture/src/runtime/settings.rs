@@ -4,6 +4,8 @@
 use serde::Deserialize;
 use world_engine_protocol::atlas::PoseSource;
 
+use crate::pose::vio::pairing::VioScale;
+
 /// The configured pose provider (`atlas.pose_provider`). `Auto` picks by
 /// profile and rig (see [`resolve_pose_provider`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
@@ -33,7 +35,8 @@ pub fn resolve_pose_provider(
     }
 }
 
-/// VIO inputs (`atlas.vio`): the Basalt binary and the rig sensors it reads.
+/// VIO inputs (`atlas.vio`): the Basalt binary, the rig sensors it reads and
+/// the resolution it tracks at (`scale`: 1 or 0.5).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VioSettings {
@@ -42,6 +45,7 @@ pub struct VioSettings {
     pub left: String,
     pub right: String,
     pub imu: String,
+    pub scale: VioScale,
 }
 
 impl Default for VioSettings {
@@ -51,6 +55,7 @@ impl Default for VioSettings {
             left: "cam_fl".into(),
             right: "cam_fr".into(),
             imu: "imu0".into(),
+            scale: VioScale::Full,
         }
     }
 }

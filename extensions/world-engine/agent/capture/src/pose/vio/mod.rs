@@ -41,8 +41,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use world_engine_protocol::atlas::PoseSource;
 
-use self::calib::{basalt_calib, basalt_config, imu_from_body, CalibError};
-use self::pairing::{PairOutcome, StereoPairer};
+use self::calib::{basalt_calib, basalt_config, imu_from_body, scaled_rig, CalibError};
+use self::pairing::{PairOutcome, StereoPairer, VioScale};
 use self::supervise::{supervise, ChildSpec};
 use self::wire::{encode_imu, encode_stereo, HEADER_LEN, IMU_LEN};
 use super::{se3, PoseProvider, PoseTrack};
@@ -63,6 +63,8 @@ pub struct VioConfig {
     /// The `basalt-ados` executable.
     pub binary: PathBuf,
     pub rig: Rig,
+    /// The resolution the stereo pair is tracked at.
+    pub scale: VioScale,
     pub left_id: String,
     pub right_id: String,
     pub imu_id: String,
@@ -131,7 +133,8 @@ impl VioPose {
         if cfg.left_id == cfg.right_id {
             return Err(VioError::SameCamera(cfg.left_id));
         }
-        let calib = basalt_calib(&cfg.rig, &cfg.left_id, &cfg.right_id, &cfg.imu_id)?;
+        let vio_rig = scaled_rig(&cfg.rig, [&cfg.left_id, &cfg.right_id], cfg.scale);
+        let calib = basalt_calib(&vio_rig, &cfg.left_id, &cfg.right_id, &cfg.imu_id)?;
         let (r_imu_body, t_imu_body) = imu_from_body(&cfg.rig, &cfg.imu_id)?;
         std::fs::create_dir_all(&cfg.work_dir).map_err(|source| VioError::Io {
             path: cfg.work_dir.clone(),
@@ -159,7 +162,7 @@ impl VioPose {
             track,
             imu_id: cfg.imu_id,
             r_imu_body,
-            pairer: Mutex::new(StereoPairer::new(cfg.left_id, cfg.right_id)),
+            pairer: Mutex::new(StereoPairer::new(cfg.left_id, cfg.right_id, cfg.scale)),
             imu_tx,
             frame_tx,
             counters,
