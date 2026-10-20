@@ -61,13 +61,13 @@
       }
     },
     "spark-build-lod": {
-      "version": "2.3.1",
+      "version": "2.4.0",
       "license": "MIT",
       "kind": "cargo",
       "note": "the Spark LoD builder ships only as a Rust binary crate in the source tree (no npm CLI, no release binary); built with cargo install from the pinned tag commit",
       "cargo": {
         "repo": "https://github.com/sparkjsdev/spark",
-        "rev": "2e9c2e74a486b1ba3a31025a22b231b8e4fccde3",
+        "rev": "ffe210dc0a45d0515a06c9235878108112827d61",
         "package": "build-lod"
       },
       "probe": ["probe-lod.rad"],

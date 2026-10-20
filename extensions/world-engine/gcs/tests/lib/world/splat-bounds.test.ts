@@ -48,6 +48,21 @@ describe("splatFramingBounds", () => {
     expect(max[0] - min[0]).toBeGreaterThan(1.8);
   });
 
+  it("holds at any model scale: a tiny unanchored model frames its solid splats too", () => {
+    // The same scene at 1e-4 scale (an arbitrary SfM frame): every splat is
+    // thinner than any absolute floor, and its flat floaters thinner still.
+    const k = 1e-4;
+    const shrink = (p: Splat): Splat => ({ c: [p.c[0] * k, p.c[1] * k, p.c[2] * k], s: [p.s[0] * k, p.s[1] * k, p.s[2] * k], o: p.o });
+    const discs = Array.from({ length: 600 }, (_, i): Splat => ({ c: [2048 * rand(i, 6), -2048, 2048], s: [1e-7, 50, 150], o: 0.9 }));
+    const all = [...SOLID, ...discs].map(shrink);
+    const { min, max, solid } = splatFramingBounds(walk(all), all.length)!;
+    expect(solid).toBe(true);
+    expect(min[0]).toBeGreaterThan(1.9 * k);
+    expect(max[0]).toBeLessThan(4.1 * k);
+    expect(min[1]).toBeGreaterThan(-1.1 * k);
+    expect(max[2]).toBeLessThan(-2.9 * k);
+  });
+
   it("reports a fully transparent splat as not solid, framed on every finite centre", () => {
     const faint = SOLID.map((p) => ({ ...p, o: 0.01 }));
     const { min, max, solid } = splatFramingBounds(walk(faint), faint.length)!;

@@ -54,9 +54,13 @@ export function splatMesh(SPARK: Spark, input: SplatInput): SplatMesh {
 
 /** The framing box of an initialized mesh in viewer coordinates (empty when
  * the mesh has no finite centre; floaters trimmed, see `splat-bounds`) and
- * whether any of its splats is solid. */
-export function splatViewerBounds(THREE: Three, mesh: SplatMesh): { box: T.Box3; solid: boolean } {
-  const f = splatFramingBounds((cb) => mesh.forEachSplat(cb), mesh.splats?.getNumSplats() ?? 0);
+ * whether any of its splats is solid; `"streaming"` for a streamed LoD mesh
+ * the renderer has paged no splats into yet (its RAD header carries no
+ * bounds), to be framed once it has. */
+export function splatViewerBounds(THREE: Three, mesh: SplatMesh): { box: T.Box3; solid: boolean } | "streaming" {
+  const count = mesh.splats?.getNumSplats() ?? 0;
+  if (mesh.paged && count === 0) return "streaming";
+  const f = splatFramingBounds((cb) => mesh.forEachSplat(cb), count);
   if (!f) return { box: new THREE.Box3(), solid: false };
   const box = new THREE.Box3(new THREE.Vector3(...f.min), new THREE.Vector3(...f.max)).applyMatrix4(mesh.matrix);
   return { box, solid: f.solid };
@@ -72,6 +76,8 @@ export class SparkStage {
   private readonly walk: WalkControls;
   private readonly raycaster: T.Raycaster;
   private splat: SplatMesh | null = null;
+  /** The streamed splat still waiting for its first pages to be framed. */
+  private streaming: SplatMesh | null = null;
   private collision: T.Object3D | null = null;
   private plan: T.LineSegments | null = null;
   private aisles: T.LineSegments | null = null;
@@ -131,14 +137,30 @@ export class SparkStage {
     if (this.mode === "walk") this.walk.update(dt);
     else this.orbit.update();
     this.renderer.render(this.scene, this.camera);
+    if (this.streaming) this.frameStreamed(this.streaming);
     for (const l of this.frameListeners) l();
     this.raf = requestAnimationFrame(this.loop);
   };
 
+  /** Frame a streamed splat on the first splats the renderer paged in. */
+  private frameStreamed(mesh: SplatMesh): void {
+    if (mesh !== this.splat) {
+      this.streaming = null;
+      return;
+    }
+    const f = splatViewerBounds(this.THREE, mesh);
+    if (f === "streaming") return;
+    this.streaming = null;
+    if (f.box.isEmpty()) return;
+    this.bounds = f.box;
+    this.frame();
+  }
+
   /** Load the splat in `frame`; it replaces any previous splat, and the
-   * camera frames the new one alone. Resolves whether any splat in it is
-   * solid: false means an empty or fully transparent model, nothing to see
-   * (also resolves true when a later load replaced this one). */
+   * camera frames the new one alone (a streamed LoD splat once its first
+   * pages arrive). Resolves whether any splat in it is solid: false means an
+   * empty or fully transparent model, nothing to see (true for a streamed
+   * splat, and when a later load replaced this one). */
   async loadSplat(input: SplatInput, frame: ArtifactFrame): Promise<boolean> {
     const mesh = splatMesh(this.SPARK, input);
     mesh.matrixAutoUpdate = false;
@@ -149,13 +171,18 @@ export class SparkStage {
       this.splat.dispose();
     }
     this.splat = mesh;
+    this.streaming = null;
     this.scene.add(mesh);
     await mesh.initialized;
     if (this.splat !== mesh) return true;
-    const { box, solid } = splatViewerBounds(this.THREE, mesh);
-    this.bounds = box;
+    const f = splatViewerBounds(this.THREE, mesh);
+    if (f === "streaming") {
+      this.streaming = mesh;
+      return true;
+    }
+    this.bounds = f.box;
     this.frame();
-    return solid;
+    return f.solid;
   }
 
   /** Load the collision mesh (GLB, local ENU, Z up) used for picking. */
