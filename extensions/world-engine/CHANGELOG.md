@@ -163,8 +163,9 @@ All notable changes to the World Engine extension.
   a splat on its solid splats (opacity at least 0.05, smallest scale at
   least 1% of the opaque splats' median middle scale, so at any model scale),
   the 1st to 99th percentile per axis, so far floaters no longer push the
-  camera out until the scene is sub-pixel; a streamed `.rad` is framed once
-  its first pages arrive. A model with no solid splat shows "empty or fully
+  camera out until the scene is sub-pixel; a streamed `.rad` is re-framed
+  as its pages arrive, until the paged count settles (at most 2 s) or the
+  user moves the camera. A model with no solid splat shows "empty or fully
   transparent" instead of a blank view.
 
 ### Removed

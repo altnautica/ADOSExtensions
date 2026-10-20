@@ -25,6 +25,7 @@ import { artifactToViewerMatrix, type ArtifactFrame, type Vec3 } from "../../lib
 import { splatFramingBounds } from "../../lib/world/splat-bounds";
 import { followCanvasSize } from "../atlas/viewers/cloud-view";
 import { disposeMaterials, disposeObject } from "./scene-resources";
+import { StreamedFraming } from "./streamed-framing";
 import { WalkControls } from "./walk-controls";
 
 export type ViewMode = "orbit" | "dollhouse" | "walk";
@@ -76,8 +77,8 @@ export class SparkStage {
   private readonly walk: WalkControls;
   private readonly raycaster: T.Raycaster;
   private splat: SplatMesh | null = null;
-  /** The streamed splat still waiting for its first pages to be framed. */
-  private streaming: SplatMesh | null = null;
+  /** The streamed splat being framed as its pages arrive. */
+  private streaming: { mesh: SplatMesh; framing: StreamedFraming } | null = null;
   private collision: T.Object3D | null = null;
   private plan: T.LineSegments | null = null;
   private aisles: T.LineSegments | null = null;
@@ -116,6 +117,8 @@ export class SparkStage {
     this.scene.add(this.spark);
     this.orbit = new Orbit(this.camera, canvas);
     this.orbit.enableDamping = true;
+    // The user's own camera move ends any re-framing of a streamed splat.
+    this.orbit.addEventListener("start", () => this.streaming?.framing.stop());
     this.walk = new WalkControls(this.camera, canvas);
     this.raycaster = new THREE.Raycaster();
     this.measure = new THREE.Group();
@@ -137,28 +140,28 @@ export class SparkStage {
     if (this.mode === "walk") this.walk.update(dt);
     else this.orbit.update();
     this.renderer.render(this.scene, this.camera);
-    if (this.streaming) this.frameStreamed(this.streaming);
+    if (this.streaming) this.frameStreamed(now);
     for (const l of this.frameListeners) l();
     this.raf = requestAnimationFrame(this.loop);
   };
 
-  /** Frame a streamed splat on the first splats the renderer paged in. */
-  private frameStreamed(mesh: SplatMesh): void {
-    if (mesh !== this.splat) {
-      this.streaming = null;
-      return;
-    }
+  /** Re-frame a streamed splat on the splats paged in so far, as
+   * `StreamedFraming` decides. */
+  private frameStreamed(now: number): void {
+    if (!this.streaming) return;
+    const { mesh, framing } = this.streaming;
+    const step = mesh === this.splat ? framing.step(mesh.splats?.getNumSplats() ?? 0, now) : "done";
+    if (step === "done") this.streaming = null;
+    if (step !== "frame") return;
     const f = splatViewerBounds(this.THREE, mesh);
-    if (f === "streaming") return;
-    this.streaming = null;
-    if (f.box.isEmpty()) return;
+    if (f === "streaming" || f.box.isEmpty()) return;
     this.bounds = f.box;
     this.frame();
   }
 
   /** Load the splat in `frame`; it replaces any previous splat, and the
-   * camera frames the new one alone (a streamed LoD splat once its first
-   * pages arrive). Resolves whether any splat in it is solid: false means an
+   * camera frames the new one alone (a streamed LoD splat as its pages
+   * arrive, see `streamed-framing`). Resolves whether any splat in it is solid: false means an
    * empty or fully transparent model, nothing to see (true for a streamed
    * splat, and when a later load replaced this one). */
   async loadSplat(input: SplatInput, frame: ArtifactFrame): Promise<boolean> {
@@ -177,7 +180,7 @@ export class SparkStage {
     if (this.splat !== mesh) return true;
     const f = splatViewerBounds(this.THREE, mesh);
     if (f === "streaming") {
-      this.streaming = mesh;
+      this.streaming = { mesh, framing: new StreamedFraming() };
       return true;
     }
     this.bounds = f.box;
@@ -248,6 +251,7 @@ export class SparkStage {
 
   setMode(mode: ViewMode): void {
     this.mode = mode;
+    this.streaming?.framing.stop();
     this.orbit.enabled = mode !== "walk";
     if (mode === "walk") this.walk.enter(this.floorY);
     else this.frame(mode === "dollhouse");
