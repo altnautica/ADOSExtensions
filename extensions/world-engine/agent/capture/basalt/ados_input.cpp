@@ -202,6 +202,8 @@ struct Shared {
   std::atomic<int64_t> frames_in{0};
   std::atomic<int64_t> last_frame_ms{0};
   uint64_t frames_dropped = 0;  // input thread only
+  uint64_t imu_out_of_order = 0;     // input thread only
+  uint64_t frames_out_of_order = 0;  // input thread only
 };
 
 int64_t now_ms() {
@@ -232,6 +234,7 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
   bool hello = false;
   bool seen_stereo = false;
   std::deque<basalt::ImuData<double>::Ptr> preroll;
+  int64_t last_pair_t_ns = 0;
   int64_t last_imu_t_ns = 0;
   while (read_exact(fd, header, sizeof header)) {
     const uint8_t type = header[0];
@@ -250,6 +253,18 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
     if (type == ados::kMsgImu) {
       if (len != ados::kImuLen) die(2, "bad IMU message length");
       const ados::ImuMsg m = ados::decode_imu(buf.data());
+      // Basalt integrates only strictly increasing IMU times and aborts on
+      // anything else; a host-mapped stamp can step back by the mapping's
+      // jitter, so such a sample is dropped rather than fed.
+      if (int64_t(m.t_ns) <= last_imu_t_ns) {
+        if (++shared.imu_out_of_order % 100 == 1) {
+          std::fprintf(stderr,
+                       "basalt-ados: %llu IMU samples not after the previous "
+                       "one, dropped\n",
+                       static_cast<unsigned long long>(shared.imu_out_of_order));
+        }
+        continue;
+      }
       basalt::ImuData<double>::Ptr d(new basalt::ImuData<double>);
       d->t_ns = m.t_ns;
       last_imu_t_ns = m.t_ns;
@@ -280,6 +295,17 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
                      h.width, h.height);
         continue;
       }
+      // Basalt asserts on a frame not after the previous one.
+      if (int64_t(h.t_ns) <= last_pair_t_ns) {
+        if (++shared.frames_out_of_order % 100 == 1) {
+          std::fprintf(stderr,
+                       "basalt-ados: %llu stereo pairs not after the previous "
+                       "one, dropped\n",
+                       static_cast<unsigned long long>(shared.frames_out_of_order));
+        }
+        continue;
+      }
+      last_pair_t_ns = int64_t(h.t_ns);
       basalt::OpticalFlowInput::Ptr in(new basalt::OpticalFlowInput);
       in->t_ns = h.t_ns;
       in->img_data.resize(2);

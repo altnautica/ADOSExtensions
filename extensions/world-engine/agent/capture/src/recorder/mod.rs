@@ -44,6 +44,11 @@ pub const IMAGE_QUEUE: usize = 64;
 pub const TOUCH_EVERY: Duration = Duration::from_secs(30);
 /// How often the recorded byte count is re-measured.
 const MEASURE_EVERY: Duration = Duration::from_secs(2);
+/// Images JPEG-encoded at once by the writer. The encoder takes tens of
+/// milliseconds per 1280×800 frame, so one thread falls behind two 20 Hz
+/// cameras; queued images are taken in batches of up to this many and encoded
+/// on scoped threads, then written in queue order.
+const JPEG_BATCH: usize = 4;
 
 /// One thing to record, already on the session timebase.
 #[derive(Debug)]
@@ -332,65 +337,135 @@ fn write_loop(
             measured = (Instant::now(), bytes);
         }
         let Some(item) = item else { continue };
-        if let Item::Finish {
-            operator,
-            health,
-            reply,
-        } = item
-        {
-            let m = w.manifest_mut();
-            m.operator = operator;
-            m.health = health;
-            let r = with_marker_heartbeat(&marker, TOUCH_EVERY, || w.finish());
-            let _ = reply.send(r.map_err(|e| e.to_string()));
-            return;
-        }
-        if matches!(item, Item::Image { .. }) {
-            pending_images.fetch_sub(1, Ordering::Relaxed);
-        }
-        if stats.lock().error.is_some() {
-            stats.lock().lost_after_error += 1;
-            continue;
-        }
-        match write_item(&mut w, &dir, item, encoding, &stats) {
-            Ok(()) => {}
-            Err(WriteFail::Bad(kind, e)) => {
-                tracing::warn!(kind, error = %e, "capture_record_item_skipped");
-                *stats.lock().bad_items.entry(kind).or_default() += 1;
+        for ready in convert_batch(take_batch(item, &rx, encoding), encoding) {
+            let item = match ready {
+                Ready::Item(Item::Finish {
+                    operator,
+                    health,
+                    reply,
+                }) => {
+                    let m = w.manifest_mut();
+                    m.operator = operator;
+                    m.health = health;
+                    let r = with_marker_heartbeat(&marker, TOUCH_EVERY, || w.finish());
+                    let _ = reply.send(r.map_err(|e| e.to_string()));
+                    return;
+                }
+                ready => ready,
+            };
+            if matches!(item, Ready::Image { .. }) {
+                pending_images.fetch_sub(1, Ordering::Relaxed);
             }
-            Err(WriteFail::Io(e)) => {
-                tracing::error!(error = %e, "capture_record_failed");
-                stats.lock().error = Some(e.to_string());
+            if stats.lock().error.is_some() {
+                stats.lock().lost_after_error += 1;
+                continue;
+            }
+            match write_item(&mut w, &dir, item, &stats) {
+                Ok(()) => {}
+                Err(WriteFail::Bad(kind, e)) => {
+                    tracing::warn!(kind, error = %e, "capture_record_item_skipped");
+                    *stats.lock().bad_items.entry(kind).or_default() += 1;
+                }
+                Err(WriteFail::Io(e)) => {
+                    tracing::error!(error = %e, "capture_record_failed");
+                    stats.lock().error = Some(e.to_string());
+                }
             }
         }
     }
 }
 
+/// An item ready to write: an image already converted to its message.
+enum Ready {
+    Image {
+        camera: String,
+        t_ns: u64,
+        msg: anyhow::Result<ImageMsg>,
+    },
+    Item(Item),
+}
+
+/// `first` plus, when the session records JPEG and `first` is an image, the
+/// items already queued behind it up to [`JPEG_BATCH`] images (stopping after
+/// a `Finish`), in queue order.
+fn take_batch(first: Item, rx: &mpsc::Receiver<Item>, encoding: ImageEncoding) -> Vec<Item> {
+    let mut batch = vec![first];
+    if encoding != ImageEncoding::Jpeg || !matches!(batch[0], Item::Image { .. }) {
+        return batch;
+    }
+    let mut images = 1;
+    while images < JPEG_BATCH {
+        let Ok(next) = rx.try_recv() else { break };
+        let finish = matches!(next, Item::Finish { .. });
+        images += usize::from(matches!(next, Item::Image { .. }));
+        batch.push(next);
+        if finish {
+            break;
+        }
+    }
+    batch
+}
+
+/// Convert every image of `batch`, on one scoped thread each when there are
+/// several, keeping the batch order.
+fn convert_batch(batch: Vec<Item>, encoding: ImageEncoding) -> Vec<Ready> {
+    fn convert(item: Item, encoding: ImageEncoding) -> Ready {
+        match item {
+            Item::Image {
+                camera,
+                t_ns,
+                format,
+                width,
+                height,
+                pixels,
+            } => {
+                let msg = convert::image(&camera, t_ns, format, width, height, pixels, encoding);
+                Ready::Image { camera, t_ns, msg }
+            }
+            other => Ready::Item(other),
+        }
+    }
+    let images = batch
+        .iter()
+        .filter(|i| matches!(i, Item::Image { .. }))
+        .count();
+    if images < 2 {
+        return batch.into_iter().map(|i| convert(i, encoding)).collect();
+    }
+    std::thread::scope(|s| {
+        let jobs: Vec<_> = batch
+            .into_iter()
+            .map(|item| match item {
+                Item::Image { .. } => Err(s.spawn(move || convert(item, encoding))),
+                other => Ok(Ready::Item(other)),
+            })
+            .collect();
+        jobs.into_iter()
+            .map(|job| job.unwrap_or_else(|h| h.join().expect("image conversion panicked")))
+            .collect()
+    })
+}
+
 fn write_item(
     w: &mut SessionWriter,
     dir: &Path,
-    item: Item,
-    encoding: ImageEncoding,
+    item: Ready,
     stats: &Mutex<RecorderStats>,
 ) -> Result<(), WriteFail> {
-    match item {
-        Item::Image {
-            camera,
-            t_ns,
-            format,
-            width,
-            height,
-            pixels,
-        } => {
+    let item = match item {
+        Ready::Image { camera, t_ns, msg } => {
             let topic = topics::cam_image(&camera);
-            let msg = convert::image(&camera, t_ns, format, width, height, pixels, encoding)
-                .map_err(|e| WriteFail::Bad("image", e))?;
-            match msg {
+            match msg.map_err(|e| WriteFail::Bad("image", e))? {
                 ImageMsg::Raw(m) => w.write_proto(&topic, t_ns, &m)?,
                 ImageMsg::Compressed(m) => w.write_proto(&topic, t_ns, &m)?,
             }
             *stats.lock().images.entry(camera).or_default() += 1;
+            return Ok(());
         }
+        Ready::Item(item) => item,
+    };
+    match item {
+        Item::Image { .. } => unreachable!("converted by convert_batch"),
         Item::Imu { src, t_ns, batch } => w.write_proto(&topics::imu(&src), t_ns, &batch)?,
         Item::Trigger { camera, rec } => {
             w.write_proto(&topics::cam_trigger(&camera), rec.t_mid_ns, &rec)?

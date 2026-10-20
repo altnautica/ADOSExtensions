@@ -298,6 +298,65 @@ fn a_bad_item_is_counted_and_skipped() {
     rec.finish(op, manifest(&rig).health).unwrap();
 }
 
+/// A JPEG session encodes queued images in batches on several threads and
+/// still writes every item, each camera's images in time order.
+#[test]
+fn a_jpeg_backlog_is_encoded_in_batches_and_written_in_order() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = rig();
+    let rec = Recorder::start(RecorderConfig {
+        root: dir.path().to_path_buf(),
+        manifest: manifest(&rig),
+        rig: rig.clone(),
+        limits: SegmentLimits::default(),
+        encoding: ImageEncoding::Jpeg,
+        active_marker: None,
+    })
+    .unwrap();
+    let sdir = rec.dir().to_path_buf();
+    for k in 0..23u64 {
+        let t = 1_000_000_000 + k * 50_000_000;
+        for camera in ["cam_fl", "cam_fr"] {
+            assert!(rec.send(Item::Image {
+                camera: camera.into(),
+                t_ns: t,
+                format: FrameFormat::Gray8,
+                width: 64,
+                height: 48,
+                pixels: (0..64 * 48).map(|i| (i as u64 * 7 + k) as u8).collect(),
+            }));
+        }
+    }
+    let s = wait_for(&rec, |s| s.images.values().sum::<u64>() == 46);
+    assert_eq!(s.images.get("cam_fl"), Some(&23));
+    assert_eq!(s.images.get("cam_fr"), Some(&23));
+    let op = Operator {
+        site: None,
+        floor: None,
+        rooms: vec![],
+    };
+    rec.finish(op, manifest(&rig).health).unwrap();
+    let mut last = std::collections::HashMap::new();
+    let mut jpegs = 0;
+    SessionReader::open(&sdir)
+        .unwrap()
+        .for_each_message(|msg| {
+            if msg.topic.ends_with("/image") {
+                let prev = last.insert(msg.topic.to_string(), msg.t_ns);
+                assert!(
+                    prev.is_none_or(|p| p < msg.t_ns),
+                    "{} out of order",
+                    msg.topic
+                );
+                assert_eq!(msg.schema_name, Some("foxglove.CompressedImage"));
+                jpegs += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(jpegs, 46);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_writer_io_error_ends_recording() {

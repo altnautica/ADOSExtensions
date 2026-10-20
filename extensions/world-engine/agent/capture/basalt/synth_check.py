@@ -146,6 +146,10 @@ def main():
     # simulator bench), so the first pair is older than the newest IMU.
     ap.add_argument("--frame-lag-s", type=float, default=0.0,
                     help="send each stereo pair this long after its exposure")
+    # Host-mapped IMU stamps can step back by the clock mapping's jitter.
+    ap.add_argument("--imu-stepback-every", type=int, default=0,
+                    help="every Nth IMU sample, also send one stamped half a "
+                         "period before the previous sample (0 = never)")
     args = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     config = args.config or os.path.join(here, "vio_config.json")
@@ -194,6 +198,9 @@ def main():
             g, a = imu_sample(t)
             t_ns = T0_NS + round(t * 1e9)
             conn.sendall(struct.pack("<BIQ6d", 1, 56, t_ns, *g, *a))
+            if args.imu_stepback_every and k and k % args.imu_stepback_every == 0:
+                back = t_ns - round(1.5e9 / IMU_HZ)
+                conn.sendall(struct.pack("<BIQ6d", 1, 56, back, *g, *a))
         # The pair exposed lag_imu samples ago.
         e = k - lag_imu
         te = e / IMU_HZ
