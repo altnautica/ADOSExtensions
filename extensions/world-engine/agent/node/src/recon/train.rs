@@ -17,7 +17,13 @@ pub struct TrainSummary {
     pub steps: u64,
     pub max_splats: u64,
     pub gaussians: Option<u64>,
+    /// Mean training-view PSNR of the exported splat as rendered.
     pub psnr: Option<f64>,
+    /// The same after a per-view least-squares colour affine: the geometry
+    /// fit apart from per-view colour (which the bilateral grid absorbs in
+    /// training). A wide gap to `psnr` means the colours went into the grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub psnr_cc: Option<f64>,
     /// 3DGUT (unscented transform) was on.
     pub ut: bool,
     /// Why the high-fidelity trainer did not run (Brush stood in).
@@ -134,6 +140,7 @@ pub fn brush(
         // counts only while it densifies.
         gaussians: ply_vertex_count(&splat),
         psnr: None,
+        psnr_cc: None,
         ut: false,
         fallback_reason: reason.map(str::to_string),
     })
@@ -230,6 +237,7 @@ pub fn gsplat(
         max_splats,
         gaussians: done.get("gaussians").and_then(|v| v.as_u64()),
         psnr: done.get("psnr").and_then(|v| v.as_f64()),
+        psnr_cc: done.get("psnr_cc").and_then(|v| v.as_f64()),
         ut,
         fallback_reason: None,
     })

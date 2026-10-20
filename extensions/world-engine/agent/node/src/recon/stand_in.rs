@@ -314,7 +314,7 @@ impl StandInRunner {
                 let pts = splat_points(&colmap);
                 write_splat_ply(&out.join("splat.ply"), &pts)?;
                 on_line(&format!(
-                    r#"{{"event":"done","ply":"{}","gaussians":{},"psnr":31.5}}"#,
+                    r#"{{"event":"done","ply":"{}","gaussians":{},"psnr":31.5,"psnr_cc":32.25}}"#,
                     out.join("splat.ply")
                         .display()
                         .to_string()

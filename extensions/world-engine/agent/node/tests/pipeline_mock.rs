@@ -210,6 +210,10 @@ async fn a_tour_reconstruction_runs_every_stage_and_resumes() {
         ]
     );
     assert!(done["tools"]["colmap"].as_str().is_some());
+    let train = &done["stages"][2]["detail"];
+    assert_eq!(train["trainer"], "gsplat", "{train}");
+    assert_eq!(train["psnr"], 31.5, "{train}");
+    assert_eq!(train["psnr_cc"], 32.25, "{train}");
 
     let (_, outs) = json(
         &n.router,
