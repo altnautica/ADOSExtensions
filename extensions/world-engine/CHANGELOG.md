@@ -206,6 +206,25 @@ All notable changes to the World Engine extension.
   as its pages arrive, until the paged count settles (at most 2 s) or the
   user moves the camera. A model with no solid splat shows "empty or fully
   transparent" instead of a blank view.
+- Reconstruction `sfm` on a posed session matches only the image pairs the
+  poses make plausible (within 2 s of keyframes in time, 20 to 60; centres
+  within 4 m with view axes under 30° apart; the cameras of one rig
+  instant) through `matches_importer`, verifies each pair's relative pose
+  and drops those that contradict the priors (rotation over 10°, or
+  direction over 20° across a baseline of at least 0.3 m), then maps with
+  `pose_prior_mapper`, each image's prior position weighted by the track's
+  recorded covariance or the source's default (`lidar2d` 0.03/0.03/0.25 m,
+  `vio` 0.05 m, `fc_ekf` 0.5 m) under a robust loss. A fixed LiDAR
+  trajectory and the `preview` preset still triangulate against the poses.
+  An unposed session's sequential matcher uses a linear overlap of 2 s of
+  keyframes with no quadratic overlap or loop detection. Every pair needs 30
+  verified inliers and an image 50 to register; a calibrated rig is
+  configured for prior-weighted and unposed mapping alike, with rig
+  verification. Points seen by fewer than three images, or whose depth
+  disagrees with the LiDAR cloud or the scaled depth prior by more than
+  0.30 m, are dropped before training. The stage detail reports
+  `pairs_rejected_by_prior`, `points_dropped_short_track` and
+  `points_dropped_depth`.
 
 ### Removed
 

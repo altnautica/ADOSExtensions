@@ -118,6 +118,8 @@ pub fn rewrite_frames(
         match traj.at(t) {
             Some(body) => {
                 f.t_world_cam = Some(geom::mul(&body, &cam.t_body_sensor.0));
+                // The recorded track's covariance no longer describes this pose.
+                f.prior_sigma_m = None;
                 n.glim += 1;
             }
             None if keep_recorded => n.recorded += 1,

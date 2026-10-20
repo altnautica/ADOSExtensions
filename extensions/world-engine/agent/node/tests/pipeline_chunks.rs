@@ -316,11 +316,13 @@ async fn a_large_posed_warehouse_reconstructs_in_chunks() {
     assert!(chunks
         .iter()
         .all(|c| c["core"].as_array().unwrap().len() == 4));
-    assert_eq!(sfm["method"], "known_poses");
+    // A VIO track is refined against the images, priors weighted.
+    assert_eq!(sfm["method"], "pose_prior_mapper");
+    assert!(sfm["pairs_rejected_by_prior"].is_u64(), "{sfm}");
     assert_eq!(sfm["world_frame"], true);
     assert_eq!(sfm["registered_images"], FRAMES);
     assert!(sfm["shared_frames"].as_u64().unwrap() > 0, "{sfm}");
-    // Every chunk triangulated against the same priors.
+    // Every chunk mapped against the same priors.
     assert!(
         sfm["max_shared_pose_delta_m"].as_f64().unwrap() < 1e-9,
         "{sfm}"

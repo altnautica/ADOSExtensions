@@ -1,13 +1,18 @@
 //! Stage `sfm`: COLMAP over the prepared dataset.
 //!
-//! A session with a recorded pose track triangulates against those poses
-//! (fixed for a LiDAR-odometry track, refined by bundle adjustment for a
-//! visual-inertial or flight-controller track), so the model lands in the
-//! session's ENU world frame. A session without poses runs incremental (or,
-//! for large sites, hierarchical) mapping and stays in COLMAP's own frame;
-//! a calibrated multi-camera rig is configured as a COLMAP rig first, so the
-//! frames of one instant are matched to each other and mapped as one rigid
-//! frame with the session's camera mounts.
+//! A session with a recorded pose track matches only the image pairs its
+//! poses make plausible (neighbours in time, nearby views looking the same
+//! way, the cameras of one rig instant), drops every verified pair whose
+//! relative pose contradicts the priors, and maps with the priors as
+//! weighted position constraints (`pose_prior_mapper`), so the model lands in
+//! the session's ENU world frame. A LiDAR-odometry track is trusted as is:
+//! its poses stay fixed and only the points are triangulated. A session
+//! without poses runs incremental (or, for large sites, hierarchical)
+//! mapping and stays in COLMAP's own frame. A calibrated multi-camera rig is
+//! configured as a COLMAP rig first, so the frames of one instant are
+//! matched to each other and mapped as one rigid frame with the session's
+//! camera mounts. Short and depth-inconsistent tracks are dropped before
+//! training (see [`super::track_filter`]).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -17,13 +22,16 @@ use serde::{Deserialize, Serialize};
 
 use super::colmap::{self, camera_params, params_arg};
 use super::geom;
+use super::pairs::{self, PairCfg};
 use super::prepare::{read_frames, FrameRecord};
+use super::track_filter;
 use super::{StageError, ToolInvocation, ToolRunner};
 
 /// What `sfm` produced (its stage detail).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SfmSummary {
-    /// `known_poses` or `mapper` / `hierarchical_mapper`.
+    /// `known_poses` (fixed prior poses), `pose_prior_mapper`, or `mapper` /
+    /// `hierarchical_mapper` (no prior).
     pub method: String,
     /// The model is in the session's ENU frame (pose priors were used).
     pub world_frame: bool,
@@ -32,10 +40,57 @@ pub struct SfmSummary {
     /// Rig instants mapped as one rigid frame each (0 when each camera mapped on its own).
     #[serde(default)]
     pub rig_frames_paired: usize,
+    /// Verified image pairs dropped because their relative pose contradicted the pose prior.
+    #[serde(default)]
+    pub pairs_rejected_by_prior: usize,
+    /// Sparse points dropped for a track shorter than three images.
+    #[serde(default)]
+    pub points_dropped_short_track: usize,
+    /// Sparse points dropped for disagreeing with the LiDAR or depth-prior depth.
+    #[serde(default)]
+    pub points_dropped_depth: usize,
+}
+
+/// How one `sfm` run treats the session's poses.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SfmOptions<'a> {
+    /// Keep the prior poses fixed and only triangulate (a trusted LiDAR trajectory).
+    pub fixed_poses: bool,
+    /// Refine poses against the images; off, prior poses are only triangulated against.
+    pub refine: bool,
+    /// Hierarchical mapping for a large unposed site.
+    pub hierarchical: bool,
+    /// The source of the frames' `T_world_cam` (`vio`, `fc_ekf`, `lidar`, `lidar2d`,
+    /// `truth`), which sets the prior's default uncertainty.
+    pub prior_source: Option<&'a str>,
 }
 
 /// A prior-posed session needs at least this share of posed keyframes.
 const MIN_POSED_SHARE: f64 = 0.5;
+/// Fewest verified inliers a pair needs, and fewest matches the mapper uses a pair with.
+const MIN_INLIERS: &str = "30";
+/// Fewest 2D-3D inliers to register an image.
+const ABS_POSE_MIN_INLIERS: &str = "50";
+/// A verified pair is dropped when its relative rotation is this far from the
+/// priors' (degrees), or, over a prior baseline of at least
+/// [`PRIOR_MIN_BASELINE_M`], its translation direction this far (degrees).
+const PRIOR_MAX_ROT_DEG: f64 = 10.0;
+const PRIOR_MAX_DIR_DEG: f64 = 20.0;
+const PRIOR_MIN_BASELINE_M: f64 = 0.3;
+
+/// One-sigma prior position uncertainty (x, y, z metres) of a pose source
+/// when its track recorded no covariance.
+pub fn default_prior_sigma_m(source: Option<&str>) -> [f64; 3] {
+    match source {
+        // A planar LiDAR fixes x and y; height comes from the camera rig alone.
+        Some("lidar2d") => [0.03, 0.03, 0.25],
+        Some("lidar") => [0.03; 3],
+        Some("vio") => [0.05; 3],
+        Some("truth") => [0.01; 3],
+        // `fc_ekf`, and any source without a known accuracy.
+        _ => [0.5; 3],
+    }
+}
 
 /// Run the stage. `dataset` holds `images/` + `frames.json`; the model lands
 /// in `dataset/sparse/0`, the database and the text export in `sfm_dir`.
@@ -43,9 +98,7 @@ pub fn run(
     runner: &dyn ToolRunner,
     dataset: &Path,
     sfm_dir: &Path,
-    fixed_poses: bool,
-    refine: bool,
-    hierarchical: bool,
+    opts: &SfmOptions<'_>,
     progress: &mut dyn FnMut(f32),
 ) -> Result<SfmSummary, StageError> {
     if sfm_dir.exists() {
@@ -93,9 +146,13 @@ pub fn run(
 
     let posed = frames.iter().filter(|f| f.t_world_cam.is_some()).count();
     let use_priors = posed >= 3 && posed as f64 >= MIN_POSED_SHARE * frames.len() as f64;
-    // The rig goes into the database before matching: the sequential matcher
-    // then also pairs the images of neighbouring frames across cameras.
-    let rig = match use_priors {
+    let triangulate_only = use_priors && (opts.fixed_poses || !opts.refine);
+    // The rig goes into the database before matching: the matchers then also
+    // pair the images of neighbouring frames across cameras. Triangulating
+    // against fixed poses gains nothing from it, and COLMAP 4.2.1's
+    // `point_triangulator` aborts in its final bundle adjustment when the
+    // database holds a rig its rig-less input model does not.
+    let rig = match triangulate_only {
         true => None,
         false => rig_config(&by_cam),
     };
@@ -113,15 +170,52 @@ pub fn run(
         )?;
     }
 
-    let matcher = if frames.len() <= 150 {
+    let window = pairs::window(&frames);
+    let matcher = if use_priors {
+        // Pairs from the poses; the matchers' own candidate search (quadratic
+        // overlap, vocabulary-tree loops) is what pairs look-alike bays.
+        let list = sfm_dir.join("pairs.txt");
+        pairs::write(&list, &pairs::from_poses(&frames, &PairCfg::new(window)))?;
+        ToolInvocation::new("colmap", sfm_dir)
+            .arg("matches_importer")
+            .arg("--match_list_path")
+            .arg(&list)
+            .args(["--match_type", "pairs"])
+    } else if frames.len() <= 150 {
         ToolInvocation::new("colmap", sfm_dir).arg("exhaustive_matcher")
     } else {
         ToolInvocation::new("colmap", sfm_dir)
             .arg("sequential_matcher")
-            .args(["--SequentialMatching.overlap", "15"])
-            .args(["--SequentialMatching.quadratic_overlap", "1"])
+            .arg("--SequentialMatching.overlap")
+            .arg(window.to_string())
+            .args(["--SequentialMatching.quadratic_overlap", "0"])
+            .args(["--SequentialMatching.loop_detection", "0"])
     };
-    runner.run(&matcher.arg("--database_path").arg(&db), &mut |_| {})?;
+    let mut matcher = matcher
+        .arg("--database_path")
+        .arg(&db)
+        .args(["--TwoViewGeometry.compute_relative_pose", "1"])
+        .args(["--TwoViewGeometry.min_num_inliers", MIN_INLIERS]);
+    if rig.is_some() {
+        matcher = matcher.args(["--FeatureMatching.rig_verification", "1"]);
+    }
+    runner.run(&matcher, &mut |_| {})?;
+    let pairs_rejected_by_prior = match use_priors {
+        true => colmap::invalidate_inconsistent_pairs(
+            &db,
+            &frames,
+            PRIOR_MAX_ROT_DEG,
+            PRIOR_MAX_DIR_DEG,
+            PRIOR_MIN_BASELINE_M,
+        )?,
+        false => 0,
+    };
+    if use_priors {
+        tracing::info!(
+            pairs = pairs_rejected_by_prior,
+            "sfm_pairs_rejected_by_prior"
+        );
+    }
     progress(0.5);
 
     let model0 = sparse.join("0");
@@ -129,7 +223,30 @@ pub fn run(
     // Calibrated intrinsics are kept: refining focal length against nearly
     // fixed poses can trade it for scene scale along one axis.
     let calibrated = !frames.is_empty() && frames.iter().all(|f| f.calibrated);
-    let method = if use_priors {
+    let pins = |mut inv: ToolInvocation| {
+        inv = inv.args([
+            "--Mapper.min_num_matches",
+            MIN_INLIERS,
+            "--Mapper.abs_pose_min_num_inliers",
+            ABS_POSE_MIN_INLIERS,
+        ]);
+        // Every mapper takes the same `--Mapper.*` options (COLMAP 4.2.1 help).
+        if calibrated {
+            inv = inv.args([
+                "--Mapper.ba_refine_focal_length",
+                "0",
+                "--Mapper.ba_refine_extra_params",
+                "0",
+            ]);
+        }
+        if rig.is_some() {
+            // The mounts are calibrated: keep them, so the model takes their
+            // metric baseline instead of trading it for drift.
+            inv = inv.args(["--Mapper.ba_refine_sensor_from_rig", "0"]);
+        }
+        inv
+    };
+    let method = if triangulate_only {
         let ids = colmap::read_db_ids(&db)?;
         let known = sfm_dir.join("known");
         if colmap::write_known_model(&known, &frames, &ids)? < 3 {
@@ -147,58 +264,48 @@ pub fn run(
                 .arg("--input_path")
                 .arg(&known)
                 .arg("--output_path")
-                .arg(&model0),
+                .arg(&model0)
+                .args(["--Mapper.min_num_matches", MIN_INLIERS])
+                .args(["--Mapper.abs_pose_min_num_inliers", ABS_POSE_MIN_INLIERS]),
             &mut |_| {},
         )?;
-        progress(0.75);
-        if refine && !fixed_poses {
-            let mut ba = ToolInvocation::new("colmap", sfm_dir)
-                .arg("bundle_adjuster")
-                .arg("--input_path")
-                .arg(&model0)
-                .arg("--output_path")
-                .arg(&model0)
-                .args(["--BundleAdjustment.refine_principal_point", "0"]);
-            if calibrated {
-                ba = ba.args([
-                    "--BundleAdjustment.refine_focal_length",
-                    "0",
-                    "--BundleAdjustment.refine_extra_params",
-                    "0",
-                ]);
-            }
-            runner.run(&ba, &mut |_| {})?;
-        }
         "known_poses"
     } else {
+        let mapper = match (use_priors, opts.hierarchical) {
+            (true, _) => {
+                let default = default_prior_sigma_m(opts.prior_source);
+                let sigma = |f: &FrameRecord| f.prior_sigma_m.unwrap_or(default);
+                if colmap::write_pose_priors(&db, &frames, &sigma)? < 3 {
+                    return Err(StageError::input(
+                        "fewer than three posed keyframes reached the COLMAP database",
+                    ));
+                }
+                "pose_prior_mapper"
+            }
+            (false, true) => "hierarchical_mapper",
+            (false, false) => "mapper",
+        };
         let mapped = sfm_dir.join("mapped");
         fs::create_dir_all(&mapped)?;
-        let mapper = if hierarchical {
-            "hierarchical_mapper"
-        } else {
-            "mapper"
-        };
-        let mut map = ToolInvocation::new("colmap", sfm_dir)
-            .arg(mapper)
-            .arg("--database_path")
-            .arg(&db)
-            .arg("--image_path")
-            .arg(&images)
-            .arg("--output_path")
-            .arg(&mapped);
-        // Both mappers take the same `--Mapper.*` options (COLMAP 4.2.1 help).
-        if calibrated {
+        let mut map = pins(
+            ToolInvocation::new("colmap", sfm_dir)
+                .arg(mapper)
+                .arg("--database_path")
+                .arg(&db)
+                .arg("--image_path")
+                .arg(&images)
+                .arg("--output_path")
+                .arg(&mapped),
+        );
+        if use_priors {
+            // The per-image covariances written above, with a robust loss so a
+            // stretch of bad prior cannot drag the model.
             map = map.args([
-                "--Mapper.ba_refine_focal_length",
+                "--overwrite_priors_covariance",
                 "0",
-                "--Mapper.ba_refine_extra_params",
-                "0",
+                "--use_robust_loss_on_prior_position",
+                "1",
             ]);
-        }
-        if rig.is_some() {
-            // The mounts are calibrated: keep them, so the model takes their
-            // metric baseline instead of trading it for drift.
-            map = map.args(["--Mapper.ba_refine_sensor_from_rig", "0"]);
         }
         runner.run(&map, &mut |_| {})?;
         let best = largest_model(&mapped)?;
@@ -212,16 +319,28 @@ pub fn run(
 
     let txt = sfm_dir.join("txt");
     fs::create_dir_all(&txt)?;
-    runner.run(
-        &ToolInvocation::new("colmap", sfm_dir)
-            .arg("model_converter")
-            .arg("--input_path")
-            .arg(&model0)
-            .arg("--output_path")
-            .arg(&txt)
-            .args(["--output_type", "TXT"]),
-        &mut |_| {},
-    )?;
+    let convert = |from: &Path, to: &Path, kind: &str| {
+        runner.run(
+            &ToolInvocation::new("colmap", sfm_dir)
+                .arg("model_converter")
+                .arg("--input_path")
+                .arg(from)
+                .arg("--output_path")
+                .arg(to)
+                .args(["--output_type", kind]),
+            &mut |_| {},
+        )
+    };
+    convert(&model0, &txt, "TXT")?;
+    let dropped = track_filter::run(&txt, dataset, use_priors)?;
+    if dropped != track_filter::Dropped::default() {
+        tracing::info!(
+            short_track = dropped.short_track,
+            depth = dropped.depth,
+            "sfm_points_filtered"
+        );
+        convert(&txt, &model0, "BIN")?;
+    }
     let registered = colmap::read_image_poses(&txt)?.len();
     let points = colmap::read_points(&txt)?.len();
     if registered == 0 {
@@ -234,6 +353,9 @@ pub fn run(
         registered_images: registered,
         points,
         rig_frames_paired: rig.map_or(0, |(_, n)| n),
+        pairs_rejected_by_prior,
+        points_dropped_short_track: dropped.short_track,
+        points_dropped_depth: dropped.depth,
     })
 }
 
@@ -297,243 +419,5 @@ fn largest_model(mapped: &Path) -> Result<std::path::PathBuf, StageError> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::recon::geom;
-    use crate::recon::stand_in::StandInRunner;
-    use ados_capture_contract::CameraModelModel;
-
-    fn frames(calibrated: bool) -> Vec<FrameRecord> {
-        (0..4)
-            .map(|i| FrameRecord {
-                name: format!("cam0/{i}.png"),
-                camera_id: "cam0".into(),
-                t_ns: i,
-                t_world_cam: Some(geom::from_quat_trans(
-                    [1.0, 0.0, 0.0, 0.0],
-                    [i as f64 * 0.3, 0.0, 0.0],
-                )),
-                width: 64,
-                height: 48,
-                fx: 40.0,
-                fy: 40.0,
-                cx: 32.0,
-                cy: 24.0,
-                model: CameraModelModel::Pinhole,
-                dist: vec![],
-                calibrated,
-                t_body_cam: None,
-                rig_instant: None,
-            })
-            .collect()
-    }
-
-    fn ba_args(calibrated: bool) -> Vec<String> {
-        let dir = tempfile::tempdir().unwrap();
-        let dataset = dir.path().join("dataset");
-        fs::create_dir_all(dataset.join("images/cam0")).unwrap();
-        fs::write(
-            dataset.join("frames.json"),
-            serde_json::to_vec(&frames(calibrated)).unwrap(),
-        )
-        .unwrap();
-        let runner = StandInRunner::default();
-        run(
-            &runner,
-            &dataset,
-            &dir.path().join("sfm"),
-            false,
-            true,
-            false,
-            &mut |_| {},
-        )
-        .unwrap();
-        runner
-            .runs_of("colmap")
-            .into_iter()
-            .find(|i| i.args_lossy().first().map(String::as_str) == Some("bundle_adjuster"))
-            .expect("bundle adjustment ran")
-            .args_lossy()
-    }
-
-    #[test]
-    fn calibrated_intrinsics_stay_fixed_in_bundle_adjustment() {
-        let fixed = ba_args(true);
-        let pos = fixed
-            .iter()
-            .position(|a| a == "--BundleAdjustment.refine_focal_length")
-            .expect("focal length pinned");
-        assert_eq!(fixed[pos + 1], "0");
-        assert!(fixed
-            .iter()
-            .any(|a| a == "--BundleAdjustment.refine_extra_params"));
-        let free = ba_args(false);
-        assert!(!free
-            .iter()
-            .any(|a| a == "--BundleAdjustment.refine_focal_length"));
-    }
-
-    #[test]
-    fn calibrated_intrinsics_stay_fixed_in_the_hierarchical_mapper() {
-        let dir = tempfile::tempdir().unwrap();
-        let dataset = dir.path().join("dataset");
-        fs::create_dir_all(dataset.join("images/cam0")).unwrap();
-        let unposed: Vec<FrameRecord> = frames(true)
-            .into_iter()
-            .map(|f| FrameRecord {
-                t_world_cam: None,
-                ..f
-            })
-            .collect();
-        fs::write(
-            dataset.join("frames.json"),
-            serde_json::to_vec(&unposed).unwrap(),
-        )
-        .unwrap();
-        let runner = StandInRunner::default();
-        run(
-            &runner,
-            &dataset,
-            &dir.path().join("sfm"),
-            false,
-            true,
-            true,
-            &mut |_| {},
-        )
-        .unwrap();
-        let args = runner
-            .runs_of("colmap")
-            .into_iter()
-            .find(|i| i.args_lossy().first().map(String::as_str) == Some("hierarchical_mapper"))
-            .expect("hierarchical mapper ran")
-            .args_lossy();
-        let pos = args
-            .iter()
-            .position(|a| a == "--Mapper.ba_refine_focal_length")
-            .expect("focal length pinned");
-        assert_eq!(args[pos + 1], "0");
-    }
-
-    /// The stereo mounts of the sim Visor rig (body FLU, OpenCV cameras 10 cm apart).
-    fn stereo_mount(y: f64) -> geom::Mat4 {
-        [
-            0.0, 0.0, 1.0, 0.1, -1.0, 0.0, 0.0, y, 0.0, -1.0, 0.0, 0.3, 0.0, 0.0, 0.0, 1.0,
-        ]
-    }
-
-    /// Six unposed stereo frames, exported by `prepare` as three rig instants;
-    /// `cam_fr` at `fr_calibrated`.
-    fn stereo_frames(fr_calibrated: bool) -> Vec<FrameRecord> {
-        let mut out = Vec::new();
-        for (cam, y, calibrated) in [("cam_fl", 0.05, true), ("cam_fr", -0.05, fr_calibrated)] {
-            for t in [300_000_000u64, 9_900_000_000, 10_200_000_000] {
-                out.push(FrameRecord {
-                    name: crate::recon::prepare::frame_name(cam, t),
-                    camera_id: cam.into(),
-                    t_ns: t,
-                    t_world_cam: None,
-                    t_body_cam: Some(stereo_mount(y)),
-                    calibrated,
-                    rig_instant: Some(t),
-                    ..frames(true).remove(0)
-                });
-            }
-        }
-        out
-    }
-
-    fn run_stereo(
-        frames: &[FrameRecord],
-    ) -> (SfmSummary, Vec<Vec<String>>, Option<serde_json::Value>) {
-        let dir = tempfile::tempdir().unwrap();
-        let dataset = dir.path().join("dataset");
-        fs::create_dir_all(dataset.join("images")).unwrap();
-        fs::write(
-            dataset.join("frames.json"),
-            serde_json::to_vec(frames).unwrap(),
-        )
-        .unwrap();
-        let runner = StandInRunner::default();
-        let sfm = dir.path().join("sfm");
-        let s = run(&runner, &dataset, &sfm, false, true, false, &mut |_| {}).unwrap();
-        let config = fs::read(sfm.join("rig_config.json"))
-            .ok()
-            .map(|b| serde_json::from_slice(&b).unwrap());
-        let runs = runner
-            .runs_of("colmap")
-            .into_iter()
-            .map(|i| i.args_lossy())
-            .collect();
-        (s, runs, config)
-    }
-
-    #[test]
-    fn frame_names_sort_in_time_order() {
-        let a = crate::recon::prepare::frame_name("cam_fl", 10_152_000_000);
-        let b = crate::recon::prepare::frame_name("cam_fl", 100_152_000_000);
-        assert!(a < b, "{a} vs {b}");
-        assert_eq!(a, "cam_fl/00000000010152000000.png");
-    }
-
-    #[test]
-    fn a_calibrated_stereo_rig_is_configured_before_matching_and_kept_in_mapping() {
-        let (s, runs, config) = run_stereo(&stereo_frames(true));
-        assert_eq!(s.rig_frames_paired, 3);
-        let cmd = |name: &str| runs.iter().position(|a| a[0] == name).unwrap_or(usize::MAX);
-        assert!(cmd("rig_configurator") < cmd("exhaustive_matcher"));
-        let config = config.expect("rig config written");
-        let cams = config[0]["cameras"].as_array().unwrap();
-        assert_eq!(cams[0]["image_prefix"], "cam_fl/");
-        assert_eq!(cams[0]["ref_sensor"], true);
-        assert_eq!(cams[1]["image_prefix"], "cam_fr/");
-        // cam_fr sits 10 cm to the right of cam_fl (+x of the OpenCV camera).
-        let t: Vec<f64> =
-            serde_json::from_value(cams[1]["cam_from_rig_translation"].clone()).unwrap();
-        let q: Vec<f64> = serde_json::from_value(cams[1]["cam_from_rig_rotation"].clone()).unwrap();
-        assert!(
-            (t[0] + 0.1).abs() < 1e-12 && t[1].abs() < 1e-12 && t[2].abs() < 1e-12,
-            "{t:?}"
-        );
-        assert!((q[0] - 1.0).abs() < 1e-12, "{q:?}");
-        let mapper = &runs[cmd("mapper")];
-        let pos = mapper
-            .iter()
-            .position(|a| a == "--Mapper.ba_refine_sensor_from_rig")
-            .expect("mounts kept");
-        assert_eq!(mapper[pos + 1], "0");
-    }
-
-    #[test]
-    fn no_rig_for_an_uncalibrated_camera_unpaired_frames_or_a_posed_session() {
-        let (s, runs, config) = run_stereo(&stereo_frames(false));
-        assert_eq!(s.rig_frames_paired, 0);
-        assert!(config.is_none());
-        assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
-        // Exported outside a rig, or an instant short of a camera.
-        let unpaired: Vec<FrameRecord> = stereo_frames(true)
-            .into_iter()
-            .map(|f| FrameRecord {
-                rig_instant: None,
-                ..f
-            })
-            .collect();
-        let mut short = stereo_frames(true);
-        short.pop();
-        for frames in [unpaired, short] {
-            let (s, runs, config) = run_stereo(&frames);
-            assert_eq!(s.rig_frames_paired, 0);
-            assert!(config.is_none());
-            assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
-        }
-        let posed: Vec<FrameRecord> = stereo_frames(true)
-            .into_iter()
-            .map(|f| FrameRecord {
-                t_world_cam: Some(geom::IDENTITY),
-                ..f
-            })
-            .collect();
-        let (s, runs, _) = run_stereo(&posed);
-        assert_eq!((s.rig_frames_paired, s.method.as_str()), (0, "known_poses"));
-        assert!(!runs.iter().any(|a| a[0] == "rig_configurator"));
-    }
-}
+#[path = "sfm_tests.rs"]
+mod tests;

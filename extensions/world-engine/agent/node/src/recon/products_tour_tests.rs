@@ -37,6 +37,7 @@ fn frame(cam: &str, t_ns: u64) -> FrameRecord {
         calibrated: true,
         t_body_cam: None,
         rig_instant: None,
+        prior_sigma_m: None,
     }
 }
 

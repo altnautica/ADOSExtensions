@@ -206,6 +206,7 @@ fn frame(t_ns: u64) -> FrameRecord {
         calibrated: false,
         t_body_cam: None,
         rig_instant: None,
+        prior_sigma_m: None,
     }
 }
 

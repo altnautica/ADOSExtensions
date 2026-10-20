@@ -252,6 +252,7 @@ fn record(cam: &str, instant: u64, rig_instant: Option<u64>) -> FrameRecord {
         calibrated: true,
         t_body_cam: None,
         rig_instant,
+        prior_sigma_m: None,
     }
 }
 

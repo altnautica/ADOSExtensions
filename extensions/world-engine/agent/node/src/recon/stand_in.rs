@@ -101,13 +101,13 @@ fn box_points() -> Vec<[f64; 3]> {
     out
 }
 
-/// The box room plus `extra` points.
+/// The box room plus `extra` points, each seen by three images.
 fn write_points_txt(dir: &Path, extra: &[[f64; 3]]) -> Result<(), StageError> {
     let mut s = String::from("# POINT3D_ID X Y Z R G B ERROR TRACK[]\n");
     for (i, p) in box_points().iter().chain(extra).enumerate() {
         let _ = writeln!(
             s,
-            "{} {} {} {} 180 170 160 0.5 1 1",
+            "{} {} {} {} 180 170 160 0.5 1 1 2 1 3 1",
             i + 1,
             p[0],
             p[1],
@@ -115,6 +115,43 @@ fn write_points_txt(dir: &Path, extra: &[[f64; 3]]) -> Result<(), StageError> {
         );
     }
     fs::write(dir.join("points3D.txt"), s).map_err(io)
+}
+
+/// One point a metre in front of each posed camera of a text model, so a
+/// model's points follow its cameras.
+fn points_ahead(model: &Path) -> Result<Vec<[f64; 3]>, StageError> {
+    Ok(super::colmap::read_image_poses(model)?
+        .values()
+        .map(|t| [t[3] + t[2], t[7] + t[6], t[11] + t[10]])
+        .collect())
+}
+
+/// COLMAP's verified-pair table, empty (the stand-in matchers verify nothing).
+const TWO_VIEW_DDL: &str = "CREATE TABLE IF NOT EXISTS two_view_geometries (pair_id INTEGER \
+    PRIMARY KEY NOT NULL, rows INTEGER NOT NULL, cols INTEGER NOT NULL, data BLOB, config \
+    INTEGER NOT NULL, F BLOB, E BLOB, H BLOB, qvec BLOB, tvec BLOB, camera1 BLOB, camera2 BLOB)";
+
+fn matched(inv: &ToolInvocation) -> Result<(), StageError> {
+    let db = arg_after(inv, "--database_path").ok_or_else(|| StageError::input("no db"))?;
+    let conn = rusqlite::Connection::open(&db).map_err(io)?;
+    conn.execute_batch(TWO_VIEW_DDL).map_err(io)
+}
+
+/// A stand-in `pose_prior_mapper` model as `<output>/0`: every posed frame of
+/// the dataset (the parent of `--image_path`) the database knows, at its prior.
+fn prior_map(inv: &ToolInvocation) -> Result<(), StageError> {
+    let db = arg_after(inv, "--database_path").ok_or_else(|| StageError::input("no db"))?;
+    let images = arg_after(inv, "--image_path").ok_or_else(|| StageError::input("no images"))?;
+    let out = arg_after(inv, "--output_path")
+        .ok_or_else(|| StageError::input("no output"))?
+        .join("0");
+    let dataset = images
+        .parent()
+        .ok_or_else(|| StageError::input("no dataset"))?;
+    let frames = super::prepare::read_frames(dataset)?;
+    super::colmap::write_known_model(&out, &frames, &super::colmap::read_db_ids(&db)?)?;
+    fs::write(out.join("images.bin"), [1u8]).map_err(io)?;
+    write_points_txt(&out, &points_ahead(&out)?)
 }
 
 /// The stand-in trainer's gaussians: one per sparse point of the dataset it
@@ -258,7 +295,9 @@ impl StandInRunner {
     fn colmap(&self, inv: &ToolInvocation) -> Result<(), StageError> {
         match first(inv).as_str() {
             "feature_extractor" => extract(inv),
+            "exhaustive_matcher" | "sequential_matcher" | "matches_importer" => matched(inv),
             "mapper" | "hierarchical_mapper" => map(inv),
+            "pose_prior_mapper" => prior_map(inv),
             "point_triangulator" => {
                 let input =
                     arg_after(inv, "--input_path").ok_or_else(|| StageError::input("in"))?;
@@ -268,13 +307,7 @@ impl StandInRunner {
                 for f in ["cameras.txt", "images.txt"] {
                     fs::copy(input.join(f), out.join(f)).map_err(io)?;
                 }
-                // One point a metre in front of each posed camera, so a
-                // model's points follow its cameras.
-                let ahead: Vec<[f64; 3]> = super::colmap::read_image_poses(&input)?
-                    .values()
-                    .map(|t| [t[3] + t[2], t[7] + t[6], t[11] + t[10]])
-                    .collect();
-                write_points_txt(&out, &ahead)
+                write_points_txt(&out, &points_ahead(&input)?)
             }
             "model_converter" => {
                 let input =

@@ -178,7 +178,14 @@ async fn a_real_session_reconstructs_with_the_pinned_tools() {
             prep["frames"].as_u64().unwrap_or(0) * 4 >= synth_session::FRAMES,
             "{prep}"
         );
-        assert_eq!(sfm["method"], "known_poses", "{sfm}");
+        // Preview only triangulates against the prior; the other presets map
+        // with it as a weighted constraint.
+        let method = match preset.as_str() {
+            "preview" => "known_poses",
+            _ => "pose_prior_mapper",
+        };
+        assert_eq!(sfm["method"], method, "{sfm}");
+        assert!(sfm["pairs_rejected_by_prior"].is_u64(), "{sfm}");
         assert_eq!(sfm["world_frame"], true, "{sfm}");
         assert!(sfm["points"].as_u64().unwrap_or(0) >= 1000, "{sfm}");
         let cams = std::fs::read_to_string(job_dir.join("sfm/txt/cameras.txt")).unwrap();
