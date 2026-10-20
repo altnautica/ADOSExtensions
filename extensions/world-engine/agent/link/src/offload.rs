@@ -270,11 +270,14 @@ impl Reconciler {
                 return None;
             }
         };
-        // The credential THIS node issued, or the sole one for a pinned address.
-        let credential = node.credential(&self.credentials, &OFFLOAD_STREAM_LANE);
-        if credential.is_none() {
-            tracing::info!(node = %node.addr(), "offload reconciler: no credential from this workstation; a paired workstation will refuse the session");
-        }
+        // The credential THIS node issued, or the best one for a pinned address.
+        let credential = match node.credential(&self.credentials, &OFFLOAD_STREAM_LANE) {
+            Ok(c) => Some(c),
+            Err(gap) => {
+                tracing::info!(node = %node.addr(), reason = %gap, "offload reconciler: no usable credential for this workstation; a paired workstation will refuse the session");
+                None
+            }
+        };
         Some(Target {
             base_url: node.base_url(),
             target: node.addr(),

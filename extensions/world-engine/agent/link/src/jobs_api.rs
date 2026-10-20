@@ -41,7 +41,7 @@ impl DroneApi {
     /// A client of the paired node's job API, and the node's label.
     async fn job_client(&self) -> Result<(ComputeClient, String), ApiError> {
         let node = resolve_lan(self.host.as_ref(), &self.credentials, &JOB_SUBMIT_LANE).await?;
-        let credential = node.credential(&self.credentials, &JOB_SUBMIT_LANE);
+        let credential = node.credential(&self.credentials, &JOB_SUBMIT_LANE).ok();
         let label = node.label();
         Ok((
             ComputeClient::pinned(node.base_url(), credential, Some(node.pin)),

@@ -17,7 +17,7 @@ use world_engine_protocol::node_credential::NodeLane;
 use world_engine_transport::PinnedHost;
 
 use crate::compute_node::{self, ComputeNode};
-use crate::credentials::CredentialStore;
+use crate::credentials::{CredentialGap, CredentialStore};
 use crate::host::Host;
 use crate::reply::{codes, ApiError};
 
@@ -70,7 +70,11 @@ impl LanNode {
             .unwrap_or_else(|| self.node.addr())
     }
 
-    pub fn credential(&self, stores: &CredentialStore, lane: &NodeLane) -> Option<String> {
+    pub fn credential(
+        &self,
+        stores: &CredentialStore,
+        lane: &NodeLane,
+    ) -> Result<String, CredentialGap> {
         self.node.credential(stores, lane)
     }
 }

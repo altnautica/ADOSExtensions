@@ -219,7 +219,7 @@ impl Relay {
                     if let Some(r) = run.as_mut() {
                         // Pick up a credential installed (or rotated) after the
                         // relay started, without a restart.
-                        let fresh = self.credentials.lookup(r.node_id.as_deref(), &ATLAS_INGEST_LANE);
+                        let fresh = self.credential(&r.compute_url, r.node_id.as_deref());
                         if fresh != r.credential {
                             tracing::info!("atlas_relay_credential_changed");
                             r.bearer = LanHttpBearer::new(r.compute_url.clone(), fresh.clone());
@@ -270,9 +270,7 @@ impl Relay {
                 (url, Some(node.device_id).filter(|d| !d.is_empty()))
             }
         };
-        let credential = self
-            .credentials
-            .lookup(node_id.as_deref(), &ATLAS_INGEST_LANE);
+        let credential = self.credential(&compute_url, node_id.as_deref());
         tracing::info!(compute_url = %compute_url, "starting ground-station Atlas aux-lane relay");
         let run = Run {
             bearer: LanHttpBearer::new(compute_url.clone(), credential.clone()),
@@ -283,6 +281,18 @@ impl Relay {
         };
         self.publish(&run, true);
         Some(run)
+    }
+
+    /// The ingest credential for the node at `compute_url` (`node_id` when it
+    /// advertised one).
+    fn credential(&self, compute_url: &str, node_id: Option<&str>) -> Option<String> {
+        self.credentials
+            .select(
+                node_id,
+                Some(url_authority(compute_url)),
+                &ATLAS_INGEST_LANE,
+            )
+            .ok()
     }
 
     /// End a run, leaving a final `up: false` snapshot.
@@ -301,11 +311,25 @@ impl Relay {
     }
 }
 
+/// The `host[:port]` of a base URL, so a configured target is matched against
+/// the address a credential was installed for.
+fn url_authority(url: &str) -> &str {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::FakeHost;
     use world_engine_transport::atlas_event_router;
+
+    #[test]
+    fn a_base_url_reduces_to_its_address() {
+        assert_eq!(url_authority("http://10.99.0.2:8092"), "10.99.0.2:8092");
+        assert_eq!(url_authority("http://[fd00::5]:8092/api"), "[fd00::5]:8092");
+        assert_eq!(url_authority("ws.local"), "ws.local");
+    }
 
     /// Spawn the compute receiver on an ephemeral port; return its base URL and
     /// the channel events land on.

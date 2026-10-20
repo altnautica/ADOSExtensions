@@ -4,6 +4,9 @@
 //!   [`crate::sessions`], newest first); `[]` while the capture root is
 //!   unknown. A crashed session (stale `.recording`) is listed with
 //!   `uploaded: false` and `upload` `{state: "failed", error: "not_finished"}`.
+//!   While auto-upload is on but cannot pick a credential for the node, the
+//!   sessions it would take read `{state: "blocked", error: "no_credential"}`
+//!   (or `"ambiguous_credential"`).
 //! - `POST /atlas/sessions/{id}/upload` → `{"ok":true}`: queue it for the
 //!   paired node (`409 E_RECORDING` while it records, `409 E_NOT_FINISHED`
 //!   for a crashed session).

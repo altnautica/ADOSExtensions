@@ -20,13 +20,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::auth::constant_time_eq;
-use world_engine_protocol::node_credential::NodeLane;
+use world_engine_protocol::node_credential::{NodeLane, ISSUED_TOKEN_VERSION as TOKEN_PREFIX};
 
 /// Default location of the issued-credential store.
 pub const DEFAULT_NODE_CREDENTIALS_PATH: &str = "/var/ados/compute/node-credentials.json";
 
-/// The version prefix of an issued token: `nc1.<id>.<secret>`.
-const TOKEN_PREFIX: &str = "nc1";
 /// Id and secret lengths, drawn from [`TOKEN_CHARSET`] (31 symbols): the
 /// secret carries over 200 bits.
 const ID_LEN: usize = 12;

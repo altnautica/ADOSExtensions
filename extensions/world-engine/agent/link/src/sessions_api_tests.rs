@@ -40,6 +40,24 @@ async fn sessions_list_with_their_upload_state() {
 }
 
 #[tokio::test]
+async fn the_list_shows_why_auto_upload_is_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = FakeHost::new();
+    host.set_config(crate::upload::AUTO_UPLOAD_KEY, json!(true));
+    host.set_config(crate::compute_node::PIN_KEY, json!("127.0.0.1:8092"));
+    let api = test_api(host, &dir.path().join("none.sock"), dir.path());
+    let root = dir.path().join("sessions");
+    finished_session(&root, "visor-1-20261019T101500Z-3fa2");
+    let power = crate::power::PowerWatch::default();
+    assert!(!api.uploads.auto_gate(&api.control, &power).await);
+    let (st, body) = call(drone_router(api), "GET", "/atlas/sessions", None).await;
+    assert_eq!(st, StatusCode::OK);
+    let upload = &body["sessions"][0]["upload"];
+    assert_eq!(upload["state"], "blocked");
+    assert_eq!(upload["error"], "no_credential");
+}
+
+#[tokio::test]
 async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let dir = tempfile::tempdir().unwrap();
     let api = test_api(FakeHost::new(), &dir.path().join("none.sock"), dir.path());

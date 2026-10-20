@@ -311,7 +311,7 @@ impl Forwarder {
             Some(node) => {
                 let base = node.base_url();
                 tracing::info!(base = %base, node = ?node.device_id, "atlas forwarder resolved compute node");
-                let credential = node.credential(&self.credentials, &ATLAS_INGEST_LANE);
+                let credential = node.credential(&self.credentials, &ATLAS_INGEST_LANE).ok();
                 bearers.push(Box::new(LanHttpBearer::new(base, credential)));
                 let addr = node.addr();
                 Some(node.device_id.unwrap_or(addr))

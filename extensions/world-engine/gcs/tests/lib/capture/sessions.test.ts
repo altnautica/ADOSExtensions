@@ -56,6 +56,12 @@ describe("coerceSessions", () => {
     const [s] = coerceSessions({ sessions: [{ session_id: "a", upload: { state: "teleporting" } }] });
     expect(s?.upload.state).toBe("idle");
   });
+
+  it("keeps a blocked auto-upload and its reason", () => {
+    const [s] = coerceSessions({ sessions: [{ session_id: "a", upload: { state: "blocked", error: "no_credential" } }] });
+    expect(s?.upload.state).toBe("blocked");
+    expect(s?.upload.error).toBe("no_credential");
+  });
 });
 
 describe("upload progress", () => {

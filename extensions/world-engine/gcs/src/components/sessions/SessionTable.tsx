@@ -28,9 +28,9 @@ export function UploadCell({ session, rate }: { session: CaptureSession; rate: n
   const eta = uploadEtaS(u, rate);
   return (
     <div className="we:flex we:min-w-32 we:flex-col we:gap-0.5" data-upload={u.state}>
-      <span className={cn(u.state === "failed" ? "we:text-status-error" : "we:text-text-secondary")}>
+      <span className={cn(u.state === "failed" || u.state === "blocked" ? "we:text-status-error" : "we:text-text-secondary")}>
         {t(`upload.${u.state}`)}
-        {f !== null && u.state !== "idle" && ` ${Math.round(f * 100)} %`}
+        {f !== null && u.state !== "idle" && u.state !== "blocked" && ` ${Math.round(f * 100)} %`}
       </span>
       {(u.state === "uploading" || u.state === "queued") && (
         <div className="we:h-1 we:rounded we:bg-bg-tertiary" role="progressbar" aria-valuenow={f === null ? undefined : Math.round(f * 100)} aria-valuemin={0} aria-valuemax={100}>

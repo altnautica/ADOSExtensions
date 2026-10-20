@@ -145,6 +145,16 @@ All notable changes to the World Engine extension.
   Cameras with too few common instants are exported outside a rig. The
   `prepare` and `sfm` stage details report `rig_frames_paired` (and `prepare`
   `rig_frames_dropped`) in place of the `sfm` camera count.
+- A lane pinned to a compute-node address (`offload.compute_node_addr`, or
+  the relay's `relay.compute_base_url`) picks among several installed
+  credentials for the lane instead of presenting none: an issued-form token
+  (`nc1.<id>.<secret>`) over any other, then one installed for that address
+  (`POST /node-credential` takes an optional `node_addr`, kept with the
+  credential), then the most recently installed; two equal on all three are
+  ambiguous. When auto-upload is on and no credential can be picked, the
+  sessions it would take list `upload.state: "blocked"` with `error`
+  `no_credential` or `ambiguous_credential` in `GET /atlas/sessions`, the GCS
+  shows "Auto-upload blocked", and the link logs a warning once.
 
 ### Removed
 

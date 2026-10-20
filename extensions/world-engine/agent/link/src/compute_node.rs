@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use world_engine_transport::{pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE};
 
-use crate::credentials::CredentialStore;
+use crate::credentials::{CredentialGap, CredentialStore};
 use crate::host::{config_string, Host};
 use world_engine_protocol::node_credential::NodeLane;
 
@@ -50,9 +50,14 @@ impl ComputeNode {
     }
 
     /// The credential to present on `lane`: the one this node issued, or for a
-    /// pinned address (no node id) the sole credential installed for the lane.
-    pub fn credential(&self, stores: &CredentialStore, lane: &NodeLane) -> Option<String> {
-        stores.lookup(self.device_id.as_deref(), lane)
+    /// pinned address (no node id) the best one for that address
+    /// ([`CredentialStore::select`]).
+    pub fn credential(
+        &self,
+        stores: &CredentialStore,
+        lane: &NodeLane,
+    ) -> Result<String, CredentialGap> {
+        stores.select(self.device_id.as_deref(), Some(&self.addr()), lane)
     }
 }
 
@@ -215,15 +220,16 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_node_presents_the_sole_credential_for_the_lane() {
+    fn a_pinned_node_presents_the_best_credential_for_its_address() {
         let dir = tempfile::tempdir().unwrap();
         let ext = dir.path().join(STORE_FILE);
         let mut store = WorkstationCredentials::default();
         store.upsert(InstalledCredential {
             workstation_node_id: "ws-a".into(),
-            credential: "secret-a".into(),
+            credential: "nc1.A.SECRET".into(),
             lanes: vec![ATLAS_INGEST_LANE],
             installed_at_ms: 1,
+            node_addr: Some("192.0.2.5".into()),
         });
         store.save(&ext).unwrap();
         let stores = CredentialStore {
@@ -236,17 +242,21 @@ mod tests {
         };
         assert_eq!(
             pinned.credential(&stores, &ATLAS_INGEST_LANE).as_deref(),
-            Some("secret-a")
+            Ok("nc1.A.SECRET")
         );
-        // With two installed there is no sole one to guess from.
+        // A newer one minted elsewhere does not displace the one minted here.
         store.upsert(InstalledCredential {
             workstation_node_id: "ws-b".into(),
-            credential: "secret-b".into(),
+            credential: "nc1.B.SECRET".into(),
             lanes: vec![ATLAS_INGEST_LANE],
             installed_at_ms: 2,
+            node_addr: Some("192.0.2.6:8092".into()),
         });
         store.save(&ext).unwrap();
-        assert_eq!(pinned.credential(&stores, &ATLAS_INGEST_LANE), None);
+        assert_eq!(
+            pinned.credential(&stores, &ATLAS_INGEST_LANE).as_deref(),
+            Ok("nc1.A.SECRET")
+        );
     }
 
     #[test]

@@ -9,9 +9,11 @@
 //!
 //! Auto-upload ([`UploadManager::run_auto`]) enqueues every finished,
 //! un-uploaded session when all hold: plugin config `atlas.auto_upload` is
-//! true, a node resolves on the LAN and this device holds its
-//! `sessions.upload` credential, the capture service is not recording, and
-//! the device is idle or charging ([`crate::power`]).
+//! true, a node resolves on the LAN and this device holds a usable
+//! `sessions.upload` credential for it, the capture service is not recording,
+//! and the device is idle or charging ([`crate::power`]). When auto-upload is
+//! on but no credential can be picked ([`CredentialGap`]), the waiting sessions
+//! read `blocked` with the reason in `error`, and the gap is logged once.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -28,7 +30,7 @@ use world_engine_protocol::atlas::CaptureState;
 use world_engine_transport::{BulkClient, BulkConfig, SessionPlan};
 
 use crate::control::{ControlClient, LiveCapture};
-use crate::credentials::{CredentialStore, SESSION_UPLOAD_LANE};
+use crate::credentials::{CredentialGap, CredentialStore, SESSION_UPLOAD_LANE};
 use crate::host::{config_bool, Host};
 use crate::lan_node::resolve_lan;
 use crate::power::PowerWatch;
@@ -55,6 +57,8 @@ pub enum UploadState {
     Uploading,
     Committed,
     Failed,
+    /// Auto-upload is on but cannot run; `error` names why.
+    Blocked,
 }
 
 /// The `upload` object of a session row.
@@ -117,6 +121,8 @@ struct Inner {
     /// recording, a paired node). Auto-queued jobs wait while it is closed and
     /// a running one stops (it resumes from the node's offset later).
     gate: watch::Sender<bool>,
+    /// Why auto-upload cannot run although it is on, as last evaluated.
+    blocked: Mutex<Option<CredentialGap>>,
 }
 
 /// The upload queue and its progress; cheap to clone.
@@ -142,6 +148,7 @@ impl UploadManager {
                 queue: Mutex::default(),
                 wake: Notify::new(),
                 gate: watch::channel(false).0,
+                blocked: Mutex::default(),
             }),
         }
     }
@@ -152,10 +159,23 @@ impl UploadManager {
     }
 
     /// The progress of `dir`: the live job, else committed (marker present,
-    /// node and bytes as the marker records them) or idle.
+    /// node and bytes as the marker records them) or idle. A session auto-upload
+    /// would take (waiting in its queue, or finished and not yet queued) reads
+    /// `blocked` while auto-upload is blocked.
     pub fn view(&self, dir: &SessionDir, size_bytes: u64) -> UploadView {
+        let blocked = *self.inner.blocked.lock();
+        let block = |v: &mut UploadView| {
+            if let Some(gap) = blocked {
+                v.state = UploadState::Blocked;
+                v.error = Some(gap.code().to_string());
+            }
+        };
         if let Some(job) = self.inner.jobs.lock().get(&dir.id) {
-            return job.view.clone();
+            let mut v = job.view.clone();
+            if job.auto && v.state == UploadState::Queued {
+                block(&mut v);
+            }
+            return v;
         }
         let mut v = UploadView::idle(size_bytes);
         if dir.uploaded {
@@ -164,6 +184,8 @@ impl UploadManager {
             v.bytes_total = marker.bytes.unwrap_or(size_bytes);
             v.bytes_sent = v.bytes_total;
             v.node = marker.node;
+        } else if dir.finished && !dir.recording {
+            block(&mut v);
         }
         v
     }
@@ -268,7 +290,7 @@ impl UploadManager {
             .await
             .map_err(|e| fail(None, e))?;
         let label = node.label();
-        let credential = node.credential(&i.credentials, &SESSION_UPLOAD_LANE);
+        let credential = node.credential(&i.credentials, &SESSION_UPLOAD_LANE).ok();
         self.update(id, |j| {
             j.view.state = UploadState::Uploading;
             j.view.bytes_total = plan.total_bytes;
@@ -380,11 +402,30 @@ impl UploadManager {
         }
     }
 
+    /// Record why auto-upload cannot run (`None`: nothing blocks it), logging
+    /// each change once.
+    fn note_blocked(&self, gap: Option<CredentialGap>) {
+        let mut blocked = self.inner.blocked.lock();
+        if *blocked == gap {
+            return;
+        }
+        match gap {
+            Some(reason) => {
+                tracing::warn!(%reason, "auto-upload blocked: no usable sessions.upload credential for the compute node")
+            }
+            None => tracing::info!("auto-upload no longer blocked"),
+        }
+        *blocked = gap;
+    }
+
     /// Whether the auto-upload gate is open now.
-    async fn auto_gate(&self, control: &ControlClient, power: &PowerWatch) -> bool {
+    pub(crate) async fn auto_gate(&self, control: &ControlClient, power: &PowerWatch) -> bool {
         let i = &self.inner;
-        if !config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await || !power.idle_or_charging()
-        {
+        if !config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await {
+            self.note_blocked(None);
+            return false;
+        }
+        if !power.idle_or_charging() {
             return false;
         }
         let recording = match LiveCapture::from(control.status().await) {
@@ -398,9 +439,11 @@ impl UploadManager {
             return false;
         }
         match resolve_lan(i.host.as_ref(), &i.credentials, &SESSION_UPLOAD_LANE).await {
-            Ok(node) => node
-                .credential(&i.credentials, &SESSION_UPLOAD_LANE)
-                .is_some(),
+            Ok(node) => {
+                let gap = node.credential(&i.credentials, &SESSION_UPLOAD_LANE).err();
+                self.note_blocked(gap);
+                gap.is_none()
+            }
             Err(_) => false,
         }
     }

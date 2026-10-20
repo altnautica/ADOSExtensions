@@ -306,3 +306,70 @@ async fn auto_jobs_wait_while_the_gate_is_closed_and_operator_jobs_do_not() {
     m.set_auto_gate(true);
     assert_eq!(settle(&m, &a).await.state, UploadState::Committed);
 }
+
+#[tokio::test]
+async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason() {
+    use world_engine_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
+    let root = tempfile::tempdir().unwrap();
+    let id = "a-20261019T101500Z-0001";
+    finished_session(root.path(), id);
+    let host = FakeHost::new();
+    host.set_config(AUTO_UPLOAD_KEY, json!(true));
+    host.set_config(PIN_KEY, json!("127.0.0.1:8092"));
+    let creds = root.path().join("creds.json");
+    let root_path = root.path().to_path_buf();
+    let m = UploadManager::new(
+        host.clone(),
+        CredentialStore {
+            path: Some(creds.clone()),
+        },
+        Arc::new(move || Some(root_path.clone())),
+        fast(),
+    );
+    let control = ControlClient::new(root.path().join("none.sock"));
+    let power = PowerWatch::default();
+    let dir = SessionDir::open(root.path(), id).unwrap();
+
+    // Nothing installed: the gate stays shut and the session says why.
+    assert!(!m.auto_gate(&control, &power).await);
+    let v = m.view(&dir, 0);
+    assert_eq!(
+        (v.state, v.error.as_deref()),
+        (UploadState::Blocked, Some("no_credential"))
+    );
+    assert_eq!(serde_json::to_value(&v).unwrap()["state"], "blocked");
+
+    // Two equally good credentials: ambiguous, never a guess.
+    let mut store = WorkstationCredentials::default();
+    for (node, secret) in [("ws-a", "nc1.A.SECRET"), ("ws-b", "nc1.B.SECRET")] {
+        store.upsert(InstalledCredential {
+            workstation_node_id: node.into(),
+            credential: secret.into(),
+            lanes: vec![SESSION_UPLOAD_LANE],
+            installed_at_ms: 7,
+            node_addr: None,
+        });
+    }
+    store.save(&creds).unwrap();
+    assert!(!m.auto_gate(&control, &power).await);
+    assert_eq!(
+        m.view(&dir, 0).error.as_deref(),
+        Some("ambiguous_credential")
+    );
+    // A queued auto job reads blocked too.
+    m.enqueue_pending();
+    assert_eq!(m.view(&dir, 0).state, UploadState::Blocked);
+
+    // One of them minted at the pinned address: the gate opens.
+    store.workstations[1].node_addr = Some("127.0.0.1".into());
+    store.save(&creds).unwrap();
+    assert!(m.auto_gate(&control, &power).await);
+    let v = m.view(&dir, 0);
+    assert_eq!((v.state, v.error), (UploadState::Queued, None));
+
+    // Auto-upload off: nothing is blocked, whatever the store holds.
+    std::fs::remove_file(&creds).unwrap();
+    host.set_config(AUTO_UPLOAD_KEY, json!(false));
+    assert!(!m.auto_gate(&control, &power).await);
+    assert_eq!(m.view(&dir, 0).state, UploadState::Queued);
+}

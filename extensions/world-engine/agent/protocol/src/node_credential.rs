@@ -87,6 +87,19 @@ impl<'de> Deserialize<'de> for NodeLane {
     }
 }
 
+/// The version tag an issued token starts with: `nc1.<id>.<secret>`.
+pub const ISSUED_TOKEN_VERSION: &str = "nc1";
+
+/// Whether `token` has the form a workstation issues (`nc1.<id>.<secret>`),
+/// the only form its node-credential gate admits. An owner bearer token, for
+/// one, is not.
+pub fn is_issued_token(token: &str) -> bool {
+    let mut parts = token.trim().splitn(3, '.');
+    parts.next() == Some(ISSUED_TOKEN_VERSION)
+        && parts.next().is_some_and(|id| !id.is_empty())
+        && parts.next().is_some_and(|secret| !secret.is_empty())
+}
+
 /// One credential a workstation issued this node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledCredential {
@@ -100,6 +113,10 @@ pub struct InstalledCredential {
     pub lanes: Vec<NodeLane>,
     /// Epoch milliseconds it was installed here.
     pub installed_at_ms: i64,
+    /// The workstation's `host[:port]` it was minted at, when the installer
+    /// named one, so a lane pinned to that address picks it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_addr: Option<String>,
 }
 
 /// Every credential installed on this node, one per issuing workstation.
@@ -128,21 +145,6 @@ impl WorkstationCredentials {
             tracing::warn!(path = %path.display(), error = %e, "workstation credentials unreadable");
             Self::default()
         })
-    }
-
-    /// The credential to present to a workstation. A known node id picks its
-    /// own credential and nothing else, so a credential is never offered to a
-    /// node it was not issued by. An unknown id (a pinned address carries none)
-    /// picks the sole installed credential, and none when there are several.
-    pub fn for_node(&self, workstation_node_id: Option<&str>) -> Option<&InstalledCredential> {
-        match workstation_node_id.filter(|id| !id.is_empty()) {
-            Some(id) => self
-                .workstations
-                .iter()
-                .find(|c| c.workstation_node_id == id),
-            None if self.workstations.len() == 1 => self.workstations.first(),
-            None => None,
-        }
     }
 
     /// Insert or replace the credential for its workstation.
@@ -193,6 +195,7 @@ mod tests {
             credential: secret.into(),
             lanes: vec![NodeLane::from_static("atlas.ingest")],
             installed_at_ms: 1,
+            node_addr: None,
         }
     }
 
@@ -220,23 +223,28 @@ mod tests {
     }
 
     #[test]
-    fn a_known_node_gets_only_its_own_credential() {
-        let mut store = WorkstationCredentials::default();
-        store.upsert(cred("ws-a", "secret-a"));
-        store.upsert(cred("ws-b", "secret-b"));
-        assert_eq!(store.for_node(Some("ws-b")).unwrap().credential, "secret-b");
-        // A node that issued nothing is offered nothing, even with others held.
-        assert_eq!(store.for_node(Some("ws-rogue")), None);
-        // An unknown node id with several held is ambiguous: nothing offered.
-        assert_eq!(store.for_node(None), None);
+    fn only_the_issued_form_reads_as_an_issued_token() {
+        assert!(is_issued_token("nc1.ID.SECRET"));
+        assert!(is_issued_token(" nc1.ID.SEC.RET "));
+        for other in [
+            "owner-bearer-token",
+            "nc1.ID",
+            "nc1..SECRET",
+            "nc1.ID.",
+            "nc2.ID.SECRET",
+            "",
+        ] {
+            assert!(!is_issued_token(other), "{other:?}");
+        }
     }
 
     #[test]
-    fn an_unknown_node_gets_the_sole_credential() {
-        let mut store = WorkstationCredentials::default();
-        store.upsert(cred("ws-a", "secret-a"));
-        assert_eq!(store.for_node(None).unwrap().credential, "secret-a");
-        assert_eq!(store.for_node(Some("")).unwrap().credential, "secret-a");
+    fn a_store_without_addresses_still_loads() {
+        let old = br#"{"workstations":[{"workstation_node_id":"ws-a","credential":"c","lanes":["atlas.ingest"],"installed_at_ms":1}]}"#;
+        let store: WorkstationCredentials = serde_json::from_slice(old).unwrap();
+        assert_eq!(store.workstations[0].node_addr, None);
+        let back = serde_json::to_value(&store).unwrap();
+        assert!(back["workstations"][0].get("node_addr").is_none());
     }
 
     #[test]
@@ -245,7 +253,7 @@ mod tests {
         store.upsert(cred("ws-a", "old"));
         store.upsert(cred("ws-a", "new"));
         assert_eq!(store.workstations.len(), 1);
-        assert_eq!(store.for_node(Some("ws-a")).unwrap().credential, "new");
+        assert_eq!(store.workstations[0].credential, "new");
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 import { arr, bool, num, obj, objOrNull, str } from "./coerce";
 
-export type UploadState = "idle" | "queued" | "uploading" | "committed" | "failed";
+export type UploadState = "idle" | "queued" | "uploading" | "committed" | "failed" | "blocked";
 
 export interface SessionUpload {
   state: UploadState;
@@ -30,7 +30,7 @@ export interface CaptureSession {
   upload: SessionUpload;
 }
 
-const UPLOAD_STATES: readonly UploadState[] = ["idle", "queued", "uploading", "committed", "failed"];
+const UPLOAD_STATES: readonly UploadState[] = ["idle", "queued", "uploading", "committed", "failed", "blocked"];
 
 function coerceUpload(raw: unknown, fallbackTotal: number | null): SessionUpload {
   const e = obj(raw);

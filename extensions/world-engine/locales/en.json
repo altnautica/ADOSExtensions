@@ -410,6 +410,7 @@
       "uploading": "Uploading",
       "committed": "Uploaded",
       "failed": "Upload failed",
+      "blocked": "Auto-upload blocked",
       "start": "Upload"
     },
     "delete": "Delete",
