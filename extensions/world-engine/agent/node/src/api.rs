@@ -17,7 +17,9 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use world_engine_protocol::compute::{CancelResponse, SubmitResponse};
+use world_engine_protocol::compute::{
+    CancelResponse, NodeIdentity, SubmitResponse, NODE_IDENTITY_PATH,
+};
 
 use crate::artifacts::rewrite_artifact_host;
 use crate::auth::{require_job_api, ComputeAuth, NodeCaller};
@@ -58,6 +60,8 @@ pub fn build_router_with_base(
 ) -> Router {
     Router::new()
         .route("/api/compute/status", get(status))
+        // Which node this is: served to any caller (see `identity`).
+        .route(NODE_IDENTITY_PATH, get(identity))
         .route("/api/compute/datasets", post(create_dataset))
         .route("/api/compute/jobs", get(list_jobs).post(submit_job))
         .route("/api/compute/jobs/:id", get(job_status))
@@ -189,6 +193,16 @@ async fn status(
         session_states: sessions.state_counts(),
     };
     Ok(Json(resp).into_response())
+}
+
+/// This node's id, the one it advertises over mDNS and names in the
+/// credentials it issues. Served without a credential, so a node that reaches
+/// this one by a pinned address can present only the credential this node
+/// issued it.
+async fn identity(Extension(auth): Extension<Arc<ComputeAuth>>) -> Json<NodeIdentity> {
+    Json(NodeIdentity {
+        node_id: auth.credentials.node_id().to_string(),
+    })
 }
 
 /// The live streaming perception-offload sessions: state, throughput, and the

@@ -19,7 +19,8 @@ use reqwest::{redirect, Client};
 use serde::Serialize;
 
 use world_engine_protocol::compute::{
-    CancelResponse, ComputeHeartbeat, ComputeJobKind, Dataset, Output, SubmitResponse,
+    CancelResponse, ComputeHeartbeat, ComputeJobKind, Dataset, NodeIdentity, Output,
+    SubmitResponse, NODE_IDENTITY_PATH,
 };
 use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
@@ -27,6 +28,10 @@ use crate::job_status::JobStatus;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+/// The identity probe is a small read on the path to every lane, so it gives
+/// up quickly.
+const IDENTITY_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const IDENTITY_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// A failure calling the compute node's job API.
 #[derive(Debug, thiserror::Error)]
@@ -242,4 +247,25 @@ impl ComputeClient {
         )
         .await
     }
+}
+
+/// Ask the node at `base_url` which node it is ([`NODE_IDENTITY_PATH`]). It
+/// carries no credential: the answer decides which credential, if any, the
+/// caller then presents to that node.
+pub async fn node_identity(base_url: &str) -> Result<NodeIdentity, ClientError> {
+    let http = node_http(IDENTITY_CONNECT_TIMEOUT, IDENTITY_TIMEOUT, None);
+    let url = format!("{}{NODE_IDENTITY_PATH}", base_url.trim_end_matches('/'));
+    let resp = http
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| ClientError::Request(e.to_string()))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ClientError::Http(status.as_u16(), body));
+    }
+    resp.json::<NodeIdentity>()
+        .await
+        .map_err(|e| ClientError::Decode(e.to_string()))
 }

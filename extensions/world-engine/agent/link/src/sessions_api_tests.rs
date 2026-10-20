@@ -44,7 +44,8 @@ async fn the_list_shows_why_auto_upload_is_blocked() {
     let dir = tempfile::tempdir().unwrap();
     let host = FakeHost::new();
     host.set_config(crate::upload::AUTO_UPLOAD_KEY, json!(true));
-    host.set_config(crate::compute_node::PIN_KEY, json!("127.0.0.1:8092"));
+    let node = crate::upload::tests::serve_node(std::sync::Arc::default()).await;
+    host.set_config(crate::compute_node::PIN_KEY, json!(node));
     let api = test_api(host, &dir.path().join("none.sock"), dir.path());
     let root = dir.path().join("sessions");
     finished_session(&root, "visor-1-20261019T101500Z-3fa2");

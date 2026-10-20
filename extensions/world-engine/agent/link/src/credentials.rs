@@ -5,8 +5,8 @@
 //! this node a credential scoped to the lanes it uses and installs it here. The
 //! lanes (the Atlas forwarder, the offload session, a ground station's Atlas
 //! relay) present it to the workstation that issued it, picked by that
-//! workstation's advertised node id, or for a pinned address by
-//! [`CredentialStore::select`].
+//! workstation's node id (advertised over mDNS, or read from a pinned node);
+//! see [`CredentialStore::select`].
 //!
 //! Installs land in the extension's own store under the plugin data dir, and
 //! every lookup reads that store. The agent's node-wide credential file is
@@ -24,7 +24,7 @@ use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
 use world_engine_protocol::node_credential::{
-    is_issued_token, InstalledCredential, NodeLane, WorkstationCredentials,
+    InstalledCredential, NodeLane, WorkstationCredentials,
 };
 
 use crate::api::detail;
@@ -54,7 +54,7 @@ const MAX_NODE_ADDR_LEN: usize = 255;
 pub enum CredentialGap {
     /// None is installed for the lane, or none from the node that named itself.
     NoCredential,
-    /// Several fit a pinned address equally well and nothing tells them apart.
+    /// A node that did not name itself, and several credentials it could be.
     Ambiguous,
 }
 
@@ -109,15 +109,15 @@ impl CredentialStore {
             .collect()
     }
 
-    /// The credential to present on `lane` to a node.
+    /// The credential to present on `lane` to a node, never one from another
+    /// node.
     ///
-    /// A node that names itself (`node_id`, its mDNS advert) gets the
-    /// credential it issued and nothing else, so a credential is never offered
-    /// to a node that did not issue it. A node known only by its address
-    /// (`addr`, a pinned `host[:port]`) gets the best of the lane's
-    /// credentials: an issued-form token over any other (the workstation admits
-    /// nothing else), then one installed for that address, then the most
-    /// recently installed. Two equal on all three are ambiguous.
+    /// A node that names itself (`node_id`: its mDNS advert, or a pinned node's
+    /// identity reply) gets the credential it issued and nothing else. A node
+    /// known only by its address (`addr`, a pinned `host[:port]` that did not
+    /// say its id) gets the credential installed for that address, else the
+    /// lane's sole credential; more than one candidate either way is
+    /// ambiguous.
     pub fn select(
         &self,
         node_id: Option<&str>,
@@ -133,16 +133,19 @@ impl CredentialStore {
                 .ok_or(CredentialGap::NoCredential);
         }
         let pinned = addr.and_then(addr_key);
-        let rank = |c: &InstalledCredential| {
-            let at_pin = pinned.is_some() && c.node_addr.as_deref().and_then(addr_key) == pinned;
-            (is_issued_token(&c.credential), at_pin, c.installed_at_ms)
+        let at_pin: Vec<&InstalledCredential> = creds
+            .iter()
+            .filter(|c| pinned.is_some() && c.node_addr.as_deref().and_then(addr_key) == pinned)
+            .collect();
+        let candidates = if at_pin.is_empty() {
+            creds.iter().collect()
+        } else {
+            at_pin
         };
-        let mut ranked: Vec<_> = creds.into_iter().map(|c| (rank(&c), c)).collect();
-        ranked.sort_by_key(|(r, _)| std::cmp::Reverse(*r));
-        match ranked.as_slice() {
+        match candidates.as_slice() {
             [] => Err(CredentialGap::NoCredential),
-            [(best, _), (next, _), ..] if best == next => Err(CredentialGap::Ambiguous),
-            [(_, c), ..] => Ok(c.credential.clone()),
+            [only] => Ok(only.credential.clone()),
+            _ => Err(CredentialGap::Ambiguous),
         }
     }
 
@@ -412,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pinned_address_takes_the_credential_installed_for_it() {
+    fn a_pinned_address_takes_only_the_credential_installed_for_it() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(STORE_FILE);
         let lanes = [SESSION_UPLOAD_LANE, JOB_SUBMIT_LANE];
@@ -439,30 +442,38 @@ mod tests {
                 .as_deref(),
             Ok("nc1.B.SECRET")
         );
-        // An address neither was minted at: the most recently installed.
+        // An address neither was minted at gets neither: whatever answers there
+        // never collects another node's credential.
         assert_eq!(
-            stores
-                .select(None, Some("10.99.0.9:8092"), &SESSION_UPLOAD_LANE)
-                .as_deref(),
-            Ok("nc1.B.SECRET")
+            stores.select(None, Some("10.99.0.9:8092"), &SESSION_UPLOAD_LANE),
+            Err(CredentialGap::Ambiguous)
         );
     }
 
     #[test]
-    fn a_pinned_address_presents_the_node_credential_over_an_owner_token() {
+    fn a_pinned_node_that_says_its_id_gets_its_credential_over_an_owner_token() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(STORE_FILE);
         let lanes = [SESSION_UPLOAD_LANE, JOB_SUBMIT_LANE];
         // The node's credential, then its owner bearer token filed under
-        // another id and installed later: the workstation admits only the first.
+        // another id and installed later.
         install(&path, "standalone-1", "nc1.ID.SECRET", None, &lanes, 1);
         install(&path, "host-node", "owner-bearer-token", None, &lanes, 2);
         let stores = CredentialStore { path: Some(path) };
         assert_eq!(
             stores
-                .select(None, Some("10.99.0.2:8092"), &SESSION_UPLOAD_LANE)
+                .select(
+                    Some("standalone-1"),
+                    Some("10.99.0.2:8092"),
+                    &SESSION_UPLOAD_LANE
+                )
                 .as_deref(),
             Ok("nc1.ID.SECRET")
+        );
+        // Unread id, two candidates, no address recorded: nothing is presented.
+        assert_eq!(
+            stores.select(None, Some("10.99.0.2:8092"), &SESSION_UPLOAD_LANE),
+            Err(CredentialGap::Ambiguous)
         );
     }
 
@@ -481,7 +492,7 @@ mod tests {
             CredentialStore { path: None }.select(None, None, &SESSION_UPLOAD_LANE),
             Err(CredentialGap::NoCredential)
         );
-        // Two alike in every respect: nothing tells them apart.
+        // The sole credential for the lane goes to a node that did not say.
         install(
             &path,
             "ws-a",
@@ -490,13 +501,20 @@ mod tests {
             &[SESSION_UPLOAD_LANE],
             5,
         );
+        assert_eq!(
+            stores
+                .select(None, Some("10.99.0.2"), &SESSION_UPLOAD_LANE)
+                .as_deref(),
+            Ok("nc1.A.SECRET")
+        );
+        // Two: nothing tells them apart.
         install(
             &path,
             "ws-b",
             "nc1.B.SECRET",
             None,
             &[SESSION_UPLOAD_LANE],
-            5,
+            6,
         );
         assert_eq!(
             stores.select(None, Some("10.99.0.2"), &SESSION_UPLOAD_LANE),

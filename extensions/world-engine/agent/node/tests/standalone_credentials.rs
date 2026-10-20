@@ -248,6 +248,16 @@ async fn two_standalone_nodes_have_their_own_ids_and_credentials() {
     let from_b = mint(&node_b, "visor-1", None).await;
     assert_eq!(from_a["workstation_node_id"], id_a.as_str());
     assert_eq!(from_b["workstation_node_id"], id_b.as_str());
+    // Each answers which node it is to any caller, so a device pinned to an
+    // address presents only the credential that node issued.
+    for (router, id) in [(&node_a, &id_a), (&node_b, &id_b)] {
+        let (s, body) = call(router, &As::Nobody, "GET", "/api/compute/identity", vec![]).await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(body, serde_json::json!({ "node_id": id }));
+    }
+    // Nothing else opens up without a credential.
+    let (s, _) = call(&node_a, &As::Nobody, "GET", "/api/compute/status", vec![]).await;
+    assert_eq!(s, StatusCode::UNAUTHORIZED);
     // Node A's credential means nothing to node B.
     let cred_a = from_a["credential"].as_str().unwrap();
     let (s, _) = call(

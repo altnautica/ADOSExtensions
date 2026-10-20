@@ -59,7 +59,7 @@ pub use bulk_plan::{
     BulkConfig, BulkError, Committed, PlanFile, SessionPlan, CHECKSUMS_FILE, MANIFEST_FILE,
     MAX_CHUNK_BYTES,
 };
-pub use client::{ClientError, ComputeClient, PinnedHost};
+pub use client::{node_identity, ClientError, ComputeClient, PinnedHost};
 pub use error::TransportError;
 pub use job_status::{JobError, JobGpu, JobStage, JobStatus};
 pub use ladder::BearerLadder;

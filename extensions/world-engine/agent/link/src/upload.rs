@@ -122,7 +122,16 @@ struct Inner {
     /// a running one stops (it resumes from the node's offset later).
     gate: watch::Sender<bool>,
     /// Why auto-upload cannot run although it is on, as last evaluated.
-    blocked: Mutex<Option<CredentialGap>>,
+    blocked: Mutex<Blocked>,
+}
+
+#[derive(Default)]
+struct Blocked {
+    /// The credential gap holding the gate shut now, if that is what does.
+    now: Option<CredentialGap>,
+    /// The gap last warned about; cleared once a credential is found, so each
+    /// gap is logged once however often the device goes busy and idle.
+    warned: Option<CredentialGap>,
 }
 
 /// The upload queue and its progress; cheap to clone.
@@ -163,7 +172,7 @@ impl UploadManager {
     /// would take (waiting in its queue, or finished and not yet queued) reads
     /// `blocked` while auto-upload is blocked.
     pub fn view(&self, dir: &SessionDir, size_bytes: u64) -> UploadView {
-        let blocked = *self.inner.blocked.lock();
+        let blocked = self.inner.blocked.lock().now;
         let block = |v: &mut UploadView| {
             if let Some(gap) = blocked {
                 v.state = UploadState::Blocked;
@@ -402,31 +411,37 @@ impl UploadManager {
         }
     }
 
-    /// Record why auto-upload cannot run (`None`: nothing blocks it), logging
-    /// each change once.
-    fn note_blocked(&self, gap: Option<CredentialGap>) {
+    /// Record this evaluation's gate and credential gap, warning once per gap.
+    fn note_blocked(&self, open: bool, gap: Option<CredentialGap>) {
         let mut blocked = self.inner.blocked.lock();
-        if *blocked == gap {
-            return;
+        blocked.now = gap;
+        if open {
+            blocked.warned = None;
+        } else if let Some(reason) = gap.filter(|g| blocked.warned != Some(*g)) {
+            tracing::warn!(%reason, "auto-upload blocked: no usable sessions.upload credential for the compute node");
+            blocked.warned = Some(reason);
         }
-        match gap {
-            Some(reason) => {
-                tracing::warn!(%reason, "auto-upload blocked: no usable sessions.upload credential for the compute node")
-            }
-            None => tracing::info!("auto-upload no longer blocked"),
-        }
-        *blocked = gap;
     }
 
-    /// Whether the auto-upload gate is open now.
+    /// Whether the auto-upload gate is open now. The blocked reason is set from
+    /// this evaluation alone: it reads a credential gap only while that gap is
+    /// what holds the gate shut.
     pub(crate) async fn auto_gate(&self, control: &ControlClient, power: &PowerWatch) -> bool {
+        let (open, gap) = self.evaluate_gate(control, power).await;
+        self.note_blocked(open, gap);
+        open
+    }
+
+    /// The gate, and the credential gap when that is what shuts it.
+    async fn evaluate_gate(
+        &self,
+        control: &ControlClient,
+        power: &PowerWatch,
+    ) -> (bool, Option<CredentialGap>) {
         let i = &self.inner;
-        if !config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await {
-            self.note_blocked(None);
-            return false;
-        }
-        if !power.idle_or_charging() {
-            return false;
+        if !config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await || !power.idle_or_charging()
+        {
+            return (false, None);
         }
         let recording = match LiveCapture::from(control.status().await) {
             LiveCapture::Running(s) => {
@@ -436,15 +451,14 @@ impl UploadManager {
             LiveCapture::Unknown => true,
         };
         if recording {
-            return false;
+            return (false, None);
         }
         match resolve_lan(i.host.as_ref(), &i.credentials, &SESSION_UPLOAD_LANE).await {
-            Ok(node) => {
-                let gap = node.credential(&i.credentials, &SESSION_UPLOAD_LANE).err();
-                self.note_blocked(gap);
-                gap.is_none()
-            }
-            Err(_) => false,
+            Ok(node) => match node.credential(&i.credentials, &SESSION_UPLOAD_LANE) {
+                Ok(_) => (true, None),
+                Err(gap) => (false, Some(gap)),
+            },
+            Err(_) => (false, None),
         }
     }
 

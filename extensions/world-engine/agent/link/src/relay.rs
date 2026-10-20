@@ -254,10 +254,14 @@ impl Relay {
         }
     }
 
-    /// Start a run toward the configured URL, or a node resolved over mDNS.
+    /// Start a run toward the configured URL (its node asked its id), or a
+    /// node resolved over mDNS.
     async fn start(&self, configured: Option<String>) -> Option<Run> {
         let (compute_url, node_id) = match configured {
-            Some(url) => (url, None),
+            Some(url) => {
+                let id = compute_node::identify(&url).await;
+                (url, id)
+            }
             None => {
                 let issuers = self.credentials.issuers(&ATLAS_INGEST_LANE);
                 let Some(node) =

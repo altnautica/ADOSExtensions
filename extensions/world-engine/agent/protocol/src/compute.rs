@@ -213,6 +213,16 @@ pub struct CancelResponse {
     pub cancelled: bool,
 }
 
+/// The job-API route a node answers which node it is, without a credential.
+pub const NODE_IDENTITY_PATH: &str = "/api/compute/identity";
+
+/// The reply on [`NODE_IDENTITY_PATH`]: the node's id, the one it advertises
+/// over mDNS and names in the credentials it issues.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeIdentity {
+    pub node_id: String,
+}
+
 macro_rules! impl_msgpack {
     ($($t:ty),+ $(,)?) => {
         $(impl $t {

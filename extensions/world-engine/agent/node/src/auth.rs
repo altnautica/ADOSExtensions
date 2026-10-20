@@ -13,7 +13,8 @@
 //!   are never reachable with a node credential.
 //!
 //! [`require_job_api`] guards the job API: owner-only except the calls another
-//! node makes ([`job_api_lane`]). [`require_lane`] guards each lane router.
+//! node makes ([`job_api_lane`]) and the node's identity, which any caller may
+//! read ([`public_job_api_route`]). [`require_lane`] guards each lane router.
 //! TCP callers share one rate budget on the job API.
 
 use std::sync::{Arc, Mutex};
@@ -159,6 +160,12 @@ fn own_job_read(path: &str) -> bool {
         )
 }
 
+/// Whether a job-API request is open to any caller: only reading the node's
+/// identity, which it also advertises over mDNS.
+pub fn public_job_api_route(method: &Method, path: &str) -> bool {
+    method == Method::GET && path == world_engine_protocol::compute::NODE_IDENTITY_PATH
+}
+
 /// The issued credential a node request was admitted with (its id), set on
 /// the request by [`require_job_api`]; handlers scope a node's job reads to
 /// the jobs it submitted. Absent for the owner.
@@ -235,6 +242,9 @@ pub async fn require_job_api(
             Json(serde_json::json!({ "error": "rate limited" })),
         )
             .into_response();
+    }
+    if public_job_api_route(req.method(), req.uri().path()) {
+        return next.run(req).await;
     }
     let lane = job_api_lane(req.method(), req.uri().path());
     if is_owner(&auth, &req) {
@@ -332,6 +342,19 @@ mod tests {
             (Method::POST, "/api/compute/node-credentials"),
         ] {
             assert_eq!(job_api_lane(&m, p), None, "{m} {p}");
+        }
+    }
+
+    #[test]
+    fn only_reading_the_identity_is_open_to_any_caller() {
+        assert!(public_job_api_route(&Method::GET, "/api/compute/identity"));
+        for (m, p) in [
+            (Method::POST, "/api/compute/identity"),
+            (Method::GET, "/api/compute/identity/x"),
+            (Method::GET, "/api/compute/status"),
+            (Method::GET, "/api/compute/node-credentials"),
+        ] {
+            assert!(!public_job_api_route(&m, p), "{m} {p}");
         }
     }
 

@@ -315,7 +315,9 @@ async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason()
     finished_session(root.path(), id);
     let host = FakeHost::new();
     host.set_config(AUTO_UPLOAD_KEY, json!(true));
-    host.set_config(PIN_KEY, json!("127.0.0.1:8092"));
+    // A node that predates the identity route: its id cannot be read.
+    let node_addr = serve_node(Arc::default()).await;
+    host.set_config(PIN_KEY, json!(node_addr));
     let creds = root.path().join("creds.json");
     let root_path = root.path().to_path_buf();
     let m = UploadManager::new(
@@ -339,7 +341,7 @@ async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason()
     );
     assert_eq!(serde_json::to_value(&v).unwrap()["state"], "blocked");
 
-    // Two equally good credentials: ambiguous, never a guess.
+    // Two credentials and an unread id: ambiguous, never a guess.
     let mut store = WorkstationCredentials::default();
     for (node, secret) in [("ws-a", "nc1.A.SECRET"), ("ws-b", "nc1.B.SECRET")] {
         store.upsert(InstalledCredential {
@@ -360,8 +362,22 @@ async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason()
     m.enqueue_pending();
     assert_eq!(m.view(&dir, 0).state, UploadState::Blocked);
 
-    // One of them minted at the pinned address: the gate opens.
-    store.workstations[1].node_addr = Some("127.0.0.1".into());
+    // The device goes busy: the gate is shut for that, not for a credential.
+    power.note(json!({"armed": true, "batteries": [{"current_a": 12.0, "age_ms": 100}]}));
+    assert!(!m.auto_gate(&control, &power).await);
+    assert_eq!(m.view(&dir, 0).state, UploadState::Queued);
+    power.note(json!({"armed": false}));
+    assert!(!m.auto_gate(&control, &power).await);
+    assert_eq!(m.view(&dir, 0).state, UploadState::Blocked);
+
+    // The pinned address stops resolving to the LAN: no stale reason either.
+    host.set_config(PIN_KEY, json!("203.0.113.7:8092"));
+    assert!(!m.auto_gate(&control, &power).await);
+    assert_eq!(m.view(&dir, 0).state, UploadState::Queued);
+    host.set_config(PIN_KEY, json!(node_addr));
+
+    // One of them installed for the pinned address: the gate opens.
+    store.workstations[1].node_addr = Some(node_addr.clone());
     store.save(&creds).unwrap();
     assert!(m.auto_gate(&control, &power).await);
     let v = m.view(&dir, 0);

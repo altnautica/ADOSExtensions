@@ -87,19 +87,6 @@ impl<'de> Deserialize<'de> for NodeLane {
     }
 }
 
-/// The version tag an issued token starts with: `nc1.<id>.<secret>`.
-pub const ISSUED_TOKEN_VERSION: &str = "nc1";
-
-/// Whether `token` has the form a workstation issues (`nc1.<id>.<secret>`),
-/// the only form its node-credential gate admits. An owner bearer token, for
-/// one, is not.
-pub fn is_issued_token(token: &str) -> bool {
-    let mut parts = token.trim().splitn(3, '.');
-    parts.next() == Some(ISSUED_TOKEN_VERSION)
-        && parts.next().is_some_and(|id| !id.is_empty())
-        && parts.next().is_some_and(|secret| !secret.is_empty())
-}
-
 /// One credential a workstation issued this node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstalledCredential {
@@ -219,22 +206,6 @@ mod tests {
         ] {
             assert!(NodeLane::parse(bad).is_none(), "{bad:?}");
             assert!(serde_json::from_value::<NodeLane>(serde_json::json!(bad)).is_err());
-        }
-    }
-
-    #[test]
-    fn only_the_issued_form_reads_as_an_issued_token() {
-        assert!(is_issued_token("nc1.ID.SECRET"));
-        assert!(is_issued_token(" nc1.ID.SEC.RET "));
-        for other in [
-            "owner-bearer-token",
-            "nc1.ID",
-            "nc1..SECRET",
-            "nc1.ID.",
-            "nc2.ID.SECRET",
-            "",
-        ] {
-            assert!(!is_issued_token(other), "{other:?}");
         }
     }
 
