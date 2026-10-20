@@ -12,6 +12,10 @@ use super::geom::{self, Mat4};
 use super::prepare::FrameRecord;
 use super::StageError;
 
+#[path = "colmap_db.rs"]
+mod db;
+pub use db::{invalidate_inconsistent_pairs, pair_id, write_pose_priors};
+
 /// The COLMAP camera model and parameter list for a contract camera.
 pub fn camera_params(f: &FrameRecord) -> (&'static str, Vec<f64>) {
     let base = [f.fx, f.fy, f.cx, f.cy];
@@ -190,6 +194,7 @@ mod tests {
             calibrated: true,
             t_body_cam: None,
             rig_instant: None,
+            prior_sigma_m: None,
         }
     }
 

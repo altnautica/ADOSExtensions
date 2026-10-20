@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use ados_capture_contract::foxglove::{CompressedImage, PointCloud, PoseInFrame, RawImage};
-use ados_capture_contract::v1::TriggerRecord;
+use ados_capture_contract::v1::{PoseCov, TriggerRecord};
 use ados_capture_contract::{Manifest, Rig, RigSensorKind, SessionReader};
 
 use super::geom::{self, Mat4};
@@ -69,8 +69,40 @@ pub struct SessionIndex {
     pub manifest: Manifest,
     pub rig: Rig,
     pub poses: Option<PoseTrack>,
+    /// One-sigma world position uncertainty (x, y, z metres) of the prior
+    /// track, from its `/pose/<source>/cov` channel, sorted by time; empty
+    /// when the session recorded none.
+    pub pose_sigma: Vec<(u64, [f64; 3])>,
     pub frames: Vec<FrameRef>,
     pub lidar_sweeps: usize,
+}
+
+impl SessionIndex {
+    /// The prior's position sigma at `t_ns`: the nearest covariance sample
+    /// within the interpolation gap, `None` without one.
+    pub fn pose_sigma_at(&self, t_ns: u64) -> Option<[f64; 3]> {
+        let s = &self.pose_sigma;
+        let i = s.partition_point(|(t, _)| *t < t_ns);
+        [i.checked_sub(1), Some(i)]
+            .into_iter()
+            .flatten()
+            .filter_map(|j| s.get(j))
+            .min_by_key(|(t, _)| t.abs_diff(t_ns))
+            .filter(|(t, _)| t.abs_diff(t_ns) <= MAX_GAP_NS)
+            .map(|(_, sigma)| *sigma)
+    }
+}
+
+/// The position sigmas of a `PoseCov` (the x, y, z diagonal of its
+/// row-major 6x6), `None` unless all three are finite and positive.
+fn position_sigma(c: &PoseCov) -> Option<[f64; 3]> {
+    let var = |i: usize| {
+        c.cov
+            .get(i * 7)
+            .copied()
+            .filter(|v| v.is_finite() && *v > 0.0)
+    };
+    Some([var(0)?.sqrt(), var(1)?.sqrt(), var(2)?.sqrt()])
 }
 
 /// Decode a `foxglove.PoseInFrame` into `T_world_body`.
@@ -96,6 +128,7 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
         .map(|s| s.id.clone())
         .collect();
     let mut tracks: Vec<PoseTrack> = Vec::new();
+    let mut sigmas: HashMap<String, Vec<(u64, [f64; 3])>> = HashMap::new();
     let mut frames = Vec::new();
     let mut triggers: HashMap<String, Vec<(u64, u64)>> = HashMap::new();
     let mut lidar_sweeps = 0usize;
@@ -120,7 +153,14 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
                 }
             }
         } else if let Some(source) = m.topic.strip_prefix("/pose/") {
-            if !source.contains('/') {
+            if let Some(source) = source.strip_suffix("/cov") {
+                if let Some(s) = m.decode::<PoseCov>().ok().and_then(|c| position_sigma(&c)) {
+                    sigmas
+                        .entry(source.to_string())
+                        .or_default()
+                        .push((m.t_ns, s));
+                }
+            } else if !source.contains('/') {
                 if let Some(t) = m.decode::<PoseInFrame>().ok().and_then(|p| pose_matrix(&p)) {
                     match tracks.iter_mut().find(|tr| tr.source == source) {
                         Some(tr) => tr.samples.push((m.t_ns, t)),
@@ -157,10 +197,16 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
                 .find(|t| t.source == *src && t.samples.len() >= 2)
         })
         .cloned();
+    let mut pose_sigma = poses
+        .as_ref()
+        .and_then(|p| sigmas.remove(&p.source))
+        .unwrap_or_default();
+    pose_sigma.sort_by_key(|(t, _)| *t);
     Ok(SessionIndex {
         manifest: reader.manifest().clone(),
         rig: reader.rig().clone(),
         poses,
+        pose_sigma,
         frames,
         lidar_sweeps,
     })

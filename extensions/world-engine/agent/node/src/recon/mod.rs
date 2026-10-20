@@ -13,6 +13,7 @@ pub mod export;
 pub mod geom;
 pub mod glim;
 pub mod glim_bag;
+pub mod pairs;
 pub mod pipeline;
 pub mod prepare;
 pub mod preset;
@@ -23,6 +24,7 @@ pub mod session_data;
 pub mod sfm;
 #[cfg(any(test, feature = "mock"))]
 pub mod stand_in;
+pub mod track_filter;
 pub mod train;
 
 use std::path::PathBuf;

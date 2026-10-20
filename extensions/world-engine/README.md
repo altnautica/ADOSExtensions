@@ -123,8 +123,10 @@ The node drives pinned third-party tools listed in
 by `fetch-tools.ps1` (Windows) or `fetch-tools.sh` (Linux/macOS). It never
 takes a tool from `PATH`; `ADOS_TOOL_<NAME>` overrides one explicitly.
 
-- **COLMAP 4.2** for structure-from-motion (known-pose triangulation and
-  bundle adjustment, or incremental / hierarchical mapping).
+- **COLMAP 4.2** for structure-from-motion: with a pose track, pose-chosen
+  image pairs, verified pairs that contradict the track dropped, and
+  prior-weighted mapping (or triangulation against a fixed LiDAR trajectory);
+  without one, incremental / hierarchical mapping.
 - **Brush** for the `preview` preset; **gsplat** (the `gsplat_train` uv project)
   for `hq`, `tour` and `warehouse`. Without working gsplat kernels the node
   trains with Brush at full length and records why.

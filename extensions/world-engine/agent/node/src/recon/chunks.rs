@@ -4,13 +4,14 @@
 //! core holds more than `chunk_frames` frames; sparse cells merge into their
 //! nearest chunk, and every empty cell goes to the nearest owned one, so the
 //! cells partition the whole plane. A chunk trains on every frame whose camera
-//! centre lies within `overlap_m` of its core. Each chunk runs known-pose
-//! triangulation (so every chunk stays in the session ENU frame) and training
+//! centre lies within `overlap_m` of its core. Each chunk runs SfM against
+//! the pose priors (fixed-pose triangulation or prior-weighted mapping, see
+//! [`sfm::run`]), so every chunk stays in the session ENU frame, and trains
 //! on its own dataset; the results are merged by keeping, from each chunk,
 //! only what lies in its core (see [`super::chunks_merge`]).
 //!
 //! Frames without a pose prior cannot be placed and are left out of every
-//! chunk; known-pose triangulation would not register them either.
+//! chunk; SfM against the priors would not place them either.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fs;
@@ -20,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use super::chunks_merge;
 use super::prepare::{read_frames, FrameRecord};
-use super::sfm::{self, SfmSummary};
+use super::sfm::{self, SfmOptions, SfmSummary};
 use super::train::TrainSummary;
 use super::{StageError, ToolInvocation, ToolRunner};
 
@@ -30,7 +31,7 @@ pub const CHUNK_FRAMES: usize = 400;
 pub const MIN_CHUNK_FRAMES: usize = 10;
 /// How far past its core a chunk trains, metres.
 pub const OVERLAP_M: f64 = 5.0;
-/// The posed share known-pose triangulation needs (as in [`sfm::run`]).
+/// The posed share SfM against the priors needs (as in [`sfm::run`]).
 const MIN_POSED_SHARE: f64 = 0.5;
 /// Grid cells never shrink below this, metres.
 const MIN_CELL_M: f64 = 2.0;
@@ -293,7 +294,7 @@ pub fn plan(
 }
 
 /// The chunk plan for a prepared dataset, or `None` when it runs unchunked:
-/// too few posed frames for known-pose triangulation, or one chunk holds it.
+/// too few posed frames for SfM against the priors, or one chunk holds it.
 pub fn plan_dataset(
     dataset: &Path,
     chunk_frames: Option<usize>,
@@ -364,14 +365,14 @@ fn write_chunk_dataset(
 
 /// Stage `sfm` per chunk: chunk datasets under `dataset/chunks/<i>/`, models
 /// under `sfm_dir/chunks/<i>/`, merged into `sfm_dir/txt` and, as BIN, into
-/// `dataset/sparse/0`. Returns the stage detail.
+/// `dataset/sparse/0`. Each chunk runs with `opts` (never hierarchical).
+/// Returns the stage detail.
 pub fn run_sfm(
     runner: &dyn ToolRunner,
     dataset: &Path,
     sfm_dir: &Path,
     plan: &ChunkPlan,
-    fixed_poses: bool,
-    refine: bool,
+    opts: &SfmOptions<'_>,
     progress: &mut dyn FnMut(f32),
 ) -> Result<serde_json::Value, StageError> {
     for d in [
@@ -390,14 +391,24 @@ pub fn run_sfm(
     let by_name: BTreeMap<&str, &FrameRecord> =
         frames.iter().map(|f| (f.name.as_str(), f)).collect();
     let n = plan.chunks.len() as f32;
+    let chunk_opts = SfmOptions {
+        hierarchical: false,
+        ..*opts
+    };
     let mut models = Vec::with_capacity(plan.chunks.len());
+    let mut total = SfmSummary::default();
     for (i, c) in plan.chunks.iter().enumerate() {
         let ds = dataset.join("chunks").join(c.id.to_string());
         write_chunk_dataset(dataset, c, &by_name, &ds)?;
         let dir = chunk_sfm.join(c.id.to_string());
-        sfm::run(runner, &ds, &dir, fixed_poses, refine, false, &mut |f| {
+        let s = sfm::run(runner, &ds, &dir, &chunk_opts, &mut |f| {
             progress(0.9 * (i as f32 + f) / n)
         })?;
+        total.method = s.method;
+        total.rig_frames_paired += s.rig_frames_paired;
+        total.pairs_rejected_by_prior += s.pairs_rejected_by_prior;
+        total.points_dropped_short_track += s.points_dropped_short_track;
+        total.points_dropped_depth += s.points_dropped_depth;
         models.push((c.id, dir.join("txt")));
     }
     let txt = sfm_dir.join("txt");
@@ -416,11 +427,10 @@ pub fn run_sfm(
     )?;
     progress(1.0);
     let mut detail = serde_json::to_value(SfmSummary {
-        method: "known_poses".into(),
         world_frame: true,
         registered_images: merged.images,
         points: merged.points,
-        rig_frames_paired: 0,
+        ..total
     })?;
     if let (Some(d), serde_json::Value::Object(extra)) = (detail.as_object_mut(), plan.detail()) {
         d.extend(extra);

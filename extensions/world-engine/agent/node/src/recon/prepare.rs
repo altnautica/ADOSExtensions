@@ -65,6 +65,11 @@ pub struct FrameRecord {
     /// every other camera; `None` outside a rig.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rig_instant: Option<u64>,
+    /// One-sigma position uncertainty (x, y, z metres) of `T_world_cam` from the recorded
+    /// pose covariance; `None` when the track carried none (SfM then takes the prior
+    /// source's default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_sigma_m: Option<[f64; 3]>,
 }
 
 /// The dataset name of camera `cam`'s frame at `t_ns` (see [`FrameRecord::name`]).
@@ -419,6 +424,7 @@ pub fn run(
                     calibrated: model.calibrated,
                     t_body_cam: Some(sensor.t_body_sensor.0),
                     rig_instant: selection.rig.then_some(instant),
+                    prior_sigma_m: t_world_cam.and_then(|_| index.pose_sigma_at(t_sensor)),
                 },
                 decoded.blur_score(),
             ));

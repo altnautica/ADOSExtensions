@@ -172,7 +172,11 @@ pub fn run_staged(
 /// with the sparse points. `prepare` computes the priors either way (the
 /// motion and mirror masks use them).
 fn train_depth_prior(preset_wants: bool, has_lidar: bool, sfm_detail: &serde_json::Value) -> bool {
-    preset_wants && !has_lidar && sfm_detail["method"].as_str() != Some("known_poses")
+    let posed = matches!(
+        sfm_detail["method"].as_str(),
+        Some("known_poses" | "pose_prior_mapper")
+    );
+    preset_wants && !has_lidar && !posed
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -250,26 +254,20 @@ fn reconstruct(
         };
         let p = &mut |f: f32| p(share + (1.0 - share) * f);
         let fixed = glim.as_ref().is_some_and(|g| g.used) || prior.as_deref() == Some("lidar");
+        let opts = sfm::SfmOptions {
+            fixed_poses: fixed,
+            refine: preset != Preset::Preview,
+            hierarchical: spec.hierarchical,
+            prior_source: prior.as_deref(),
+        };
         // A posed warehouse session larger than one chunk runs per chunk.
         let plan = match preset {
             Preset::Warehouse => chunks::plan_dataset(&dataset, chunk_frames)?,
             _ => None,
         };
         let mut detail = match plan {
-            Some(plan) => chunks::run_sfm(ctx.runner, &dataset, &sfm_dir, &plan, fixed, true, p)?,
-            None => {
-                let refine = preset != Preset::Preview;
-                let s = sfm::run(
-                    ctx.runner,
-                    &dataset,
-                    &sfm_dir,
-                    fixed,
-                    refine,
-                    spec.hierarchical,
-                    p,
-                )?;
-                serde_json::to_value(s)?
-            }
+            Some(plan) => chunks::run_sfm(ctx.runner, &dataset, &sfm_dir, &plan, &opts, p)?,
+            None => serde_json::to_value(sfm::run(ctx.runner, &dataset, &sfm_dir, &opts, p)?)?,
         };
         if let Some(g) = glim {
             // With no recorded track GLIM's poses sit in its own arbitrary
@@ -533,6 +531,11 @@ mod depth_prior_tests {
             &json!({"method": "hierarchical_mapper"})
         ));
         assert!(!train_depth_prior(true, false, &posed));
+        assert!(!train_depth_prior(
+            true,
+            false,
+            &json!({"method": "pose_prior_mapper"})
+        ));
         assert!(!train_depth_prior(true, true, &mapped));
         assert!(!train_depth_prior(false, false, &mapped));
     }
