@@ -137,6 +137,11 @@ def main():
     ap.add_argument("binary")
     ap.add_argument("--config", help="Basalt VIO config JSON (default: alongside)")
     ap.add_argument("--seconds", type=float, default=12.0)
+    # The live capture streams IMU from the hub well before the first stereo
+    # pair (camera start-up, pairing). A lead-in longer than Basalt's stock
+    # 0.3 s IMU queue deadlocked the reader before the queue fix.
+    ap.add_argument("--imu-lead-s", type=float, default=2.0,
+                    help="seconds of IMU sent before the first stereo pair")
     args = ap.parse_args()
     here = os.path.dirname(os.path.abspath(__file__))
     config = args.config or os.path.join(here, "vio_config.json")
@@ -183,7 +188,7 @@ def main():
         g, a = imu_sample(t)
         t_ns = T0_NS + round(t * 1e9)
         conn.sendall(struct.pack("<BIQ6d", 1, 56, t_ns, *g, *a))
-        if k % (IMU_HZ // CAM_HZ) == 0 and k > 0:
+        if k % (IMU_HZ // CAM_HZ) == 0 and k > 0 and t >= args.imu_lead_s:
             left, right = render(t, 0), render(t, 1)
             conn.sendall(struct.pack("<BIQII", 2, 16 + 2 * W * H, t_ns, W, H)
                          + left.tobytes() + right.tobytes())
@@ -205,6 +210,9 @@ def main():
     if states:
         est = np.array([[s["T_w_i"][3], s["T_w_i"][7], s["T_w_i"][11]] for s in states])
         gt = np.array([position((s["t_ns"] - T0_NS) / 1e9) for s in states])
+        # Basalt's origin is where it initialised (the first stereo pair, after
+        # any IMU lead-in), so ground truth is taken relative to that point.
+        gt -= position((states[0]["t_ns"] - T0_NS) / 1e9)
         # Basalt's yaw is arbitrary: align about z (2-D Procrustes), origin fixed.
         h = est[:, :2].T @ gt[:, :2]
         u, _, vt = np.linalg.svd(h)

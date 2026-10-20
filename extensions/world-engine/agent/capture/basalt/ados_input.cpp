@@ -27,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -56,6 +57,17 @@ constexpr auto kStateTimeout = std::chrono::milliseconds(1000);
 // exit 3 so the supervisor restarts (and so re-initialises) the estimator.
 constexpr auto kLostExit = std::chrono::milliseconds(3000);
 constexpr auto kInitExit = std::chrono::milliseconds(15000);
+// The input thread reads IMU and stereo messages in arrival order from one
+// socket. Basalt's estimator takes IMU samples only while it integrates up to
+// a vision frame, and its stock IMU queue holds 300 samples (0.3 s at 1 kHz).
+// IMU that arrives before the first stereo pair, or while optical flow lags
+// by more than 0.3 s, would fill that queue and block the reader on push, so
+// the next stereo pair is never read and the estimator never consumes: a
+// deadlock. So IMU before the first stereo pair is held to the last
+// kImuPreroll samples, and the queue holds kImuQueueCapacity (20 s at 1 kHz,
+// above the optical-flow queue's 10 frames of lag).
+constexpr size_t kImuPreroll = 200;
+constexpr int kImuQueueCapacity = 20000;
 
 std::mutex g_out_mutex;
 // The JSON-lines stream. Process stdout is pointed at stderr at start-up, so
@@ -201,6 +213,8 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
   std::vector<uint8_t> buf;
   uint8_t header[ados::kHeaderLen];
   bool hello = false;
+  bool seen_stereo = false;
+  std::deque<basalt::ImuData<double>::Ptr> preroll;
   while (read_exact(fd, header, sizeof header)) {
     const uint8_t type = header[0];
     const uint32_t len = ados::read_u32(header + 1);
@@ -222,6 +236,11 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
       d->t_ns = m.t_ns;
       d->gyro = Eigen::Vector3d(m.gyro[0], m.gyro[1], m.gyro[2]);
       d->accel = Eigen::Vector3d(m.accel[0], m.accel[1], m.accel[2]);
+      if (!seen_stereo) {
+        preroll.push_back(d);
+        if (preroll.size() > kImuPreroll) preroll.pop_front();
+        continue;
+      }
       vio.imu_data_queue.push(d);
     } else if (type == ados::kMsgStereo) {
       if (len < ados::kStereoHeaderLen) die(2, "bad stereo message length");
@@ -250,6 +269,12 @@ void input_loop(int fd, const basalt::Calibration<double>& calib,
       in->img_data[1].img = to_basalt_image(left + plane, h.width, h.height);
       shared.frames_in++;
       shared.last_frame_ms = now_ms();
+      if (!seen_stereo) {
+        // The IMU just before the first frame, so integration can start there.
+        for (auto& p : preroll) vio.imu_data_queue.push(p);
+        preroll.clear();
+        seen_stereo = true;
+      }
       flow.input_queue.push(in);
     }
   }
@@ -298,6 +323,7 @@ int main(int argc, char** argv) {
       basalt::VioEstimatorFactory::getVioEstimator(
           config, calib, basalt::constants::g, true, false);
   vio->initialize(Eigen::Vector3d::Zero(), Eigen::Vector3d::Zero());
+  vio->imu_data_queue.set_capacity(kImuQueueCapacity);
 
   tbb::concurrent_bounded_queue<basalt::OpticalFlowResult::Ptr> flow_out;
   tbb::concurrent_bounded_queue<basalt::PoseVelBiasState<double>::Ptr> states;
