@@ -57,8 +57,9 @@ dependencies = [
 
 [[package]]
 name = "ados-config"
-version = "0.105.0"
+version = "0.106.1"
 dependencies = [
+ "ados-macpin",
  "ados-protocol",
  "nix 0.29.0",
  "parking_lot",
@@ -80,15 +81,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ados-macpin"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.2",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ados-offload"
-version = "0.105.0"
+version = "0.1.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ados-protocol"
-version = "0.105.0"
+version = "0.106.1"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -132,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sdk"
-version = "0.105.0"
+version = "0.106.1"
 dependencies = [
  "ados-protocol",
  "async-trait",
@@ -149,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sensorbus"
-version = "0.105.0"
+version = "0.106.1"
 dependencies = [
  "ados-protocol",
  "jsonschema 0.18.3",
@@ -168,11 +182,19 @@ dependencies = [
 
 [[package]]
 name = "ados-vision"
-version = "0.105.0"
+version = "0.106.1"
+dependencies = [
+ "ados-protocol",
+]
+
+[[package]]
+name = "ados-vision-engine"
+version = "0.106.1"
 dependencies = [
  "ados-config",
  "ados-protocol",
  "ados-sensorbus",
+ "ados-vision",
  "anyhow",
  "memmap2",
  "nix 0.29.0",
@@ -8202,7 +8224,7 @@ dependencies = [
  "ados-protocol",
  "ados-scan2d",
  "ados-sdk",
- "ados-vision",
+ "ados-vision-engine",
  "anyhow",
  "aprilgrid",
  "async-trait",

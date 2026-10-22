@@ -91,18 +91,18 @@ world-engine-transport = { path = "../transport" }
 ados-sdk = { workspace = true }
 # Node-credential helpers, the mDNS reach rule, rustls provider install.
 ados-protocol = { workspace = true, features = ["tls"] }
-# The real perception-offload detector: ados-vision's ONNX backend (the same
+# The real perception-offload detector: ados-vision-engine's ONNX backend (the same
 # YOLO decode a drone runs on its NPU). Optional so a CPU-only build needs no
 # ONNX Runtime; `coreml` adds the Apple-GPU execution provider.
-ados-vision = { workspace = true, optional = true }
+ados-vision-engine = { workspace = true, optional = true }
 
 [features]
 default = []
-# Build the real ONNX detector hosted on ados-vision's backend.
-onnx = ["dep:ados-vision", "ados-vision/onnx"]
+# Build the real ONNX detector hosted on ados-vision-engine's backend.
+onnx = ["dep:ados-vision-engine", "ados-vision-engine/onnx"]
 # Register the CoreML execution provider so ONNX inference runs on the Apple GPU
 # (macOS workstation). Implies `onnx`.
-coreml = ["onnx", "ados-vision/coreml"]
+coreml = ["onnx", "ados-vision-engine/coreml"]
 # Stand-in tool runners (no COLMAP / trainer / converter on the host) for the
 # pipeline integration test and the stand-in reconstructor. Never in a release
 # build.

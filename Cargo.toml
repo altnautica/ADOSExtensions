@@ -77,7 +77,7 @@ ados-protocol = { path = "../ADOSDroneAgent/crates/ados-protocol" }
 ados-offload = { path = "../ADOSDroneAgent/crates/ados-offload" }
 # The ONNX detector backend a compute node hosts for perception offload.
 # Optional in the node crate, behind its `onnx` / `coreml` features.
-ados-vision = { path = "../ADOSDroneAgent/crates/ados-vision", default-features = false }
+ados-vision-engine = { path = "../ADOSDroneAgent/crates/ados-vision-engine", default-features = false }
 # The capture storage sidecar reader and admission rule (capture root,
 # E_STORAGE_FULL), shared with the agent's janitor.
 ados-config = { path = "../ADOSDroneAgent/crates/ados-config" }

@@ -89,7 +89,7 @@ impl Detector for NoDetector {
     }
 }
 
-/// Normalize a pixel-space `ados-vision` detection (box in the frame's own
+/// Normalize a pixel-space `ados-vision-engine` detection (box in the frame's own
 /// resolution) into the offload wire shape (box in `0.0..=1.0`). Pulled out so
 /// it is unit-testable without a model. Returns `None` for a box-less percept
 /// (a mask/pose/depth-only reading): the offload wire is box-based, so a percept
@@ -111,7 +111,7 @@ fn to_offload_detection(
     })
 }
 
-/// A real ONNX detector: the compute node hosts `ados-vision`'s ONNX backend
+/// A real ONNX detector: the compute node hosts `ados-vision-engine`'s ONNX backend
 /// (the same YOLO decode the drone runs on its NPU) and runs it over frames an
 /// NPU-less drone streams in, so the offloaded result is identical to a local
 /// detection. On Apple Silicon the ONNX session registers the CoreML execution
@@ -119,7 +119,7 @@ fn to_offload_detection(
 /// feature; the mock keeps the path testable in CI where no model is present.
 #[cfg(feature = "onnx")]
 pub struct OnnxDetector {
-    model: Box<dyn ados_vision::backend::LoadedModel>,
+    model: Box<dyn ados_vision_engine::backend::LoadedModel>,
     name: String,
 }
 
@@ -128,8 +128,8 @@ impl OnnxDetector {
     /// Load `meta` (model path + input dims + head + class labels) into an ONNX
     /// session. Fails if the model file is missing or will not load.
     pub fn from_model(meta: &ados_protocol::framebus::ModelMetadata) -> Result<Self, ComputeError> {
-        use ados_vision::backend::VisionBackend;
-        let backend = ados_vision::backend::OnnxBackend::new();
+        use ados_vision_engine::backend::VisionBackend;
+        let backend = ados_vision_engine::backend::OnnxBackend::new();
         let model = backend.load(meta).map_err(|e| ComputeError::Backend {
             backend: "onnx".into(),
             message: format!("load {}: {e}", meta.id),
