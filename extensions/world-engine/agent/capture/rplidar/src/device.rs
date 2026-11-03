@@ -63,7 +63,8 @@ pub struct RplidarStats {
     pub points: u64,
     /// Nodes with no return.
     pub no_return: u64,
-    /// Revolutions with no return at all, dropped as no data.
+    /// Revolutions with no return at all (nothing in range), emitted as
+    /// empty scans.
     pub empty_revolutions: u64,
     /// Bytes skipped to regain node framing.
     pub resync_bytes: u64,
