@@ -1,16 +1,16 @@
 //! Commands the `external_nav` mode sends the flight controller: the EKF
-//! source-set switch, the EKF origin, the origin request, and the stream
-//! rates of the inputs it reads.
+//! source-set switch, the EKF origin and the origin request. The inputs it
+//! reads (`LOCAL_POSITION_NED`, `ATTITUDE`, `GPS_RAW_INT`) are streamed by
+//! the agent's MAVLink router on the drone profile; the plugin does not
+//! request their rates, so no two schedules fight.
 
 use ados_protocol::mavlink::ardupilotmega::{MavCmd, COMMAND_LONG_DATA};
 use ados_protocol::mavlink::MavMessage;
 
-use crate::mavlink_emit::{build_set_message_interval, encode_v2};
+use crate::mavlink_emit::encode_v2;
 
 /// `GPS_GLOBAL_ORIGIN` message id (for `MAV_CMD_REQUEST_MESSAGE`).
 pub const GPS_GLOBAL_ORIGIN_ID: u32 = 49;
-pub const ATTITUDE_ID: u32 = 30;
-pub const GPS_RAW_INT_ID: u32 = 24;
 
 fn command_long(target: (u8, u8), command: MavCmd, param1: f32) -> MavMessage {
     MavMessage::COMMAND_LONG(COMMAND_LONG_DATA {
@@ -79,17 +79,6 @@ pub fn build_set_global_origin(
     p.push(0); // current
     p.push(0); // autocontinue
     encode_v2(comp_id, sequence, COMMAND_INT_ID, COMMAND_INT_CRC_EXTRA, p)
-}
-
-/// Stream requests for the inputs `external_nav` reads: `ATTITUDE` at
-/// 50 Hz and `GPS_RAW_INT` at 5 Hz. `LOCAL_POSITION_NED` is not requested:
-/// the agent's MAVLink router already streams it at 20 Hz on the drone
-/// profile, and a second rate request would fight that schedule.
-pub fn extnav_stream_requests(target: (u8, u8)) -> [MavMessage; 2] {
-    [
-        build_set_message_interval(target.0, target.1, ATTITUDE_ID, 20_000.0),
-        build_set_message_interval(target.0, target.1, GPS_RAW_INT_ID, 200_000.0),
-    ]
 }
 
 #[cfg(test)]

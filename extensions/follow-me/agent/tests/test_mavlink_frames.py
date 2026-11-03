@@ -20,34 +20,39 @@ def _decode(frame: bytes):
     return msgs[-1] if msgs else None
 
 
-def test_position_setpoint_carries_the_scaled_global_position() -> None:
-    # The position setpoint is built as ctx.flight.guided_setpoint kwargs; the
-    # agent's scoped flight sender encodes and stamps the wire frame, so the
-    # builder only shapes the arguments (lat/lon scaled to 1e7, frame + mask).
-    sp = mavlink_frames.build_position_setpoint(
-        lat_deg=12.3456789,
-        lon_deg=77.1234567,
-        alt_rel_m=15.0,
+def _local(**overrides: float) -> dict:
+    args = dict(
+        north_m=12.5,
+        east_m=-3.25,
+        down_m=-4.0,
+        vn_mps=1.4,
+        ve_mps=-0.2,
+        vd_mps=0.0,
         yaw_rad=1.2,
     )
-    assert sp["kind"] == "global_int"
-    assert sp["coordinate_frame"] == mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT
-    assert sp["x"] == float(round(12.3456789 * 1e7))
-    assert sp["y"] == float(round(77.1234567 * 1e7))
-    assert abs(sp["z"] - 15.0) < 1e-4
-    assert abs(sp["yaw"] - 1.2) < 1e-4
+    args.update(overrides)
+    return mavlink_frames.build_local_setpoint(**args)
 
 
-def test_position_setpoint_mask_ignores_velocity_and_accel_keeps_yaw() -> None:
-    sp = mavlink_frames.build_position_setpoint(
-        lat_deg=0.0, lon_deg=0.0, alt_rel_m=10.0, yaw_rad=0.0
-    )
-    mask = sp["type_mask"]
-    # Velocity bits (3,4,5), accel bits (6,7,8), yaw-rate (11) set = ignored.
-    for bit in (3, 4, 5, 6, 7, 8, 11):
+def test_local_setpoint_carries_position_velocity_and_yaw() -> None:
+    # The setpoint is built as ctx.flight.guided_setpoint kwargs; the agent's
+    # scoped flight sender encodes it as SET_POSITION_TARGET_LOCAL_NED (84).
+    sp = _local()
+    assert sp["kind"] == "local_ned"
+    assert sp["coordinate_frame"] == mavlink2.MAV_FRAME_LOCAL_NED == 1
+    assert (sp["x"], sp["y"], sp["z"]) == (12.5, -3.25, -4.0)
+    assert (sp["vx"], sp["vy"], sp["vz"]) == (1.4, -0.2, 0.0)
+    assert sp["yaw"] == 1.2
+
+
+def test_local_setpoint_mask_is_2496() -> None:
+    mask = _local()["type_mask"]
+    assert mask == 2496
+    # Acceleration (6,7,8) and yaw-rate (11) ignored.
+    for bit in (6, 7, 8, 11):
         assert mask & (1 << bit), f"bit {bit} should be set (ignored)"
-    # Position bits (0,1,2) and yaw bit (10) clear = used.
-    for bit in (0, 1, 2, 10):
+    # Position (0-2), velocity (3-5) and yaw (10) used.
+    for bit in (0, 1, 2, 3, 4, 5, 10):
         assert not (mask & (1 << bit)), f"bit {bit} should be clear (used)"
 
 

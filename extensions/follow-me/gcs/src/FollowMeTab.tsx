@@ -6,7 +6,10 @@
  * `contributes.parameters`, so the GCS renders those controls itself — this
  * iframe does NOT re-implement them. The tab renders only what a native
  * control can't: the static plugin facts and the honest live read-back the
- * agent publishes (lock state, commanding flag, range, setpoints).
+ * agent publishes (phase, lock state, commanding flag, range with its
+ * uncertainty and cues, height source, re-acquire state, latency). The
+ * re-acquire mode itself is a native parameter (rendered as a Strict | Smart
+ * toggle); the tab shows the mode in effect.
  *
  * @license GPL-3.0-or-later
  */
@@ -17,7 +20,7 @@ import type { PluginContext } from "@altnautica/plugin-sdk";
 
 import { normalizeConfig } from "./config";
 import { useFollowState } from "./follow-state";
-import { card, labelRow, lockColor, sectionTitle } from "./style";
+import { card, labelRow, lockColor, phaseColor, sectionTitle } from "./style";
 import {
   DEFAULT_CONFIG,
   holdReasonLabelKey,
@@ -96,6 +99,10 @@ function SpecsSection({
       <h3 style={sectionTitle}>{t("specs.title")}</h3>
       <SpecRow label={t("specs.detector")} value={t("specs.detectorValue")} />
       <SpecRow label={t("specs.camera")} value={config.designate_camera} />
+      <SpecRow
+        label={t("settings.reacquireMode")}
+        value={t(`reacquire.${config.reacquire_mode}`)}
+      />
       <SpecRow label={t("specs.fcMode")} value={t("specs.fcModeValue")} />
       <SpecRow label={t("specs.resource")} value={t("specs.resourceValue")} />
       <p style={{ margin: "0.4rem 0 0", fontSize: "0.7rem", color: "var(--fm-text-muted, #94a3b8)" }} data-testid="fm-settings-hint">
@@ -119,6 +126,27 @@ function MetricsSection({
   return (
     <section style={card} data-testid="fm-metrics">
       <h3 style={sectionTitle}>{t("metrics.title")}</h3>
+      <div style={labelRow}>
+        <span>{t("metrics.phase")}</span>
+        <span
+          style={{ color: phaseColor(follow.phase), fontWeight: 600 }}
+          data-testid="fm-phase"
+        >
+          {t(`phase.${follow.phase}`)}
+        </span>
+      </div>
+      <MetricRow
+        label={t("metrics.reacquireMode")}
+        value={t(`reacquire.${follow.reacquireMode}`)}
+        testId="fm-reacquire-mode"
+      />
+      {follow.phase === "coasting" || follow.phase === "searching" ? (
+        <MetricRow
+          label={t("metrics.coastRemaining")}
+          value={`${follow.coastRemainingS.toFixed(1)} s`}
+          testId="fm-coast-remaining"
+        />
+      ) : null}
       <div style={labelRow}>
         <span>{t("metrics.lockState")}</span>
         <span
@@ -181,8 +209,47 @@ function MetricsSection({
       />
       <MetricRow
         label={t("metrics.range")}
-        value={fmtMeters(follow.rangeM)}
+        value={fmtRange(follow.rangeM, follow.rangeSigmaM)}
         testId="fm-range"
+      />
+      <MetricRow
+        label={t("metrics.rangeCues")}
+        value={
+          follow.rangeCues.length
+            ? follow.rangeCues.map((c) => t(`cue.${c.kind}`)).join(" · ")
+            : "—"
+        }
+        testId="fm-range-cues"
+      />
+      <MetricRow
+        label={t("metrics.agl")}
+        value={
+          follow.aglM == null
+            ? "—"
+            : `${fmtMeters(follow.aglM)} · ${t(`agl.${follow.aglSource ?? "baro"}`)}`
+        }
+        testId="fm-agl"
+      />
+      <MetricRow
+        label={t("metrics.targetSpeed")}
+        value={
+          follow.targetSpeedMps == null
+            ? "—"
+            : `${follow.targetSpeedMps.toFixed(1)} m/s`
+        }
+        testId="fm-target-speed"
+      />
+      <MetricRow
+        label={t("metrics.latency")}
+        value={
+          follow.pipelineLatencyMs == null ? "—" : `${follow.pipelineLatencyMs} ms`
+        }
+        testId="fm-latency"
+      />
+      <MetricRow
+        label={t("metrics.setpointRate")}
+        value={`${follow.setpointRateHz.toFixed(1)} Hz`}
+        testId="fm-setpoint-rate"
       />
       <MetricRow
         label={t("metrics.distanceSetpoint")}
@@ -235,4 +302,10 @@ function MetricRow({
 function fmtMeters(v: number | null): string {
   if (v == null || !Number.isFinite(v)) return "—";
   return `${v.toFixed(1)} m`;
+}
+
+function fmtRange(range: number | null, sigma: number | null): string {
+  if (range == null || !Number.isFinite(range)) return "—";
+  if (sigma == null || !Number.isFinite(sigma)) return fmtMeters(range);
+  return `${range.toFixed(1)} ± ${sigma.toFixed(1)} m`;
 }

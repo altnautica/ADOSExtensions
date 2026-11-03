@@ -9,7 +9,11 @@
  * @license GPL-3.0-or-later
  */
 
-import { DEFAULT_CONFIG, type FollowConfig } from "./types";
+import {
+  DEFAULT_CONFIG,
+  normalizeReacquireMode,
+  type FollowConfig,
+} from "./types";
 
 /** Coerce a raw config payload into the typed FollowConfig with defaults. */
 export function normalizeConfig(raw: unknown): FollowConfig {
@@ -27,6 +31,16 @@ export function normalizeConfig(raw: unknown): FollowConfig {
         : DEFAULT_CONFIG.designate_camera,
     camera_hfov_deg: numberOr(r.camera_hfov_deg, DEFAULT_CONFIG.camera_hfov_deg),
     mount_pitch_deg: numberOr(r.mount_pitch_deg, DEFAULT_CONFIG.mount_pitch_deg),
+    reacquire_mode:
+      r.reacquire_mode === undefined
+        ? DEFAULT_CONFIG.reacquire_mode
+        : normalizeReacquireMode(r.reacquire_mode),
+    reacquire_window_s: numberOr(r.reacquire_window_s, DEFAULT_CONFIG.reacquire_window_s),
+    reacquire_min_similarity: numberOr(
+      r.reacquire_min_similarity,
+      DEFAULT_CONFIG.reacquire_min_similarity,
+    ),
+    max_speed_mps: numberOr(r.max_speed_mps, DEFAULT_CONFIG.max_speed_mps),
   };
 }
 

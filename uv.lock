@@ -42,7 +42,7 @@ dev = [
 
 [[package]]
 name = "altnautica-follow-me"
-version = "0.2.10"
+version = "0.3.0"
 source = { editable = "extensions/follow-me/agent" }
 dependencies = [
     { name = "pymavlink" },

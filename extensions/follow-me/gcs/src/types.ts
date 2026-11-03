@@ -11,6 +11,42 @@
 /** Lock state words shared with the agent + vision contract. */
 export type LockState = "locked" | "uncertain" | "lost";
 
+/** The follow phase the agent publishes. */
+export type FollowPhase =
+  | "idle"
+  | "acquiring"
+  | "following"
+  | "coasting"
+  | "searching"
+  | "lost"
+  | "holding";
+
+const PHASES: readonly FollowPhase[] = [
+  "idle",
+  "acquiring",
+  "following",
+  "coasting",
+  "searching",
+  "lost",
+  "holding",
+];
+
+/** What the follow does when the lock on the subject is lost. */
+export type ReacquireMode = "strict" | "smart";
+
+/** Where the height above ground came from: the downward rangefinder or the
+ * barometric height. */
+export type AglSource = "rng" | "baro";
+
+export type RangeCueKind = "ground" | "box_height" | "lidar";
+
+/** One range cue the agent fused into the subject range. */
+export interface RangeCue {
+  kind: RangeCueKind;
+  rangeM: number;
+  sigmaM: number;
+}
+
 /**
  * Why the loop is not commanding, as published by the agent.
  *
@@ -28,7 +64,7 @@ export type HoldReason =
   | "fc-stale"
   | "fc-disarmed"
   | "fc-not-guided"
-  | "no-ground-fix";
+  | "no-range";
 
 const HOLD_REASONS: readonly HoldReason[] = [
   "inactive",
@@ -39,7 +75,7 @@ const HOLD_REASONS: readonly HoldReason[] = [
   "fc-stale",
   "fc-disarmed",
   "fc-not-guided",
-  "no-ground-fix",
+  "no-range",
 ];
 
 /** Hold reasons that mean an input the follow depends on stopped arriving,
@@ -66,11 +102,27 @@ export const FOLLOW_STATE_TOPIC = "follow.state";
 /** The follow read-back the agent publishes on FOLLOW_STATE_TOPIC. */
 export interface FollowState {
   active: boolean;
+  phase: FollowPhase;
   lockState: LockState | null;
   targetId: number | null;
+  /** Detector confidence of the locked subject's latest box. */
+  confidence: number | null;
+  /** Horizontal range to the subject and its 1-sigma uncertainty. */
   rangeM: number | null;
+  rangeSigmaM: number | null;
+  rangeCues: RangeCue[];
+  targetSpeedMps: number | null;
+  aglM: number | null;
+  aglSource: AglSource | null;
   distanceSetpointM: number | null;
   heightSetpointM: number | null;
+  reacquireMode: ReacquireMode;
+  /** Seconds left in a smart re-acquire window; 0 outside one. */
+  coastRemainingS: number;
+  /** Detection frame to setpoint send, milliseconds. */
+  pipelineLatencyMs: number | null;
+  /** Guided setpoints sent per second over the last 2 s. */
+  setpointRateHz: number;
   commanding: boolean;
   /** Flight-controller armed state, as of the last HEARTBEAT. False once
    * that heartbeat goes stale: a remembered arm state is not an observed one. */
@@ -84,18 +136,29 @@ export interface FollowState {
 /** The agent emits snake_case keys; normalize to the camelCase shape. */
 export interface RawFollowState {
   active?: boolean;
+  phase?: FollowPhase | string;
   lock_state?: LockState | null;
   target_id?: number | null;
+  confidence?: number | null;
   range_m?: number | null;
+  range_sigma_m?: number | null;
+  range_cues?: { kind?: string; range_m?: number; sigma_m?: number }[];
+  target_speed_mps?: number | null;
+  agl_m?: number | null;
+  agl_source?: AglSource | string | null;
   distance_setpoint_m?: number | null;
   height_setpoint_m?: number | null;
+  reacquire_mode?: ReacquireMode | string;
+  coast_remaining_s?: number;
+  pipeline_latency_ms?: number | null;
+  setpoint_rate_hz?: number;
   commanding?: boolean;
   fc_armed?: boolean;
   fc_guided?: boolean;
   hold_reason?: HoldReason | string | null;
 }
 
-/** The per-drone config the settings tab writes through ctx.config. */
+/** The per-drone config the tab reads through ctx.config. */
 export interface FollowConfig {
   active: boolean;
   follow_distance_m: number;
@@ -104,6 +167,10 @@ export interface FollowConfig {
   designate_camera: string;
   camera_hfov_deg: number;
   mount_pitch_deg: number;
+  reacquire_mode: ReacquireMode;
+  reacquire_window_s: number;
+  reacquire_min_similarity: number;
+  max_speed_mps: number;
 }
 
 export const DEFAULT_CONFIG: FollowConfig = {
@@ -111,19 +178,34 @@ export const DEFAULT_CONFIG: FollowConfig = {
   follow_distance_m: 8,
   follow_height_m: 4,
   gimbal_point: true,
-  designate_camera: "uvc-0",
+  designate_camera: "auto",
   camera_hfov_deg: 70,
   mount_pitch_deg: 30,
+  reacquire_mode: "smart",
+  reacquire_window_s: 4,
+  reacquire_min_similarity: 0.75,
+  max_speed_mps: 6,
 };
 
 /** Empty follow state baseline before the first read-back arrives. */
 export const EMPTY_FOLLOW_STATE: FollowState = {
   active: false,
+  phase: "idle",
   lockState: null,
   targetId: null,
+  confidence: null,
   rangeM: null,
+  rangeSigmaM: null,
+  rangeCues: [],
+  targetSpeedMps: null,
+  aglM: null,
+  aglSource: null,
   distanceSetpointM: null,
   heightSetpointM: null,
+  reacquireMode: "smart",
+  coastRemainingS: 0,
+  pipelineLatencyMs: null,
+  setpointRateHz: 0,
   commanding: false,
   fcArmed: false,
   fcGuided: false,
@@ -135,20 +217,57 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
   if (!raw || typeof raw !== "object") return { ...EMPTY_FOLLOW_STATE };
   return {
     active: raw.active === true,
+    phase: PHASES.includes(raw.phase as FollowPhase)
+      ? (raw.phase as FollowPhase)
+      : "idle",
     lockState: normalizeLockState(raw.lock_state),
-    targetId: typeof raw.target_id === "number" ? raw.target_id : null,
-    rangeM: typeof raw.range_m === "number" ? raw.range_m : null,
-    distanceSetpointM:
-      typeof raw.distance_setpoint_m === "number"
-        ? raw.distance_setpoint_m
+    targetId: num(raw.target_id),
+    confidence: num(raw.confidence),
+    rangeM: num(raw.range_m),
+    rangeSigmaM: num(raw.range_sigma_m),
+    rangeCues: normalizeCues(raw.range_cues),
+    targetSpeedMps: num(raw.target_speed_mps),
+    aglM: num(raw.agl_m),
+    aglSource:
+      raw.agl_source === "rng" || raw.agl_source === "baro"
+        ? raw.agl_source
         : null,
-    heightSetpointM:
-      typeof raw.height_setpoint_m === "number" ? raw.height_setpoint_m : null,
+    distanceSetpointM: num(raw.distance_setpoint_m),
+    heightSetpointM: num(raw.height_setpoint_m),
+    reacquireMode: normalizeReacquireMode(raw.reacquire_mode),
+    coastRemainingS: num(raw.coast_remaining_s) ?? 0,
+    pipelineLatencyMs: num(raw.pipeline_latency_ms),
+    setpointRateHz: num(raw.setpoint_rate_hz) ?? 0,
     commanding: raw.commanding === true,
     fcArmed: raw.fc_armed === true,
     fcGuided: raw.fc_guided === true,
     holdReason: normalizeHoldReason(raw.hold_reason),
   };
+}
+
+/** Strict unless the value is exactly "smart": an unknown mode must never
+ * read as the mode that re-designates on its own. */
+export function normalizeReacquireMode(v: unknown): ReacquireMode {
+  return v === "smart" ? "smart" : "strict";
+}
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function normalizeCues(v: RawFollowState["range_cues"]): RangeCue[] {
+  if (!Array.isArray(v)) return [];
+  const out: RangeCue[] = [];
+  for (const c of v) {
+    if (
+      (c?.kind === "ground" || c?.kind === "box_height" || c?.kind === "lidar") &&
+      typeof c.range_m === "number" &&
+      typeof c.sigma_m === "number"
+    ) {
+      out.push({ kind: c.kind, rangeM: c.range_m, sigmaM: c.sigma_m });
+    }
+  }
+  return out;
 }
 
 function normalizeLockState(v: unknown): LockState | null {

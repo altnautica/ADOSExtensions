@@ -1,7 +1,9 @@
-"""Flight-controller, pose and gimbal state the follow loop projects through.
+"""Flight-controller, pose, rangefinder and gimbal state the follow loop
+projects through.
 
 Each input is aged rather than latched (see :class:`FreshnessGate`): the
-loop holds when the pose, the HEARTBEAT or the gimbal report stops arriving.
+loop holds when the pose, the HEARTBEAT or the gimbal report stops arriving,
+and the rangefinder stops being the height source when it goes quiet.
 :class:`FcStateMixin` holds the MAVLink handlers that fill this state; it is a
 mixin of :class:`follow_me.FollowMePlugin`.
 """
@@ -19,20 +21,28 @@ from follow_me.freshness import FreshnessGate
 # still works — a stream-rate change, a lagged broadcast receiver, a router
 # reconnect, an FC that simply stops emitting one message — so each is aged
 # rather than latched, and each gets a window sized from the cadence that
-# message is actually expected at. One shared window would be wrong for all
-# three: they are requested at 10 Hz, 5 Hz and 1 Hz respectively.
+# message is actually expected at.
 #
-# Pose. The agent's MAVLink router requests ATTITUDE at 10 Hz and
-# GLOBAL_POSITION_INT at 5 Hz, so the slower of the two nominally arrives
-# every 0.2 s. 0.5 s is three follow-loop periods (the loop runs at 6 Hz)
-# and two and a half position periods: one dropped message plus link jitter
-# still reads current, while a real stall is caught within about three
-# ticks. Deliberately much tighter than the 1.5 s detection coast window,
-# because a frozen pose corrupts the ORIGIN and heading the projection
-# measures from, which grows the setpoint error without bound as the
-# aircraft flies on. A frozen bounding box only misplaces the subject
-# within the frame, and the loop already holds its last setpoint for that.
+# Pose. The router requests ATTITUDE at 10 Hz and, on a drone,
+# LOCAL_POSITION_NED at 20 Hz, so the slower of the two
+# nominally arrives every 0.1 s. 0.5 s is ten follow-loop periods (the loop
+# runs at 20 Hz) and five attitude periods: a dropped message plus link
+# jitter still reads current, while a real stall is caught quickly. A frozen
+# pose corrupts the origin and heading the projection measures from, which
+# grows the setpoint error without bound as the aircraft flies on.
 _POSE_MAX_AGE_S = 0.5
+
+# Downward rangefinder. Usable as the AGL source only while younger than
+# this; older readings fall back to barometric height.
+_RANGE_MAX_AGE_S = 0.3
+
+# GLOBAL_POSITION_INT at 5 Hz: relative altitude (the barometric AGL
+# fallback) and lat/lon for display. Two missed messages plus jitter.
+_GLOBAL_MAX_AGE_S = 1.0
+
+# MAV_SENSOR_ROTATION_PITCH_270: a downward-facing rangefinder. Only that
+# orientation measures height above ground.
+RANGEFINDER_DOWN = 25
 
 # Flight-controller arm + mode. HEARTBEAT is requested at 1 Hz, so a window
 # sized like the pose one would report stale between every message. Three
@@ -106,33 +116,52 @@ def is_guided_mode(autopilot: int, custom_mode: int, mav_type: int) -> bool:
 class Pose:
     """Latest FC pose cached from the MAVLink telemetry stream.
 
-    Attitude and position arrive on two different messages, at two different
-    rates, and can stop independently — an FC can keep emitting ATTITUDE long
-    after GLOBAL_POSITION_INT dries up. They therefore carry two separate
-    freshness gates rather than one shared mark, which whichever message was
-    still flowing would keep refreshing, hiding the partial stall entirely.
+    Control runs in the flight controller's local NED frame: attitude from
+    ATTITUDE, position and velocity from LOCAL_POSITION_NED. The two arrive on
+    different messages at different rates and can stop independently, so they
+    carry separate freshness gates rather than one shared mark, which
+    whichever message was still flowing would keep refreshing, hiding the
+    partial stall entirely.
+
+    GLOBAL_POSITION_INT is no longer a control input. It supplies the
+    barometric relative altitude (the AGL fallback when the downward
+    rangefinder is unusable) and lat/lon for display only.
     """
 
     __slots__ = (
         "roll",
         "pitch",
         "yaw",
+        "north_m",
+        "east_m",
+        "down_m",
+        "vn_mps",
+        "ve_mps",
+        "vd_mps",
         "lat_deg",
         "lon_deg",
         "rel_alt_m",
         "attitude",
         "position",
+        "global_position",
     )
 
     def __init__(self, max_age_s: float = _POSE_MAX_AGE_S) -> None:
         self.roll = 0.0
         self.pitch = 0.0
         self.yaw = 0.0
+        self.north_m = 0.0
+        self.east_m = 0.0
+        self.down_m = 0.0
+        self.vn_mps = 0.0
+        self.ve_mps = 0.0
+        self.vd_mps = 0.0
         self.lat_deg = 0.0
         self.lon_deg = 0.0
         self.rel_alt_m = 0.0
         self.attitude = FreshnessGate(max_age_s)
         self.position = FreshnessGate(max_age_s)
+        self.global_position = FreshnessGate(_GLOBAL_MAX_AGE_S)
 
     def ready(self, now_monotonic_s: float) -> bool:
         """Whether BOTH halves of the pose are current enough to project
@@ -141,6 +170,37 @@ class Pose:
         usable."""
         return self.attitude.is_fresh(now_monotonic_s) and self.position.is_fresh(
             now_monotonic_s
+        )
+
+    def baro_agl_m(self, now_monotonic_s: float) -> float:
+        """Barometric height above the take-off point: GLOBAL_POSITION_INT
+        relative altitude while it is current, else the local-frame height
+        above the EKF origin (which sits at the take-off point when no GNSS
+        origin was set)."""
+        if self.global_position.is_fresh(now_monotonic_s):
+            return self.rel_alt_m
+        return -self.down_m
+
+
+class Rangefinder:
+    """The latest downward DISTANCE_SENSOR reading (orientation 25 only), in
+    metres, with the sensor's own reported valid band."""
+
+    __slots__ = ("distance_m", "min_m", "max_m", "report")
+
+    def __init__(self, max_age_s: float = _RANGE_MAX_AGE_S) -> None:
+        self.distance_m = 0.0
+        self.min_m = 0.0
+        self.max_m = 0.0
+        self.report = FreshnessGate(max_age_s)
+
+    def usable(self, now_monotonic_s: float) -> bool:
+        """Fresh and inside the sensor's reported [min, max] band. A reading
+        at or beyond max is "no return", never a height."""
+        return (
+            self.report.is_fresh(now_monotonic_s)
+            and self.max_m > self.min_m
+            and self.min_m <= self.distance_m < self.max_m
         )
 
 
@@ -195,11 +255,13 @@ class GimbalState:
 
 
 class FcStateMixin:
-    """The MAVLink handlers that keep the cached FC, pose and gimbal state."""
+    """The MAVLink handlers that keep the cached FC, pose, rangefinder and
+    gimbal state."""
 
     _pose: Pose
     _fc: FcState
     _gimbal: GimbalState
+    _rangefinder: Rangefinder
 
     def _on_heartbeat(self, delivery: dict[str, Any]) -> None:
         msg = mavlink_frames.decode_fields(delivery)
@@ -232,17 +294,42 @@ class FcStateMixin:
         self._pose.roll = float(msg["roll"])
         self._pose.pitch = float(msg["pitch"])
         self._pose.yaw = float(msg["yaw"])
-        # Marked separately from position: ATTITUDE and GLOBAL_POSITION_INT
+        # Marked separately from position: ATTITUDE and LOCAL_POSITION_NED
         # are different messages at different rates and either can stall on
         # its own.
         self._pose.attitude.mark(monotonic())
 
+    def _on_local_position(self, delivery: dict[str, Any]) -> None:
+        # LOCAL_POSITION_NED: metres and m/s in the FC's local NED frame.
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None:
+            return
+        self._pose.north_m = float(msg["x"])
+        self._pose.east_m = float(msg["y"])
+        self._pose.down_m = float(msg["z"])
+        self._pose.vn_mps = float(msg["vx"])
+        self._pose.ve_mps = float(msg["vy"])
+        self._pose.vd_mps = float(msg["vz"])
+        self._pose.position.mark(monotonic())
+
     def _on_global_position(self, delivery: dict[str, Any]) -> None:
-        # lat/lon are 1e7 integer degrees; relative_alt is millimetres.
+        # Display and barometric-AGL fallback only. lat/lon are 1e7 integer
+        # degrees; relative_alt is millimetres.
         msg = mavlink_frames.decode_fields(delivery)
         if msg is None:
             return
         self._pose.lat_deg = float(msg["lat"]) / 1e7
         self._pose.lon_deg = float(msg["lon"]) / 1e7
         self._pose.rel_alt_m = float(msg["relative_alt"]) / 1000.0
-        self._pose.position.mark(monotonic())
+        self._pose.global_position.mark(monotonic())
+
+    def _on_distance_sensor(self, delivery: dict[str, Any]) -> None:
+        # Only a downward rangefinder measures height above ground; a
+        # forward or upward one on the same bus is ignored. Distances are cm.
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None or int(msg.get("orientation", -1)) != RANGEFINDER_DOWN:
+            return
+        self._rangefinder.distance_m = float(msg["current_distance"]) / 100.0
+        self._rangefinder.min_m = float(msg["min_distance"]) / 100.0
+        self._rangefinder.max_m = float(msg["max_distance"]) / 100.0
+        self._rangefinder.report.mark(monotonic())

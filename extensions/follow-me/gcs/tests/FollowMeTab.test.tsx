@@ -5,7 +5,7 @@ import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
 
 import { FollowMeTab } from "../src/FollowMeTab";
 import enLocale from "../../locales/en.json";
-import type { FollowState } from "../src/types";
+import { EMPTY_FOLLOW_STATE, type FollowState } from "../src/types";
 
 afterEach(cleanup);
 
@@ -18,20 +18,14 @@ function harnessCtx() {
 }
 
 const idleFollow: FollowState = {
-  active: false,
-  lockState: null,
-  targetId: null,
-  rangeM: null,
-  distanceSetpointM: null,
-  heightSetpointM: null,
-  commanding: false,
-  fcArmed: false,
-  fcGuided: false,
+  ...EMPTY_FOLLOW_STATE,
   holdReason: "inactive",
 };
 
 const commandingFollow: FollowState = {
+  ...EMPTY_FOLLOW_STATE,
   active: true,
+  phase: "following",
   lockState: "locked",
   targetId: 42,
   rangeM: 12.3,
@@ -44,6 +38,44 @@ const commandingFollow: FollowState = {
 };
 
 describe("FollowMeTab", () => {
+  it("shows the phase, the re-acquire mode, range with uncertainty and the coast window", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{
+          ...commandingFollow,
+          phase: "coasting",
+          lockState: "lost",
+          reacquireMode: "smart",
+          rangeM: 10.2,
+          rangeSigmaM: 0.6,
+          rangeCues: [{ kind: "ground", rangeM: 10.1, sigmaM: 0.7 }],
+          aglM: 4.1,
+          aglSource: "rng",
+          coastRemainingS: 2.5,
+          pipelineLatencyMs: 85,
+          setpointRateHz: 20,
+        }}
+      />,
+    );
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Coasting");
+    expect(screen.getByTestId("fm-reacquire-mode").textContent).toBe("Smart");
+    expect(screen.getByTestId("fm-range").textContent).toBe("10.2 ± 0.6 m");
+    expect(screen.getByTestId("fm-range-cues").textContent).toBe("Ground");
+    expect(screen.getByTestId("fm-agl").textContent).toBe("4.1 m · Rangefinder");
+    expect(screen.getByTestId("fm-coast-remaining").textContent).toBe("2.5 s");
+    expect(screen.getByTestId("fm-latency").textContent).toBe("85 ms");
+    expect(screen.getByTestId("fm-setpoint-rate").textContent).toBe("20.0 Hz");
+  });
+
+  it("hides the coast window outside a coast", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={commandingFollow} />);
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Following");
+    expect(screen.queryByTestId("fm-coast-remaining")).toBeNull();
+  });
+
   it("renders specs and live metrics with the generic detector", () => {
     const h = harnessCtx();
     render(<FollowMeTab ctx={h.ctx} followOverride={idleFollow} />);

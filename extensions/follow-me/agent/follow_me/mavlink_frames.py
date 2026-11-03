@@ -8,16 +8,14 @@ hand the packed bytes to the router.
 
 Two messages are produced:
 
-* ``SET_POSITION_TARGET_GLOBAL_INT`` (id 86) for the guided follow
-  setpoint. The type mask keeps position and yaw and ignores velocity,
-  acceleration, and yaw-rate so the autopilot flies to the lat/lon/alt
-  and faces the subject.
+* ``SET_POSITION_TARGET_LOCAL_NED`` (id 84, frame ``MAV_FRAME_LOCAL_NED``)
+  for the guided follow setpoint: position, velocity feed-forward and yaw,
+  with acceleration and yaw-rate ignored.
 * ``COMMAND_LONG`` with ``MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW`` (1000) to
   point a gimbal at the subject when one is present.
 
-The companion sends under the autopilot's own system id with the
-peripheral component id so the autopilot accepts the guided setpoint as
-an onboard command.
+The companion sends with the onboard-computer component id so the autopilot
+accepts the guided setpoint as an onboard command.
 
 Inbound, ``ctx.mavlink.subscribe`` delivers ``{msg_name, frame,
 timestamp_ms}`` with ``frame`` the raw wire bytes; :func:`decode_fields`
@@ -42,24 +40,15 @@ ONBOARD_COMPUTER_COMP_ID = 191
 # manager default, which is sufficient for point-at-target.
 _GIMBAL_FLAGS_DEFAULT = 0
 
-# Type mask for SET_POSITION_TARGET_GLOBAL_INT. Bits set = field IGNORED.
-# We keep position (lat/lon/alt) and yaw; ignore the three velocity, the
-# three acceleration, the force flag, and the yaw-rate bits.
-_IGNORE_VX = 1 << 3
-_IGNORE_VY = 1 << 4
-_IGNORE_VZ = 1 << 5
+# Type mask for SET_POSITION_TARGET_LOCAL_NED. Bits set = field IGNORED.
+# Position (bits 0-2), velocity (3-5) and yaw (10) are used; the three
+# acceleration bits (6-8) and yaw-rate (11) are ignored: 2496.
 _IGNORE_AFX = 1 << 6
 _IGNORE_AFY = 1 << 7
 _IGNORE_AFZ = 1 << 8
 _IGNORE_YAW_RATE = 1 << 11
-POSITION_YAW_TYPE_MASK = (
-    _IGNORE_VX
-    | _IGNORE_VY
-    | _IGNORE_VZ
-    | _IGNORE_AFX
-    | _IGNORE_AFY
-    | _IGNORE_AFZ
-    | _IGNORE_YAW_RATE
+POSITION_VELOCITY_YAW_TYPE_MASK = (
+    _IGNORE_AFX | _IGNORE_AFY | _IGNORE_AFZ | _IGNORE_YAW_RATE
 )
 
 
@@ -98,31 +87,33 @@ def decode_fields(delivery: Mapping[str, Any]) -> dict[str, Any] | None:
     return msg.to_dict()
 
 
-def build_position_setpoint(
+def build_local_setpoint(
     *,
-    lat_deg: float,
-    lon_deg: float,
-    alt_rel_m: float,
+    north_m: float,
+    east_m: float,
+    down_m: float,
+    vn_mps: float,
+    ve_mps: float,
+    vd_mps: float,
     yaw_rad: float,
 ) -> dict[str, float | int | str]:
-    """Build the ``ctx.flight.guided_setpoint`` kwargs for a global follow.
+    """Build the ``ctx.flight.guided_setpoint`` kwargs for a local follow.
 
-    Describes a SET_POSITION_TARGET_GLOBAL_INT that keeps lat/lon/alt and
-    yaw and ignores velocity, acceleration, and yaw-rate, so the autopilot
-    flies to the position and faces the subject. ``lat_deg`` / ``lon_deg``
-    are scaled to the 1e7 integer representation the message carries;
-    ``alt_rel_m`` is metres above the arming/home altitude (the frame is
-    GLOBAL_RELATIVE_ALT_INT). The scoped flight sender in the agent encodes
-    and stamps the frame on the outbound link, so the plugin no longer packs
-    raw MAVLink for the position setpoint (the gimbal command still does).
+    Describes a SET_POSITION_TARGET_LOCAL_NED in ``MAV_FRAME_LOCAL_NED``
+    (metres from the EKF origin, down positive) carrying position, velocity
+    feed-forward and yaw. The scoped flight sender in the agent encodes and
+    stamps the frame on the outbound link.
     """
     return {
-        "kind": "global_int",
-        "coordinate_frame": int(mavlink2.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT),
-        "type_mask": int(POSITION_YAW_TYPE_MASK),
-        "x": float(round(lat_deg * 1e7)),
-        "y": float(round(lon_deg * 1e7)),
-        "z": float(alt_rel_m),
+        "kind": "local_ned",
+        "coordinate_frame": int(mavlink2.MAV_FRAME_LOCAL_NED),
+        "type_mask": int(POSITION_VELOCITY_YAW_TYPE_MASK),
+        "x": float(north_m),
+        "y": float(east_m),
+        "z": float(down_m),
+        "vx": float(vn_mps),
+        "vy": float(ve_mps),
+        "vz": float(vd_mps),
         "yaw": float(yaw_rad),
     }
 
@@ -192,8 +183,9 @@ def gimbal_angles_for_target(
 
 __all__ = [
     "ONBOARD_COMPUTER_COMP_ID",
-    "POSITION_YAW_TYPE_MASK",
-    "build_position_setpoint",
+    "POSITION_VELOCITY_YAW_TYPE_MASK",
+    "build_local_setpoint",
     "build_gimbal_pitchyaw",
+    "decode_fields",
     "gimbal_angles_for_target",
 ]

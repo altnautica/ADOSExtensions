@@ -11,7 +11,7 @@
 
 import type { CSSProperties } from "react";
 
-import type { LockState } from "./types";
+import type { FollowPhase, LockState } from "./types";
 
 /** Border/text color for a lock state: green locked, amber uncertain, red
  * lost. Untracked detections fall back to a neutral tertiary tone. */
@@ -23,6 +23,26 @@ export function lockColor(lockState: LockState | null): string {
       return "var(--fm-warning, #f59e0b)";
     case "lost":
       return "var(--fm-error, #ef4444)";
+    default:
+      return "var(--fm-tertiary, #94a3b8)";
+  }
+}
+
+/** Colour for a follow phase, from the HUD tokens the host theme streams in
+ * (with dark-theme fallbacks). The phase is always shown with its word too, so
+ * colour is never the only signal. */
+export function phaseColor(phase: FollowPhase): string {
+  switch (phase) {
+    case "following":
+      return "var(--hud-track, #FF5A1F)";
+    case "coasting":
+    case "searching":
+      return "var(--hud-coast, #f59e0b)";
+    case "lost":
+      return "var(--fm-error, #ef4444)";
+    case "holding":
+    case "acquiring":
+      return "var(--fm-text, #ededed)";
     default:
       return "var(--fm-tertiary, #94a3b8)";
   }

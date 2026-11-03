@@ -163,6 +163,7 @@ def _install_sdk_stub() -> None:
         track_id: int | None = None
         assoc_confidence: float | None = None
         lock_state: str | None = None
+        attributes: dict[str, Any] | None = None
 
     @dataclass(frozen=True)
     class DetectionBatch:

@@ -1,61 +1,87 @@
-"""The follow loop: the command gate, the setpoint projection and the
-``follow.state`` read-back. A mixin of :class:`follow_me.FollowMePlugin`."""
+"""The follow loop: the command gate, lock loss and re-acquire, and the
+setpoints. A mixin of :class:`follow_me.FollowMePlugin`.
+
+Every tick (20 Hz) decides one of three things:
+
+* **follow**: a live engine lock, a current pose, a live armed+guided flight
+  controller and a recent range fix. The subject filter is updated from each
+  new box and the standoff setpoint (position, velocity feed-forward, yaw) is
+  sent as SET_POSITION_TARGET_LOCAL_NED.
+* **coast** (``smart`` re-acquire only): the lock was lost; fly toward the
+  predicted standoff at half feed-forward for ``reacquire_window_s`` while
+  looking for the subject in each new batch.
+* **hold**: anything else. If the loop was commanding, a few zero-velocity
+  setpoints at the current position are sent so the vehicle stops where it is
+  instead of flying on along the last feed-forward; then nothing more is sent,
+  so the operator's own guided commands are not fought.
+"""
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import math
+from collections import deque
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
-from ados.sdk.vision import BoundingBox
 
-from follow_me import fc_state, mavlink_frames, projection
+from follow_me import fc_state, mavlink_frames, setpoint
+from follow_me.projection import TargetFix
+from follow_me.reacquire import Coast, Embedding, blend_template
 from follow_me.state import (
-    FOLLOW_STATE_TOPIC,
     HOLD_FC_DISARMED,
     HOLD_FC_NOT_GUIDED,
     HOLD_FC_STALE,
     HOLD_INACTIVE,
-    HOLD_LOCK_LOST,
     HOLD_LOCK_UNCERTAIN,
-    HOLD_NO_GROUND_FIX,
     HOLD_NO_LOCK,
+    HOLD_NO_RANGE,
     HOLD_POSE_STALE,
     LOCK_LOCKED,
-    LOCK_LOST,
+    PHASE_ACQUIRING,
+    PHASE_FOLLOWING,
+    PHASE_HOLDING,
+    PHASE_IDLE,
+    PHASE_LOST,
     FollowConfig,
-    FollowState,
 )
+from follow_me.target_filter import TargetFilter
 
 # The fixed cadence the follow loop commands at, decoupled from the
 # inference rate so the setpoint stream is smooth regardless of detector
-# jitter.
-_LOOP_HZ = 6.0
+# jitter; the filter predicts between boxes.
+_LOOP_HZ = 20.0
 _LOOP_PERIOD = 1.0 / _LOOP_HZ
 
-# A slow heartbeat for the follow.state read-back even when nothing
-# changed, so the GCS knows the agent is alive.
-_STATE_HEARTBEAT_S = 1.0
+# With no new range fix for this long the prediction is no longer trusted
+# enough to command on a live lock.
+_MEASUREMENT_STALE_S = 1.0
+# Zero-velocity hold setpoints sent after the loop stops commanding (0.25 s
+# at 20 Hz), so one dropped frame cannot leave the last feed-forward active.
+_HOLD_REPEATS = 5
+# Gimbal pointing is re-sent at most this often.
+_GIMBAL_PERIOD_S = 0.2
+# Detection-to-setpoint latencies outside this are clock mismatches, not
+# measurements, and are not reported.
+_MAX_LATENCY_MS = 10_000.0
+# Window the published setpoint send rate is measured over.
+SETPOINT_RATE_WINDOW_S = 2.0
 
-# Fallback frame size when a detection batch carries no source-frame
-# dimensions (a pre-frame-size agent). The common UVC capture size.
-_DEFAULT_FRAME_W = 640
-_DEFAULT_FRAME_H = 480
 
+@dataclass(frozen=True)
+class Sighting:
+    """The engine-designated detection from the newest batch, with what the
+    shared lock gate does not keep."""
 
-@dataclass
-class _LastCommand:
-    """The last follow command emitted, retained so the loop can HOLD it while
-    coasting on a frozen bounding box instead of re-projecting stale image data
-    through fresh vehicle attitude."""
-
+    track_id: int
     bbox: Any
-    position_setpoint: dict[str, Any]
-    gimbal_frame: bytes | None
-    range_m: float
-    distance_setpoint_m: float
-    height_setpoint_m: float
+    camera_id: str
+    frame_wh: tuple[int, int] | None
+    ts_ms: int
+    received_s: float
+    confidence: float
+    embedding: Embedding | None
 
 
 class FollowLoopMixin:
@@ -64,18 +90,31 @@ class FollowLoopMixin:
     _ctx: Any
     _pose: fc_state.Pose
     _fc: fc_state.FcState
-    _gimbal: fc_state.GimbalState
+    _rangefinder: fc_state.Rangefinder
     _tracker: LockedTargetTracker
-    _published: FollowState
-    _last_heartbeat: float
-    _last_command: _LastCommand | None
+    _filter: TargetFilter
+    _filter_track_id: int | None
+    _template: Embedding | None
+    _sighting: Sighting | None
+    _measured_bbox: Any
+    _last_fix: TargetFix | None
+    _coast: Coast | None
+    _phase: str
+    _hold_sends_remaining: int
+    _pending_latency_ts_ms: int | None
+    _latency_ms: int | None
+    _last_gimbal_s: float
+    _setpoint_times: deque[float]
+    _last_lost_track_id: int | None
+    _latest_batch: Any
+    _latest_batch_s: float
     _commanded_gimbal: tuple[float, float] | None
-    _last_frame_wh: tuple[int, int] | None
 
     async def _follow_loop(self) -> None:
         while True:
             await asyncio.sleep(_LOOP_PERIOD)
             try:
+                await self._housekeeping(fc_state.monotonic())
                 await self._tick()
             except asyncio.CancelledError:
                 raise
@@ -88,293 +127,239 @@ class FollowLoopMixin:
         # gate that produced it.
         now = fc_state.monotonic()
         cfg = await self._config_for_tick()
-
-        if not cfg.active or not self._tracker.has_lock:
-            await self._publish_state(
-                now=now,
-                active=cfg.active,
-                commanding=False,
-                hold_reason=HOLD_INACTIVE if not cfg.active else HOLD_NO_LOCK,
+        if not cfg.active:
+            self._coast = None
+            await self._hold(
+                cfg, now, phase=PHASE_IDLE, hold_reason=HOLD_INACTIVE, active=False
             )
             return
-
-        lock = self._tracker.effective_lock(now)
-
-        if lock is EffectiveLock.LOST:
-            # Drop the lock entirely; require a fresh operator designate. The
-            # held setpoint goes with it, so a re-lock recomputes from scratch.
-            self._tracker.drop()
-            self._last_command = None
-            await self._publish_state(
-                now=now,
-                active=True,
-                lock_state=LOCK_LOST,
-                commanding=False,
-                hold_reason=HOLD_LOCK_LOST,
-                force=True,
-            )
+        if self._coast is not None:
+            await self._tick_coast(cfg, now)
             return
+        await self._tick_follow(cfg, now)
 
-        target = self._tracker.locked_target(now)
-        if target is None:
-            # uncertain (or coasting): hold, stop commanding.
-            await self._publish_state(
-                now=now,
-                active=True,
-                lock_state=lock.value,
-                commanding=False,
-                hold_reason=HOLD_LOCK_UNCERTAIN,
-            )
-            return
-
+    def _gate(self, now: float) -> str | None:
+        """The hold reason the vehicle side imposes, or ``None`` to command."""
         if not self._pose.ready(now):
-            # The subject is locked and the write path may well still work,
-            # but the pose the projection measures from is either absent or
-            # no longer current. Commanding here would fly the aircraft to a
-            # point computed from where it used to be, with the error growing
-            # for as long as the telemetry stays stalled. Hold, and say why —
-            # silence here reads identical to a healthy pre-arm hold.
-            await self._publish_state(
-                now=now,
-                active=True,
-                lock_state=LOCK_LOCKED,
-                commanding=False,
-                hold_reason=HOLD_POSE_STALE,
-            )
-            return
-
+            # A pose the aircraft has since flown away from would place every
+            # setpoint relative to where it used to be.
+            return HOLD_POSE_STALE
         if not self._fc.is_fresh(now):
-            # The HEARTBEAT stopped. Whatever the FC was doing when it last
-            # reported, nothing confirms it is still armed or still in a mode
-            # that accepts setpoints.
-            await self._publish_state(
-                now=now,
-                active=True,
-                lock_state=LOCK_LOCKED,
-                commanding=False,
-                hold_reason=HOLD_FC_STALE,
-            )
-            return
-
-        if not (self._fc.armed and self._fc.guided):
-            # Locked with a usable pose and a live heartbeat, but the FC is not
-            # armed and in a guided/offboard mode, so a position setpoint would
-            # be ignored. Report honestly and do not command.
-            await self._publish_state(
-                now=now,
-                active=True,
-                lock_state=LOCK_LOCKED,
-                commanding=False,
-                hold_reason=(
-                    HOLD_FC_DISARMED if not self._fc.armed else HOLD_FC_NOT_GUIDED
-                ),
-            )
-            return
-
-        await self._command_follow(cfg, target.bbox, now)
-
-    async def _command_follow(
-        self, cfg: FollowConfig, bbox: BoundingBox, now: float
-    ) -> None:
-        # Coast hold: while the tracker holds LOCKED through the coast window it
-        # returns the SAME frozen bbox object from the last sighting. Re-
-        # projecting that stale bbox through fresh vehicle attitude each tick
-        # would drift the world setpoint on stale image data, so hold (re-send)
-        # the last commanded setpoint until a fresh detection replaces the bbox.
-        if self._last_command is not None and bbox is self._last_command.bbox:
-            await self._resend_last_command(now)
-            return
-
-        frame_w, frame_h = self._frame_size()
-
-        # Which pitch/yaw the camera boresight is actually at. A reported or
-        # commanded gimbal angle is the TOTAL orientation relative to the
-        # vehicle, so it replaces the fixed mount tilt rather than adding to it.
-        gimbal = self._gimbal_angles_deg(cfg, now)
-        if gimbal is None:
-            mount_pitch_deg = cfg.mount_pitch_deg
-            gimbal_pitch_deg = 0.0
-            gimbal_yaw_deg = 0.0
-        else:
-            mount_pitch_deg = 0.0
-            gimbal_pitch_deg, gimbal_yaw_deg = gimbal
-
-        setpoint = projection.project_follow_setpoint(
-            bbox_x=bbox.x,
-            bbox_y=bbox.y,
-            bbox_w=bbox.width,
-            bbox_h=bbox.height,
-            frame_width=frame_w,
-            frame_height=frame_h,
-            horizontal_fov_deg=cfg.camera_hfov_deg,
-            roll_rad=self._pose.roll,
-            pitch_rad=self._pose.pitch,
-            yaw_rad=self._pose.yaw,
-            vehicle_lat_deg=self._pose.lat_deg,
-            vehicle_lon_deg=self._pose.lon_deg,
-            agl_m=self._pose.rel_alt_m,
-            follow_distance_m=cfg.follow_distance_m,
-            follow_height_m=cfg.follow_height_m,
-            mount_pitch_deg=mount_pitch_deg,
-            gimbal_pitch_deg=gimbal_pitch_deg,
-            gimbal_yaw_deg=gimbal_yaw_deg,
-        )
-        if setpoint is None:
-            # No ground intersection (subject above the horizon / no AGL).
-            await self._publish_state(
-                now=now,
-                active=True,
-                lock_state=LOCK_LOCKED,
-                commanding=False,
-                hold_reason=HOLD_NO_GROUND_FIX,
-            )
-            return
-
-        position_setpoint = mavlink_frames.build_position_setpoint(
-            lat_deg=setpoint.lat_deg,
-            lon_deg=setpoint.lon_deg,
-            alt_rel_m=setpoint.alt_rel_m,
-            yaw_rad=setpoint.yaw_rad,
-        )
-        await self._ctx.flight.guided_setpoint(**position_setpoint)
-
-        gimbal_frame: bytes | None = None
-        if cfg.gimbal_point:
-            target = setpoint.target
-            pitch_deg, yaw_deg = mavlink_frames.gimbal_angles_for_target(
-                slant_range_m=target.slant_range_m,
-                agl_m=self._pose.rel_alt_m,
-                bearing_rad=target.bearing_rad,
-                vehicle_yaw_rad=self._pose.yaw,
-            )
-            # Cache the commanded angle (projection convention: pitch positive =
-            # down, so negate the negative-down gimbal command) as the boresight
-            # estimate until the FC reports a real attitude.
-            self._commanded_gimbal = (-pitch_deg, yaw_deg)
-            gimbal_frame = mavlink_frames.build_gimbal_pitchyaw(
-                pitch_deg=pitch_deg, yaw_deg=yaw_deg
-            )
-            # A missing gimbal component is non-fatal: the FC ignores the
-            # command and the body-only follow continues.
-            try:
-                await self._ctx.mavlink.send(gimbal_frame)
-            except Exception as exc:  # noqa: BLE001
-                self._ctx.log.info(
-                    "follow_me_gimbal_skipped", error=str(exc)
-                )
-                gimbal_frame = None
-
-        self._last_command = _LastCommand(
-            bbox=bbox,
-            position_setpoint=position_setpoint,
-            gimbal_frame=gimbal_frame,
-            range_m=setpoint.target.ground_range_m,
-            distance_setpoint_m=cfg.follow_distance_m,
-            height_setpoint_m=cfg.follow_height_m,
-        )
-        await self._publish_state(
-            now=now,
-            active=True,
-            lock_state=LOCK_LOCKED,
-            commanding=True,
-            range_m=setpoint.target.ground_range_m,
-            distance_setpoint_m=cfg.follow_distance_m,
-            height_setpoint_m=cfg.follow_height_m,
-        )
-
-    async def _resend_last_command(self, now: float) -> None:
-        """Re-send the last commanded setpoint (and gimbal frame) unchanged,
-        holding position while coasting on a frozen bbox."""
-        cmd = self._last_command
-        if cmd is None:
-            return
-        await self._ctx.flight.guided_setpoint(**cmd.position_setpoint)
-        if cmd.gimbal_frame is not None:
-            try:
-                await self._ctx.mavlink.send(cmd.gimbal_frame)
-            except Exception as exc:  # noqa: BLE001
-                self._ctx.log.info("follow_me_gimbal_skipped", error=str(exc))
-        await self._publish_state(
-            now=now,
-            active=True,
-            lock_state=LOCK_LOCKED,
-            commanding=True,
-            range_m=cmd.range_m,
-            distance_setpoint_m=cmd.distance_setpoint_m,
-            height_setpoint_m=cmd.height_setpoint_m,
-        )
-
-    def _frame_size(self) -> tuple[int, int]:
-        """The source-frame size the bbox pixels live in.
-
-        Uses the real dimensions the detection batch carried (cached in
-        _on_batch); falls back to the common UVC 640x480 frame only when a
-        batch arrived without them (a pre-frame-size agent).
-        """
-        if self._last_frame_wh is not None:
-            return self._last_frame_wh
-        return (_DEFAULT_FRAME_W, _DEFAULT_FRAME_H)
-
-    def _gimbal_angles_deg(
-        self, cfg: FollowConfig, now: float
-    ) -> tuple[float, float] | None:
-        """The camera boresight pitch/yaw (projection convention: pitch
-        positive = down, yaw positive = right of the nose), or ``None`` for a
-        fixed camera whose tilt is the configured mount pitch.
-
-        Preference: the FC's CURRENT reported gimbal attitude, then the last
-        angle the plugin commanded the gimbal to (only when gimbal pointing is
-        enabled), then ``None`` (no gimbal in play). A report that has aged out
-        drops to the commanded angle rather than being believed indefinitely:
-        once MOUNT_ORIENTATION stops arriving, the angle the plugin asked for
-        tracks the gimbal's real aim better than a report that predates it.
-        """
-        if self._gimbal.report.is_fresh(now):
-            return (self._gimbal.pitch_deg, self._gimbal.yaw_deg)
-        if cfg.gimbal_point and self._commanded_gimbal is not None:
-            return self._commanded_gimbal
+            return HOLD_FC_STALE
+        if not self._fc.armed:
+            return HOLD_FC_DISARMED
+        if not self._fc.guided:
+            return HOLD_FC_NOT_GUIDED
         return None
 
-    # -- state read-back ---------------------------------------------
-
-    async def _publish_state(
-        self,
-        *,
-        force: bool = False,
-        now: float | None = None,
-        active: bool | None = None,
-        lock_state: str | None = None,
-        commanding: bool = False,
-        hold_reason: str | None = None,
-        range_m: float | None = None,
-        distance_setpoint_m: float | None = None,
-        height_setpoint_m: float | None = None,
-    ) -> None:
-        # Callers inside a tick pass that tick's clock so the published FC
-        # flags are aged against the same instant the command gate used.
-        if now is None:
-            now = fc_state.monotonic()
-        new = FollowState(
-            active=bool(active) if active is not None else False,
-            lock_state=lock_state,
-            target_id=self._tracker.track_id,
-            range_m=range_m,
-            distance_setpoint_m=distance_setpoint_m,
-            height_setpoint_m=height_setpoint_m,
-            commanding=commanding,
-            # Aged, not remembered: once the HEARTBEAT these came from is stale
-            # the read-back stops asserting an arm/mode state nothing has
-            # confirmed. hold_reason carries "fc-stale" so the operator can
-            # tell a lost heartbeat from a genuinely disarmed aircraft.
-            fc_armed=self._fc.armed_at(now),
-            fc_guided=self._fc.guided_at(now),
-            hold_reason=None if commanding else hold_reason,
+    async def _tick_follow(self, cfg: FollowConfig, now: float) -> None:
+        if not self._tracker.has_lock:
+            phase = PHASE_LOST if self._phase == PHASE_LOST else PHASE_ACQUIRING
+            await self._hold(cfg, now, phase=phase, hold_reason=HOLD_NO_LOCK)
+            return
+        lock = self._tracker.effective_lock(now)
+        if lock is EffectiveLock.LOST:
+            await self._on_lock_lost(cfg, now)
+            return
+        target = self._tracker.locked_target(now)
+        if target is None:
+            await self._hold(
+                cfg,
+                now,
+                phase=PHASE_HOLDING,
+                hold_reason=HOLD_LOCK_UNCERTAIN,
+                lock_state=lock.value,
+            )
+            return
+        if self._filter_track_id != target.track_id:
+            # A different subject (a fresh operator designate): new track.
+            self._reset_track(target.track_id)
+        gate = self._gate(now)
+        if gate is not None:
+            await self._hold(
+                cfg, now, phase=PHASE_HOLDING, hold_reason=gate, lock_state=LOCK_LOCKED
+            )
+            return
+        # While the gate coasts on a frozen box (no new sighting) the box is
+        # the same object; it is never re-projected through fresh attitude.
+        if target.bbox is not self._measured_bbox:
+            self._measure_sighting(cfg, now, target.bbox)
+        if (
+            not self._filter.initialized
+            or (now - self._filter.last_update_s) > _MEASUREMENT_STALE_S
+        ):
+            await self._hold(
+                cfg,
+                now,
+                phase=PHASE_HOLDING if self._filter.initialized else PHASE_ACQUIRING,
+                hold_reason=HOLD_NO_RANGE,
+                lock_state=LOCK_LOCKED,
+            )
+            return
+        await self._command(
+            cfg, now, phase=PHASE_FOLLOWING, ff_scale=1.0, lock_state=LOCK_LOCKED
         )
-        heartbeat_due = (now - self._last_heartbeat) >= _STATE_HEARTBEAT_S
-        if not force and not new.changed_from(self._published) and not heartbeat_due:
+
+    def _reset_track(self, track_id: int | None) -> None:
+        self._filter.reset()
+        self._filter_track_id = track_id
+        self._template = None
+        self._measured_bbox = None
+        self._last_fix = None
+        self._last_lost_track_id = None
+        self._latency_ms = None
+        self._pending_latency_ts_ms = None
+
+    def _measure_sighting(self, cfg: FollowConfig, now: float, bbox: Any) -> None:
+        self._measured_bbox = bbox
+        s = self._sighting if (self._sighting and self._sighting.bbox is bbox) else None
+        frame_w, frame_h = s.frame_wh if (s and s.frame_wh) else self._frame_size()
+        fix = self._measure_box(cfg, now, bbox, frame_w, frame_h)
+        if fix is None:
             return
-        self._published = new
-        self._last_heartbeat = now
-        if self._ctx is None:
+        self._filter.update(
+            s.received_s if s else now,
+            self._pose.north_m + fix.offset_north_m,
+            self._pose.east_m + fix.offset_east_m,
+            fix.covariance(),
+        )
+        self._last_fix = fix
+        if s is not None:
+            if s.ts_ms > 0:
+                self._pending_latency_ts_ms = s.ts_ms
+            if s.embedding is not None:
+                self._template = blend_template(self._template, s.embedding)
+
+    # -- commanding and holding ----------------------------------------
+
+    async def _command(
+        self,
+        cfg: FollowConfig,
+        now: float,
+        *,
+        phase: str,
+        ff_scale: float,
+        lock_state: str,
+        coast_remaining_s: float = 0.0,
+        predicted_bbox: dict[str, object] | None = None,
+    ) -> None:
+        pred = self._filter.predicted(now)
+        if pred is None:
+            await self._hold(
+                cfg, now, phase=PHASE_HOLDING, hold_reason=HOLD_NO_RANGE, lock_state=lock_state
+            )
             return
-        await self._ctx.events.publish(FOLLOW_STATE_TOPIC, new.to_dict())
+        x = pred[0]
+        agl, _src = self._agl(now)
+        sp = setpoint.compute_setpoint(
+            drone_north_m=self._pose.north_m,
+            drone_east_m=self._pose.east_m,
+            drone_down_m=self._pose.down_m,
+            drone_yaw_rad=self._pose.yaw,
+            agl_m=agl,
+            target_north_m=x[0],
+            target_east_m=x[1],
+            target_vn_mps=x[2],
+            target_ve_mps=x[3],
+            follow_distance_m=cfg.follow_distance_m,
+            follow_height_m=cfg.follow_height_m,
+            max_speed_mps=cfg.max_speed_mps,
+            ff_scale=ff_scale,
+        )
+        await self._send_setpoint(sp, now)
+        if self._pending_latency_ts_ms is not None:
+            # Both clocks are the host's monotonic clock (the engine stamps
+            # frames with CLOCK_MONOTONIC).
+            latency = now * 1000.0 - self._pending_latency_ts_ms
+            self._latency_ms = (
+                int(round(latency)) if 0.0 <= latency <= _MAX_LATENCY_MS else None
+            )
+            self._pending_latency_ts_ms = None
+        self._hold_sends_remaining = _HOLD_REPEATS
+        await self._point_gimbal(cfg, now, x[0], x[1], agl)
+        await self._publish_state(
+            cfg,
+            now=now,
+            active=True,
+            phase=phase,
+            lock_state=lock_state,
+            commanding=True,
+            coast_remaining_s=coast_remaining_s,
+            predicted_bbox=predicted_bbox,
+        )
+
+    async def _hold(
+        self,
+        cfg: FollowConfig,
+        now: float,
+        *,
+        phase: str,
+        hold_reason: str,
+        lock_state: str | None = None,
+        active: bool = True,
+        coast_remaining_s: float = 0.0,
+        force: bool = False,
+    ) -> None:
+        if (
+            self._hold_sends_remaining > 0
+            and self._pose.ready(now)
+            and self._fc.armed_at(now)
+            and self._fc.guided_at(now)
+        ):
+            hold = setpoint.hold_setpoint(
+                north_m=self._pose.north_m,
+                east_m=self._pose.east_m,
+                down_m=self._pose.down_m,
+                yaw_rad=self._pose.yaw,
+            )
+            await self._send_setpoint(hold, now)
+            self._hold_sends_remaining -= 1
+        await self._publish_state(
+            cfg,
+            now=now,
+            active=active,
+            phase=phase,
+            lock_state=lock_state,
+            commanding=False,
+            hold_reason=hold_reason,
+            coast_remaining_s=coast_remaining_s,
+            force=force,
+        )
+
+    async def _send_setpoint(self, sp: setpoint.LocalSetpoint, now: float) -> None:
+        """Send one SET_POSITION_TARGET_LOCAL_NED and count it toward the
+        published send rate (the agent's own setpoints never reach a ground
+        tlog, so the read-back is where a bench reads the rate)."""
+        await self._ctx.flight.guided_setpoint(
+            **mavlink_frames.build_local_setpoint(**asdict(sp))
+        )
+        self._setpoint_times.append(now)
+
+    async def _point_gimbal(
+        self, cfg: FollowConfig, now: float, north: float, east: float, agl: float
+    ) -> None:
+        if not cfg.gimbal_point or (now - self._last_gimbal_s) < _GIMBAL_PERIOD_S:
+            return
+        dn = north - self._pose.north_m
+        de = east - self._pose.east_m
+        pitch_deg, yaw_deg = mavlink_frames.gimbal_angles_for_target(
+            slant_range_m=math.hypot(math.hypot(dn, de), agl),
+            agl_m=agl,
+            bearing_rad=math.atan2(de, dn),
+            vehicle_yaw_rad=self._pose.yaw,
+        )
+        # Cached in the projection convention (pitch positive = down) as the
+        # boresight estimate until the FC reports a real gimbal attitude.
+        self._commanded_gimbal = (-pitch_deg, yaw_deg)
+        self._last_gimbal_s = now
+        try:
+            await self._ctx.mavlink.send(
+                mavlink_frames.build_gimbal_pitchyaw(pitch_deg=pitch_deg, yaw_deg=yaw_deg)
+            )
+        except Exception as exc:  # noqa: BLE001
+            # A missing gimbal component is non-fatal: the body-only follow
+            # continues.
+            self._ctx.log.info("follow_me_gimbal_skipped", error=str(exc))
+
+
+__all__ = ["FollowLoopMixin", "Sighting"]

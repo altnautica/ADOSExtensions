@@ -23,6 +23,7 @@ describe("normalizeFollowState", () => {
       fc_guided: true,
     });
     expect(s).toEqual({
+      ...EMPTY_FOLLOW_STATE,
       active: true,
       lockState: "locked",
       targetId: 12,
@@ -33,7 +34,44 @@ describe("normalizeFollowState", () => {
       fcArmed: true,
       fcGuided: true,
       holdReason: null,
+      // A payload with no reacquire_mode reads as strict, never smart.
+      reacquireMode: "strict",
     });
+  });
+
+  it("maps phase, range cues, AGL, re-acquire, latency and setpoint rate", () => {
+    const s = normalizeFollowState({
+      phase: "coasting",
+      range_m: 10.2,
+      range_sigma_m: 0.3,
+      range_cues: [
+        { kind: "ground", range_m: 10.1, sigma_m: 0.4 },
+        { kind: "bogus", range_m: 1, sigma_m: 1 },
+      ],
+      target_speed_mps: 1.4,
+      agl_m: 4.1,
+      agl_source: "rng",
+      reacquire_mode: "smart",
+      coast_remaining_s: 2.5,
+      pipeline_latency_ms: 85,
+      setpoint_rate_hz: 20,
+      confidence: 0.97,
+    });
+    expect(s.phase).toBe("coasting");
+    expect(s.rangeSigmaM).toBe(0.3);
+    expect(s.rangeCues).toEqual([{ kind: "ground", rangeM: 10.1, sigmaM: 0.4 }]);
+    expect(s.aglSource).toBe("rng");
+    expect(s.reacquireMode).toBe("smart");
+    expect(s.coastRemainingS).toBe(2.5);
+    expect(s.pipelineLatencyMs).toBe(85);
+    expect(s.setpointRateHz).toBe(20);
+    expect(s.confidence).toBe(0.97);
+  });
+
+  it("reads an unknown phase as idle and an unknown mode as strict", () => {
+    const s = normalizeFollowState({ phase: "bogus", reacquire_mode: "bogus" });
+    expect(s.phase).toBe("idle");
+    expect(s.reacquireMode).toBe("strict");
   });
 
   it("falls back to the empty baseline for a null payload", () => {
@@ -69,7 +107,7 @@ describe("hold reasons", () => {
     "fc-stale",
     "fc-disarmed",
     "fc-not-guided",
-    "no-ground-fix",
+    "no-range",
   ] as const;
 
   it("has a locale label for every reason the agent can publish", () => {
@@ -79,6 +117,28 @@ describe("hold reasons", () => {
         (enLocale as Record<string, string>)[holdReasonLabelKey(reason)],
         `missing label for ${reason}`,
       ).toBeTruthy();
+    }
+  });
+
+  it("has a locale label for every phase, mode, cue and AGL source", () => {
+    const keys = [
+      "phase.idle",
+      "phase.acquiring",
+      "phase.following",
+      "phase.coasting",
+      "phase.searching",
+      "phase.lost",
+      "phase.holding",
+      "reacquire.strict",
+      "reacquire.smart",
+      "cue.ground",
+      "cue.box_height",
+      "cue.lidar",
+      "agl.rng",
+      "agl.baro",
+    ];
+    for (const key of keys) {
+      expect((enLocale as Record<string, string>)[key], key).toBeTruthy();
     }
   });
 
@@ -99,9 +159,16 @@ describe("normalizeConfig", () => {
     expect(c.follow_distance_m).toBe(12);
     expect(c.follow_height_m).toBe(4);
     expect(c.gimbal_point).toBe(true);
-    expect(c.designate_camera).toBe("uvc-0");
+    expect(c.designate_camera).toBe("auto");
     expect(c.camera_hfov_deg).toBe(70);
     expect(c.mount_pitch_deg).toBe(30);
+    expect(c.reacquire_mode).toBe("smart");
+    expect(c.max_speed_mps).toBe(6);
+  });
+
+  it("reads an unknown re-acquire mode as strict", () => {
+    expect(normalizeConfig({ reacquire_mode: "x" }).reacquire_mode).toBe("strict");
+    expect(normalizeConfig({ reacquire_mode: "smart" }).reacquire_mode).toBe("smart");
   });
 
   it("coerces a numeric string", () => {

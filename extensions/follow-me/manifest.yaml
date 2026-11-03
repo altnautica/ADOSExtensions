@@ -1,37 +1,45 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.2.10"
-description: "Lock onto an operator-designated subject and fly a fixed-distance standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
+version: "0.3.0"
+description: "Lock onto an operator-designated subject and fly a standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
-  Click a subject in the live video and the drone follows it at a fixed
-  distance and height. A generic person/object detector on the companion
-  produces detections; the operator designates one; the companion locks
-  onto that track, projects its image position onto the ground, and feeds
-  the flight controller guided position setpoints at a steady rate.
+  Click a subject in the live video and the drone follows it at a set
+  distance and height above the ground. A generic person/object detector on
+  the companion produces detections; the operator designates one; the
+  companion locks onto that track, estimates the subject's position from the
+  box (ground intersection of the feet, box height, and an optional planar
+  lidar return, fused by their uncertainty), tracks its velocity with a
+  Kalman filter, and streams local-frame guided setpoints (position, velocity
+  feed-forward and yaw) to the flight controller at 20 Hz. A downward
+  rangefinder on the flight controller keeps the follow height above the
+  terrain.
 
-  A lock-state safety gate stops commanding the instant the tracker reports
-  the subject uncertain or lost, and never silently re-locks onto a
-  different subject. The Follow-Me Skill in the cockpit Skill Bar arms and
-  disarms the behavior; click a detected subject in the cockpit and pick
-  Follow to designate it; the follow settings render as native controls; the
-  node-detail tab carries a live read-back.
+  A lock-state safety gate stops commanding when the tracker reports the
+  subject uncertain or lost. On a loss the re-acquire mode decides: Strict
+  holds and waits for the operator to designate again; Smart coasts on the
+  prediction for a few seconds and, if a person matching the subject's
+  appearance appears where the subject should be, designates it and
+  announces the re-acquire. The engine never re-locks silently.
 
   Requires a flight controller in a guided position-hold mode (ArduPilot
   Guided, PX4 Offboard/position). Works with a forward or downward camera;
   point a gimbal at the subject when one is present.
 features:
   - "Click a detected subject in the cockpit and pick Follow to designate it"
-  - "Fixed-distance, fixed-height standoff follow via guided setpoints"
+  - "Standoff follow with velocity feed-forward at 20 Hz in the local frame"
+  - "Terrain-following height from a downward rangefinder, barometric fallback"
+  - "Range from the feet ray, the box height and an optional planar lidar, fused by uncertainty"
+  - "Strict or Smart re-acquire after an occlusion, operator selectable"
   - "Lock-state safety gate: stops commanding on uncertain or lost"
   - "Optional gimbal point-at-subject when a gimbal is present"
-  - "Live read-back: lock state, commanding flag, range, setpoints"
+  - "Live read-back: phase, lock, range with uncertainty, height source, latency"
 hardware_requirements:
   cameras: "USB UVC or CSI camera bound to the vision pipeline"
   fc_firmware: "ArduPilot or PX4 in a guided position-hold mode"
   boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 resource_impact:
-  output_rate_hz: 6
+  output_rate_hz: 20
   cpu_percent_peak: 25
   ram_mb: 128
   pids: 4
@@ -45,7 +53,9 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  ados_version: ">=0.99.180"
+  # The agent's drone stream table (LOCAL_POSITION_NED and DISTANCE_SENSOR)
+  # and the detection-embedding subscription arrive in 0.108.0.
+  ados_version: ">=0.108.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 
@@ -56,10 +66,16 @@ agent:
   per_drone_config: true
   permissions:
     - id: vision.detection.subscribe
+    # Smart re-acquire designates the matching track with the engine.
+    - id: vision.track.designate
     - id: mavlink.read
     - id: mavlink.write
     - id: flight.guided_setpoint
     - id: event.publish
+    # The optional planar scan the world-engine extension shares
+    # (plugin.world-engine.scan, subscribe capability telemetry.read).
+    - id: event.subscribe
+    - id: telemetry.read
     - id: mcp.expose
   mavlink_components:
     # The companion's own component id: the guided setpoints and the gimbal
@@ -223,6 +239,64 @@ gcs:
           label: "settings.mountPitch"
           group: "settings.title"
           order: 42
+      # What happens when the lock on the subject is lost. Two values, so
+      # surfaces render it as a STRICT | SMART toggle. strict: hold and wait for
+      # the operator to designate again. smart: coast on the prediction for
+      # reacquire_window_s and designate a person that matches the subject's
+      # appearance and predicted position, announcing it.
+      - key: reacquire_mode
+        binding: plugin.config
+        schema:
+          type: string
+          enum: ["strict", "smart"]
+          default: "smart"
+        ui:
+          widget: enum
+          label: "settings.reacquireMode"
+          group: "settings.title"
+          order: 60
+      - key: reacquire_window_s
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0.5
+          maximum: 15
+          step: 0.5
+          default: 4
+        ui:
+          widget: range
+          label: "settings.reacquireWindow"
+          group: "settings.title"
+          order: 62
+          visible_if: { key: reacquire_mode, equals: "smart" }
+      - key: reacquire_min_similarity
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0.5
+          maximum: 0.99
+          step: 0.01
+          default: 0.75
+        ui:
+          widget: range
+          label: "settings.reacquireMinSimilarity"
+          group: "settings.title"
+          order: 64
+          visible_if: { key: reacquire_mode, equals: "smart" }
+      # Cap on the velocity feed-forward handed to the flight controller.
+      - key: max_speed_mps
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0.5
+          maximum: 15
+          step: 0.5
+          default: 6
+        ui:
+          widget: range
+          label: "settings.maxSpeed"
+          group: "settings.title"
+          order: 70
       # The camera whose detections the follow loop consumes. A registry
       # picker: the operator pins a camera or leaves it on auto (the first
       # detect camera → any camera for the detection filter).

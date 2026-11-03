@@ -25,10 +25,9 @@ use super::ticks::companion_state_from_i64;
 use crate::config::Mode;
 use crate::external_nav::{ExtnavHealth, OdometryBuilder, COMPONENT_EXTNAV};
 use crate::health::HealthSnapshot;
-use crate::mavlink_emit::{frame_for, monotonic_ns, next_sequence, of_frame, ComponentRouter};
+use crate::mavlink_emit::{frame_for, monotonic_ns, next_sequence, ComponentRouter};
 use crate::nav_commands::{
     build_request_origin, build_set_ekf_source_set, build_set_global_origin,
-    extnav_stream_requests,
 };
 use crate::nav_config::{ExternalNavConfig, ObstacleConfig};
 use crate::nav_state::{RateMeter, NAV_STATE_TOPIC};
@@ -40,7 +39,6 @@ const SECOND: i64 = 1_000_000_000;
 const ORIGIN_WAIT_NS: i64 = 5 * SECOND;
 const ACK_WAIT_NS: i64 = SECOND;
 const MAX_COMMAND_TRIES: u8 = 3;
-const STREAM_REQUEST_PERIOD_NS: i64 = 30 * SECOND;
 const RATE_WINDOW_NS: i64 = SECOND;
 /// `MAV_RESULT_ACCEPTED`.
 const ACCEPTED: u8 = 0;
@@ -90,22 +88,12 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
         let mut pending: Option<PendingSet> = None;
         let mut last_origin_request: Option<i64> = None;
         let mut last_origin_set: Option<i64> = None;
-        let mut last_streams: Option<i64> = None;
         let mut last_tracked: Option<i64> = None;
         loop {
             interval.tick().await;
             let now = monotonic_ns();
             let target = task.sinks.fc_target.get();
             let fc = task.sinks.fc_nav.snapshot(now);
-
-            if last_streams.is_none_or(|t| now - t >= STREAM_REQUEST_PERIOD_NS) {
-                last_streams = Some(now);
-                for msg in extnav_stream_requests(target) {
-                    if let Some(frame) = of_frame(&msg) {
-                        task.router.send(&task.ctx, &frame).await;
-                    }
-                }
-            }
 
             // One ODOMETRY per new pose (the tracker's scan rate, ~10 Hz);
             // nothing between poses, nothing while lost or stale.

@@ -8,16 +8,43 @@ GCS settings tab. The values mirror ``config-schema.json``.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 
 # The topic the agent publishes the follow read-back on and the GCS skill
 # + tab subscribe to. Must equal the manifest skill ``state.topic``.
 FOLLOW_STATE_TOPIC = "follow.state"
+# One-shot events: a smart re-acquire designated a new track, and the follow
+# gave the subject up.
+FOLLOW_REACQUIRED_TOPIC = "follow.reacquired"
+FOLLOW_LOST_TOPIC = "follow.lost"
 
 # Lock-state words on the wire (lowercase, matching the vision contract).
 LOCK_LOCKED = "locked"
 LOCK_UNCERTAIN = "uncertain"
 LOCK_LOST = "lost"
+
+# The follow phase on the wire. ``idle``: the skill is off. ``acquiring``:
+# armed, waiting for a lock and a first range fix. ``following``: commanding
+# on a live lock. ``coasting``: the lock dropped and a smart re-acquire flies
+# toward the predicted standoff while the prediction is still tight.
+# ``searching``: the same window once the prediction has spread too far to
+# draw a box. ``lost``: the subject was given up. ``holding``: locked but a
+# gate (telemetry, flight controller, range, uncertain lock) holds.
+PHASE_IDLE = "idle"
+PHASE_ACQUIRING = "acquiring"
+PHASE_FOLLOWING = "following"
+PHASE_COASTING = "coasting"
+PHASE_SEARCHING = "searching"
+PHASE_LOST = "lost"
+PHASE_HOLDING = "holding"
+
+# Re-acquire modes. ``strict`` gives the subject up on the first loss and
+# waits for the operator. ``smart`` coasts on the prediction for a window and
+# re-designates a track that matches the subject's appearance and predicted
+# position, announcing it.
+REACQUIRE_STRICT = "strict"
+REACQUIRE_SMART = "smart"
+_REACQUIRE_MODES = (REACQUIRE_STRICT, REACQUIRE_SMART)
 
 # Why the loop is not commanding, on the wire. ``commanding: false`` on its
 # own tells an operator that the follow is not flying the aircraft but not
@@ -32,7 +59,7 @@ HOLD_POSE_STALE = "pose-stale"
 HOLD_FC_STALE = "fc-stale"
 HOLD_FC_DISARMED = "fc-disarmed"
 HOLD_FC_NOT_GUIDED = "fc-not-guided"
-HOLD_NO_GROUND_FIX = "no-ground-fix"
+HOLD_NO_RANGE = "no-range"
 
 
 @dataclass(frozen=True)
@@ -54,6 +81,10 @@ class FollowConfig:
     # forward-down angle rather than 0 (a level camera never resolves a
     # ground point and the follow loop would never command).
     mount_pitch_deg: float = 30.0
+    reacquire_mode: str = REACQUIRE_SMART
+    reacquire_window_s: float = 4.0
+    reacquire_min_similarity: float = 0.75
+    max_speed_mps: float = 6.0
 
     @classmethod
     def resolve(
@@ -70,6 +101,7 @@ class FollowConfig:
                 return static[key]
             return default
 
+        mode = str(pick("reacquire_mode", cls.reacquire_mode)).strip().lower()
         return cls(
             active=bool(pick("active", cls.active)),
             follow_distance_m=_as_float(
@@ -92,6 +124,27 @@ class FollowConfig:
                 pick("mount_pitch_deg", cls.mount_pitch_deg),
                 cls.mount_pitch_deg,
             ),
+            # An unrecognised mode resolves to strict: the conservative
+            # behaviour that never re-designates on its own.
+            reacquire_mode=mode if mode in _REACQUIRE_MODES else REACQUIRE_STRICT,
+            reacquire_window_s=_clamped(
+                pick("reacquire_window_s", cls.reacquire_window_s),
+                cls.reacquire_window_s,
+                0.5,
+                15.0,
+            ),
+            reacquire_min_similarity=_clamped(
+                pick("reacquire_min_similarity", cls.reacquire_min_similarity),
+                cls.reacquire_min_similarity,
+                0.5,
+                0.99,
+            ),
+            max_speed_mps=_clamped(
+                pick("max_speed_mps", cls.max_speed_mps),
+                cls.max_speed_mps,
+                0.5,
+                15.0,
+            ),
         )
 
 
@@ -102,15 +155,21 @@ def _as_float(value: object, default: float) -> float:
         return default
 
 
+def _clamped(value: object, default: float, lo: float, hi: float) -> float:
+    v = _as_float(value, default)
+    return lo if v < lo else hi if v > hi else v
+
+
 @dataclass
 class FollowState:
     """The published follow read-back. ``commanding`` is the honest bit:
-    True only while active, locked, the vehicle pose is CURRENT, AND the
-    flight controller is armed and in a guided/offboard mode that accepts the
-    setpoints. ``fc_armed`` / ``fc_guided`` carry the flight-controller state,
-    and are reported False once the HEARTBEAT they came from goes stale — a
-    remembered arm state is not an observed one. ``hold_reason`` names which
-    gate is holding, so ``commanding: false`` is never a cause-free reading."""
+    True only while active, the vehicle pose is CURRENT, the flight
+    controller is armed and in a guided/offboard mode that accepts the
+    setpoints, AND the loop is flying a follow (on a live lock or a smart
+    coast). ``fc_armed`` / ``fc_guided`` are reported False once the
+    HEARTBEAT they came from goes stale — a remembered arm state is not an
+    observed one. ``hold_reason`` names which gate is holding, so
+    ``commanding: false`` is never a cause-free reading."""
 
     active: bool = False
     lock_state: str | None = None
@@ -122,6 +181,23 @@ class FollowState:
     fc_armed: bool = False
     fc_guided: bool = False
     hold_reason: str | None = None
+    phase: str = PHASE_IDLE
+    range_sigma_m: float | None = None
+    range_cues: list[dict[str, object]] = field(default_factory=list)
+    target_speed_mps: float | None = None
+    bearing_deg: float | None = None
+    depression_deg: float | None = None
+    target_ned: list[float] | None = None
+    target_vel_ned: list[float] | None = None
+    predicted_bbox: dict[str, object] | None = None
+    setpoint_rate_hz: float = 0.0
+    agl_m: float | None = None
+    agl_source: str | None = None
+    reacquire_mode: str = REACQUIRE_SMART
+    coast_remaining_s: float = 0.0
+    pipeline_latency_ms: int | None = None
+    track_id: int | None = None
+    confidence: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -132,9 +208,20 @@ class FollowState:
 
 __all__ = [
     "FOLLOW_STATE_TOPIC",
+    "FOLLOW_REACQUIRED_TOPIC",
+    "FOLLOW_LOST_TOPIC",
     "LOCK_LOCKED",
     "LOCK_UNCERTAIN",
     "LOCK_LOST",
+    "PHASE_IDLE",
+    "PHASE_ACQUIRING",
+    "PHASE_FOLLOWING",
+    "PHASE_COASTING",
+    "PHASE_SEARCHING",
+    "PHASE_LOST",
+    "PHASE_HOLDING",
+    "REACQUIRE_STRICT",
+    "REACQUIRE_SMART",
     "HOLD_INACTIVE",
     "HOLD_NO_LOCK",
     "HOLD_LOCK_UNCERTAIN",
@@ -143,7 +230,7 @@ __all__ = [
     "HOLD_FC_STALE",
     "HOLD_FC_DISARMED",
     "HOLD_FC_NOT_GUIDED",
-    "HOLD_NO_GROUND_FIX",
+    "HOLD_NO_RANGE",
     "FollowConfig",
     "FollowState",
 ]

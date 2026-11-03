@@ -4,6 +4,71 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.3.0] - 2026-11-03
+
+### Changed
+
+- Setpoints are `SET_POSITION_TARGET_LOCAL_NED` (frame `MAV_FRAME_LOCAL_NED`,
+  type mask 2496) at 20 Hz. Each one carries position, a velocity
+  feed-forward of the subject's velocity (clamped to `max_speed_mps`) and yaw
+  toward the subject. The `SET_POSITION_TARGET_GLOBAL_INT` builder is removed.
+- Control runs in the flight controller's local frame, from
+  `LOCAL_POSITION_NED`. `GLOBAL_POSITION_INT` now supplies only the barometric
+  height fallback and lat/lon. The agent (0.108.0 or later) streams
+  `LOCAL_POSITION_NED` and `DISTANCE_SENSOR` at 20 Hz on a drone; the
+  minimum agent version is raised to match.
+- The subject is projected through the bottom-centre of its box (the feet)
+  rather than the box centre, which projected long by about
+  `0.85 m / tan(depression)`.
+- Height above ground comes from a downward `DISTANCE_SENSOR` (orientation 25)
+  while it is fresh (< 0.3 s), inside its reported range and the vehicle is
+  tilted under 30 degrees. Otherwise the barometric height is used. The
+  follow height is terrain-following.
+- Range is the inverse-variance fusion of up to three cues: the ground
+  intersection, the box height of a 1.70 m subject (only when the box clears
+  every frame edge) and an optional planar-lidar return from
+  `plugin.world-engine.scan`. The lidar return is accepted only within 25 % of
+  the other cues.
+- A constant-velocity Kalman filter tracks the subject's position and velocity.
+  The standoff trails the subject along its direction of travel when it moves
+  faster than 0.5 m/s.
+- The hold reason `no-ground-fix` is renamed `no-range`. Every hold that
+  follows commanding sends a short burst of zero-velocity setpoints at the
+  current position, so the last feed-forward never stays active.
+
+### Added
+
+- `reacquire_mode` (`strict` | `smart`, default `smart`), plus
+  `reacquire_window_s`, `reacquire_min_similarity` and `max_speed_mps`.
+  - In `smart` mode, a lost lock coasts toward the predicted standoff at half
+    feed-forward. A `person` that matches the subject's appearance embedding
+    and lies within 3 sigma of the prediction is designated with the engine,
+    and the plugin announces it on `follow.reacquired`.
+  - When the window expires, or in `strict` mode, the plugin announces
+    `follow.lost` and holds.
+- New `follow.state` fields:
+  - `phase`;
+  - `range_sigma_m` and `range_cues`;
+  - `target_speed_mps`, `agl_m` and `agl_source`;
+  - `reacquire_mode` and `coast_remaining_s`;
+  - `pipeline_latency_ms` (detection frame to setpoint send) and
+    `setpoint_rate_hz`;
+  - `track_id` and `confidence`;
+  - `bearing_deg` and `depression_deg`;
+  - `target_ned` and `target_vel_ned`;
+  - `predicted_bbox` while coasting.
+- The node-detail tab shows the phase, the re-acquire mode, the range with its
+  uncertainty and cues, the height source, the subject speed, the
+  re-acquire window, the latency and the setpoint rate.
+- New permissions:
+  - `vision.track.designate`, for the re-acquire designate;
+  - `event.subscribe` and `telemetry.read`, for the optional scan topic.
+
+### Fixed
+
+- The GCS bundle reported version 0.2.9.
+- The GCS default designate camera matches the agent (`auto`).
+
 ## [0.2.10]
 
 ### Fixed

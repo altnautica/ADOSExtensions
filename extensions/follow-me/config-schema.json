@@ -21,7 +21,7 @@
     "follow_height_m": {
       "type": "number",
       "title": "Follow height (m)",
-      "description": "Height above the arming altitude the drone holds while following.",
+      "description": "Height above the ground the drone holds while following: the downward rangefinder when it is valid, else the barometric height above the take-off point.",
       "default": 4,
       "minimum": 0,
       "maximum": 20
@@ -53,6 +53,37 @@
       "default": 30,
       "minimum": 0,
       "maximum": 90
+    },
+    "reacquire_mode": {
+      "type": "string",
+      "title": "Re-acquire mode",
+      "description": "What happens when the lock on the subject is lost. strict: hold and wait for the operator to designate again. smart: coast on the prediction for reacquire_window_s and designate a person matching the subject's appearance and predicted position, announcing it on follow.reacquired.",
+      "enum": ["strict", "smart"],
+      "default": "smart"
+    },
+    "reacquire_window_s": {
+      "type": "number",
+      "title": "Re-acquire window (s)",
+      "description": "How long a smart re-acquire coasts on the prediction before giving the subject up.",
+      "default": 4,
+      "minimum": 0.5,
+      "maximum": 15
+    },
+    "reacquire_min_similarity": {
+      "type": "number",
+      "title": "Re-acquire minimum similarity",
+      "description": "Appearance similarity (cosine, 0-1) a candidate needs to the subject's stored embedding to be re-acquired.",
+      "default": 0.75,
+      "minimum": 0.5,
+      "maximum": 0.99
+    },
+    "max_speed_mps": {
+      "type": "number",
+      "title": "Maximum speed (m/s)",
+      "description": "Cap on the velocity feed-forward sent to the flight controller.",
+      "default": 6,
+      "minimum": 0.5,
+      "maximum": 15
     },
     "detector": {
       "type": "string",
