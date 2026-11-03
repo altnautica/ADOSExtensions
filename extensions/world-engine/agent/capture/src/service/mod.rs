@@ -16,6 +16,7 @@
 
 mod control;
 mod frame;
+mod nav_lane;
 mod tick;
 mod view;
 
@@ -36,6 +37,7 @@ use crate::control::ControlMsg;
 use crate::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
 use crate::hud::HudAction;
 use crate::lidar_scan::LidarScan;
+use crate::nav::{NavMap, NavSettings};
 use crate::pose::fc_ekf::FcEkfPose;
 use crate::pose::PoseProvider;
 use crate::publish::AtlasPublisher;
@@ -97,6 +99,21 @@ pub struct LoopDeps {
     /// `None` where there is none (the lock is then never applied).
     pub camera: Option<Arc<dyn CameraControl>>,
     pub paths: Paths,
+    pub nav: NavDeps,
+}
+
+/// What the navigation lanes need beyond the capture loop's own inputs.
+#[derive(Clone, Default)]
+pub struct NavDeps {
+    /// The flight controller's EKF feed, always (the map's z is its height).
+    pub fc_feed: Option<FcEkfPose>,
+    /// The LiDAR mount, body-from-sensor (FLU); identity when unknown.
+    pub lidar_mount: Option<[f64; 16]>,
+    /// Whether the configured LiDAR is planar: its session record is the
+    /// compact polar stream instead of the Cartesian cloud.
+    pub lidar_planar: bool,
+    /// Where evicted occupancy tiles go with no session open.
+    pub scratch_dir: Option<PathBuf>,
 }
 
 /// Per-camera frame accounting.
@@ -156,6 +173,12 @@ pub(crate) struct Engine {
     /// Sim-stamped frames whose exposure could not be mapped to the host
     /// clock (the bus clock is not on `sim`); they keep their arrival stamp.
     sim_unmapped: u64,
+    /// The live navigation and mapping lanes.
+    nav: NavMap,
+    nav_deps: NavDeps,
+    /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
+    /// "fc"`).
+    fc_imu_prev: Option<(u64, [f64; 9])>,
 }
 
 /// Run the capture loop until `cancel`. An open session is closed (manifest
@@ -178,6 +201,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         view_tx,
         camera,
         paths,
+        nav: nav_deps,
     } = deps;
     if let Some(fc) = &fc {
         fc.set_covariance(cfg.pose_prior.fc_covariance());
@@ -195,11 +219,26 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     }
     let (exposure_tx, mut exposure_rx) = mpsc::unbounded_channel();
     let bus_timebase = crate::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
+    let budget = crate::nav::budget::resolve(
+        cfg.memory_budget_mb,
+        std::env::var(crate::nav::budget::MEMORY_MAX_ENV).ok().as_deref(),
+        std::path::Path::new("/"),
+    );
+    let nav = NavMap::new(NavSettings {
+        nav_pose: cfg.nav_pose,
+        placement: cfg.placement,
+        budget,
+        pose_interval_ms: cfg.pose_publish_interval_ms,
+    });
+    tracing::info!(
+        nav_pose = ?cfg.nav_pose,
+        placement = ?cfg.placement,
+        budget_mb = budget.total_mb(),
+        "atlas_nav_lanes"
+    );
+    let nav_period = Duration::from_millis(cfg.pose_publish_interval_ms.clamp(10, 1000) as u64);
     let mut engine = Engine {
-        keyframes: CaptureSession::with_pose_interval(
-            cfg.capture.clone(),
-            cfg.pose_publish_interval_ms,
-        ),
+        keyframes: CaptureSession::new(cfg.capture.clone()),
         exposure: cfg.exposure.clone(),
         camera,
         exposure_seq: 0,
@@ -229,6 +268,9 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         slow: 0,
         bus_timebase,
         sim_unmapped: 0,
+        nav,
+        nav_deps,
+        fc_imu_prev: None,
     };
     // Frames are pulled on their own task so a source read is never
     // cancelled mid-frame by the select below.
@@ -255,6 +297,9 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     });
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // The pose lane drains the provider at its own publish interval.
+    let mut nav_tick = tokio::time::interval(nav_period);
+    nav_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     engine.publish_status().await;
     // A configured lock is applied once per run; unlocked leaves the cameras
     // on their own auto exposure.
@@ -271,9 +316,10 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
                 engine.on_hud(action).await;
             }
             _ = tick.tick() => engine.on_tick().await,
+            _ = nav_tick.tick() => engine.on_nav_tick().await,
             Some(ev) = bus_rx.recv() => engine.on_bus(ev),
             Some(scan) = async { match lidar_rx.as_mut() { Some(rx) => rx.recv().await, None => None } } => {
-                engine.on_lidar(scan);
+                engine.on_lidar(scan).await;
             }
             f = frame_rx.recv() => match f {
                 Some(f) => engine.on_frame(f).await,

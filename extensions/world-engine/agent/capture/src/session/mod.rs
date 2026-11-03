@@ -1,12 +1,11 @@
 //! Capture session: the stateful core that turns a stream of pose-tagged
-//! frames into the pose stream plus selected keyframes a compute node
-//! reconstructs from.
+//! frames into the selected keyframes a compute node reconstructs from.
 //!
 //! One session runs one flow regardless of camera count. Each enabled camera
-//! gets its own [`KeyframeSelector`]; a frame always contributes to the ~10 Hz
-//! pose stream and, when its camera's selector fires, a full keyframe. The
-//! fusion keys off the enabled count downstream; the same code path serves one
-//! camera or an all-sides rig.
+//! gets its own [`KeyframeSelector`]; a frame counts toward the ingest rate
+//! and, when its camera's selector fires, yields a full keyframe. The live
+//! shared pose stream is not the session's: the navigation publisher
+//! (`crate::nav`) owns it, so the pose keeps flowing with no session open.
 
 use crate::config::CaptureConfig;
 use crate::selector::KeyframeSelector;
@@ -16,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use world_engine_protocol::atlas::{
     CaptureState, CaptureStatus, KeyframeEnvelope, KeyframeFlags, KeyframeImage, KeyframeTier,
-    Pose, PoseDescriptor, PoseSource, TimeAlignment, VioHealth,
+    Pose, PoseSource, TimeAlignment, VioHealth,
 };
 
 /// How many recent accepted frames the ingest rate is measured over.
@@ -44,25 +43,10 @@ pub struct FrameInput {
     pub imu_window: Vec<ImuSample>,
 }
 
-/// The pose side of one frame, with no image and no intrinsics. The
-/// overwhelming majority of frames are not keyframes, and building a whole
-/// [`FrameInput`] with an empty [`KeyframeImage`] and a resolved intrinsics
-/// matrix purely to reach the pose stream was a per-frame allocation for
-/// nothing.
-#[derive(Debug, Clone)]
-pub struct PoseInput {
-    pub pose: Pose,
-    pub anchor: Option<GeoAnchor>,
-}
-
-/// The result of ingesting one frame: a pose descriptor for the live pose
-/// stream when the pose cadence is due, plus a keyframe when the camera's
+/// The result of ingesting one accepted frame: a keyframe when the camera's
 /// selector fired.
 #[derive(Debug, Clone)]
 pub struct CaptureOutput {
-    /// `None` when the ~10 Hz pose cadence is not due yet. The frame was still
-    /// accepted and counted; only the publish is decimated.
-    pub pose: Option<PoseDescriptor>,
     pub keyframe: Option<KeyframeEnvelope>,
 }
 
@@ -90,11 +74,6 @@ pub struct CaptureSession {
     /// Selected frames refused this session because their pose sat too far from
     /// the exposure (see `MAX_PAIRING_RESIDUAL_MS`).
     pairing_rejected: u64,
-    // Pose-publish decimation. ONE clock for the whole rig, not one per camera:
-    // the rig has a single pose, so an N-camera rig must not publish N times the
-    // documented rate onto the same bus that carries multi-MB keyframes.
-    pose_interval_ms: i64,
-    last_pose_pub_ms: Option<i64>,
     /// Median scene depth from the latest fresh LiDAR scan; scales the
     /// keyframe baseline.
     scene_depth_m: Option<f64>,
@@ -104,12 +83,6 @@ impl CaptureSession {
     /// Build an idle session for the given config. No keyframes flow until
     /// [`start`](Self::start) moves it to capturing.
     pub fn new(config: CaptureConfig) -> Self {
-        Self::with_pose_interval(config, 100)
-    }
-
-    /// Build an idle session that publishes at most one pose descriptor per
-    /// `pose_interval_ms` across the whole rig.
-    pub fn with_pose_interval(config: CaptureConfig, pose_interval_ms: i64) -> Self {
         Self {
             config,
             selectors: HashMap::new(),
@@ -124,8 +97,6 @@ impl CaptureSession {
             pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
             pairing_rejected: 0,
-            pose_interval_ms: pose_interval_ms.max(0),
-            last_pose_pub_ms: None,
             scene_depth_m: None,
         }
     }
@@ -142,7 +113,6 @@ impl CaptureSession {
         self.selectors.clear();
         self.dropped_keyframes = 0;
         self.pairing_rejected = 0;
-        self.last_pose_pub_ms = None;
         // The world frame and anchor are per-session: a new session must not
         // inherit the previous run's latch, or its first keyframes would be
         // selected before this run's frame is fixed.
@@ -321,22 +291,11 @@ impl CaptureSession {
         }
     }
 
-    /// Ingest the POSE side of one frame — no image, no intrinsics, no keyframe.
-    /// The path for the overwhelming majority of frames, which only feed the
-    /// live pose stream.
-    ///
-    /// Returns `None` when the session is not capturing, the camera is not
-    /// enabled, or the rig-wide pose cadence is not due yet.
-    pub fn on_pose_only(
-        &mut self,
-        camera_id: &str,
-        input: PoseInput,
-        ts_ms: i64,
-    ) -> Option<PoseDescriptor> {
-        if !self.accept_frame(camera_id, ts_ms) {
-            return None;
-        }
-        self.due_pose(input.pose, input.anchor, ts_ms)
+    /// Ingest a frame that will not be a keyframe (no image, no intrinsics):
+    /// it only counts toward the ingest rate. `false` when the session is not
+    /// capturing or the camera is not enabled.
+    pub fn on_pose_only(&mut self, camera_id: &str, ts_ms: i64) -> bool {
+        self.accept_frame(camera_id, ts_ms)
     }
 
     /// Whether this frame is accepted for ingest, recording it in the rate
@@ -364,37 +323,9 @@ impl CaptureSession {
         true
     }
 
-    /// A pose descriptor when the rig-wide cadence is due, else `None`.
-    ///
-    /// One clock for the whole rig: the rig has a single pose, so an N-camera
-    /// set must not publish N descriptors per interval. A non-monotonic `ts_ms`
-    /// (a source that re-stamps or replays) is treated as due rather than
-    /// wedging the cadence forever.
-    fn due_pose(
-        &mut self,
-        pose: Pose,
-        anchor: Option<GeoAnchor>,
-        ts_ms: i64,
-    ) -> Option<PoseDescriptor> {
-        let due = match self.last_pose_pub_ms {
-            None => true,
-            Some(last) => ts_ms < last || ts_ms - last >= self.pose_interval_ms,
-        };
-        if !due {
-            return None;
-        }
-        self.last_pose_pub_ms = Some(ts_ms);
-        Some(PoseDescriptor {
-            pose,
-            anchor,
-            ts_ms,
-        })
-    }
-
     /// Ingest one frame for `camera_id`, image included. Returns `None` when the
     /// session is not capturing or the camera is not enabled. Otherwise it
-    /// produces a pose descriptor when the rig-wide pose cadence is due and,
-    /// when the camera's selector fires, a full keyframe (with
+    /// yields a full keyframe when the camera's selector fires (with
     /// `is_session_start` set on the first keyframe of the session).
     pub fn on_frame(
         &mut self,
@@ -442,11 +373,11 @@ impl CaptureSession {
                 tier: KeyframeTier::Full,
                 image: frame.image,
                 camera: frame.camera,
-                pose: frame.pose.clone(),
+                pose: frame.pose,
                 pose_cov: frame.pose_cov,
                 pose_source: frame.pose_source,
                 time: frame.time,
-                anchor: frame.anchor.clone(),
+                anchor: frame.anchor,
                 imu_window: frame.imu_window,
                 flags: KeyframeFlags {
                     is_session_start: is_first,
@@ -459,8 +390,7 @@ impl CaptureSession {
             None
         };
 
-        let pose = self.due_pose(frame.pose, frame.anchor, ts_ms);
-        Some(CaptureOutput { pose, keyframe })
+        Some(CaptureOutput { keyframe })
     }
 
     /// Measured ingest rate (Hz) over the last [`INGEST_WINDOW`] accepted frames,

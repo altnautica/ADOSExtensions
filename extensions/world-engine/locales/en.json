@@ -47,6 +47,8 @@
     "metal": "Metal",
     "gpuAwaiting": "Awaiting GPU telemetry…",
     "worldModelHeading": "World Model",
+    "liveMapHeading": "Live map",
+    "liveMapCaption": "Live map: {tiles} tiles, {points} points at {voxel} cm",
     "viewerGroupLabel": "Viewer",
     "pipelineSegment": "Pipeline",
     "reconstructedWith": "Reconstructed with {backend}",
@@ -423,12 +425,19 @@
     "deleteUnuploaded": "This session has not been uploaded. Delete it anyway?",
     "reconstructTitle": "Reconstruct {id}",
     "presetLabel": "Reconstruction preset",
-    "preset": { "preview": "Preview", "hq": "HQ", "tour": "Tour", "warehouse": "Warehouse" },
+    "preset": {
+      "preview": "Preview",
+      "hq": "HQ",
+      "tour": "Tour",
+      "warehouse": "Warehouse",
+      "planar-sweep": "Planar sweep"
+    },
     "presetHint": {
       "preview": "Quick splat for a field check",
       "hq": "High-fidelity splat, mesh and point cloud",
       "tour": "HQ plus floorplan, rooms and a shareable tour bundle",
-      "warehouse": "HQ in chunks plus floorplan and aisles"
+      "warehouse": "HQ in chunks plus floorplan and aisles",
+      "planar-sweep": "LiDAR-only: point cloud, occupancy per height band and floorplan"
     },
     "reconstruct": "Reconstruct",
     "queued": "{preset} reconstruction queued",

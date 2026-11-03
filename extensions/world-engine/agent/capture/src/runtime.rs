@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
-use world_engine_protocol::atlas::POSE_COV_LEN;
+use world_engine_protocol::atlas::{ComputePlacement, NavPoseMode, POSE_COV_LEN};
 use world_engine_protocol::capture_ctl::{ExposureMode, ExposureView};
 
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
@@ -199,6 +199,9 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_VIO,
     KEY_LIDAR,
     KEY_SEGMENT,
+    KEY_NAV_POSE,
+    KEY_COMPUTE_PLACEMENT,
+    KEY_MEMORY_BUDGET_MB,
 ];
 
 pub const KEY_ENABLED: &str = "atlas.enabled";
@@ -220,6 +223,9 @@ pub const KEY_EXPOSURE: &str = "atlas.exposure";
 pub const KEY_VIO: &str = "atlas.vio";
 pub const KEY_LIDAR: &str = "atlas.lidar";
 pub const KEY_SEGMENT: &str = "atlas.segment";
+pub const KEY_NAV_POSE: &str = "atlas.nav_pose";
+pub const KEY_COMPUTE_PLACEMENT: &str = "atlas.compute_placement";
+pub const KEY_MEMORY_BUDGET_MB: &str = "atlas.memory_budget_mb";
 
 /// The initial exposure lock: unlocked, walking caps.
 fn default_exposure() -> ExposureView {
@@ -256,6 +262,23 @@ pub struct AtlasRuntimeConfig {
     pub vio: VioSettings,
     pub lidar: LidarSettings,
     pub segment: SegmentSettings,
+    /// When the navigation lanes publish (`atlas.nav_pose`); absent, `always`
+    /// when a planar LiDAR device is set, else `capture`.
+    pub nav_pose: NavPoseMode,
+    /// Where the heavy map products are built (`atlas.compute_placement`).
+    pub placement: ComputePlacement,
+    /// `atlas.memory_budget_mb`; `None` resolves from the unit's cap.
+    pub memory_budget_mb: Option<u64>,
+}
+
+/// `atlas.nav_pose` when the key is absent: `always` with a planar LiDAR
+/// device configured (the pose feeds the flight controller), else `capture`.
+pub fn default_nav_pose(lidar: &LidarSettings) -> NavPoseMode {
+    if lidar.rplidar.device.is_empty() {
+        NavPoseMode::Capture
+    } else {
+        NavPoseMode::Always
+    }
 }
 
 impl Default for AtlasRuntimeConfig {
@@ -276,6 +299,9 @@ impl Default for AtlasRuntimeConfig {
             vio: VioSettings::default(),
             lidar: LidarSettings::default(),
             segment: SegmentSettings::default(),
+            nav_pose: default_nav_pose(&LidarSettings::default()),
+            placement: ComputePlacement::default(),
+            memory_budget_mb: None,
         }
     }
 }
@@ -404,6 +430,11 @@ impl AtlasRuntimeConfig {
             typed(values, KEY_EXPOSURE, default_exposure())?,
             mains_hz,
         );
+        let lidar: LidarSettings = typed(values, KEY_LIDAR, LidarSettings::default())?;
+        let memory_budget_mb = match present(values, KEY_MEMORY_BUDGET_MB) {
+            None => None,
+            Some(_) => Some(unsigned(values, KEY_MEMORY_BUDGET_MB, 0)?),
+        };
         Ok(Self {
             enabled: typed(values, KEY_ENABLED, false)?,
             device_id: device_id.to_string(),
@@ -426,8 +457,11 @@ impl AtlasRuntimeConfig {
             mains_hz,
             exposure,
             vio: typed(values, KEY_VIO, VioSettings::default())?,
-            lidar: typed(values, KEY_LIDAR, LidarSettings::default())?,
+            nav_pose: typed(values, KEY_NAV_POSE, default_nav_pose(&lidar))?,
+            lidar,
             segment: typed(values, KEY_SEGMENT, SegmentSettings::default())?,
+            placement: typed(values, KEY_COMPUTE_PLACEMENT, ComputePlacement::default())?,
+            memory_budget_mb,
         })
     }
 

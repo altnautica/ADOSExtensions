@@ -44,6 +44,7 @@ import {
   type WorldModelGeneration,
 } from "../../lib/atlas/world-generation";
 import { useAtlasWorldStream } from "../../hooks/use-atlas-world-stream";
+import { LiveMapCanvas } from "./LiveMapCanvas";
 import {
   selectDeviceWorld,
   useAtlasWorldStore,
@@ -237,6 +238,8 @@ export function WorldGenerationCard({
       )}
 
       <GenerationBody generation={generation} t={t} locale={LOCALE} />
+
+      <LiveMapCanvas map={world.live} />
 
       <div
         className="we:text-[10px] we:text-text-tertiary"

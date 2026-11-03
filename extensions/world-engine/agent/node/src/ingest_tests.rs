@@ -296,6 +296,38 @@ fn live_disabled_produces_no_periodic_reconstructs() {
 }
 
 #[test]
+fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
+    use world_engine_protocol::atlas::{
+        ComputePlacement, MapStatus, PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = LiveReconstructConfig {
+        enabled: false,
+        ..live(3, 2)
+    };
+    let mut ingest = AtlasIngest::with_live_config(dir.path(), cfg);
+    let status = |placement| {
+        let st = MapStatus {
+            session_id: Some("stream".into()),
+            placement,
+            ..MapStatus::default()
+        };
+        AtlasEvent::new(PLUGIN_ATLAS_MAP_STATUS_TOPIC, None, st.to_msgpack().unwrap())
+    };
+    assert!(!ingest.live_active());
+    ingest.step(&status(ComputePlacement::Stream), 50).unwrap();
+    assert!(ingest.live_active());
+    for kf in 0..3 {
+        ingest.step(&real_keyframe_event("stream", kf), 100).unwrap();
+    }
+    assert_eq!(ingest.due_reconstructs(200).unwrap().len(), 1);
+
+    // A drone that stops streaming takes its session off the live path.
+    ingest.step(&status(ComputePlacement::PostFlight), 300).unwrap();
+    assert!(!ingest.live_active());
+}
+
+#[test]
 fn live_enabled_snapshots_a_real_reconstruct_job_on_the_cadence() {
     let dir = tempfile::tempdir().unwrap();
     let mut ingest = AtlasIngest::with_live_config(dir.path(), live(3, 2));

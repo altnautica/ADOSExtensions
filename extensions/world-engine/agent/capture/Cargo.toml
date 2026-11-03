@@ -34,6 +34,7 @@ ados-config = { workspace = true }
 ados-livox = { path = "livox" }
 ados-rplidar = { path = "rplidar" }
 ados-scan2d = { path = "../scan2d" }
+world-engine-livemap = { path = "../livemap" }
 prost = "0.14"
 prost-types = "0.14"
 # Kalibr calibration YAML import.
@@ -54,6 +55,8 @@ nix = { version = "0.29", default-features = false, features = ["time"] }
 # Encode a selected keyframe's raw frame to JPEG before it ships to the compute
 # node (a reconstructor ingests compressed images, never raw planes).
 image = { version = "0.25", default-features = false, features = ["jpeg"] }
+# The session's planar scans as a zstd (level 3) polar stream.
+zstd = "0.13"
 
 [features]
 default = ["livox-sdk"]

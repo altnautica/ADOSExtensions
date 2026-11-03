@@ -15,11 +15,14 @@ import {
   bearerCarriesKeyframes,
   bearerKeyframesDegraded,
   decodeAtlasEvent,
+  isLiveMapPayload,
   PLUGIN_ATLAS_ARTIFACT_TOPICS,
+  PLUGIN_ATLAS_MAP_STATUS_TOPIC,
   PLUGIN_ATLAS_MESH_TOPIC,
   PLUGIN_ATLAS_OCCUPANCY_TOPIC,
   PLUGIN_ATLAS_POINTCLOUD_TOPIC,
   PLUGIN_ATLAS_POSE_TOPIC,
+  PLUGIN_ATLAS_SCAN_TOPIC,
   PLUGIN_ATLAS_SPLAT_TOPIC,
   PLUGIN_ATLAS_TOPICS,
 } from "../../../src/lib/atlas/world-contract";
@@ -125,21 +128,34 @@ describe("shared-data capability gate", () => {
     expect(atlasTopicSubscribeCapability("atlas.keyframe")).toBeNull();
   });
 
-  it("lists every shared-data topic including the pose lane", () => {
+  it("lists every shared-data topic including the live lanes", () => {
     expect([...PLUGIN_ATLAS_TOPICS]).toEqual([
       PLUGIN_ATLAS_POSE_TOPIC,
       PLUGIN_ATLAS_POINTCLOUD_TOPIC,
       PLUGIN_ATLAS_OCCUPANCY_TOPIC,
       PLUGIN_ATLAS_SPLAT_TOPIC,
       PLUGIN_ATLAS_MESH_TOPIC,
+      PLUGIN_ATLAS_SCAN_TOPIC,
+      PLUGIN_ATLAS_MAP_STATUS_TOPIC,
     ]);
-    // The artifact set is the topic set minus the live pose lane.
+    // The artifact set is the topic set minus the pose, scan and status lanes.
     expect(PLUGIN_ATLAS_ARTIFACT_TOPICS).toHaveLength(
-      PLUGIN_ATLAS_TOPICS.length - 1,
+      PLUGIN_ATLAS_TOPICS.length - 3,
     );
-    expect([...PLUGIN_ATLAS_ARTIFACT_TOPICS]).not.toContain(
+    for (const live of [
       PLUGIN_ATLAS_POSE_TOPIC,
-    );
+      PLUGIN_ATLAS_SCAN_TOPIC,
+      PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+    ]) {
+      expect([...PLUGIN_ATLAS_ARTIFACT_TOPICS]).not.toContain(live);
+      expect(atlasTopicSubscribeCapability(live)).toBe(ATLAS_POSE_READ_CAP);
+    }
+  });
+
+  it("tells a live map payload from a product descriptor by kind", () => {
+    expect(isLiveMapPayload({ kind: "live", seq: 1 })).toBe(true);
+    expect(isLiveMapPayload({ kind: "product" })).toBe(false);
+    expect(isLiveMapPayload(null)).toBe(false);
   });
 });
 

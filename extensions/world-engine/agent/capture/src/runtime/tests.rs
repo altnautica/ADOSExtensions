@@ -170,7 +170,7 @@ fn an_unparseable_key_is_an_error_naming_it() {
 }
 
 #[test]
-fn auto_picks_lidar_then_vio_on_a_visor_and_the_ekf_elsewhere() {
+fn auto_picks_lidar_anywhere_then_vio_on_a_visor_and_the_ekf_elsewhere() {
     let r = |c, p, s, l| resolve_pose_provider(c, p, s, l);
     let auto = PoseProviderConfig::Auto;
     assert_eq!(r(auto, "visor", true, false), PoseSource::Vio);
@@ -178,7 +178,9 @@ fn auto_picks_lidar_then_vio_on_a_visor_and_the_ekf_elsewhere() {
     // A LiDAR and IMU outrank the stereo pair.
     assert_eq!(r(auto, "visor", true, true), PoseSource::Lidar);
     assert_eq!(r(auto, "visor", false, false), PoseSource::FcEkf);
-    assert_eq!(r(auto, "drone", true, true), PoseSource::FcEkf);
+    // A drone with a planar LiDAR and IMU navigates on the LiDAR pose.
+    assert_eq!(r(auto, "drone", true, true), PoseSource::Lidar);
+    assert_eq!(r(auto, "drone", true, false), PoseSource::FcEkf);
     assert_eq!(
         r(PoseProviderConfig::Lidar, "drone", false, false),
         PoseSource::Lidar
@@ -286,5 +288,38 @@ fn the_pre_contract_override_shape_fails_loudly() {
         err.reason.contains("dist"),
         "the error names the new keys: {}",
         err.reason
+    );
+}
+
+#[test]
+fn nav_lanes_default_on_with_a_planar_lidar_and_placement_defaults_to_hybrid() {
+    let d = AtlasRuntimeConfig::from_values("", &BTreeMap::new()).unwrap();
+    assert_eq!(d.nav_pose, NavPoseMode::Always, "the RPLIDAR device defaults to auto");
+    assert_eq!(d.placement, ComputePlacement::Hybrid);
+    assert_eq!(d.memory_budget_mb, None);
+
+    let no_lidar = values(&[(KEY_LIDAR, json!({"rplidar": {"device": ""}}))]);
+    let c = AtlasRuntimeConfig::from_values("", &no_lidar).unwrap();
+    assert_eq!(c.nav_pose, NavPoseMode::Capture);
+
+    let set = values(&[
+        (KEY_NAV_POSE, json!("capture")),
+        (KEY_COMPUTE_PLACEMENT, json!("post_flight")),
+        (KEY_MEMORY_BUDGET_MB, json!(600)),
+    ]);
+    let c = AtlasRuntimeConfig::from_values("", &set).unwrap();
+    assert_eq!(c.nav_pose, NavPoseMode::Capture);
+    assert_eq!(c.placement, ComputePlacement::PostFlight);
+    assert_eq!(c.memory_budget_mb, Some(600));
+
+    let bad = values(&[(KEY_COMPUTE_PLACEMENT, json!("cloud"))]);
+    assert_eq!(
+        AtlasRuntimeConfig::from_values("", &bad).unwrap_err().key,
+        KEY_COMPUTE_PLACEMENT
+    );
+    let neg = values(&[(KEY_MEMORY_BUDGET_MB, json!(-5))]);
+    assert_eq!(
+        AtlasRuntimeConfig::from_values("", &neg).unwrap_err().key,
+        KEY_MEMORY_BUDGET_MB
     );
 }

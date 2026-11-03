@@ -132,8 +132,12 @@ pub(super) async fn atlas_receiver_loop(
     state: Arc<Mutex<Engine>>,
     work_root: PathBuf,
     live_config: LiveReconstructConfig,
+    world: Arc<WorldBroadcaster>,
 ) {
+    let mut live_maps = world_engine_node::live_stream::LiveStreams::new(work_root.join("live"));
     let mut ingest = AtlasIngest::with_live_config(work_root, live_config);
+    let mut live_tick = tokio::time::interval(Duration::from_secs(1));
+    live_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let mut tick = tokio::time::interval(Duration::from_secs(LIVE_CADENCE_TICK_SECS));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -143,13 +147,23 @@ pub(super) async fn atlas_receiver_loop(
         tokio::select! {
             maybe_event = rx.recv() => {
                 let Some(event) = maybe_event else { break };
+                // A streaming drone's raw scans build the live map, not a dataset.
+                if event.topic == world_engine_protocol::atlas::ATLAS_SCAN_TOPIC {
+                    live_maps.on_scan(&event);
+                    continue;
+                }
                 drain_event(&mut ingest, &state, &event).await;
                 // A keyframe may have hit the count trigger; check promptly.
-                if live_config.enabled {
+                if ingest.live_active() {
                     run_live_cycles(&mut ingest, &state).await;
                 }
             }
-            _ = tick.tick(), if live_config.enabled => {
+            _ = live_tick.tick() => {
+                for (device, event) in live_maps.tick() {
+                    world.publish(&device, event);
+                }
+            }
+            _ = tick.tick(), if ingest.live_active() => {
                 // The interval trigger + the skip-while-running reconcile.
                 run_live_cycles(&mut ingest, &state).await;
             }

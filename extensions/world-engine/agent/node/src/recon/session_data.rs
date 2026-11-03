@@ -202,6 +202,12 @@ pub fn index(reader: &SessionReader) -> Result<SessionIndex, StageError> {
         .and_then(|p| sigmas.remove(&p.source))
         .unwrap_or_default();
     pose_sigma.sort_by_key(|(t, _)| *t);
+    // A planar LiDAR's scans are in its polar stream, not the log.
+    for s in reader.rig().sensors.iter().filter(|s| s.kind == RigSensorKind::Lidar) {
+        if let Some(polar) = super::polar::read(reader.dir(), &s.id)? {
+            lidar_sweeps += polar.len();
+        }
+    }
     Ok(SessionIndex {
         manifest: reader.manifest().clone(),
         rig: reader.rig().clone(),

@@ -9,7 +9,8 @@
 //!
 //! Auto-upload ([`UploadManager::run_auto`]) enqueues every finished,
 //! un-uploaded session when all hold: plugin config `atlas.auto_upload` is
-//! true, a node resolves on the LAN and this device holds a usable
+//! true or `atlas.compute_placement` uploads after flight (`post_flight`,
+//! `hybrid`), a node resolves on the LAN and this device holds a usable
 //! `sessions.upload` credential for it, the capture service is not recording,
 //! and the device is idle or charging ([`crate::power`]). When auto-upload is
 //! on but no credential can be picked ([`CredentialGap`]), the waiting sessions
@@ -26,12 +27,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use world_engine_capture::storage::UPLOADED_MARKER;
-use world_engine_protocol::atlas::CaptureState;
+use world_engine_protocol::atlas::{CaptureState, ComputePlacement};
 use world_engine_transport::{BulkClient, BulkConfig, SessionPlan};
 
 use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{CredentialGap, CredentialStore, SESSION_UPLOAD_LANE};
-use crate::host::{config_bool, Host};
+use crate::host::{config_bool, config_string, Host};
 use crate::lan_node::resolve_lan;
 use crate::power::PowerWatch;
 use crate::reply::{codes, ApiError};
@@ -43,6 +44,21 @@ pub type RootFn = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 /// The plugin config key that turns auto-upload on.
 pub const AUTO_UPLOAD_KEY: &str = "atlas.auto_upload";
+/// The plugin config key naming where map products are built.
+pub const COMPUTE_PLACEMENT_KEY: &str = "atlas.compute_placement";
+
+/// Whether a placement (the config string, absent = the default) asks for
+/// the session to upload after the flight. An unparseable value does not.
+pub fn placement_uploads(value: Option<&str>) -> bool {
+    let placement = match value {
+        None => ComputePlacement::default(),
+        Some(v) => match serde_json::from_value(serde_json::Value::from(v)) {
+            Ok(p) => p,
+            Err(_) => return false,
+        },
+    };
+    placement.uploads_after_flight()
+}
 /// How often the auto-upload gate is evaluated. Auto-queued uploads pause
 /// within this of the device becoming busy (armed, recording, discharging).
 const AUTO_INTERVAL: Duration = Duration::from_secs(10);
@@ -197,6 +213,11 @@ impl UploadManager {
             block(&mut v);
         }
         v
+    }
+
+    /// The live upload job of session `id`, if one was queued this run.
+    pub fn job_view(&self, id: &str) -> Option<UploadView> {
+        self.inner.jobs.lock().get(id).map(|j| j.view.clone())
     }
 
     /// Whether `id` is queued or uploading.
@@ -439,8 +460,13 @@ impl UploadManager {
         power: &PowerWatch,
     ) -> (bool, Option<CredentialGap>) {
         let i = &self.inner;
-        if !config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await || !power.idle_or_charging()
-        {
+        let wanted = config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await
+            || placement_uploads(
+                config_string(i.host.as_ref(), COMPUTE_PLACEMENT_KEY)
+                    .await
+                    .as_deref(),
+            );
+        if !wanted || !power.idle_or_charging() {
             return (false, None);
         }
         let recording = match LiveCapture::from(control.status().await) {

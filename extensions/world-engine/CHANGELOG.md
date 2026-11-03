@@ -4,8 +4,59 @@ All notable changes to the World Engine extension.
 
 ## [Unreleased]
 
+### Added
+
+- **Navigation lanes independent of capture.** With `atlas.nav_pose =
+  always` (the default when an RPLIDAR device is set) the capture service
+  publishes the navigation pose in `map_frd` with its `health`, `frame` and
+  `source`, the binned body-frame scan (`plugin.world-engine.scan`), live
+  occupancy tiles and sweep-cloud deltas, and `plugin.world-engine.map_status`
+  whether or not a session is open. The pose is no longer published from the
+  camera frame path.
+- **Live occupancy and sweep cloud.** 5 cm occupancy tiles built by ray
+  tracing every return, evicted to the session past 200 m or past their
+  budget share; a voxel-centroid cloud of every scan placed by the 6-DoF pose
+  that doubles its voxel when its budget share fills.
+- **`atlas.memory_budget_mb`** bounds the keyframe queue, the scan ring, the
+  sweep cloud and the occupancy tiles (40/10/30/20 %); unset it is 80 % of the
+  capture unit's memory cap (`ADOS_PLUGIN_MEMORY_MAX_BYTES` from the host,
+  else the cgroup). Queues drop their oldest entry and count it.
+- **`atlas.compute_placement`** (`onboard`, `stream`, `post_flight`,
+  `hybrid`) sets the live cloud resolution, has the compute node reconstruct
+  in flight for `stream` and build a full-resolution live map from the raw
+  polar scans the drone sends (`atlas.scan`), served on the device's world
+  stream (the link reports the bearer and the rate it carries in the map
+  status), and uploads the session after landing for
+  `post_flight` and `hybrid`. The live map lanes stay on the drone and are
+  not forwarded to the node.
+- **Polar scan sessions.** A planar LiDAR records `lidar/<sensor>.polar.zst`
+  (3 bytes a bin, zstd) instead of the 17-byte-a-point Cartesian cloud.
+- **`planar-sweep` preset**: LAZ cloud, occupancy per height band and
+  floorplan from the loop-closed polar scans, with no pinned tool for a
+  LiDAR-only session; with camera frames it also trains a preview splat and
+  meshes it.
+- The GCS world-model card draws the live map (occupancy tiles and the sweep
+  cloud) as it arrives.
+- Per-profile resource caps (`agent.resources_by_profile`): 768 MB on a
+  drone, 1536 MB on a visor, 512 MB on a ground station.
+- `atlas.lidar.imu = "fc"` levels a planar LiDAR with IMU samples
+  synthesised from the flight controller's attitude, for a companion with no
+  IMU of its own (the rig declares an IMU sensor `fc` at the body origin).
+- `scan2d_replay` example: replays a recorded scan log through the scan
+  matcher and prints the wall time.
+
+### Removed
+
+- `atlas.live_reconstruct`. A compute node reconstructs a session in flight
+  when its drone streams (`atlas.compute_placement = stream`, read from the
+  drone's map status); `ADOS_ATLAS_LIVE` still forces it on a bench node.
+
 ### Changed
 
+- `atlas.pose_provider = auto` picks LiDAR odometry on a drone too when the
+  rig has the configured LiDAR and IMU: there the LiDAR pose is the
+  navigation source the flight controller fuses, so its own EKF would be
+  circular.
 - **Floor plans.** The wall slice adds a band 0.4–0.1 m under a detected
   ceiling to the body-height band; points sampled from the extracted mesh
   join the cloud, so plain camera-only walls are found; rays from the

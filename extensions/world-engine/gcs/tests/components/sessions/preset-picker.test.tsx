@@ -33,7 +33,13 @@ describe("PresetPicker", () => {
   it("offers Preview / HQ / Tour / Warehouse with Preview selected", () => {
     renderPicker(() => json(200, {}));
     const radios = screen.getAllByRole("radio") as HTMLInputElement[];
-    expect(radios.map((r) => r.value)).toEqual(["preview", "hq", "tour", "warehouse"]);
+    expect(radios.map((r) => r.value)).toEqual([
+      "preview",
+      "hq",
+      "tour",
+      "warehouse",
+      "planar-sweep",
+    ]);
     expect(radios.find((r) => r.checked)?.value).toBe("preview");
   });
 

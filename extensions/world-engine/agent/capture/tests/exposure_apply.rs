@@ -92,6 +92,7 @@ async fn a_slow_camera_answers_pending_and_the_state_catches_up() {
             rig: dir.path().join("rig.json"),
             active_marker: None,
         },
+        nav: Default::default(),
     };
     let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));
 

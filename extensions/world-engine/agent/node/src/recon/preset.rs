@@ -15,6 +15,13 @@ pub enum Preset {
     Tour,
     /// `hq` over large sites (hierarchical mapping) plus floorplan and aisles.
     Warehouse,
+    /// A planar LiDAR swept through heights: the session's loop-closed polar
+    /// scans become a LAZ cloud, occupancy per height band and a floorplan.
+    /// A LiDAR-only session needs no pinned tool; with camera frames it also
+    /// trains a preview splat (Brush) and meshes it, which needs COLMAP,
+    /// splat-transform and Brush.
+    #[serde(rename = "planar-sweep")]
+    PlanarSweep,
 }
 
 /// What a preset runs.
@@ -60,6 +67,7 @@ impl Preset {
             Self::Hq => "hq",
             Self::Tour => "tour",
             Self::Warehouse => "warehouse",
+            Self::PlanarSweep => "planar-sweep",
         }
     }
 
@@ -106,6 +114,20 @@ impl Preset {
                 hierarchical: true,
                 ..hq
             },
+            // The camera half (a session with frames): a preview-length
+            // splat, meshed; the LiDAR products come from the polar scans.
+            Self::PlanarSweep => PresetSpec {
+                min_baseline_m: 0.25,
+                min_rotation_deg: 12.0,
+                max_images: 300,
+                train_steps: 7_000,
+                max_splats_8gb: 500_000,
+                mesh: true,
+                masks: false,
+                depth_priors: false,
+                floorplan: false,
+                ..hq
+            },
         }
     }
 
@@ -115,6 +137,9 @@ impl Preset {
     /// when the gsplat kernels do not run. A tour also needs the built tour
     /// viewer it bundles.
     pub fn required_tools(self) -> Vec<&'static str> {
+        if self == Self::PlanarSweep {
+            return Vec::new();
+        }
         let spec = self.spec();
         let mut tools = vec!["colmap", "splat-transform", "brush"];
         if self != Self::Preview {
@@ -216,6 +241,10 @@ mod tests {
         let wh = Preset::Warehouse.required_tools();
         assert!(wh.contains(&"gsplat_train") && wh.contains(&"spark-build-lod"));
         assert!(Preset::Warehouse.spec().aisles && Preset::Tour.spec().tour);
+        assert_eq!(Preset::parse("planar-sweep"), Some(Preset::PlanarSweep));
+        assert_eq!(Preset::PlanarSweep.as_str(), "planar-sweep");
+        assert!(Preset::PlanarSweep.required_tools().is_empty());
+        assert!(Preset::PlanarSweep.spec().mesh);
         let total: f32 = RECONSTRUCT_STAGES.iter().map(|s| stage_weight(s)).sum();
         assert!((total - 1.0).abs() < 1e-6);
     }

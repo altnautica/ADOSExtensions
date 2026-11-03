@@ -1,0 +1,24 @@
+# The live map builders shared by the drone (capture) and the compute node:
+# 5 cm occupancy tiles from ray-traced planar scans and a bounded voxel-centroid
+# sweep cloud, both emitting the live payloads of the world-engine protocol.
+[package]
+name = "world-engine-livemap"
+version = "2.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "World Engine live occupancy tiles and sweep cloud from posed planar scans."
+
+[lib]
+name = "world_engine_livemap"
+path = "src/lib.rs"
+
+[dependencies]
+world-engine-protocol = { path = "../protocol" }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

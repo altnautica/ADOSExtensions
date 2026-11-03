@@ -17,6 +17,10 @@ pub type Generation = u32;
 /// stream-lane `url`; this carries the summary only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PointCloudDescriptor {
+    /// Always [`super::nav::MapPayloadKind::Product`]: the same topic also
+    /// carries the drone's live payloads, which say `live`.
+    #[serde(default)]
+    pub kind: super::nav::MapPayloadKind,
     /// The capture session this cloud was reconstructed from.
     #[serde(default)]
     pub session_id: String,
@@ -52,6 +56,10 @@ pub enum OccupancyField {
 /// Shared-data descriptor on [`super::PLUGIN_ATLAS_OCCUPANCY_TOPIC`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OccupancyDescriptor {
+    /// Always [`super::nav::MapPayloadKind::Product`]: the same topic also
+    /// carries the drone's live payloads, which say `live`.
+    #[serde(default)]
+    pub kind: super::nav::MapPayloadKind,
     /// The capture session this grid was derived from.
     #[serde(default)]
     pub session_id: String,

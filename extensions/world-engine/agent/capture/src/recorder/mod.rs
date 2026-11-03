@@ -13,7 +13,9 @@
 //! are written. The capture-active marker the FC router watches exists for
 //! the same span.
 
+mod bounded;
 pub mod convert;
+pub mod sidecars;
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -34,6 +36,8 @@ use ados_protocol::framebus::FrameFormat;
 use parking_lot::Mutex;
 
 use convert::{ImageEncoding, ImageMsg};
+use sidecars::{PolarWriter, Sidecars};
+use world_engine_protocol::atlas::PolarScan;
 
 /// Items the queue holds before new ones are dropped. Sensor records are
 /// small and must survive an image backlog, so images have their own bound.
@@ -163,6 +167,7 @@ pub struct Recorder {
     tx: SyncSender<Item>,
     stats: Arc<Mutex<RecorderStats>>,
     pending_images: Arc<AtomicUsize>,
+    side: Arc<Sidecars>,
     thread: Option<JoinHandle<()>>,
     dir: PathBuf,
     marker: Option<PathBuf>,
@@ -183,6 +188,8 @@ impl Recorder {
         let encoding = cfg.encoding;
         let pending_images = Arc::new(AtomicUsize::new(0));
         let thread_pending = pending_images.clone();
+        let side = Arc::new(Sidecars::new());
+        let thread_side = side.clone();
         let thread = std::thread::Builder::new()
             .name("capture-recorder".into())
             .spawn(move || {
@@ -193,6 +200,7 @@ impl Recorder {
                     thread_dir,
                     encoding,
                     thread_pending,
+                    thread_side,
                 )
             })?;
         // The capture-active marker comes last so no failure above leaves
@@ -206,6 +214,7 @@ impl Recorder {
             tx,
             stats,
             pending_images,
+            side,
             thread: Some(thread),
             dir,
             marker: cfg.active_marker,
@@ -223,8 +232,28 @@ impl Recorder {
             .unwrap_or_default()
     }
 
+    /// The byte-bounded keyframe and polar-scan queues.
+    pub fn sidecars(&self) -> &Sidecars {
+        &self.side
+    }
+
+    /// Queue one planar scan for `lidar/<sensor>.polar.zst`.
+    pub fn push_polar(&self, sensor: &str, scan: &PolarScan) {
+        self.side.push_scan(sensor, scan);
+    }
+
     /// Queue an item; `false` when it was dropped (queue full or writer gone).
+    /// A keyframe preview goes to the byte-bounded keyframe queue, which drops
+    /// its oldest entry rather than refuse the new one.
     pub fn submit(&self, item: Item) -> bool {
+        let item = match item {
+            Item::Keyframe { file, jpeg } => {
+                let n = jpeg.len();
+                self.side.keyframes.push((file, jpeg), n);
+                return true;
+            }
+            other => other,
+        };
         let camera = match &item {
             Item::Image { camera, .. } => Some(camera.clone()),
             _ => None,
@@ -314,8 +343,16 @@ fn write_loop(
     dir: PathBuf,
     encoding: ImageEncoding,
     pending_images: Arc<AtomicUsize>,
+    side: Arc<Sidecars>,
 ) {
     let marker = dir.join(crate::storage::RECORDING_MARKER);
+    let mut polar = PolarWriter::default();
+    let drain_side = |polar: &mut PolarWriter| {
+        for (kind, e) in sidecars::drain(&side, &dir, polar) {
+            tracing::warn!(kind, error = %e, "capture_record_item_skipped");
+            *stats.lock().bad_items.entry(kind).or_default() += 1;
+        }
+    };
     let mut touched = Instant::now();
     let mut measured = (Instant::now(), 0u64);
     loop {
@@ -336,6 +373,7 @@ fn write_loop(
             s.bytes = bytes;
             measured = (Instant::now(), bytes);
         }
+        drain_side(&mut polar);
         let Some(item) = item else { continue };
         for ready in convert_batch(take_batch(item, &rx, encoding), encoding) {
             let item = match ready {
@@ -344,6 +382,11 @@ fn write_loop(
                     health,
                     reply,
                 }) => {
+                    drain_side(&mut polar);
+                    if let Err(e) = polar.finish() {
+                        tracing::error!(error = %e, "capture_polar_stream_finish_failed");
+                        stats.lock().error.get_or_insert_with(|| e.to_string());
+                    }
                     let m = w.manifest_mut();
                     m.operator = operator;
                     m.health = health;

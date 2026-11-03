@@ -26,6 +26,12 @@
 import { create } from "zustand";
 
 import { decodeAtlasEvent } from "../lib/atlas/world-contract";
+import {
+  applyLivePayload,
+  decodeLiveMapPayload,
+  EMPTY_LIVE_MAP,
+  type LiveMap,
+} from "../lib/atlas/live-map";
 import { decodeWorldDescriptor } from "../lib/atlas/world-descriptors";
 import {
   applyWorldArtifact,
@@ -70,6 +76,9 @@ export interface DeviceWorldState {
   /** Frames on a topic that is not a world-model artifact topic (the pose lane
    * and any future topic ride the same socket). */
   offTopicFrames: number;
+  /** The live map (occupancy tiles, sweep cloud) folded from `kind: "live"`
+   * payloads. */
+  live: LiveMap;
 }
 
 export const EMPTY_DEVICE_WORLD: DeviceWorldState = {
@@ -83,6 +92,7 @@ export const EMPTY_DEVICE_WORLD: DeviceWorldState = {
   versionRejectedFrames: 0,
   rejectedVersion: null,
   offTopicFrames: 0,
+  live: EMPTY_LIVE_MAP,
 };
 
 export interface AtlasWorldState {
@@ -109,6 +119,18 @@ export const useAtlasWorldStore = create<AtlasWorldState>((set) => ({
           next.rejectedVersion = decoded.version;
         } else next.shapeRejectedFrames += 1;
         return { devices: { ...s.devices, [deviceId]: next } };
+      }
+      const live = decodeLiveMapPayload(
+        decoded.event.topic,
+        decoded.event.payload,
+      );
+      if (live) {
+        return {
+          devices: {
+            ...s.devices,
+            [deviceId]: { ...prev, live: applyLivePayload(prev.live, live) },
+          },
+        };
       }
       const artifact = decodeWorldDescriptor(
         decoded.event.topic,

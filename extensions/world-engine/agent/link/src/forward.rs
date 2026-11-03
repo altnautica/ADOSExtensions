@@ -33,6 +33,7 @@ use parking_lot::Mutex;
 use tokio::sync::watch;
 use world_engine_protocol::atlas::{
     AtlasForwardStatus, ATLAS_FORWARD_STATUS_VERSION, ATLAS_KEYFRAME_TOPIC,
+    PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_SCAN_TOPIC,
 };
 use world_engine_transport::{
     AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer, WfbRelayBearer,
@@ -74,6 +75,8 @@ enum Forwarded {
     /// The framed body was not a valid event: logged, nothing sent (not a
     /// transport miss, so it never re-resolves the node).
     DecodeError,
+    /// A topic that stays on the drone ([`forwards_to_node`]).
+    Skipped,
 }
 
 /// Epoch milliseconds.
@@ -101,6 +104,8 @@ pub struct ForwardStatus {
     compute_node_id: Option<String>,
     bearer: Option<String>,
     last_kf_at_ms: Option<i64>,
+    /// Event bytes a bearer carried since start.
+    bytes_carried: u64,
 }
 
 impl ForwardStatus {
@@ -118,15 +123,27 @@ impl ForwardStatus {
     /// Record a forwarded event's carrying bearer (+ keyframe time). A declined
     /// send (`None`) keeps the last-known bearer so a transient decline does not
     /// flicker it.
-    fn note_carried(&mut self, bearer: Option<&'static str>, keyframe: bool, now_ms: i64) {
+    fn note_carried(
+        &mut self,
+        bearer: Option<&'static str>,
+        keyframe: bool,
+        bytes: usize,
+        now_ms: i64,
+    ) {
         if let Some(b) = bearer {
             if self.bearer.as_deref() != Some(b) {
                 self.bearer = Some(b.to_string());
             }
+            self.bytes_carried += bytes as u64;
         }
         if keyframe {
             self.last_kf_at_ms = Some(now_ms);
         }
+    }
+
+    /// Event bytes a bearer carried since start (the stream rate's source).
+    pub fn bytes_carried(&self) -> u64 {
+        self.bytes_carried
     }
 
     /// The resolved compute node, if any.
@@ -250,6 +267,7 @@ impl Forwarder {
                             self.status.lock().note_carried(
                                 carried.map(bearer_label),
                                 keyframe,
+                                body.len(),
                                 now_ms(),
                             );
                         }
@@ -329,6 +347,18 @@ impl Forwarder {
     }
 }
 
+/// Whether an event on `topic` goes to the compute node. The drone's live map
+/// lanes (the binned scan, the live occupancy tiles and sweep-cloud deltas)
+/// are for operator surfaces on the plugin bus; a streaming drone sends the
+/// node raw polar scans (`atlas.scan`) instead, and those lanes would crowd
+/// keyframes off a constrained bearer.
+pub fn forwards_to_node(topic: &str) -> bool {
+    !matches!(
+        topic,
+        PLUGIN_ATLAS_SCAN_TOPIC | PLUGIN_ATLAS_OCCUPANCY_TOPIC | PLUGIN_ATLAS_POINTCLOUD_TOPIC
+    )
+}
+
 /// Decode one framed [`AtlasEvent`] body, stamp the capturing drone's device id,
 /// and send it over the ladder. Never panics, never propagates: a forward
 /// failure is logged and the loop continues.
@@ -344,6 +374,9 @@ async fn forward_event(ladder: &BearerLadder, body: &[u8], device_id: &str) -> F
             return Forwarded::DecodeError;
         }
     };
+    if !forwards_to_node(&event.topic) {
+        return Forwarded::Skipped;
+    }
     if !device_id.is_empty() {
         event.device_id = Some(device_id.to_string());
     }
@@ -374,7 +407,7 @@ mod tests {
     fn carried_kind(f: &Forwarded) -> Option<BearerKind> {
         match f {
             Forwarded::Decoded { carried, .. } => *carried,
-            Forwarded::DecodeError => None,
+            Forwarded::DecodeError | Forwarded::Skipped => None,
         }
     }
 
@@ -444,7 +477,7 @@ mod tests {
     fn losing_the_node_clears_the_bearer() {
         let mut fwd = ForwardStatus::default();
         fwd.note_node(Some("rtx-box".into()));
-        fwd.note_carried(Some("direct-lan"), false, 100);
+        fwd.note_carried(Some("direct-lan"), false, 10, 100);
         assert_eq!(fwd.snapshot(0).bearer.as_deref(), Some("direct-lan"));
         // Losing the node clears the (now meaningless) bearer.
         fwd.note_node(None);
@@ -459,15 +492,16 @@ mod tests {
     #[test]
     fn note_carried_tracks_the_bearer_and_keyframe_time() {
         let mut fwd = ForwardStatus::default();
-        fwd.note_carried(Some("wfb-relay"), true, 1_700);
-        fwd.note_carried(Some("wfb-relay"), false, 1_800);
+        fwd.note_carried(Some("wfb-relay"), true, 10, 1_700);
+        fwd.note_carried(Some("wfb-relay"), false, 10, 1_800);
         let snap = fwd.snapshot(0);
         assert_eq!(snap.bearer.as_deref(), Some("wfb-relay"));
         // Only a keyframe advances the keyframe time.
         assert_eq!(snap.last_kf_at_ms, Some(1_700));
-        fwd.note_carried(Some("cloud"), true, 1_900);
+        fwd.note_carried(Some("cloud"), true, 10, 1_900);
         // A declined send keeps the last-known bearer.
-        fwd.note_carried(None, false, 2_000);
+        fwd.note_carried(None, false, 10, 2_000);
+        assert_eq!(fwd.bytes_carried(), 30, "a declined send carried nothing");
         let snap = fwd.snapshot(0);
         assert_eq!(snap.bearer.as_deref(), Some("cloud"));
         assert_eq!(snap.last_kf_at_ms, Some(1_900));
@@ -478,5 +512,25 @@ mod tests {
         assert_eq!(bearer_label(BearerKind::DirectLan), "direct-lan");
         assert_eq!(bearer_label(BearerKind::WfbRelay), "wfb-relay");
         assert_eq!(bearer_label(BearerKind::Cloud), "cloud");
+    }
+
+    #[test]
+    fn the_live_map_lanes_stay_on_the_drone() {
+        for topic in [
+            PLUGIN_ATLAS_SCAN_TOPIC,
+            PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+            PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+        ] {
+            assert!(!forwards_to_node(topic), "{topic}");
+        }
+        for topic in [
+            ATLAS_KEYFRAME_TOPIC,
+            "atlas.scan",
+            "plugin.world-engine.pose",
+            "plugin.world-engine.map_status",
+            "atlas.capture.state",
+        ] {
+            assert!(forwards_to_node(topic), "{topic}");
+        }
     }
 }

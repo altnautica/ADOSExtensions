@@ -11,8 +11,8 @@ use super::mesh::{self, MeshMethod};
 use super::preset::{stage_weight, ProductSwitches, CALIBRATE_STAGES, RECONSTRUCT_STAGES};
 use super::products_stage::{self, ArtifactOut, ProductsInput, OUTPUTS_FILE};
 use super::{
-    check_tools, chunks, glim, job_dir, prepare, sfm, train, Preset, StageError, StagedJob,
-    ToolRunner,
+    check_tools, chunks, glim, job_dir, planar_sweep, prepare, sfm, train, Preset, StageError,
+    StagedJob, ToolRunner,
 };
 use crate::store_stages::{StageRow, StageState};
 
@@ -185,10 +185,20 @@ fn reconstruct(
     generation: u32,
     ctx: &RunCtx<'_>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
-    let stages = Stages::new(ctx.sink, &RECONSTRUCT_STAGES);
-    check_tools(ctx.runner, &preset.required_tools())?;
-    let spec = products.apply(preset.spec());
     let reader = SessionReader::open(session_dir)?;
+    // A LiDAR-only session needs no camera stage; with camera frames the
+    // preset also trains the preview splat and meshes it, which needs the
+    // camera tools (`E_TOOL_MISSING` without them).
+    let planar = preset == Preset::PlanarSweep;
+    if planar && !has_camera_frames(&reader)? {
+        return planar_sweep_job(dir, session_id, session_dir, generation, ctx);
+    }
+    let stages = Stages::new(ctx.sink, &RECONSTRUCT_STAGES);
+    match planar {
+        true => check_tools(ctx.runner, &PLANAR_SWEEP_CAMERA_TOOLS)?,
+        false => check_tools(ctx.runner, &preset.required_tools())?,
+    }
+    let spec = products.apply(preset.spec());
     fs::write(
         dir.join("session-rig.json"),
         serde_json::to_vec_pretty(reader.rig())?,
@@ -249,7 +259,7 @@ fn reconstruct(
         let p = &mut |f: f32| p(share + (1.0 - share) * f);
         let opts = sfm::SfmOptions {
             fixed_poses: lidar.fixed,
-            refine: preset != Preset::Preview,
+            refine: !matches!(preset, Preset::Preview | Preset::PlanarSweep),
             hierarchical: spec.hierarchical,
             prior_source: lidar.prior.as_deref(),
         };
@@ -294,7 +304,7 @@ fn reconstruct(
         // `Some(reason)`: train with Brush, which stands in at full length
         // (and the stage says why) when the gsplat kernels do not run on this
         // node (no CUDA toolkit, no GPU).
-        let brush: Option<Option<String>> = if preset == Preset::Preview {
+        let brush: Option<Option<String>> = if matches!(preset, Preset::Preview | Preset::PlanarSweep) {
             Some(None)
         } else if let Err(why) = train::gsplat_available(ctx.runner, &train_dir) {
             tracing::warn!(error = %why, "gsplat unavailable; training with brush");
@@ -375,9 +385,105 @@ fn reconstruct(
             },
             p,
         )?;
-        Ok(serde_json::json!({ "artifacts": arts.len(), "world_frame": world_frame }))
+        let mut n = arts.len();
+        if planar {
+            n = append_planar_products(dir, session_id, session_dir, generation)?.len();
+        }
+        Ok(serde_json::json!({ "artifacts": n, "world_frame": world_frame }))
     })?;
     read_outputs(dir)
+}
+
+/// The planar LiDAR scans of a session for the `planar-sweep` preset,
+/// loop-closed offline ([`planar_sweep::close_loops`]).
+fn planar_scans(
+    reader: &SessionReader,
+    session_dir: &Path,
+) -> Result<(String, Vec<world_engine_protocol::atlas::PolarScan>), StageError> {
+    let lidar = super::scan2d::rig_planar_lidar(reader.rig())
+        .ok_or_else(|| StageError::input("the rig has no planar LiDAR"))?
+        .id
+        .clone();
+    let scans = super::polar::read(session_dir, &lidar)?
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| {
+            StageError::input(format!("the session recorded no polar scans of `{lidar}`"))
+        })?;
+    Ok((lidar, scans))
+}
+
+/// Whether the session recorded camera frames (the `planar-sweep` preset then
+/// also trains a preview splat and meshes it).
+fn has_camera_frames(reader: &SessionReader) -> Result<bool, StageError> {
+    Ok(!super::session_data::index(reader)?.frames.is_empty())
+}
+
+/// The tools the `planar-sweep` preset's camera half needs.
+const PLANAR_SWEEP_CAMERA_TOOLS: [&str; 3] = ["colmap", "splat-transform", "brush"];
+
+/// The `planar-sweep` preset on a LiDAR-only session: the polar scans,
+/// loop-closed, become the cloud, the per-band occupancy and the floorplan
+/// ([`planar_sweep`]). No camera stage runs, so no tool is needed.
+fn planar_sweep_job(
+    dir: &Path,
+    session_id: &str,
+    session_dir: &Path,
+    generation: u32,
+    ctx: &RunCtx<'_>,
+) -> Result<Vec<ArtifactOut>, StageError> {
+    let stages = Stages::new(ctx.sink, &RECONSTRUCT_STAGES);
+    let reader = SessionReader::open(session_dir)?;
+    let (lidar, mut scans) = planar_scans(&reader, session_dir)?;
+    stages.run("prepare", |p| {
+        p(1.0);
+        Ok(serde_json::json!({ "lidar": lidar, "scans": scans.len() }))
+    })?;
+    let loops = planar_sweep::close_loops(&mut scans);
+    let swept = planar_sweep::sweep(&scans);
+    stages.run("sfm", |p| {
+        p(1.0);
+        Ok(serde_json::json!({
+            "lidar2d": loops,
+            "scans_trusted": swept.rays.len(),
+            "points": swept.cloud.points.len(),
+        }))
+    })?;
+    stages.skip("train", "the session has no camera frames to train a splat from");
+    stages.skip("mesh", "the session has no camera frames to mesh");
+    stages.run("products", |p| {
+        let out = dir.join("out");
+        if out.exists() {
+            fs::remove_dir_all(&out)?;
+        }
+        fs::create_dir_all(&out)?;
+        let arts = planar_sweep::write_products(&out, &swept, generation, session_id)?;
+        fs::write(out.join(OUTPUTS_FILE), serde_json::to_vec_pretty(&arts)?)?;
+        p(1.0);
+        Ok(serde_json::json!({ "artifacts": arts.len(), "world_frame": false }))
+    })?;
+    read_outputs(dir)
+}
+
+/// The `planar-sweep` products added to a finished camera reconstruction of
+/// the same session (its preview splat and mesh are already in `out/`).
+fn append_planar_products(
+    dir: &Path,
+    session_id: &str,
+    session_dir: &Path,
+    generation: u32,
+) -> Result<Vec<ArtifactOut>, StageError> {
+    let reader = SessionReader::open(session_dir)?;
+    let (_, mut scans) = planar_scans(&reader, session_dir)?;
+    planar_sweep::close_loops(&mut scans);
+    let swept = planar_sweep::sweep(&scans);
+    let out = dir.join("out");
+    let mut arts = read_outputs(dir)?;
+    // The LiDAR cloud replaces the camera one; the rest are new.
+    let planar = planar_sweep::write_products(&out, &swept, generation, session_id)?;
+    arts.retain(|a| !planar.iter().any(|p| p.kind == a.kind && p.file == a.file));
+    arts.extend(planar);
+    fs::write(out.join(OUTPUTS_FILE), serde_json::to_vec_pretty(&arts)?)?;
+    Ok(arts)
 }
 
 fn calibrate(

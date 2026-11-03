@@ -184,7 +184,7 @@ impl LinkPlugin {
         }
         self.tasks
             .push(tokio::spawn(uploads.clone().run(shutdown.clone())));
-        self.tasks.push(tokio::spawn(uploads.run_auto(
+        self.tasks.push(tokio::spawn(uploads.clone().run_auto(
             control,
             power,
             shutdown.clone(),
@@ -204,6 +204,10 @@ impl LinkPlugin {
             host.clone(),
             bus_socket,
             capture.clone(),
+            monitor::MapFacts {
+                forward: forward.clone(),
+                uploads: Some(uploads.clone()),
+            },
             shutdown.clone(),
         )));
         self.tasks.push(tokio::spawn(monitor::run_status_writer(

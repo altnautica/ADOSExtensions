@@ -36,16 +36,21 @@ impl SessionLive {
 
 impl AtlasIngest {
     /// Record a successfully-persisted keyframe against its session's live
-    /// cadence. A no-op when live reconstruction is disabled (no per-session state
-    /// is tracked, so the disabled path is byte-unchanged).
+    /// cadence. A no-op when the session is not reconstructed live (neither the
+    /// node-wide override nor a streaming drone), so no per-session state is
+    /// tracked and that path is byte-unchanged.
     pub(super) fn note_persisted(&mut self, kf: &KeyframeEnvelope, now_ms: i64) {
-        if !self.live_config.enabled {
+        if !self.live_config.enabled && !self.streaming_sessions.contains(&kf.session_id) {
             return;
         }
+        let config = LiveReconstructConfig {
+            enabled: true,
+            ..self.live_config
+        };
         let live = self
             .sessions
             .entry(kf.session_id.clone())
-            .or_insert_with(|| SessionLive::new(self.live_config, now_ms));
+            .or_insert_with(|| SessionLive::new(config, now_ms));
         live.driver.note_keyframe();
         live.camera_ids.insert(kf.camera_id.clone());
     }

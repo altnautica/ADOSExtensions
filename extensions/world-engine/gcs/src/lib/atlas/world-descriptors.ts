@@ -293,7 +293,9 @@ export function decodeWorldDescriptor(
   } catch {
     return null;
   }
-  if (!fields) return null;
+  // A live map payload shares the occupancy and point-cloud topics; it is
+  // not an artifact descriptor (see `live-map.ts`).
+  if (!fields || fields.kind === "live") return null;
   switch (topic) {
     case PLUGIN_ATLAS_SPLAT_TOPIC:
       return decodeSplat(fields);

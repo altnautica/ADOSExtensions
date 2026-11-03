@@ -17,6 +17,8 @@ pub mod lidar_poses;
 pub mod mesh;
 pub mod pairs;
 pub mod pipeline;
+pub mod planar_sweep;
+pub mod polar;
 pub mod prepare;
 pub mod preset;
 pub mod process;

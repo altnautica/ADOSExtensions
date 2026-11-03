@@ -38,6 +38,7 @@ pub mod job_views;
 mod jobs_sync;
 mod keyframe_persister;
 mod lanes;
+pub mod live_stream;
 mod node_credentials;
 mod offload;
 mod offload_session_manager;

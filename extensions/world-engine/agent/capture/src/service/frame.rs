@@ -13,7 +13,7 @@ use crate::pose::{se3, PoseEstimate};
 use crate::quality;
 use crate::recorder::Item;
 use crate::recording::Phase;
-use crate::session::{FrameInput, PoseInput};
+use crate::session::FrameInput;
 
 /// IMU history attached to a keyframe when its camera has no earlier one.
 const KF_IMU_WINDOW_NS: u64 = 200_000_000;
@@ -227,16 +227,11 @@ impl Engine {
             t: e.t,
             cov: None,
         };
-        let anchor = self.session.as_ref().and_then(|s| s.anchor.clone());
         if !self.keyframes.would_select(&f.camera_id, &pose, f.ts_ms) {
-            if let Some(pd) =
-                self.keyframes
-                    .on_pose_only(&f.camera_id, PoseInput { pose, anchor }, f.ts_ms)
-            {
-                self.publisher.publish_pose(&pd).await;
-            }
+            self.keyframes.on_pose_only(&f.camera_id, f.ts_ms);
             return;
         }
+        let anchor = self.session.as_ref().and_then(|s| s.anchor.clone());
         let (w, h, fmt) = (f.width, f.height, f.format);
         let pixels = f.pixels.clone();
         let jpeg = match tokio::task::spawn_blocking(move || {
@@ -290,9 +285,6 @@ impl Engine {
         let Some(out) = self.keyframes.on_frame(&f.camera_id, input, f.ts_ms) else {
             return;
         };
-        if let Some(pd) = &out.pose {
-            self.publisher.publish_pose(pd).await;
-        }
         if let Some(kf) = out.keyframe {
             if let Some(c) = self.cams.get_mut(&f.camera_id) {
                 c.last_kf_ns = Some(f.ts_ns);

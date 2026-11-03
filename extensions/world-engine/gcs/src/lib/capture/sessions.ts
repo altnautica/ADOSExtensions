@@ -97,7 +97,13 @@ export function uploadEtaS(upload: SessionUpload, rate: number | null): number |
 }
 
 /** The reconstruction presets, in picker order. */
-export const RECONSTRUCT_PRESETS = ["preview", "hq", "tour", "warehouse"] as const;
+export const RECONSTRUCT_PRESETS = [
+  "preview",
+  "hq",
+  "tour",
+  "warehouse",
+  "planar-sweep",
+] as const;
 export type ReconstructPreset = (typeof RECONSTRUCT_PRESETS)[number];
 
 /** A human byte size ("38.4 GiB"). */

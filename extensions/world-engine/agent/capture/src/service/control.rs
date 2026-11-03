@@ -289,6 +289,14 @@ impl Engine {
             frames_dropped_pct: dropped_pct,
         };
         stop_and_bag(&mut self.keyframes);
+        self.save_map_into(s.recorder.dir());
+        if s.recorder.sidecars().keyframes.dropped() > 0 {
+            tracing::warn!(
+                keyframes_dropped = s.recorder.sidecars().keyframes.dropped(),
+                scans_dropped = s.recorder.sidecars().scans.dropped(),
+                "capture_session_budget_dropped"
+            );
+        }
         let session_id = s.session_id.clone();
         let handle = tokio::task::spawn_blocking(move || s.finish(t_end, health));
         self.closing = Some(super::Closing { session_id, handle });

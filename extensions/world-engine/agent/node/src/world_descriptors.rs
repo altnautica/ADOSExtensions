@@ -85,6 +85,7 @@ pub fn derive_descriptors(
             "pointcloud" => {
                 let points = local_ply_points(out, work_root);
                 set.pointcloud = Some(PointCloudDescriptor {
+                    kind: world_engine_protocol::atlas::MapPayloadKind::Product,
                     session_id: session_id.to_string(),
                     generation,
                     placement: placement.clone(),
@@ -169,6 +170,7 @@ pub fn derive_occupancy(
 
     Ok(Some((
         OccupancyDescriptor {
+            kind: world_engine_protocol::atlas::MapPayloadKind::Product,
             session_id: session_id.to_string(),
             generation,
             placement: placement.clone(),

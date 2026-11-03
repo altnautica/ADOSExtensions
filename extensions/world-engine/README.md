@@ -98,24 +98,55 @@ Per-node plugin configuration (`config-schema.json`):
 |---|---|
 | `atlas.enabled` | Run the capture service on this drone |
 | `atlas.capture_profile` | Keyframe selection profile |
-| `atlas.pose_provider` | Pose provider: `auto`, `fc_ekf` (flight controller), `vio` (on-device visual-inertial) or `lidar` (on-device LiDAR odometry: 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one). `auto` on a visor picks `lidar` when the rig has the configured LiDAR and IMU, else `vio` with a front stereo pair and IMU |
-| `atlas.lidar` | LiDAR input: `lidar_id` (rig sensor; its `lidar.model` picks the driver, `rplidar-c1` or `livox-mid360`), `imu`, and per-driver blocks `rplidar` (`device`: serial port, `tcp:<host>:<port>` or `auto`; `baud`) and `livox` (`sdk_library`, `host_ip`, `lidar_ips`) |
-| `atlas.auto_upload` | Upload finished sessions to the paired compute node over the LAN when the device is idle or charging and not recording (default `false`) |
+| `atlas.pose_provider` | Pose provider: `auto`, `fc_ekf` (flight controller), `vio` (on-device visual-inertial) or `lidar` (on-device LiDAR odometry: 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one). `auto` picks `lidar` when the rig has the configured LiDAR and IMU (on a drone too, where the LiDAR pose is the navigation source the flight controller fuses), else on a visor `vio` with a front stereo pair and IMU, else `fc_ekf` |
+| `atlas.lidar` | LiDAR input: `lidar_id` (rig sensor; its `lidar.model` picks the driver, `rplidar-c1` or `livox-mid360`), `imu` (the rig IMU a planar LiDAR is levelled with; `fc` synthesises it from the flight controller's attitude for a companion without an IMU), and per-driver blocks `rplidar` (`device`: serial port, `tcp:<host>:<port>` or `auto`; `baud`) and `livox` (`sdk_library`, `host_ip`, `lidar_ips`) |
+| `atlas.auto_upload` | Upload finished sessions to the paired compute node over the LAN when the device is idle or charging and not recording (default `false`; a `post_flight` or `hybrid` placement uploads regardless) |
+| `atlas.nav_pose` | `always`: publish the navigation pose, scan, live occupancy, sweep cloud and map status whenever the pose provider runs; `capture`: only with a session open. Default `always` when an RPLIDAR device is set |
+| `atlas.compute_placement` | Where the heavy map products are built: `onboard` (5 cm sweep cloud on the drone), `stream` (keyframes, poses and raw polar scans stream to the compute node, which reconstructs in flight and serves a full-resolution live map on the device's world stream; the drone keeps a 20 cm cloud), `post_flight` (record, upload after landing), `hybrid` (10 cm on board plus the post-flight upload; default). Navigation SLAM and the live occupancy always stay on board |
+| `atlas.memory_budget_mb` | RAM the live map stores may hold (keyframe queue 40 %, scan ring 10 %, sweep cloud 30 %, occupancy 20 %); unset, 80 % of the capture unit's memory cap. A full sweep cloud doubles its voxel (`sweep_cloud_coarsened`); full queues drop their oldest entry and count it |
 | `atlas.rig_id` | Rig whose calibrations `GET /atlas/calib` lists; empty uses the only rig in the device calibration store |
 | `atlas.reconstruct_steps` | Training steps for the reconstruction (the detail level) |
 | `atlas.hfov_deg` | Camera horizontal field of view used when no intrinsics are given |
 | `atlas.cameras[]` | Cameras the capture service reads |
 | `atlas.selection.*` | Keyframe selection thresholds |
 | `atlas.intrinsics.*` | Camera intrinsics |
-| `atlas.live_reconstruct` | Rebuild the world incrementally on the compute node while keyframes arrive (default `false`) |
 | `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02) |
-| `atlas.pose_publish_interval_ms` | Interval between published world poses, in ms (100) |
+| `atlas.pose_publish_interval_ms` | Minimum interval between published navigation poses, in ms (100; 33 for 30 Hz, bounded by the provider's own rate) |
 | `offload.enabled` | Perception offload: `auto`, `on` or `off` |
 | `offload.compute_node_addr` | Compute node pinned as `host:port` for both the Atlas forwarder and the offload session; empty discovers one on the LAN over mDNS |
 | `serving.enabled` | Serve perception offload on this compute node |
 | `serving.detector_model` | Detector model the compute node serves |
 | `relay.enabled` | Run the Atlas relay on this ground station (default `false`) |
 | `relay.compute_base_url` | Compute node the ground-station relay forwards to |
+
+## Navigation and live map lanes
+
+While the pose provider runs (`atlas.nav_pose`), the capture service
+publishes shared topics other extensions and the agent's navigation API read:
+
+| Topic | Rate | Payload |
+|---|---|---|
+| `plugin.world-engine.pose` | pose interval | Body pose in `map_frd` (the planar SLAM world at the first scan turned to FRD: `x`, `-y`, `-z`, `-yaw`; z is the flight controller's height above the first pose), with `health`, `frame` and `source` |
+| `plugin.world-engine.scan` | per scan | The scan binned to 360 one-degree bins in the body FRD frame, nearest range per bin, `0` for no return |
+| `plugin.world-engine.occupancy` | 1 Hz | Live: changed 64×64-cell tiles at 5 cm as grey PNG (0 occupied, 254 free, 205 unknown), `kind: "live"`; node products say `kind: "product"` |
+| `plugin.world-engine.pointcloud` | 1 Hz | Live: up to 20 000 new voxel centroids of the sweep cloud (every scan placed by SLAM x, y, yaw, the FC height and the IMU roll and pitch), `kind: "live"` |
+| `plugin.world-engine.map_status` | 1 Hz | Placement, memory used against the budget, voxel size, keyframes dropped, sweep points, mapped area, upload and stream progress |
+
+Occupancy tiles farther than 200 m from the vehicle, or past the occupancy
+share of the budget (farthest first), are written to the session's
+`map/occupancy/` and leave RAM. A closing session also gets the whole sweep
+cloud as `map/sweep_cloud.f32` (little-endian `f32` xyz).
+
+A planar LiDAR records into the session as `lidar/<sensor>.polar.zst`: a zstd
+(level 3) stream of polar records, each with the sensor pose and 720 bins of
+`u16` range in mm plus `u8` quality (3 bytes a bin). The `planar-sweep`
+preset turns those alone into a LAZ cloud, occupancy per height band (0–3,
+3–8 and 8–15 m above the first scan) in `map_server` PNG + YAML, and a
+floorplan, after closing loops offline over the scans; a LiDAR-only session needs no pinned tool, and a session with camera frames also gets a preview splat and its mesh (COLMAP, splat-transform and Brush, `E_TOOL_MISSING` without them).
+
+`cargo run --release -p world-engine-capture --example scan2d_replay --
+<lidar0.polar.zst>` replays a recorded scan log through the scan matcher and
+prints the wall time, a fixed workload for comparing CPUs.
 
 ## Reconstruction tools
 

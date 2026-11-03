@@ -125,6 +125,7 @@ fn world_model_descriptors_round_trip() {
     assert_eq!(status, back);
 
     let cloud = PointCloudDescriptor {
+        kind: MapPayloadKind::Product,
         session_id: "sess-1".into(),
         generation: 3,
         placement: Placement::identity(Some(sample_anchor())),
@@ -213,6 +214,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         scale: 1.0,
     };
     let occ = OccupancyDescriptor {
+        kind: MapPayloadKind::Product,
         session_id: "sess-1".into(),
         generation: 4,
         placement: placement.clone(),
@@ -265,6 +267,9 @@ fn occupancy_splat_mesh_pose_round_trip() {
         pose: sample_pose(),
         anchor: Some(sample_anchor()),
         ts_ms: 5,
+        health: VioHealth::Degraded,
+        frame: NavFrame::MapFrd,
+        source: NavPoseSource::LidarPlanar,
     };
     assert_eq!(
         pose_desc,

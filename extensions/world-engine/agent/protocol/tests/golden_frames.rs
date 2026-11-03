@@ -51,6 +51,7 @@ fn splat() -> SplatDescriptor {
 fn occupancy(field: OccupancyField) -> OccupancyDescriptor {
     let esdf = field == OccupancyField::Esdf;
     OccupancyDescriptor {
+        kind: world_engine_protocol::atlas::MapPayloadKind::Product,
         session_id: SESSION.into(),
         generation: 7,
         placement: placement(),
@@ -79,6 +80,7 @@ fn constant(out: &mut String, doc: &str, name: &str, bytes: &[u8]) {
 
 fn render() -> String {
     let cloud = PointCloudDescriptor {
+        kind: world_engine_protocol::atlas::MapPayloadKind::Product,
         session_id: SESSION.into(),
         generation: 7,
         placement: placement(),

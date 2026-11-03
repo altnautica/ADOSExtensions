@@ -18,10 +18,11 @@ pub enum PoseProviderConfig {
     Lidar,
 }
 
-/// Resolve the configured provider. `Auto` on a visor: LiDAR odometry when
-/// the rig has the configured LiDAR (with its scan model) and IMU, else VIO
-/// when it has a front stereo pair and an IMU, else the FC EKF; on a drone,
-/// the FC EKF.
+/// Resolve the configured provider. `Auto`: LiDAR odometry when the rig has
+/// the configured LiDAR (with its scan model) and IMU, on a drone too (there
+/// the LiDAR pose is the navigation source the flight controller fuses, so the
+/// FC's own EKF would be circular); else, on a visor, VIO when it has a front
+/// stereo pair and an IMU; else the FC EKF.
 pub fn resolve_pose_provider(
     cfg: PoseProviderConfig,
     profile: &str,
@@ -32,7 +33,7 @@ pub fn resolve_pose_provider(
         PoseProviderConfig::FcEkf => PoseSource::FcEkf,
         PoseProviderConfig::Vio => PoseSource::Vio,
         PoseProviderConfig::Lidar => PoseSource::Lidar,
-        PoseProviderConfig::Auto if profile == "visor" && rig_has_lidar_imu => PoseSource::Lidar,
+        PoseProviderConfig::Auto if rig_has_lidar_imu => PoseSource::Lidar,
         PoseProviderConfig::Auto if profile == "visor" && rig_has_stereo_imu => PoseSource::Vio,
         PoseProviderConfig::Auto => PoseSource::FcEkf,
     }

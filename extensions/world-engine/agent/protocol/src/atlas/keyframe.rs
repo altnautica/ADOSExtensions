@@ -376,10 +376,15 @@ pub struct CaptureStatus {
     pub dropped_keyframes: u64,
 }
 
-/// Shared-data descriptor on [`super::PLUGIN_ATLAS_POSE_TOPIC`].
+/// Shared-data descriptor on [`super::PLUGIN_ATLAS_POSE_TOPIC`]: the body FRD
+/// pose in `frame` (`R` world-from-body, `t` body origin), the estimator that
+/// produced it and its health.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PoseDescriptor {
     pub pose: Pose,
     pub anchor: Option<GeoAnchor>,
     pub ts_ms: i64,
+    pub health: VioHealth,
+    pub frame: super::nav::NavFrame,
+    pub source: super::nav::NavPoseSource,
 }

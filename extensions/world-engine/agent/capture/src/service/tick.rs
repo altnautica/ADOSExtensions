@@ -1,13 +1,12 @@
-//! Sensor-bus and LiDAR records, the 10 Hz tick (pose drain, closing, record
-//! retry) and the 1 Hz slow tick (health record, HUD, state publish).
+//! Sensor-bus records, the 10 Hz tick (pose drain, closing, record retry) and
+//! the 1 Hz slow tick (health record, HUD, state and live-map publish).
 
 use ados_capture_contract::v1::ImuBatch;
 use world_engine_protocol::capture_ctl::StartArgs;
 
+use world_engine_protocol::atlas::PoseDescriptor;
+
 use super::{Engine, SLOW_TICKS};
-use crate::lidar_scan::LidarScan;
-use crate::pose::se3;
-use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::{ClockReading, Level, StorageReading};
 use crate::recorder::{convert, Item};
 use crate::recording::Phase;
@@ -17,7 +16,7 @@ use crate::sensor_bus::BusEvent;
 const RECORD_RETRY_NS: u64 = 5_000_000_000;
 
 impl Engine {
-    fn recorder(&self) -> Option<&crate::recorder::Recorder> {
+    pub(super) fn recorder(&self) -> Option<&crate::recorder::Recorder> {
         self.session
             .as_ref()
             .filter(|s| s.phase == Phase::Recording)
@@ -83,31 +82,11 @@ impl Engine {
         }
     }
 
-    pub(super) fn on_lidar(&mut self, scan: LidarScan) {
-        self.pose.feed_lidar(&scan);
-        let r_world_sensor = self.pose.pose_at(scan.t_ns).map(|e| {
-            let mount = self
-                .rig
-                .as_ref()
-                .and_then(|r| r.sensors.iter().find(|s| s.id == scan.sensor_id))
-                .map_or(se3::IDENTITY, |s| se3::from_mat4(&s.t_body_sensor.0).0);
-            se3::mat_mul(&e.r, &mount)
-        });
-        self.lidar_depth = Some(LidarDepth::from_scan(&scan, r_world_sensor.as_ref()));
-        let t = self.to_session(scan.t_ns);
-        if let Some(r) = self.recorder() {
-            let cloud = crate::lidar_record::scan_to_point_cloud(&scan, t, &scan.sensor_id);
-            r.submit(Item::Lidar {
-                src: scan.sensor_id.clone(),
-                t_ns: t,
-                cloud,
-            });
-        }
-    }
-
     pub(super) async fn on_tick(&mut self) {
         let now = crate::clock::mono_ns();
-        self.drain_poses();
+        if let Some(pd) = self.drain_poses() {
+            self.publisher.publish_pose(&pd).await;
+        }
         self.poll_closing().await;
         if let Some(at) = self.record_retry_at.filter(|at| now >= *at) {
             self.record_retry_at = None;
@@ -146,18 +125,27 @@ impl Engine {
             let _ = tx.send(view);
         }
         self.publish_status().await;
+        self.nav_slow_tick().await;
     }
 
-    /// Hand every new pose estimate to coverage (frames do too) and the recorder.
-    fn drain_poses(&mut self) {
+    /// Hand every new pose estimate to the navigation lane and the recorder;
+    /// the pose descriptor to publish when its interval is due.
+    pub(super) fn drain_poses(&mut self) -> Option<PoseDescriptor> {
         let mut out = Vec::new();
         self.pose.drain_new(&mut out);
         let q = self.pose.quality();
         self.quality.recording = self.is_recording();
         self.quality
             .on_pose_quality(q.degeneracy_ratio, q.tracked_features);
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_millis() as i64);
+        let (fc_up, open) = (self.fc_up(), self.session.is_some());
+        let due = out
+            .last()
+            .and_then(|e| self.nav.on_pose(e, fc_up, now_ms, open));
         if out.is_empty() || self.recorder().is_none() {
-            return;
+            return due;
         }
         let source = crate::pose::source_str(self.pose.source());
         for e in out {
@@ -172,6 +160,7 @@ impl Engine {
                 });
             }
         }
+        due
     }
 
     /// Record the newest vehicle-state GNSS fix, once.

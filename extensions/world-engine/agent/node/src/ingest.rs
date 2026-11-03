@@ -20,8 +20,9 @@
 use std::collections::{HashMap, HashSet};
 
 use world_engine_protocol::atlas::{
-    AtlasEvent, CaptureState, CaptureStatus, KeyframeBudget, KeyframeEnvelope, PoseSource,
-    VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+    AtlasEvent, CaptureState, CaptureStatus, KeyframeBudget, KeyframeEnvelope, MapStatus,
+    PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+    PLUGIN_ATLAS_MAP_STATUS_TOPIC,
 };
 use world_engine_protocol::compute::{ComputeJobKind, ComputeJobState};
 
@@ -103,6 +104,10 @@ pub struct AtlasIngest {
     /// Per-session live state, keyed by session id. Empty when live reconstruction
     /// is disabled (the sessions are never tracked, so the path is byte-unchanged).
     sessions: HashMap<String, SessionLive>,
+    /// Sessions whose drone streams for live reconstruction
+    /// (`atlas.compute_placement = stream`), learned from the drone's
+    /// `map_status`. Reconstructed live even when `live_config.enabled` is off.
+    streaming_sessions: HashSet<String>,
     /// The capturing drone's device id, keyed by session id, learned from each
     /// event's `device_id` (the drone-side forwarder stamps it on egress). Stamped
     /// into the dataset + reconstruct job so the compute→cloud producer can
@@ -145,6 +150,7 @@ impl AtlasIngest {
             persister: KeyframePersister::new(work_root),
             live_config,
             sessions: HashMap::new(),
+            streaming_sessions: HashSet::new(),
             session_devices: HashMap::new(),
             accounts: HashMap::new(),
             train_iters: default_train_iters(),
@@ -267,13 +273,41 @@ impl AtlasIngest {
                     Ok(None)
                 }
             },
+            PLUGIN_ATLAS_MAP_STATUS_TOPIC => {
+                match MapStatus::from_msgpack(&event.payload) {
+                    Ok(status) => self.note_placement(&status),
+                    Err(e) => tracing::debug!(error = %e, "atlas_ingest_bad_map_status"),
+                }
+                Ok(None)
+            }
             _ => Ok(None),
         }
+    }
+
+    /// Track whether the drone's open session streams for live
+    /// reconstruction. A drone that switches away stops new live cycles; the
+    /// session's final bag still reconstructs.
+    fn note_placement(&mut self, status: &MapStatus) {
+        let Some(session) = &status.session_id else {
+            return;
+        };
+        if status.placement.streams_live() {
+            self.streaming_sessions.insert(session.clone());
+        } else {
+            self.streaming_sessions.remove(session);
+        }
+    }
+
+    /// Whether any session reconstructs live: the node-wide override, or a
+    /// drone streaming its session.
+    pub fn live_active(&self) -> bool {
+        self.live_config.enabled || !self.streaming_sessions.is_empty()
     }
 
     /// Drop every piece of per-session state once the session is over.
     fn forget_session(&mut self, session_id: &str) {
         self.sessions.remove(session_id);
+        self.streaming_sessions.remove(session_id);
         self.session_devices.remove(session_id);
         self.accounts.remove(session_id);
     }

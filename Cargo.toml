@@ -28,6 +28,7 @@ members = [
   "extensions/world-engine/agent/node",
   "extensions/world-engine/agent/link",
   "extensions/world-engine/agent/scan2d",
+  "extensions/world-engine/agent/livemap",
 ]
 
 [workspace.package]

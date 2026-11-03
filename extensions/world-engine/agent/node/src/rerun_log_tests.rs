@@ -138,6 +138,7 @@ fn world_model_descriptors_map_to_world_subtree_with_payloads() {
 
     let cloud = log_pointcloud(
         &PointCloudDescriptor {
+            kind: world_engine_protocol::atlas::MapPayloadKind::Product,
             session_id: "sess-test".into(),
             generation: 1,
             placement: Placement::identity(None),
@@ -182,6 +183,7 @@ fn world_model_descriptors_map_to_world_subtree_with_payloads() {
 
     let occ = log_occupancy(
         &OccupancyDescriptor {
+            kind: world_engine_protocol::atlas::MapPayloadKind::Product,
             session_id: "sess-test".into(),
             generation: 1,
             placement: Placement::identity(None),

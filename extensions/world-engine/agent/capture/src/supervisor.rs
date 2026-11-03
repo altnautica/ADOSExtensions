@@ -152,6 +152,17 @@ impl CaptureRun {
         let chosen =
             crate::providers::pose_provider(&config, &profile, rig.as_ref(), &feeds.fc, &work_dir);
         let lidar = crate::providers::lidar_source(&config, rig.as_ref(), &work_dir);
+        let lidar_sensor = rig
+            .as_ref()
+            .and_then(|r| crate::rig_source::lidar_sensor(r, &config.lidar.lidar_id));
+        let nav = crate::service::NavDeps {
+            fc_feed: Some(feeds.fc.clone()),
+            lidar_mount: lidar_sensor.map(|(s, _)| s.t_body_sensor.0),
+            lidar_planar: lidar_sensor.is_some_and(|(_, m)| {
+                m.pattern == ados_capture_contract::LidarModelPattern::Planar
+            }),
+            scratch_dir: Some(work_dir.join("map").join(crate::nav::TILES_DIR)),
+        };
         let (lidar_src, lidar_rx) = match lidar {
             Some((s, rx)) => (Some(s), Some(rx)),
             None => (None, None),
@@ -196,6 +207,7 @@ impl CaptureRun {
                 ctx.clone(),
             ))),
             paths,
+            nav,
         };
         let capture = tokio::spawn(run_capture_loop(deps, cancel.clone()));
         Ok(Self {

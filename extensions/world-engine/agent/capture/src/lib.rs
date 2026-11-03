@@ -46,6 +46,7 @@ pub mod lidar_record;
 pub mod lidar_scan;
 pub mod lidar_source;
 pub mod mavlink_msg;
+pub mod nav;
 pub mod pose;
 pub mod providers;
 pub mod publish;
@@ -62,7 +63,7 @@ pub mod vehicle;
 
 pub use config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 pub use selector::{rotation_angle, KeyframeSelector};
-pub use session::{CaptureOutput, CaptureSession, FrameInput, PoseInput};
+pub use session::{CaptureOutput, CaptureSession, FrameInput};
 
 pub use control::{serve_control, ControlMsg};
 pub use encode::encode_keyframe_jpeg;
@@ -72,7 +73,7 @@ pub use frame_source::{
 pub use pose::{PoseEstimate, PoseProvider, PoseTrack};
 pub use publish::AtlasPublisher;
 pub use runtime::{default_intrinsics, AtlasRuntimeConfig, ConfigError, PosePrior, CONFIG_KEYS};
-pub use service::{run_capture_loop, LoopDeps, Paths};
+pub use service::{run_capture_loop, LoopDeps, NavDeps, Paths};
 
 // Re-export the shared wire contract so callers get one import surface.
 pub use world_engine_protocol::atlas::{

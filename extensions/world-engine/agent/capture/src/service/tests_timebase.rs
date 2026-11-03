@@ -91,6 +91,7 @@ async fn a_hub_session_records_on_its_own_timebase() {
         view_tx: None,
         camera: None,
         paths,
+        nav: Default::default(),
     };
     let task = tokio::spawn(run_capture_loop(deps, cancel.clone()));
     // What the ingest task does: fold into the shared state, then forward.

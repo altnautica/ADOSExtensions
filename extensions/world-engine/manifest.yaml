@@ -12,7 +12,7 @@ description_long: |
 features:
   - "Pose-tagged keyframe capture, one camera up to an all-sides rig"
   - "Resumable capture-session upload to a LAN reconstruction node with checksum verification"
-  - "Staged reconstruction presets: preview, high fidelity, tour and warehouse"
+  - "Staged reconstruction presets: preview, high fidelity, tour, warehouse and a LiDAR-only planar sweep"
   - "Gaussian splat, mesh, LAZ point cloud and occupancy with placement sidecars"
   - "Indoor products: floorplan, rooms, aisles, measurement, change detection and a static tour bundle"
   - "Live world-model streaming and Rerun recordings in Mission Control"
@@ -50,6 +50,36 @@ agent:
     max_ram_mb: 16384
     max_cpu_percent: 800
     max_pids: 1024
+  # The cap the host applies on the running node profile; `resources` is the
+  # ceiling for a profile not listed. A 4 GB drone cannot give a reconstruction
+  # node's 16 GB to one plugin, so the drone and visor caps bound the live
+  # mapping stores (`atlas.memory_budget_mb` defaults to 80 % of this cap).
+  resources_by_profile:
+    drone:
+      class: heavy
+      max_ram_mb: 768
+      max_cpu_percent: 200
+      max_pids: 128
+    visor:
+      class: heavy
+      max_ram_mb: 1536
+      max_cpu_percent: 400
+      max_pids: 1024
+    ground-station:
+      class: heavy
+      max_ram_mb: 512
+      max_cpu_percent: 200
+      max_pids: 256
+    workstation:
+      class: heavy
+      max_ram_mb: 16384
+      max_cpu_percent: 800
+      max_pids: 1024
+    compute:
+      class: heavy
+      max_ram_mb: 16384
+      max_cpu_percent: 800
+      max_pids: 1024
   # The processes serve the extension's HTTP API on the host-created socket
   # and meet each other on private sockets in the same directory.
   http: true
@@ -241,6 +271,10 @@ agent:
         subscribe_capability: plugin.world-engine.world.read
       - topic: plugin.world-engine.mesh
         subscribe_capability: plugin.world-engine.world.read
+      - topic: plugin.world-engine.scan
+        subscribe_capability: telemetry.read
+      - topic: plugin.world-engine.map_status
+        subscribe_capability: telemetry.read
     tools:
       - name: capture_start
         description: "Start a capture session on this device, optionally tagged with site, floor and room."
@@ -277,7 +311,7 @@ agent:
           type: object
           properties:
             session_id: { type: string }
-            preset: { type: string, enum: [preview, hq, tour, warehouse] }
+            preset: { type: string, enum: [preview, hq, tour, warehouse, planar-sweep] }
           required: [session_id, preset]
           additionalProperties: false
       - name: job_status

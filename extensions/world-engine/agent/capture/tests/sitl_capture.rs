@@ -215,6 +215,7 @@ async fn a_two_camera_sim_session_records_and_validates() {
         view_tx: None,
         camera: None,
         paths: paths.clone(),
+        nav: Default::default(),
     };
     let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));
     let started = start.await.unwrap();

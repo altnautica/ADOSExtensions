@@ -8,7 +8,7 @@
 //! `world-engine-node com.altnautica.world-engine` with its launch values
 //! (socket, token, data dir) in the unit's token credential; it then connects
 //! to the host and uses the plugin
-//! config (`serving.*`, `atlas.live_reconstruct`), publishes its compute status
+//! config (`serving.*`), publishes its compute status
 //! on the `status` telemetry channel, and mirrors its reconstruct jobs into the
 //! `jobs` cloud records. Without them (a standalone dev run) it runs on
 //! defaults and makes no host call. A lost host session (a plugin-host
@@ -47,8 +47,9 @@
 //! - `ADOS_COMPUTE_NODE_ID`   this node's id (default derived from the machine id)
 //! - `ADOS_COMPUTE_WORKERS`   worker slots (default `1`)
 //! - `ADOS_COMPUTE_RETENTION_S` terminal-job retention seconds (default `86400`)
-//! - `ADOS_ATLAS_LIVE`        overrides the `atlas.live_reconstruct` plugin config
-//!   (live in-flight reconstruction, default off)
+//! - `ADOS_ATLAS_LIVE`        reconstruct every session live (in flight); by
+//!   default only a session whose drone streams (`atlas.compute_placement =
+//!   stream`) is
 
 mod loops;
 mod setup;
@@ -106,8 +107,6 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 /// slow-moving and the local-first path is primary, so a coarser cadence than
 /// the heartbeat; only new or changed records are put.
 const JOBS_SYNC_INTERVAL: Duration = Duration::from_secs(15);
-/// The plugin config key gating live (in-flight) reconstruction.
-const ATLAS_LIVE_KEY: &str = "atlas.live_reconstruct";
 
 /// Run the plugin-host service until the listener stops or the host session
 /// ends.
@@ -282,12 +281,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // submits the reconstruct job the workers pick up), and every completed
     // generation's descriptors are served per device at /ws/atlas/<device_id>.
     // Installing the extension on a node is the opt-in, so both always mount.
-    let live_config = live_reconstruct_config(ctx.as_ref()).await;
+    let live_config = live_reconstruct_config();
     let (atlas_tx, atlas_rx) = mpsc::channel::<AtlasEvent>(ATLAS_EVENT_CHANNEL_CAP);
     {
         let rs = state.clone();
         let wr = work_root.clone();
-        tokio::spawn(async move { atlas_receiver_loop(atlas_rx, rs, wr, live_config).await });
+        let world = world_broadcaster.clone();
+        tokio::spawn(async move {
+            atlas_receiver_loop(atlas_rx, rs, wr, live_config, world).await
+        });
     }
     tracing::info!(
         channel_cap = ATLAS_EVENT_CHANNEL_CAP,

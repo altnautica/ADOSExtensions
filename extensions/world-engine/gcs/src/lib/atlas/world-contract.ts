@@ -25,25 +25,31 @@ export const ATLAS_CAPTURE_STATE_TOPIC = "atlas.capture.state";
 /** A selected pose-tagged keyframe, emitted drone-to-compute. */
 export const ATLAS_KEYFRAME_TOPIC = "atlas.keyframe";
 
-/** Shared-data: current 6-DoF pose plus world anchor (~10 Hz). */
+/** Shared-data: current 6-DoF navigation pose in `map_frd`. */
 export const PLUGIN_ATLAS_POSE_TOPIC = "plugin.world-engine.pose";
-/** Shared-data: point-cloud descriptor. */
+/** Shared-data: point-cloud descriptor, or the live sweep-cloud delta. */
 export const PLUGIN_ATLAS_POINTCLOUD_TOPIC = "plugin.world-engine.pointcloud";
-/** Shared-data: occupancy / ESDF grid descriptor. */
+/** Shared-data: occupancy / ESDF grid descriptor, or the live occupancy tiles. */
 export const PLUGIN_ATLAS_OCCUPANCY_TOPIC = "plugin.world-engine.occupancy";
 /** Shared-data: gaussian-splat descriptor. */
 export const PLUGIN_ATLAS_SPLAT_TOPIC = "plugin.world-engine.splat";
 /** Shared-data: mesh descriptor. */
 export const PLUGIN_ATLAS_MESH_TOPIC = "plugin.world-engine.mesh";
+/** Shared-data: the latest planar scan in the body frame (10 Hz). */
+export const PLUGIN_ATLAS_SCAN_TOPIC = "plugin.world-engine.scan";
+/** Shared-data: the live map's state (1 Hz). */
+export const PLUGIN_ATLAS_MAP_STATUS_TOPIC = "plugin.world-engine.map_status";
 
 /** Every shared-data world-model topic, so a consumer iterates the set rather
- * than hard-coding five literals that drift from the agent's own list. */
+ * than hard-coding literals that drift from the agent's own list. */
 export const PLUGIN_ATLAS_TOPICS = [
   PLUGIN_ATLAS_POSE_TOPIC,
   PLUGIN_ATLAS_POINTCLOUD_TOPIC,
   PLUGIN_ATLAS_OCCUPANCY_TOPIC,
   PLUGIN_ATLAS_SPLAT_TOPIC,
   PLUGIN_ATLAS_MESH_TOPIC,
+  PLUGIN_ATLAS_SCAN_TOPIC,
+  PLUGIN_ATLAS_MAP_STATUS_TOPIC,
 ] as const;
 
 /** The four ARTIFACT topics — the world model proper, excluding the live pose
@@ -77,7 +83,13 @@ export const ATLAS_POSE_READ_CAP = "telemetry.read";
  * convention.
  */
 export function atlasTopicSubscribeCapability(topic: string): string | null {
-  if (topic === PLUGIN_ATLAS_POSE_TOPIC) return ATLAS_POSE_READ_CAP;
+  if (
+    topic === PLUGIN_ATLAS_POSE_TOPIC ||
+    topic === PLUGIN_ATLAS_SCAN_TOPIC ||
+    topic === PLUGIN_ATLAS_MAP_STATUS_TOPIC
+  ) {
+    return ATLAS_POSE_READ_CAP;
+  }
   if (
     topic === PLUGIN_ATLAS_POINTCLOUD_TOPIC ||
     topic === PLUGIN_ATLAS_OCCUPANCY_TOPIC ||
@@ -87,6 +99,103 @@ export function atlasTopicSubscribeCapability(topic: string): string | null {
     return ATLAS_WORLD_READ_CAP;
   }
   return null;
+}
+
+// --- Live navigation and mapping payloads ----------------------------------
+//
+// Frames: `map_frd` is the planar SLAM world (body FLU at the first scan)
+// turned to FRD (`x`, `-y`, `-z`, `-yaw`); with no GNSS and the FC's yaw and
+// position sourced from this pose, the FC's local NED coincides with it.
+// `body_frd` is the vehicle body, forward-right-down.
+
+export type NavFrame = "map_frd" | "body_frd";
+export type NavHealth = "good" | "degraded" | "lost";
+export type NavPoseSource = "lidar_planar" | "fc_ekf" | "vio" | "replay";
+export type ComputePlacement = "onboard" | "stream" | "post_flight" | "hybrid";
+export type NavPoseMode = "always" | "capture";
+
+/** `plugin.world-engine.pose`: `R` row-major world-from-body, `t` metres. */
+export interface NavPose {
+  pose: { R: number[]; t: [number, number, number]; cov: number[] | null };
+  anchor: unknown | null;
+  ts_ms: number;
+  health: NavHealth;
+  frame: NavFrame;
+  source: NavPoseSource;
+}
+
+/** `plugin.world-engine.scan`: `ranges_m[i]` at `angle_start_rad +
+ * i * angle_increment_rad`, clockwise from body forward; `0` = no return. */
+export interface NavScan {
+  t_ns: number;
+  frame: "body_frd";
+  angle_start_rad: number;
+  angle_increment_rad: number;
+  ranges_m: number[];
+}
+
+/** Live occupancy cell values (ROS map_server convention). */
+export const OCCUPANCY_OCCUPIED = 0;
+export const OCCUPANCY_FREE = 254;
+export const OCCUPANCY_UNKNOWN = 205;
+
+/** One changed tile: `tile_cells` square grey PNG, row 0 = largest x (north
+ * up), column 0 = smallest y (west left); covers `[ix, ix+1) * tile_cells *
+ * res_m` in x and likewise in y. */
+export interface OccupancyTile {
+  ix: number;
+  iy: number;
+  png_b64: string;
+}
+
+/** `plugin.world-engine.occupancy` live delta (1 Hz, changed tiles only). */
+export interface LiveOccupancy {
+  kind: "live";
+  seq: number;
+  frame: "map_frd";
+  res_m: number;
+  tile_cells: number;
+  tiles: OccupancyTile[];
+}
+
+/** `plugin.world-engine.pointcloud` live delta: `count` little-endian f32
+ * xyz triples. A changed `voxel_m` supersedes every earlier delta. */
+export interface LivePointCloud {
+  kind: "live";
+  seq: number;
+  frame: "map_frd";
+  voxel_m: number;
+  count: number;
+  points_b64: string;
+}
+
+/** `plugin.world-engine.map_status` (1 Hz). */
+export interface MapStatus {
+  session_id: string | null;
+  placement: ComputePlacement;
+  memory_used_mb: number;
+  memory_budget_mb: number;
+  voxel_m: number;
+  keyframes_dropped: number;
+  sweep_points: number;
+  area_m2: number;
+  nav_pose: NavPoseMode;
+  upload: {
+    state: "idle" | "queued" | "uploading" | "done" | "failed";
+    bytes_done: number;
+    bytes_total: number;
+  };
+  stream: { state: "off" | "connecting" | "live" | "degraded"; bytes_per_s: number };
+}
+
+/** Whether a payload on a topic that also carries node products is live. A
+ * product descriptor says `kind: "product"`. */
+export function isLiveMapPayload(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { kind?: unknown }).kind === "live"
+  );
 }
 
 // --- Bearer rule -----------------------------------------------------------

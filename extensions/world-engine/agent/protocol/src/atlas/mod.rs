@@ -37,13 +37,22 @@ pub const ATLAS_CAPTURE_STATE_TOPIC: &str = "atlas.capture.state";
 /// world-model stream lane consume it.
 pub const ATLAS_KEYFRAME_TOPIC: &str = "atlas.keyframe";
 
-/// Shared-data: current 6-DoF pose plus world anchor (~10 Hz).
+/// Internal: one raw planar scan with its sensor pose, as a binary
+/// [`PolarScan`] record (not msgpack), sent to the compute node only while the
+/// drone streams (`atlas.compute_placement = stream`) so the node builds the
+/// full-resolution live map.
+pub const ATLAS_SCAN_TOPIC: &str = "atlas.scan";
+
+/// Shared-data: current 6-DoF navigation pose in `map_frd` (see [`nav`]),
+/// published while the pose provider runs (`atlas.nav_pose`).
 pub const PLUGIN_ATLAS_POSE_TOPIC: &str = "plugin.world-engine.pose";
 
-/// Shared-data: point-cloud descriptor (count, bounds, url).
+/// Shared-data: point-cloud descriptor (count, bounds, url), or the live
+/// sweep-cloud delta ([`LivePointCloud`]).
 pub const PLUGIN_ATLAS_POINTCLOUD_TOPIC: &str = "plugin.world-engine.pointcloud";
 
-/// Shared-data: occupancy-grid descriptor (origin, resolution, dims, handle).
+/// Shared-data: occupancy-grid descriptor (origin, resolution, dims, handle),
+/// or the live occupancy tiles ([`LiveOccupancy`]).
 pub const PLUGIN_ATLAS_OCCUPANCY_TOPIC: &str = "plugin.world-engine.occupancy";
 
 /// Shared-data: "splat updated" descriptor (gaussian count, url / handle).
@@ -52,14 +61,23 @@ pub const PLUGIN_ATLAS_SPLAT_TOPIC: &str = "plugin.world-engine.splat";
 /// Shared-data: mesh descriptor (vertex / face count, handle / url).
 pub const PLUGIN_ATLAS_MESH_TOPIC: &str = "plugin.world-engine.mesh";
 
+/// Shared-data: the latest planar scan in the body frame ([`ScanDescriptor`],
+/// 10 Hz).
+pub const PLUGIN_ATLAS_SCAN_TOPIC: &str = "plugin.world-engine.scan";
+
+/// Shared-data: the live map's state ([`MapStatus`], 1 Hz).
+pub const PLUGIN_ATLAS_MAP_STATUS_TOPIC: &str = "plugin.world-engine.map_status";
+
 /// Every shared-data world-model topic, in one place, so a consumer or a gate
-/// iterates the set rather than hard-coding five string literals that drift.
+/// iterates the set rather than hard-coding string literals that drift.
 pub const PLUGIN_ATLAS_TOPICS: &[&str] = &[
     PLUGIN_ATLAS_POSE_TOPIC,
     PLUGIN_ATLAS_POINTCLOUD_TOPIC,
     PLUGIN_ATLAS_OCCUPANCY_TOPIC,
     PLUGIN_ATLAS_SPLAT_TOPIC,
     PLUGIN_ATLAS_MESH_TOPIC,
+    PLUGIN_ATLAS_SCAN_TOPIC,
+    PLUGIN_ATLAS_MAP_STATUS_TOPIC,
 ];
 
 // --- Shared-data access policy --------------------------------------------
@@ -76,7 +94,9 @@ pub const PLUGIN_ATLAS_TOPICS: &[&str] = &[
 /// gate into a naming convention.
 pub fn atlas_topic_subscribe_capability(topic: &str) -> Option<&'static str> {
     match topic {
-        PLUGIN_ATLAS_POSE_TOPIC => Some(ATLAS_POSE_READ_CAP),
+        PLUGIN_ATLAS_POSE_TOPIC | PLUGIN_ATLAS_SCAN_TOPIC | PLUGIN_ATLAS_MAP_STATUS_TOPIC => {
+            Some(ATLAS_POSE_READ_CAP)
+        }
         PLUGIN_ATLAS_POINTCLOUD_TOPIC
         | PLUGIN_ATLAS_OCCUPANCY_TOPIC
         | PLUGIN_ATLAS_SPLAT_TOPIC
@@ -159,10 +179,14 @@ pub struct AtlasForwardStatus {
 
 mod descriptors;
 mod keyframe;
+pub mod nav;
+pub mod polar;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_bus;
+#[cfg(test)]
+mod tests_nav;
 
 pub use descriptors::{
     Generation, MeshDescriptor, OccupancyDescriptor, OccupancyField, PointCloudDescriptor,
@@ -172,6 +196,12 @@ pub use keyframe::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
     KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, Pose, PoseDescriptor, PoseSource,
     TimeAlignment, VioHealth, KEYFRAME_MAX_SIGMA_NS, POSE_COV_LEN,
+};
+pub use polar::{PolarError, PolarScan};
+pub use nav::{
+    ComputePlacement, LiveOccupancy, LivePointCloud, MapPayloadKind, MapStatus, NavFrame,
+    NavPoseMode, NavPoseSource, OccupancyTile, ScanDescriptor, StreamPhase, StreamProgress,
+    UploadPhase, UploadProgress,
 };
 
 /// The on-wire version stamped on every [`AtlasEvent`] envelope. Every atlas
@@ -282,4 +312,8 @@ impl_msgpack!(
     SplatDescriptor,
     MeshDescriptor,
     TimeAlignment,
+    ScanDescriptor,
+    LiveOccupancy,
+    LivePointCloud,
+    MapStatus,
 );

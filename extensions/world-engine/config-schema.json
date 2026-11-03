@@ -82,11 +82,36 @@
         "additionalProperties": false
       }
     },
-    "atlas.live_reconstruct": {
-      "type": "boolean",
-      "title": "Live reconstruction",
-      "description": "On a compute node, rebuild the world model incrementally while keyframes arrive instead of only after the capture session is bagged.",
-      "default": false
+    "atlas.compute_placement": {
+      "type": "string",
+      "title": "Map compute placement",
+      "description": "Where the heavy map products are built. Navigation SLAM and the live occupancy always stay on board. onboard: full 5 cm sweep cloud on the drone. stream: keyframes, poses and raw scans stream to the compute node in flight and it reconstructs live; the drone keeps a 20 cm cloud. post_flight: record only, upload after landing. hybrid: a 10 cm cloud on board plus the session uploaded after landing.",
+      "enum": [
+        "onboard",
+        "stream",
+        "post_flight",
+        "hybrid"
+      ],
+      "default": "hybrid"
+    },
+    "atlas.nav_pose": {
+      "type": "string",
+      "title": "Navigation pose",
+      "description": "always: publish the navigation pose, scan and live map whenever the pose provider runs. capture: only while a capture session is open. The default is always when a planar LiDAR device is set.",
+      "enum": [
+        "always",
+        "capture"
+      ]
+    },
+    "atlas.memory_budget_mb": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "title": "Map memory budget (MB)",
+      "description": "RAM the live map stores may hold: keyframe queue 40 %, scan ring 10 %, sweep cloud 30 %, occupancy 20 %. Unset: 80 % of the capture service's memory cap.",
+      "minimum": 16,
+      "default": null
     },
     "atlas.pose_prior": {
       "type": "object",
@@ -118,7 +143,7 @@
     "atlas.pose_publish_interval_ms": {
       "type": "integer",
       "title": "Pose publish interval (ms)",
-      "description": "Minimum interval between published world poses.",
+      "description": "Minimum interval between published navigation poses (33 for 30 Hz). The pose cannot publish faster than its provider estimates.",
       "minimum": 0,
       "default": 100
     },
@@ -363,7 +388,7 @@
           "default": "lidar0"
         },
         "imu": {
-          "description": "Rig IMU a planar LiDAR's scans are levelled with.",
+          "description": "Rig IMU a planar LiDAR's scans are levelled with. `fc` synthesises it from the flight controller's attitude for a companion without an IMU (declare a rig IMU sensor `fc` at the body origin).",
           "type": "string",
           "default": "imu0"
         },

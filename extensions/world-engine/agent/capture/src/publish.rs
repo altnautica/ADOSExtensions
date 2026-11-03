@@ -9,8 +9,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ados_protocol::frame::{encode_frame, FrameError, PLUGIN_MAX_FRAME};
 use ados_protocol::ipc::IpcBroadcast;
 use world_engine_protocol::atlas::{
-    AtlasEvent, CaptureStatus, KeyframeEnvelope, PoseDescriptor, ATLAS_CAPTURE_STATE_TOPIC,
-    ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_POSE_TOPIC,
+    AtlasEvent, CaptureStatus, KeyframeEnvelope, LiveOccupancy, LivePointCloud, MapStatus,
+    PolarScan, PoseDescriptor, ScanDescriptor, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+    ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_MAP_STATUS_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+    PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_POSE_TOPIC, PLUGIN_ATLAS_SCAN_TOPIC,
 };
 
 /// Per-client outbound queue depth. Keyframes are large and arrive at the
@@ -103,13 +105,55 @@ impl AtlasPublisher {
         0
     }
 
-    /// Publish the live pose descriptor (~10 Hz shared-data pose).
-    pub async fn publish_pose(&self, pose: &PoseDescriptor) {
-        match pose.to_msgpack() {
-            Ok(body) => self.publish(PLUGIN_ATLAS_POSE_TOPIC, body).await,
-            Err(e) => tracing::warn!(error = %e, "atlas_pose_encode_failed"),
+    async fn publish_encoded(
+        &self,
+        topic: &'static str,
+        body: Result<Vec<u8>, rmp_serde::encode::Error>,
+    ) {
+        match body {
+            Ok(body) => self.publish(topic, body).await,
+            Err(e) => tracing::warn!(topic, error = %e, "atlas_publish_encode_failed"),
         }
     }
+
+    /// Publish the navigation pose (`map_frd`, shared).
+    pub async fn publish_pose(&self, pose: &PoseDescriptor) {
+        self.publish_encoded(PLUGIN_ATLAS_POSE_TOPIC, pose.to_msgpack())
+            .await;
+    }
+
+    /// Publish one binned body-frame scan (shared).
+    pub async fn publish_scan(&self, scan: &ScanDescriptor) {
+        self.publish_encoded(PLUGIN_ATLAS_SCAN_TOPIC, scan.to_msgpack())
+            .await;
+    }
+
+    /// Publish the changed live occupancy tiles (shared).
+    pub async fn publish_live_occupancy(&self, occ: &LiveOccupancy) {
+        self.publish_encoded(PLUGIN_ATLAS_OCCUPANCY_TOPIC, occ.to_msgpack())
+            .await;
+    }
+
+    /// Publish a live sweep-cloud delta (shared).
+    pub async fn publish_live_pointcloud(&self, cloud: &LivePointCloud) {
+        self.publish_encoded(PLUGIN_ATLAS_POINTCLOUD_TOPIC, cloud.to_msgpack())
+            .await;
+    }
+
+    /// Publish one raw polar scan for the compute node (internal; the binary
+    /// record, not msgpack).
+    pub async fn publish_raw_scan(&self, scan: &PolarScan) {
+        let mut body = Vec::with_capacity(scan.encoded_len());
+        scan.encode(&mut body);
+        self.publish(ATLAS_SCAN_TOPIC, body).await;
+    }
+
+    /// Publish the live map status (shared).
+    pub async fn publish_map_status(&self, status: &MapStatus) {
+        self.publish_encoded(PLUGIN_ATLAS_MAP_STATUS_TOPIC, status.to_msgpack())
+            .await;
+    }
+
 
     /// Publish the capture-session state. The link folds the latest one into
     /// the extension's `status` telemetry, so the capture loop publishes it on

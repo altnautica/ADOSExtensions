@@ -157,37 +157,21 @@ impl StatePaths {
     }
 }
 
-/// Whether live (in-flight) reconstruction is on: the `ADOS_ATLAS_LIVE` env
-/// override wins, else the `atlas.live_reconstruct` plugin config. Opt-in
-/// (default off). Pure so the precedence is unit-tested.
-pub(super) fn live_enabled(env: Option<&str>, config: Option<bool>) -> bool {
-    match env {
-        Some(v) => is_truthy(v),
-        None => config.unwrap_or(false),
-    }
+/// Whether every session is reconstructed live regardless of what its drone
+/// asked for: the `ADOS_ATLAS_LIVE` env override (a bench switch). Off by
+/// default; a drone opts its own session in with `atlas.compute_placement =
+/// stream`, which reaches the ingest through its `map_status`.
+pub(super) fn live_forced(env: Option<&str>) -> bool {
+    env.is_some_and(is_truthy)
 }
 
 /// Build the live-reconstruction cadence config. The cadence defaults (every 30
 /// keyframes / 20 s / 8-keyframe floor) come from
-/// [`LiveReconstructConfig::default`]; `enabled` is set from the gate, and the
-/// thresholds can be tuned via env.
-pub(super) async fn live_reconstruct_config(ctx: Option<&PluginContext>) -> LiveReconstructConfig {
-    let config = match ctx {
-        Some(ctx) => match ctx
-            .config
-            .get(ATLAS_LIVE_KEY, rmpv::Value::Boolean(false))
-            .await
-        {
-            Ok(v) => v.as_bool(),
-            Err(e) => {
-                tracing::warn!(key = ATLAS_LIVE_KEY, error = %e, "plugin config read failed; using the default");
-                None
-            }
-        },
-        None => None,
-    };
+/// [`LiveReconstructConfig::default`]; `enabled` is the node-wide override, and
+/// the thresholds can be tuned via env.
+pub(super) fn live_reconstruct_config() -> LiveReconstructConfig {
     let mut cfg = LiveReconstructConfig {
-        enabled: live_enabled(std::env::var("ADOS_ATLAS_LIVE").ok().as_deref(), config),
+        enabled: live_forced(std::env::var("ADOS_ATLAS_LIVE").ok().as_deref()),
         ..LiveReconstructConfig::default()
     };
     if let Some(v) = env_u64("ADOS_ATLAS_LIVE_EVERY_KEYFRAMES") {
@@ -248,7 +232,7 @@ pub(super) async fn connect_host(
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_node_id, live_enabled, StatePaths};
+    use super::{derive_node_id, live_forced, StatePaths};
     use std::path::PathBuf;
 
     #[test]
@@ -275,13 +259,10 @@ mod tests {
     }
 
     #[test]
-    fn live_reconstruct_is_opt_in_and_the_env_overrides_the_config() {
-        assert!(!live_enabled(None, None), "absent everywhere reads off");
-        assert!(live_enabled(None, Some(true)));
-        assert!(!live_enabled(None, Some(false)));
-        // The env wins over the config, both ways.
-        assert!(!live_enabled(Some("0"), Some(true)));
-        assert!(live_enabled(Some("true"), Some(false)));
+    fn live_reconstruct_is_forced_only_by_the_env_override() {
+        assert!(!live_forced(None), "absent reads off");
+        assert!(!live_forced(Some("0")));
+        assert!(live_forced(Some("true")));
     }
 
     #[test]

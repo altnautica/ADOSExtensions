@@ -127,6 +127,15 @@ fn read_inputs(
     if let Some(e) = failed {
         return Err(e);
     }
+    // A planar LiDAR records its compact polar stream instead of the
+    // Cartesian channel.
+    if let Some(polar) = super::polar::read(reader.dir(), &lidar.id)? {
+        scans.extend(
+            polar
+                .iter()
+                .map(|s| super::polar::scan_input(s, shift(s.t_ns, lidar.time_offset_ns))),
+        );
+    }
     scans.sort_by_key(|s| s.t_ns);
     samples.sort_by_key(|s| s.t_ns);
     Ok((scans, samples))

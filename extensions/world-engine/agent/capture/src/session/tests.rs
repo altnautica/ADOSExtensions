@@ -70,17 +70,6 @@ pub(super) fn frame_at(t: [f64; 3]) -> FrameInput {
     }
 }
 
-pub(super) fn pose_at(t: [f64; 3]) -> PoseInput {
-    PoseInput {
-        pose: Pose {
-            r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-            t,
-            cov: None,
-        },
-        anchor: Some(anchor()),
-    }
-}
-
 /// A started session with its world frame fixed: the precondition for
 /// keyframe selection.
 pub(super) fn started(config: CaptureConfig, id: &str) -> CaptureSession {
