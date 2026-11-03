@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.siyi-pod
 name: "ADOS SIYI Optical Pod"
-version: "0.5.1"
+version: "0.5.2"
 description: "Native driver for the SIYI optical-pod line (A2 mini, A8 mini, ZR10, ZR30, ZT6, ZT30) with per-model capability negotiation: gimbal, zoom, focus, photo/record, thermal palette and gain, and a laser rangefinder with subject geolocation."
 description_long: |
   Speaks the SIYI Gimbal Camera External SDK over UDP, TCP, or a TTL serial port

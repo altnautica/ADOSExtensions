@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { lockColor, scaleBoxToRendered } from "../src/overlay-draw";
 
-const RECT = { x: 100, y: 50, width: 800, height: 450 };
+const RECT = { left: 100, top: 50, width: 800, height: 450 };
 
 describe("scaleBoxToRendered", () => {
   it("scales a pod-frame box into the letterboxed rendered rect", () => {
@@ -26,8 +26,8 @@ describe("scaleBoxToRendered", () => {
       1080,
       RECT,
     );
-    expect(r.x).toBe(RECT.x + RECT.width / 2);
-    expect(r.y).toBe(RECT.y + RECT.height / 2);
+    expect(r.x).toBe(RECT.left + RECT.width / 2);
+    expect(r.y).toBe(RECT.top + RECT.height / 2);
   });
 
   it("does not divide by zero on a zero-size stream", () => {

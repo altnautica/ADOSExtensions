@@ -2,6 +2,16 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.4.0
+
+- `ctx.videoOverlay.onProps(handler)` delivers the `video.overlay` host props
+  (`video.overlay.props`): camera, stream size, the letterbox-corrected
+  rendered rect, frame time and age, attitude (null when unknown) and the
+  fresh detection batch (null once stale), typed as `VideoOverlayHostProps`.
+  A payload without a rendered rect is dropped. Mission Control and the agent
+  cockpit push the same shape.
+- The harness adds `pushVideoOverlayProps(props)`.
+
 ## 1.3.0
 
 - `definePlugin` runs the plugin's `unmount` hook when the host posts

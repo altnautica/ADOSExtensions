@@ -261,11 +261,13 @@ export function lintManifest(manifestPath, { catalog, docsRoot }) {
     .map((l) => l.match(/^\s*slot:\s*(\S+)/))
     .filter(Boolean)
     .map((m) => m[1]);
-  if (slots.length > 1 && gcsSrc && !gcsSrc.includes("video.overlay.props")) {
+  const branchesOnOverlay =
+    gcsSrc.includes("ctx.videoOverlay.onProps") || gcsSrc.includes("video.overlay.props");
+  if (slots.length > 1 && gcsSrc && !branchesOnOverlay) {
     fail(
       `FAIL the manifest contributes ${slots.length} slots (${slots.join(", ")}) ` +
         `but the bundle never discriminates between them (no ` +
-        `ctx.events.subscribe("video.overlay.props") branch) — one of those slots ` +
+        `ctx.videoOverlay.onProps branch) — one of those slots ` +
         `renders the wrong surface`,
     );
   }

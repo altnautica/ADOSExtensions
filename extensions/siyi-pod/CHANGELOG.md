@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2
+
+- The video HUD reads the host's overlay props through the SDK's
+  `ctx.videoOverlay.onProps`, typed as `VideoOverlayHostProps`. It positions
+  against the rendered rect's `left`/`top` and scales each box from the
+  detection batch's own frame size; the earlier local type read `x`/`y` and a
+  flat detection list the hosts never sent, so its reticle and boxes landed at
+  the frame origin. A payload without a rendered rect is ignored, and stale
+  detections (the host sends none) draw no boxes.
+
 ## 0.5.1
 
 - The Cycle palette Skill's default key is `o` (was `p`, which the cockpit

@@ -19,7 +19,7 @@ import type { PodState } from "./types";
 import enLocale from "../../locales/en.json";
 
 const PLUGIN_ID = "com.altnautica.siyi-pod";
-const PLUGIN_VERSION = "0.5.1";
+const PLUGIN_VERSION = "0.5.2";
 
 let handles: { destroy(): void }[] = [];
 let rootEl: HTMLElement | null = null;
@@ -49,7 +49,7 @@ definePlugin({
 
     // Overlay props only arrive in the video.overlay slot; when they do, hide
     // the console so the HUD paints alone over the video.
-    ctx.events.subscribe<unknown>("video.overlay.props", () => {
+    ctx.videoOverlay.onProps(() => {
       root.classList.add("siyi-overlay-mode");
     });
 

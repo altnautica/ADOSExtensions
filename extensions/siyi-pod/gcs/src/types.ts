@@ -3,9 +3,8 @@
  *
  * `PodState` mirrors the agent's `siyi.pod.state` read-back (published on the
  * "siyi" telemetry channel and the `siyi.pod.state` event). `PodCapabilities`
- * is the negotiated feature set the console gates its controls on.
- * `VideoOverlayProps` is the host's letterbox-correct overlay contract the
- * video HUD consumes.
+ * is the negotiated feature set the console gates its controls on. The video
+ * HUD consumes the SDK's `VideoOverlayHostProps`.
  */
 
 export interface PodCapabilities {
@@ -41,33 +40,6 @@ export interface PodState {
   spot_temp_c: number | null;
   link_ok: boolean;
   frames_received: number;
-}
-
-/** A pixel rect (origin top-left) in the rendered video element's own space. */
-export interface RenderedRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-/** The host's `video.overlay.props` payload (letterbox-correct). */
-export interface VideoOverlayProps {
-  droneId: string;
-  cameraId: string | null;
-  streamWidth: number;
-  streamHeight: number;
-  renderedRect: RenderedRect;
-  frameTimestampMs: number | null;
-  attitude?: { roll: number; pitch: number; yaw: number } | null;
-  detections?: OverlayDetection[] | null;
-}
-
-export interface OverlayDetection {
-  bbox: { x: number; y: number; width: number; height: number };
-  trackId?: number | null;
-  lockState?: "locked" | "uncertain" | "lost" | null;
-  classLabel?: string;
 }
 
 export const GIMBAL_MODES = ["lock", "follow", "fpv"] as const;

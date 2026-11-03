@@ -58,6 +58,69 @@ export interface PerceptionTierInfo {
   hasAccelerator?: boolean;
 }
 
+/** The host event a `video.overlay` frame receives its host props on. */
+export const VIDEO_OVERLAY_PROPS_EVENT = "video.overlay.props";
+
+/** The letterbox-corrected rendered video rect, in CSS px relative to the
+ * overlay frame's top-left. Position marks against this, never the frame. */
+export interface VideoOverlayRenderedRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/** One detection on the host props (boxless detections are left out). */
+export interface VideoOverlayDetectionItem {
+  bbox: PerceptionBoundingBox;
+  classLabel: string;
+  confidence: number;
+  trackId: number | null;
+  lockState: PerceptionLockState | null;
+}
+
+/** The fresh detection batch for the overlay's video, in source-frame px. */
+export interface VideoOverlayDetections {
+  frameWidth: number;
+  frameHeight: number;
+  frameId: number;
+  /** Host-clock epoch ms the batch arrived. */
+  receivedAt: number;
+  items: VideoOverlayDetectionItem[];
+}
+
+/**
+ * The `video.overlay` host props: everything an overlay needs to draw
+ * letterbox-correct marks over the video it sits on and to map a click back
+ * to a frame pixel, without measuring the host page. Pushed when a detection
+ * batch lands or ages out, on a resize or resolution change, and on a camera
+ * switch; never per video frame.
+ */
+export interface VideoOverlayHostProps {
+  /** The device whose video this is. */
+  droneId: string;
+  /** The camera the video shows (for designate calls). */
+  cameraId: string;
+  /** The stream's intrinsic resolution. */
+  streamWidth: number;
+  streamHeight: number;
+  renderedRect: VideoOverlayRenderedRect;
+  /** Host-clock epoch ms of the batch the payload is coalesced to; 0 with
+   * no batch shown. */
+  frameTimestampMs: number;
+  /** Measured age of the frame on screen in ms, or null when the host has
+   * no estimate. */
+  frameAgeMs: number | null;
+  /** Vehicle attitude in degrees, or null when unknown or stale. Raise your
+   * own failure state on null; never substitute zero. */
+  attitude: { rollDeg: number; pitchDeg: number; yawDeg: number } | null;
+  /** The attitude is the sample at the frame's capture time rather than the
+   * newest one. */
+  attitudeAtFrameTime: boolean;
+  /** The fresh batch, or null once it is stale (drop your boxes). */
+  detections: VideoOverlayDetections | null;
+}
+
 /** Discrete identity-lock state of a track this frame. `locked` = the
  * tracker held the identity; `uncertain` = a provisional association;
  * `lost` = the track could not be re-associated. */
@@ -270,6 +333,15 @@ export interface PluginContext {
       handler: (vars: Record<string, string>) => void,
     ): () => void;
   };
+  videoOverlay: {
+    /**
+     * Receive the host props of the `video.overlay` slot this frame is
+     * mounted in. The host pushes them on load and on every material change.
+     * A payload that is not an object with a rendered rect is dropped.
+     * Returns an unsubscribe function.
+     */
+    onProps(handler: (props: VideoOverlayHostProps) => void): () => void;
+  };
   i18n: {
     /**
      * Resolve a key against the locale bundle the host streams in. Falls
@@ -447,10 +519,32 @@ export function createPluginContext(
       onChange: (handler) =>
         client.on<Record<string, string>>("theme.changed", handler),
     },
+    videoOverlay: {
+      onProps: (handler) =>
+        client.on<unknown>(VIDEO_OVERLAY_PROPS_EVENT, (args) => {
+          if (isVideoOverlayHostProps(args)) handler(args);
+        }),
+    },
     i18n: {
       t: (key, params) => formatLocale(localeBundle, key, params),
     },
   };
+}
+
+/** Shape check for a pushed host-props payload. */
+export function isVideoOverlayHostProps(v: unknown): v is VideoOverlayHostProps {
+  if (typeof v !== "object" || v === null) return false;
+  const p = v as Record<string, unknown>;
+  const r = p.renderedRect as Record<string, unknown> | null | undefined;
+  return (
+    typeof p.cameraId === "string" &&
+    typeof p.streamWidth === "number" &&
+    typeof p.streamHeight === "number" &&
+    typeof r === "object" &&
+    r !== null &&
+    ["left", "top", "width", "height"].every((k) => typeof r[k] === "number") &&
+    (p.detections === null || (typeof p.detections === "object" && Array.isArray((p.detections as { items?: unknown }).items)))
+  );
 }
 
 function formatLocale(

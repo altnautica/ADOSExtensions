@@ -41,6 +41,12 @@ export {
   type PluginRecord,
   type PluginRecordListOptions,
   type PluginRecordsApi,
+  VIDEO_OVERLAY_PROPS_EVENT,
+  isVideoOverlayHostProps,
+  type VideoOverlayHostProps,
+  type VideoOverlayDetections,
+  type VideoOverlayDetectionItem,
+  type VideoOverlayRenderedRect,
 } from "./api";
 
 export {

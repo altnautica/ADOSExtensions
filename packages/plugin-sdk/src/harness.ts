@@ -4,6 +4,8 @@ import {
   type PerceptionSessionHealth,
   type PerceptionTierInfo,
   type PluginContext,
+  VIDEO_OVERLAY_PROPS_EVENT,
+  type VideoOverlayHostProps,
 } from "./api";
 import { PluginClient } from "./client";
 import { PROTOCOL_VERSION, type RpcEnvelope } from "./protocol";
@@ -76,6 +78,8 @@ export interface PluginHarness {
    * `ctx.perception.readSessionHealth` resolves this value. */
   stubPerceptionHealth(health: PerceptionSessionHealth): void;
   pushEvent(method: string, args: unknown, capability?: string): void;
+  /** Push `video.overlay.props` the way the cockpit does. */
+  pushVideoOverlayProps(props: VideoOverlayHostProps): void;
   pushConfig(next: unknown): void;
   pushTheme(vars: Record<string, string>): void;
   /**
@@ -223,6 +227,16 @@ export function createPluginHarness(
         method,
         capability,
         args,
+        version: PROTOCOL_VERSION,
+      });
+    },
+    pushVideoOverlayProps(props) {
+      transport.pushFromHost({
+        id: `video-overlay-${Date.now()}`,
+        type: "event",
+        method: VIDEO_OVERLAY_PROPS_EVENT,
+        capability: "ui.slot.video-overlay",
+        args: props,
         version: PROTOCOL_VERSION,
       });
     },

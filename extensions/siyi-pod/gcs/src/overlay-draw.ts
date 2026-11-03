@@ -1,18 +1,19 @@
 /**
  * Pure geometry + drawing for the pod video HUD.
  *
- * The host streams `video.overlay.props` with the letterbox-correct rendered
- * rect and the pod's republished tracker boxes in pod-frame pixels. The pure
- * helpers scale a box into the rendered rect and pick a lock colour; `drawHud`
- * paints the reticle, track boxes, and range/zoom readout onto a 2D context.
+ * The host pushes the `video.overlay` props (`ctx.videoOverlay.onProps`): the
+ * letterbox-correct rendered rect and the fresh detection batch in source-frame
+ * pixels. The pure helpers scale a box into the rendered rect and pick a lock
+ * colour; `drawHud` paints the reticle, track boxes, and range/zoom readout
+ * onto a 2D context.
  */
 
 import type {
-  OverlayDetection,
-  PodState,
-  RenderedRect,
-  VideoOverlayProps,
-} from "./types";
+  VideoOverlayHostProps,
+  VideoOverlayRenderedRect,
+} from "@altnautica/plugin-sdk";
+
+import type { PodState } from "./types";
 
 export interface PixelRect {
   x: number;
@@ -21,18 +22,18 @@ export interface PixelRect {
   height: number;
 }
 
-/** Scale a pod-frame box into the rendered video rect. */
+/** Scale a source-frame box into the rendered video rect. */
 export function scaleBoxToRendered(
   box: { x: number; y: number; width: number; height: number },
-  streamWidth: number,
-  streamHeight: number,
-  rect: RenderedRect,
+  frameWidth: number,
+  frameHeight: number,
+  rect: VideoOverlayRenderedRect,
 ): PixelRect {
-  const sx = streamWidth > 0 ? rect.width / streamWidth : 1;
-  const sy = streamHeight > 0 ? rect.height / streamHeight : 1;
+  const sx = frameWidth > 0 ? rect.width / frameWidth : 1;
+  const sy = frameHeight > 0 ? rect.height / frameHeight : 1;
   return {
-    x: rect.x + box.x * sx,
-    y: rect.y + box.y * sy,
+    x: rect.left + box.x * sx,
+    y: rect.top + box.y * sy,
     width: box.width * sx,
     height: box.height * sy,
   };
@@ -54,16 +55,16 @@ export function lockColor(lockState: string | null | undefined): string {
 /** Paint the pod HUD. No-op when the 2D context or props are missing. */
 export function drawHud(
   c: CanvasRenderingContext2D | null,
-  props: VideoOverlayProps | null,
+  props: VideoOverlayHostProps | null,
   state: PodState | null,
 ): void {
   if (!c || !props) return;
-  const { renderedRect: rect, streamWidth, streamHeight } = props;
+  const { renderedRect: rect, detections } = props;
   c.clearRect(0, 0, c.canvas.width, c.canvas.height);
 
   // Center reticle.
-  const cx = rect.x + rect.width / 2;
-  const cy = rect.y + rect.height / 2;
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
   c.strokeStyle = "#3aa0d0";
   c.lineWidth = 1;
   c.beginPath();
@@ -73,12 +74,15 @@ export function drawHud(
   c.lineTo(cx, cy + 12);
   c.stroke();
 
-  // Track boxes (the pod's republished tracker).
-  for (const det of props.detections ?? []) {
-    const r = scaleBoxToRendered(det.bbox, streamWidth, streamHeight, rect);
-    c.strokeStyle = lockColor(det.lockState);
-    c.lineWidth = 2;
-    c.strokeRect(r.x, r.y, r.width, r.height);
+  // Track boxes from the fresh batch; none once the host marks it stale.
+  if (detections) {
+    const { frameWidth, frameHeight } = detections;
+    for (const det of detections.items) {
+      const r = scaleBoxToRendered(det.bbox, frameWidth, frameHeight, rect);
+      c.strokeStyle = lockColor(det.lockState);
+      c.lineWidth = 2;
+      c.strokeRect(r.x, r.y, r.width, r.height);
+    }
   }
 
   // Range + zoom readout.
@@ -91,5 +95,5 @@ export function drawHud(
   if (state?.zoom != null && state.zoom > 1) {
     lines.push(`${state.zoom.toFixed(1)}x`);
   }
-  lines.forEach((line, i) => c.fillText(line, rect.x + 8, rect.y + 18 + i * 16));
+  lines.forEach((line, i) => c.fillText(line, rect.left + 8, rect.top + 18 + i * 16));
 }
