@@ -12,5 +12,21 @@
   "preArm": {
     "ready": "Ready",
     "originBlocker": "EKF origin not set"
+  },
+  "navState": {
+    "title": "Navigation feed",
+    "waiting": "Waiting for the agent's navigation state.",
+    "activeSet": "EKF source set",
+    "extnavHealth": "External nav",
+    "odomRate": "ODOMETRY rate",
+    "resetCounter": "Pose resets",
+    "obstacleRate": "Obstacle feed",
+    "minObstacle": "Nearest obstacle",
+    "gpsFix": "GPS",
+    "health": {
+      "good": "Good",
+      "degraded": "Degraded",
+      "lost": "Lost"
+    }
   }
 }

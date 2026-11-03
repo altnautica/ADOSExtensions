@@ -6,13 +6,18 @@
 //!    ([`crate::live_config`]) and starts the config watcher, which
 //!    restarts the process when that config changes,
 //! 2. registers MAVLink component 198 (kind `vio`, the kind the host
-//!    reserves 197 and 198 for),
+//!    reserves 197 and 198 for), and 197 when it sends `ODOMETRY` or
+//!    `OBSTACLE_DISTANCE`,
 //! 3. subscribes to the FC streams the modes consume
-//!    ([`subscriptions`]),
-//! 4. starts the TIMESYNC, companion-HEARTBEAT, health and stream-rate
-//!    ticks ([`ticks`]),
-//! 5. runs the estimator on every frame pair from the shared vision frame
-//!    bus and emits the flow sample on component 198.
+//!    ([`subscriptions`]) and to the shared pose and scan topics
+//!    ([`nav_shared`]),
+//! 4. starts the TIMESYNC, companion-HEARTBEAT, health, stream-rate and
+//!    `nav.state` ticks ([`ticks`], [`extnav`]),
+//! 5. in the optical-flow modes, runs the estimator on every frame pair
+//!    from the shared vision frame bus and emits the flow sample on
+//!    component 198; in `external_nav`, runs the external-nav tick
+//!    instead and opens no frame subscription,
+//! 6. with the obstacle feed enabled, runs the obstacle tick.
 //!
 //! The frame callback runs on the IPC reader task and must not block, so
 //! it forwards each grayscale frame down a channel; a worker task owns the
@@ -23,6 +28,8 @@
 //! the process and the unit restarts it on the new config.
 
 pub mod camchain;
+pub mod extnav;
+pub mod nav_shared;
 mod status;
 pub mod subscriptions;
 pub mod ticks;
@@ -44,6 +51,8 @@ use crate::estimator::{Estimator, RangeReading, StepInputs};
 use crate::estimators::{
     available_estimators, NullEstimator, OpticalFlowDegradedEstimator, OpticalFlowEstimator,
 };
+use crate::external_nav::COMPONENT_EXTNAV;
+use crate::fc_nav::FcNavSink;
 use crate::flow::GyroReading;
 use crate::framing::{frame_to_gray, GrayImage};
 use crate::health::{CompanionState, HealthSnapshot};
@@ -54,7 +63,7 @@ use crate::pre_arm::PreArmGate;
 use crate::rangefinder::{Rangefinder, RelayDistanceSensor, TfLunaUart};
 use crate::scale::ScaleLadder;
 use status::{mark_frames_stale, publish_health, update_companion, TickInputs};
-use subscriptions::{FcTarget, Sinks};
+use subscriptions::{FcTarget, Sinks, EXTERNAL_NAV_SUBSCRIBED};
 
 const SENSOR_ID: u8 = 0;
 const DEGRADED_GRACE_NS: i64 = 2_000_000_000;
@@ -101,12 +110,15 @@ impl Plugin for VisionNavPlugin {
             merged,
         ));
 
-        if let Err(e) = ctx
-            .mavlink
-            .register_component(COMPONENT_OF as i64, "vio")
-            .await
-        {
-            eprintln!("vision-nav: register component {COMPONENT_OF} failed: {e}");
+        let mode = cfg.effective_mode();
+        let mut components = vec![COMPONENT_OF];
+        if nav_shared::uses_extnav_component(&cfg) {
+            components.push(COMPONENT_EXTNAV);
+        }
+        for comp in components {
+            if let Err(e) = ctx.mavlink.register_component(comp as i64, "vio").await {
+                eprintln!("vision-nav: register component {comp} failed: {e}");
+            }
         }
 
         let sinks = Sinks {
@@ -116,6 +128,7 @@ impl Plugin for VisionNavPlugin {
             ladder: Arc::new(ScaleLadder::new(cfg.outdoor)),
             fc_target: Arc::new(FcTarget::default()),
             fc_params: Arc::new(Mutex::new(BTreeSet::new())),
+            fc_nav: Arc::new(FcNavSink::default()),
         };
         let emit_errors = Arc::new(AtomicU64::new(0));
         let router = Arc::new(ComponentRouter::new(
@@ -127,7 +140,7 @@ impl Plugin for VisionNavPlugin {
 
         {
             let mut h = self.health.lock().expect("health lock");
-            h.mode = Some(cfg.effective_mode().as_str().to_string());
+            h.mode = Some(mode.as_str().to_string());
             h.available_estimators = available_estimators()
                 .iter()
                 .map(|s| s.to_string())
@@ -140,7 +153,14 @@ impl Plugin for VisionNavPlugin {
             }
         }
 
-        let denied = subscriptions::subscribe_all(ctx, &sinks).await;
+        let extra: &[&str] = if mode == Mode::ExternalNav {
+            EXTERNAL_NAV_SUBSCRIBED
+        } else {
+            &[]
+        };
+        let mut denied = subscriptions::subscribe_all(ctx, &sinks, extra).await;
+        let shared = Arc::new(nav_shared::NavShared::new(mode));
+        denied.extend(nav_shared::subscribe_topics(ctx, &shared, &cfg).await);
         self.health.lock().expect("health lock").degraded_reasons = denied;
 
         let companion = Arc::new(AtomicI64::new(CompanionState::Inactive as i64));
@@ -166,28 +186,56 @@ impl Plugin for VisionNavPlugin {
                 health: self.health.clone(),
                 emit_errors,
                 fc_params: sinks.fc_params.clone(),
-                engaged: cfg.effective_mode() != Mode::Off,
+                engaged: mode != Mode::Off,
                 publish_now: publish_now.clone(),
             },
         ));
 
-        let (tx, rx) = mpsc::channel::<GrayFramePair>(8);
-        let worker = Worker {
-            ctx: ctx.clone(),
-            cfg: cfg.clone(),
-            sinks,
-            router,
-            companion,
-            health: self.health.clone(),
-            publish_now,
-        };
-        self.tasks.push(tokio::spawn(worker.run(rx)));
-        subscribe_frames(ctx, tx).await?;
+        self.tasks.push(extnav::spawn_nav_state(
+            ctx,
+            mode,
+            sinks.clone(),
+            shared.clone(),
+        ));
+        if nav_shared::obstacle_active(&cfg) {
+            self.tasks.push(extnav::spawn_obstacle(
+                ctx,
+                cfg.obstacle.clone(),
+                sinks.clone(),
+                router.clone(),
+                shared.clone(),
+            ));
+        }
 
-        eprintln!(
-            "vision-nav: started (mode={})",
-            cfg.effective_mode().as_str()
-        );
+        if mode == Mode::ExternalNav {
+            // The pose comes from the shared topic: no camera frames.
+            self.tasks
+                .push(extnav::spawn_external_nav(extnav::ExtnavTask {
+                    ctx: ctx.clone(),
+                    cfg: cfg.external_nav.clone(),
+                    obstacle_enabled: cfg.obstacle.enabled,
+                    sinks,
+                    router,
+                    shared,
+                    health: self.health.clone(),
+                    companion,
+                }));
+        } else {
+            let (tx, rx) = mpsc::channel::<GrayFramePair>(8);
+            let worker = Worker {
+                ctx: ctx.clone(),
+                cfg: cfg.clone(),
+                sinks,
+                router,
+                companion,
+                health: self.health.clone(),
+                publish_now,
+            };
+            self.tasks.push(tokio::spawn(worker.run(rx)));
+            subscribe_frames(ctx, tx).await?;
+        }
+
+        eprintln!("vision-nav: started (mode={})", mode.as_str());
         Ok(())
     }
 
@@ -356,7 +404,8 @@ impl Worker {
 /// Build the estimator for a config mode.
 pub fn build_estimator(cfg: &VisionNavConfig, ladder: Arc<ScaleLadder>) -> Box<dyn Estimator> {
     match cfg.effective_mode() {
-        Mode::Off => Box::new(NullEstimator),
+        // external_nav runs no frame worker; it emits no flow either way.
+        Mode::Off | Mode::ExternalNav => Box::new(NullEstimator),
         Mode::OpticalFlow => Box::new(OpticalFlowEstimator::new(cfg.flow_quality_min)),
         Mode::OpticalFlowDegraded => Box::new(OpticalFlowDegradedEstimator::new(
             cfg.flow_quality_min,

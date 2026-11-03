@@ -2,6 +2,16 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [Unreleased]
+
+### Fixed
+
+- A MAVLink send the host reports as not sent (`sent: false`, or no router)
+  now counts in health `emitErrors` instead of passing as delivered.
+- The Vision Nav tab keeps `emitErrors`, `rangefinderError`,
+  `degradedReasons` and `fcParams` from the health block; the PX4 parameter
+  card read `fcParams` and never received it.
+
 ## [0.5.0]
 
 ### Fixed
@@ -589,13 +599,12 @@ ArduPilot and PX4 GPS-denied flight.
   CSI downward camera at 30 Hz, downsamples to 320x240 grayscale, and
   runs a pyramidal Lucas-Kanade tracker against the previous frame.
   Produces an angular flow vector per frame.
-- **Rangefinder drivers.** Four drivers ship in this release:
-  - `tf-luna` over UART. Benewake-family LiDAR, 0.2 to 8 m range.
-  - `lidar-lite-v3` over I2C. Garmin LIDAR-Lite v3, 0.05 to 40 m.
-  - `vl53l1x` over I2C. ST VL53L1X time-of-flight, 0.04 to 4 m.
-  - `mavlink-relay`. Reads the FC's `DISTANCE_SENSOR` MAVLink message
-    when the rangefinder is wired to the flight controller instead
-    of the companion.
+- **Rangefinder drivers.** Two drivers ship in this release:
+  - `tfluna_uart`. Benewake TF-Luna on a companion serial port, 0.2 to
+    8 m range.
+  - `fc_relay`. Reads the FC's `DISTANCE_SENSOR` MAVLink message when
+    the rangefinder is wired to the flight controller instead of the
+    companion.
 - **MAVLink `OPTICAL_FLOW_RAD` emission.** The plugin emits
   `OPTICAL_FLOW_RAD` (msg id 106) to the FC at 10 Hz with the
   body-frame radian convention both ArduPilot and PX4 expect. Emits

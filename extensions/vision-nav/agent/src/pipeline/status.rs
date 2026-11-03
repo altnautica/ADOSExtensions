@@ -69,6 +69,7 @@ pub(super) fn pre_arm_inputs(
         rangefinder_reading_m: reading,
         rangefinder_min_m: min,
         rangefinder_max_m: max,
+        extnav: None,
     }
 }
 

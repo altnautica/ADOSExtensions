@@ -16,11 +16,17 @@ use crate::scale::{ScaleLadder, ScaleRung};
 
 const DEFAULT_QUALITY_GATE: i32 = 50;
 
-/// The list of estimator keys this build can run (surfaced on the
-/// heartbeat so the GCS mode picker only shows modes the agent can
-/// instantiate).
+/// The list of mode keys this build can run (surfaced on the heartbeat
+/// so the GCS mode picker only shows modes the agent can instantiate).
+/// `external_nav` runs no frame estimator; the pipeline's external-nav
+/// tick serves it.
 pub fn available_estimators() -> Vec<&'static str> {
-    let mut v = vec!["off", "optical_flow", "optical_flow_degraded"];
+    let mut v = vec![
+        "off",
+        "optical_flow",
+        "optical_flow_degraded",
+        "external_nav",
+    ];
     v.sort_unstable();
     v
 }
@@ -263,7 +269,12 @@ mod tests {
         // instantiate.
         assert_eq!(
             available_estimators(),
-            vec!["off", "optical_flow", "optical_flow_degraded"]
+            vec![
+                "external_nav",
+                "off",
+                "optical_flow",
+                "optical_flow_degraded"
+            ]
         );
     }
 

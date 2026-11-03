@@ -6,11 +6,14 @@
 //! `on_configure` map with the live per-drone keys (see
 //! [`crate::live_config`]) and hands the result to
 //! [`VisionNavConfig::from_map`]. Validation rejects an optical-flow
-//! mode with a forward- or side-facing camera.
+//! mode with a forward- or side-facing camera, and `external_nav`
+//! without an EKF origin.
 
 use std::collections::BTreeMap;
 
 use rmpv::Value;
+
+use crate::nav_config::{parse_external_nav, parse_obstacle, ExternalNavConfig, ObstacleConfig};
 
 /// Operating mode. The estimator registry maps each mode to its
 /// estimator; a mode flip selects a different estimator.
@@ -19,6 +22,8 @@ pub enum Mode {
     Off,
     OpticalFlow,
     OpticalFlowDegraded,
+    /// Pose from a shared pose topic, sent as `ODOMETRY`; no camera.
+    ExternalNav,
 }
 
 impl Mode {
@@ -29,6 +34,7 @@ impl Mode {
             Mode::Off => "off",
             Mode::OpticalFlow => "optical_flow",
             Mode::OpticalFlowDegraded => "optical_flow_degraded",
+            Mode::ExternalNav => "external_nav",
         }
     }
 
@@ -38,6 +44,7 @@ impl Mode {
             "off" => Mode::Off,
             "optical_flow" => Mode::OpticalFlow,
             "optical_flow_degraded" => Mode::OpticalFlowDegraded,
+            "external_nav" => Mode::ExternalNav,
             _ => return None,
         })
     }
@@ -187,6 +194,10 @@ pub struct VisionNavConfig {
     /// Outdoor mode: the scale ladder may use the GPS altitude rung,
     /// measured from the first 3D fix.
     pub outdoor: bool,
+    /// The `external_nav` mode's pose source and EKF source sets.
+    pub external_nav: ExternalNavConfig,
+    /// Planar-scan obstacle feed (`OBSTACLE_DISTANCE`).
+    pub obstacle: ObstacleConfig,
 }
 
 impl VisionNavConfig {
@@ -225,6 +236,8 @@ impl Default for VisionNavConfig {
             firmware: FirmwareConfig::default(),
             flow_quality_min: 50,
             outdoor: false,
+            external_nav: ExternalNavConfig::default(),
+            obstacle: ObstacleConfig::default(),
         }
     }
 }
@@ -268,6 +281,12 @@ impl VisionNavConfig {
         if let Some(b) = map.get("outdoor").and_then(Value::as_bool) {
             cfg.outdoor = b;
         }
+        if let Some(v) = map.get("external_nav") {
+            cfg.external_nav = parse_external_nav(v)?;
+        }
+        if let Some(v) = map.get("obstacle") {
+            cfg.obstacle = parse_obstacle(v)?;
+        }
 
         cfg.validate()?;
         Ok(cfg)
@@ -291,6 +310,13 @@ impl VisionNavConfig {
                 "Mode {:?} needs a downward-facing camera.",
                 self.mode.as_str()
             )));
+        }
+        // The pose is local to the map; the flight controller needs a
+        // global origin to fly on it with no GPS.
+        if self.mode == Mode::ExternalNav && self.external_nav.origin_lla.is_none() {
+            return Err(ConfigError(
+                "Mode \"external_nav\" needs external_nav.origin_lla.".to_string(),
+            ));
         }
         Ok(())
     }
@@ -352,7 +378,7 @@ fn parse_firmware(v: &Value) -> Result<FirmwareConfig, ConfigError> {
 
 /// Coerce an rmpv map (or nil) into a string-keyed map for ergonomic
 /// field reads. Non-map values yield an empty map.
-fn value_to_map(v: &Value) -> BTreeMap<String, Value> {
+pub(crate) fn value_to_map(v: &Value) -> BTreeMap<String, Value> {
     let mut out = BTreeMap::new();
     if let Value::Map(entries) = v {
         for (k, val) in entries {

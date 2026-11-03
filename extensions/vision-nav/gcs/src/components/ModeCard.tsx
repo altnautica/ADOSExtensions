@@ -63,6 +63,15 @@ const ALL_MODES: ModeOption[] = [
       "the GCS marks the estimator state as degraded.",
     needs: "Downward camera. No rangefinder required.",
   },
+  {
+    id: "external_nav",
+    label: "External Navigation",
+    description:
+      "The pose another plugin publishes (for example a planar lidar " +
+      "SLAM) goes to the flight controller as ODOMETRY, and the EKF " +
+      "source set switches to it while it tracks. ArduPilot.",
+    needs: "A plugin publishing the shared pose topic, and an EKF origin.",
+  },
 ];
 
 export function ModeCard({ ctx, telemetry }: Props): JSX.Element {

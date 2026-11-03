@@ -25,6 +25,8 @@ pub const CONFIG_KEYS: &[&str] = &[
     "firmware",
     "flow_quality_min",
     "outdoor",
+    "external_nav",
+    "obstacle",
 ];
 
 /// Exit status that asks the unit to restart the plugin on new config.

@@ -69,6 +69,7 @@ const ENGINE_LABELS: Partial<Record<EstimatorMode, string>> = {
   off: "—",
   optical_flow: "Lucas-Kanade",
   optical_flow_degraded: "Lucas-Kanade (degraded)",
+  external_nav: "External pose (ODOMETRY)",
 };
 
 interface PillProps {

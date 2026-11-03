@@ -7,9 +7,9 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "Operating mode. optical_flow uses a downward camera plus a rangefinder; optical_flow_degraded takes its scale from the barometer (or GPS height in outdoor mode) instead; off keeps the plugin loaded but silent.",
+      "description": "Operating mode. optical_flow uses a downward camera plus a rangefinder; optical_flow_degraded takes its scale from the barometer (or GPS height in outdoor mode) instead; external_nav sends the pose from a shared pose topic (for example a lidar SLAM) as ODOMETRY and switches the EKF source set; off keeps the plugin loaded but silent.",
       "default": "off",
-      "enum": ["off", "optical_flow", "optical_flow_degraded"]
+      "enum": ["off", "optical_flow", "optical_flow_degraded", "external_nav"]
     },
     "active": {
       "type": "boolean",
@@ -34,6 +34,88 @@
     "camera": {
       "$ref": "#/definitions/camera",
       "title": "Camera"
+    },
+    "external_nav": {
+      "type": "object",
+      "title": "External navigation",
+      "description": "Used in external_nav mode. The pose topic must be published by an installed plugin; the agent refuses the mode without it.",
+      "properties": {
+        "pose_topic": {
+          "type": "string",
+          "title": "Pose topic",
+          "description": "Shared topic carrying the pose descriptor (map frame converted to FRD).",
+          "default": "plugin.world-engine.pose"
+        },
+        "origin_lla": {
+          "type": "array",
+          "title": "EKF origin",
+          "description": "[latitude deg, longitude deg, altitude m AMSL]. Sent as MAV_CMD_DO_SET_GLOBAL_ORIGIN when the flight controller reports no origin within 5 s. Required in external_nav mode.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "rate_hz": {
+          "type": "number",
+          "title": "ODOMETRY rate (Hz)",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 50
+        },
+        "extnav_set": {
+          "type": "integer",
+          "title": "External-nav source set",
+          "description": "EKF source set (EK3_SRCn) whose position and yaw source is ExternalNav.",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 3
+        },
+        "fallback_set": {
+          "type": "integer",
+          "title": "Fallback source set",
+          "description": "EKF source set used when the external pose is lost (the flight controller's optical-flow set), or the GPS set when GPS is primary.",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 3
+        },
+        "gps_primary": {
+          "type": "boolean",
+          "title": "GPS primary",
+          "description": "Fly on GPS and switch to the external pose only while the GPS fix is lost.",
+          "default": false
+        }
+      }
+    },
+    "obstacle": {
+      "type": "object",
+      "title": "Obstacle feed",
+      "description": "Turns a shared planar scan into OBSTACLE_DISTANCE for the flight controller's proximity avoidance (PRX1_TYPE 2).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "default": false
+        },
+        "scan_topic": {
+          "type": "string",
+          "title": "Scan topic",
+          "default": "plugin.world-engine.scan"
+        },
+        "sectors": {
+          "type": "integer",
+          "title": "Sectors",
+          "description": "Number of equal sectors over 360 degrees (72 = 5 degrees each).",
+          "default": 72,
+          "minimum": 1,
+          "maximum": 72
+        },
+        "rate_hz": {
+          "type": "number",
+          "title": "Rate (Hz)",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 20
+        }
+      }
     },
     "rangefinder": {
       "type": "object",

@@ -186,3 +186,31 @@ fn timesync_query_carries_ts1() {
         other => panic!("expected TIMESYNC, got {other:?}"),
     }
 }
+
+#[test]
+fn host_send_refusals_are_failures() {
+    use rmpv::Value;
+    let sent = Value::Map(vec![
+        (Value::from("sent"), Value::Boolean(true)),
+        (Value::from("len"), Value::from(40i64)),
+    ]);
+    assert_eq!(send_refusal(&sent), None);
+    let refused = Value::Map(vec![
+        (Value::from("sent"), Value::Boolean(false)),
+        (Value::from("reason"), Value::from("pic_refused")),
+    ]);
+    assert_eq!(send_refusal(&refused).as_deref(), Some("pic_refused"));
+    let no_router = Value::Map(vec![(Value::from("error"), Value::from("not_available"))]);
+    assert_eq!(send_refusal(&no_router).as_deref(), Some("not_available"));
+}
+
+#[test]
+fn encode_v2_truncates_trailing_zeros_and_parses() {
+    // A HEARTBEAT payload (crc extra 50) whose last byte is non-zero.
+    let mut payload = vec![0u8; 9];
+    payload[4] = 2; // type
+    payload[8] = 3; // mavlink_version
+    let frame = encode_v2(198, 7, 0, 50, payload);
+    assert_eq!(frame[1], 9);
+    assert!(parse_v2(&frame).is_ok());
+}

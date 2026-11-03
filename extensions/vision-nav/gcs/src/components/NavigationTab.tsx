@@ -2,8 +2,8 @@ import { useEffect, useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import { useVisionNavTelemetry } from "../store";
-import type { FirmwareType, VisionNavTelemetry } from "../types";
+import { useNavState, useVisionNavTelemetry } from "../store";
+import type { FirmwareType, NavState, VisionNavTelemetry } from "../types";
 
 import { ArduPilotVisionParams } from "./ArduPilotVisionParams";
 import { BetaflightUnsupported } from "./BetaflightUnsupported";
@@ -13,6 +13,7 @@ import { FallbackBanner } from "./FallbackBanner";
 import { FlowHealthCard } from "./FlowHealthCard";
 import { InavVisionParams } from "./InavVisionParams";
 import { ModeCard } from "./ModeCard";
+import { NavStateCard } from "./NavStateCard";
 import { PreArmStatus } from "./PreArmStatus";
 import { Px4VisionParams } from "./Px4VisionParams";
 import { SensorsCard } from "./SensorsCard";
@@ -27,11 +28,15 @@ export interface NavigationTabProps {
    * pumping the telemetry transport.
    */
   telemetryOverride?: VisionNavTelemetry;
+  /** Optional `nav.state` override for tests. */
+  navStateOverride?: NavState;
 }
 
 export function NavigationTab(props: NavigationTabProps): JSX.Element {
   const live = useVisionNavTelemetry(props.ctx);
   const telemetry = props.telemetryOverride ?? live;
+  const liveNav = useNavState(props.ctx);
+  const navState = props.navStateOverride ?? liveNav;
   const [themeVars, setThemeVars] = useState<Record<string, string>>({});
   const [tourReplay, setTourReplay] = useState(false);
 
@@ -105,6 +110,7 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
       />
       <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
       <ModeCard ctx={props.ctx} telemetry={telemetry} />
+      <NavStateCard ctx={props.ctx} state={navState} />
       <SensorsCard ctx={props.ctx} telemetry={telemetry} />
       <EstimatorCard ctx={props.ctx} telemetry={telemetry} />
       <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />

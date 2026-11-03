@@ -101,6 +101,10 @@ const TITLES: Record<string, string> = {
   flow_quality: "Optical flow quality",
   rangefinder: "Rangefinder healthy",
   scale_source: "Altitude scale source",
+  extnav_source: "External nav source",
+  extnav_health: "External nav tracking",
+  ekf_origin: "EKF origin set",
+  obstacle_feed: "Obstacle feed",
 };
 
 function humanise(id: string): string {

@@ -15,6 +15,7 @@ use ados_sdk::context::PluginContext;
 use rmpv::Value;
 
 use crate::clock_align::ClockAlign;
+use crate::fc_nav::{Attitude, FcNavSink};
 use crate::imu::ImuBuffer;
 use crate::mavlink_emit::monotonic_ns;
 use crate::rangefinder::RelayDistanceSensor;
@@ -56,6 +57,7 @@ pub struct Sinks {
     pub ladder: Arc<ScaleLadder>,
     pub fc_target: Arc<FcTarget>,
     pub fc_params: Arc<Mutex<BTreeSet<String>>>,
+    pub fc_nav: Arc<FcNavSink>,
 }
 
 /// Parse a `mavlink.deliver` args map into `(system, component,
@@ -112,12 +114,38 @@ pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns:
             .ladder
             .on_global_position(i64::from(d.relative_alt), now_ns),
         MavMessage::VFR_HUD(d) => sinks.ladder.on_vfr_hud(d.alt, now_ns),
-        MavMessage::GPS_RAW_INT(d) => sinks.ladder.on_gps_raw(
-            i64::from(d.alt),
-            d.fix_type as i32,
-            i32::from(d.eph),
+        MavMessage::GPS_RAW_INT(d) => {
+            sinks.ladder.on_gps_raw(
+                i64::from(d.alt),
+                d.fix_type as i32,
+                i32::from(d.eph),
+                now_ns,
+            );
+            if is_fc(sinks, system, component) {
+                sinks.fc_nav.on_gps_fix(d.fix_type as u8, now_ns);
+            }
+        }
+        // The external-nav inputs come from the flight controller only, so
+        // a gimbal or camera reporting its own ATTITUDE is never mixed in.
+        MavMessage::LOCAL_POSITION_NED(d) if is_fc(sinks, system, component) => {
+            sinks.fc_nav.on_local_position(d.z, d.vz, now_ns)
+        }
+        MavMessage::ATTITUDE(d) if is_fc(sinks, system, component) => sinks.fc_nav.on_attitude(
+            Attitude {
+                roll: d.roll,
+                pitch: d.pitch,
+                rollspeed: d.rollspeed,
+                pitchspeed: d.pitchspeed,
+                yawspeed: d.yawspeed,
+            },
             now_ns,
         ),
+        MavMessage::GPS_GLOBAL_ORIGIN(_) if is_fc(sinks, system, component) => {
+            sinks.fc_nav.on_origin()
+        }
+        MavMessage::COMMAND_ACK(d) if is_fc(sinks, system, component) => sinks
+            .fc_nav
+            .on_command_ack(d.command as u16, d.result as u8),
         MavMessage::PARAM_VALUE(d) => {
             if let Ok(id) = d.param_id.to_str() {
                 if WATCHED_FC_PARAMS.contains(&id) {
@@ -133,6 +161,12 @@ pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns:
     }
 }
 
+/// Whether a message comes from the flight controller (learned from its
+/// RAW_IMU stream).
+fn is_fc(sinks: &Sinks, system: u8, component: u8) -> bool {
+    sinks.fc_target.get() == (system, component)
+}
+
 /// The streams every mode consumes.
 pub const SUBSCRIBED: &[&str] = &[
     "RAW_IMU",
@@ -144,11 +178,19 @@ pub const SUBSCRIBED: &[&str] = &[
     "PARAM_VALUE",
 ];
 
-/// Subscribe to every [`SUBSCRIBED`] stream. Returns one
+/// The extra streams `external_nav` mode consumes.
+pub const EXTERNAL_NAV_SUBSCRIBED: &[&str] = &[
+    "LOCAL_POSITION_NED",
+    "ATTITUDE",
+    "GPS_GLOBAL_ORIGIN",
+    "COMMAND_ACK",
+];
+
+/// Subscribe to every [`SUBSCRIBED`] stream plus `extra`. Returns one
 /// `mavlink_subscribe_denied:<MSG>` entry per refused subscription.
-pub async fn subscribe_all(ctx: &PluginContext, sinks: &Sinks) -> Vec<String> {
+pub async fn subscribe_all(ctx: &PluginContext, sinks: &Sinks, extra: &[&str]) -> Vec<String> {
     let mut denied = Vec::new();
-    for name in SUBSCRIBED {
+    for name in SUBSCRIBED.iter().chain(extra) {
         let s = sinks.clone();
         let cb = Arc::new(move |args: Value| {
             if let Some((system, component, msg)) = decode_delivery(&args) {
@@ -179,6 +221,7 @@ mod tests {
             ladder: Arc::new(ScaleLadder::new(false)),
             fc_target: Arc::new(FcTarget::default()),
             fc_params: Arc::new(Mutex::new(BTreeSet::new())),
+            fc_nav: Arc::new(FcNavSink::default()),
         }
     }
 
@@ -237,5 +280,31 @@ mod tests {
     #[test]
     fn fc_target_defaults_to_one_one() {
         assert_eq!(FcTarget::default().get(), (1, 1));
+    }
+
+    #[test]
+    fn fc_attitude_and_position_reach_the_nav_sink_other_components_do_not() {
+        use ados_protocol::mavlink::ardupilotmega::{ATTITUDE_DATA, LOCAL_POSITION_NED_DATA};
+        let s = sinks();
+        let att = MavMessage::ATTITUDE(ATTITUDE_DATA {
+            roll: 0.1,
+            pitch: -0.2,
+            ..ATTITUDE_DATA::DEFAULT
+        });
+        // A gimbal's ATTITUDE (component 154) is ignored.
+        let (sys, comp, m) = decode_delivery(&delivery(1, 154, &att)).unwrap();
+        apply(&s, sys, comp, &m, 0);
+        assert!(s.fc_nav.snapshot(0).attitude.is_none());
+        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &att)).unwrap();
+        apply(&s, sys, comp, &m, 0);
+        assert_eq!(s.fc_nav.snapshot(0).attitude.unwrap().pitch, -0.2);
+        let pos = MavMessage::LOCAL_POSITION_NED(LOCAL_POSITION_NED_DATA {
+            z: -4.0,
+            vz: 0.5,
+            ..LOCAL_POSITION_NED_DATA::DEFAULT
+        });
+        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &pos)).unwrap();
+        apply(&s, sys, comp, &m, 0);
+        assert_eq!(s.fc_nav.snapshot(0).local.unwrap().z, -4.0);
     }
 }

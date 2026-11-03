@@ -88,6 +88,8 @@ fn schema_defaults_equal_rust_default() {
         "camera",
         "rangefinder",
         "firmware",
+        "external_nav",
+        "obstacle",
     ] {
         assert!(map.contains_key(key), "schema default missing for {key}");
     }
@@ -167,4 +169,34 @@ fn disengaged_effective_mode_is_off() {
     assert!(!cfg.active);
     assert_eq!(cfg.mode, Mode::OpticalFlow);
     assert_eq!(cfg.effective_mode(), Mode::Off);
+}
+
+#[test]
+fn external_nav_without_origin_is_refused() {
+    let v = map(&[("mode", Value::from("external_nav"))]);
+    let err = VisionNavConfig::from_value(&v).unwrap_err();
+    assert!(err.0.contains("origin_lla"), "{}", err.0);
+}
+
+#[test]
+fn external_nav_with_origin_parses_and_ignores_the_camera() {
+    let v = map(&[
+        ("mode", Value::from("external_nav")),
+        ("camera", map(&[("orientation", Value::from("forward"))])),
+        (
+            "external_nav",
+            map(&[(
+                "origin_lla",
+                Value::Array(vec![Value::F64(1.0), Value::F64(2.0), Value::F64(3.0)]),
+            )]),
+        ),
+        ("obstacle", map(&[("enabled", Value::from(true))])),
+    ]);
+    let cfg = VisionNavConfig::from_value(&v).unwrap();
+    assert_eq!(cfg.effective_mode(), Mode::ExternalNav);
+    assert_eq!(cfg.external_nav.origin_lla, Some([1.0, 2.0, 3.0]));
+    assert_eq!(cfg.external_nav.extnav_set, 1);
+    assert_eq!(cfg.external_nav.fallback_set, 2);
+    assert!(cfg.obstacle.enabled);
+    assert_eq!(Mode::parse("external_nav"), Some(Mode::ExternalNav));
 }

@@ -59,7 +59,7 @@ pub fn next_sequence(comp_id: u8) -> u8 {
 }
 
 /// Serialize a message under the given component id.
-fn frame_for(comp_id: u8, msg: &MavMessage) -> Option<Vec<u8>> {
+pub fn frame_for(comp_id: u8, msg: &MavMessage) -> Option<Vec<u8>> {
     let header = MavHeader {
         system_id: DEFAULT_SYS_ID,
         component_id: comp_id,
@@ -128,10 +128,31 @@ pub fn encode_optical_flow(comp_id: u8, sequence: u8, m: &OpticalFlow) -> Vec<u8
     payload.push(m.quality);
     payload.extend_from_slice(&m.flow_rate_x.to_le_bytes());
     payload.extend_from_slice(&m.flow_rate_y.to_le_bytes());
+    encode_v2(
+        comp_id,
+        sequence,
+        OPTICAL_FLOW_ID,
+        OPTICAL_FLOW_CRC_EXTRA,
+        payload,
+    )
+}
+
+/// Wrap a full little-endian payload (base fields in wire order, then the
+/// extension fields) in a MAVLink 2 frame from this system. Trailing zero
+/// bytes are truncated, as MAVLink 2 requires. Used for the messages whose
+/// extension fields the flight controller reads, which the shared codec
+/// does not emit.
+pub fn encode_v2(
+    comp_id: u8,
+    sequence: u8,
+    msg_id: u32,
+    crc_extra: u8,
+    mut payload: Vec<u8>,
+) -> Vec<u8> {
     while payload.len() > 1 && payload.last() == Some(&0) {
         payload.pop();
     }
-    let id = OPTICAL_FLOW_ID.to_le_bytes();
+    let id = msg_id.to_le_bytes();
     let mut frame = Vec::with_capacity(12 + payload.len());
     frame.extend_from_slice(&[
         0xFD,
@@ -146,13 +167,13 @@ pub fn encode_optical_flow(comp_id: u8, sequence: u8, m: &OpticalFlow) -> Vec<u8
         id[2],
     ]);
     frame.extend_from_slice(&payload);
-    let crc = x25_crc(&frame[1..], OPTICAL_FLOW_CRC_EXTRA);
+    let crc = x25_crc(&frame[1..], crc_extra);
     frame.extend_from_slice(&crc.to_le_bytes());
     frame
 }
 
 /// MAVLink X.25 checksum over `bytes` followed by the message's CRC extra.
-fn x25_crc(bytes: &[u8], crc_extra: u8) -> u16 {
+pub(crate) fn x25_crc(bytes: &[u8], crc_extra: u8) -> u16 {
     let mut crc: u16 = 0xFFFF;
     for &b in bytes.iter().chain(std::iter::once(&crc_extra)) {
         let mut tmp = b ^ (crc & 0xFF) as u8;
@@ -335,17 +356,30 @@ impl ComponentRouter {
 
     /// Send a frame on comp 198, counting and rate-limit logging failures.
     pub async fn send(&self, ctx: &PluginContext, frame: &[u8]) {
-        if let Err(e) = ctx.mavlink.send(frame, Some(COMPONENT_OF as i64)).await {
-            self.emit_errors.fetch_add(1, Ordering::Relaxed);
-            let mut last = self.last_error_log.lock().expect("emit log lock");
-            if last.is_none_or(|t| t.elapsed() >= EMIT_ERROR_LOG_EVERY) {
-                *last = Some(Instant::now());
-                eprintln!(
-                    "vision-nav: mavlink send failed ({} total): {e}",
-                    self.emit_errors.load(Ordering::Relaxed)
-                );
-            }
+        self.send_as(ctx, COMPONENT_OF, frame).await;
+    }
+
+    /// Send a frame on a component this plugin registered. A refused send
+    /// (an RPC error, or the host's `sent: false` / `error` reply when the
+    /// router dropped it) counts as a failure. Returns whether it was sent.
+    pub async fn send_as(&self, ctx: &PluginContext, comp_id: u8, frame: &[u8]) -> bool {
+        let failure = match ctx.mavlink.send(frame, Some(i64::from(comp_id))).await {
+            Ok(reply) => send_refusal(&reply),
+            Err(e) => Some(e.to_string()),
+        };
+        let Some(reason) = failure else {
+            return true;
+        };
+        self.emit_errors.fetch_add(1, Ordering::Relaxed);
+        let mut last = self.last_error_log.lock().expect("emit log lock");
+        if last.is_none_or(|t| t.elapsed() >= EMIT_ERROR_LOG_EVERY) {
+            *last = Some(Instant::now());
+            eprintln!(
+                "vision-nav: mavlink send failed ({} total): {reason}",
+                self.emit_errors.load(Ordering::Relaxed)
+            );
         }
+        false
     }
 
     /// Build + send a DISTANCE_SENSOR co-emission on comp 198.
@@ -372,6 +406,31 @@ impl ComponentRouter {
             self.send(ctx, &frame).await;
         }
     }
+}
+
+/// The reason a `mavlink.send` reply reports the frame was not sent:
+/// `{"sent": false, "reason": ..}` (router refused) or `{"error": ..}`
+/// (no router). `None` for a sent frame.
+pub fn send_refusal(reply: &rmpv::Value) -> Option<String> {
+    let rmpv::Value::Map(entries) = reply else {
+        return None;
+    };
+    let get = |key: &str| {
+        entries
+            .iter()
+            .find(|(k, _)| k.as_str() == Some(key))
+            .map(|(_, v)| v)
+    };
+    if let Some(err) = get("error").and_then(rmpv::Value::as_str) {
+        return Some(err.to_string());
+    }
+    if get("sent").and_then(rmpv::Value::as_bool) == Some(false) {
+        let reason = get("reason")
+            .and_then(rmpv::Value::as_str)
+            .unwrap_or("refused");
+        return Some(reason.to_string());
+    }
+    None
 }
 
 /// Monotonic clock in nanoseconds.

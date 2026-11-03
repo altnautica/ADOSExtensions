@@ -6,7 +6,7 @@ import { MemoryTransport } from "@altnautica/plugin-sdk";
 
 import { NavigationTab } from "../src/components/NavigationTab";
 import { firmwareFromConfig } from "../src/firmware";
-import type { VisionNavTelemetry } from "../src/types";
+import { normalizeNavState, type VisionNavTelemetry } from "../src/types";
 
 function fakeCtx(locale: Record<string, string> = {}): PluginContext {
   const subs: Array<() => void> = [];
@@ -279,5 +279,51 @@ describe("NavigationTab", () => {
     );
     expect(screen.getByTestId("vn-px4-params")).toBeTruthy();
     expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
+  });
+
+  it("renders the nav.state feed with symbol and word for tracking", () => {
+    const navState = normalizeNavState({
+      mode: "external_nav",
+      active_set: 1,
+      extnav_health: "degraded",
+      odom_rate_hz: 29.6,
+      last_reset_counter: 2,
+      obstacle_rate_hz: 10,
+      min_obstacle_m: 3.2,
+      gps_fix: 0,
+    });
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({ mode: "external_nav" })}
+        navStateOverride={navState}
+      />,
+    );
+    expect(screen.getByTestId("vn-nav-active-set").textContent).toBe("1");
+    expect(screen.getByTestId("vn-nav-extnav-health").textContent).toBe("◐ Degraded");
+    expect(screen.getByTestId("vn-nav-odom-rate").textContent).toBe("29.6 Hz");
+    expect(screen.getByTestId("vn-nav-reset-counter").textContent).toBe("2");
+    expect(screen.getByTestId("vn-nav-min-obstacle").textContent).toBe("3.20 m");
+    expect(screen.getByTestId("vn-nav-gps-fix").textContent).toBe("No GPS");
+  });
+
+  it("shows a waiting line before the first nav.state and drops junk fields", () => {
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry()}
+      />,
+    );
+    expect(screen.getByTestId("vn-nav-state-waiting")).toBeTruthy();
+    const n = normalizeNavState({
+      mode: "optical_flow",
+      extnav_health: "weird" as never,
+      odom_rate_hz: null,
+    });
+    expect(n.extnavHealth).toBeNull();
+    expect(n.odomRateHz).toBeNull();
+    expect(n.mode).toBe("optical_flow");
   });
 });

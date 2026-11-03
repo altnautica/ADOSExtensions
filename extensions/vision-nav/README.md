@@ -1,8 +1,8 @@
 # Vision Navigation
 
-GPS-denied navigation for ADOS drones. The plugin ships a modular
-estimator framework with three selectable modes: optical flow with a
-rangefinder, optical flow without one, and off.
+GPS-denied navigation for ADOS drones. The plugin ships four
+selectable modes: optical flow with a rangefinder, optical flow
+without one, external navigation from a shared pose topic, and off.
 
 The agent half is a compiled **Rust** binary. It does not open a
 camera: it subscribes to the shared vision frame bus, pairs each frame
@@ -29,6 +29,7 @@ before it goes onto a vehicle.
 | `off` | None | optional | optional | optional | none |
 | `optical_flow` | Lucas-Kanade | downward | gyro | required | comp 198 |
 | `optical_flow_degraded` | Lucas-Kanade | downward | gyro | optional | comp 198 |
+| `external_nav` | external pose topic | none | FC `ATTITUDE` | none | comp 197 |
 
 `optical_flow_degraded` is the rangefinder-free path. Scale comes
 from a ladder: baro from `GLOBAL_POSITION_INT.relative_alt`, raw baro
@@ -37,6 +38,73 @@ the first good 3D fix, then a 1.5 m static fallback. Each rung carries
 a quality multiplier so the EKF de-weights degraded scale sources. The
 static rung blocks the pre-arm scale check; the pre-arm gate is
 advisory and does not stop the flight controller from arming.
+
+## External navigation
+
+`external_nav` (ArduPilot) takes the pose another installed plugin
+publishes on a shared topic (default `plugin.world-engine.pose`, the
+World Engine extension's planar lidar SLAM) and sends it to the flight
+controller as `ODOMETRY` (#331) on component 197, at up to
+`external_nav.rate_hz` (30 Hz):
+
+- `frame_id` `MAV_FRAME_LOCAL_FRD`, `child_frame_id` `MAV_FRAME_BODY_FRD`.
+  The pose arrives in `map_frd` (a `map_flu` pose is converted with
+  `y = -y`, `z = -z`, `yaw = -yaw`).
+- x, y and yaw come from the pose; z and vertical speed from the
+  flight controller's `LOCAL_POSITION_NED`, roll and pitch from its
+  `ATTITUDE`. Velocity is the pose difference over the last 100 ms, in
+  the body frame.
+- Covariance: position σ 0.05 m and yaw σ 0.02 rad while tracking is
+  good, 0.30 m and 0.1 rad while degraded; z carries the horizontal
+  variance because ArduPilot folds the three position variances into
+  one error. `quality` is 100 (good) or 50 (degraded).
+- `reset_counter` steps on a pose jump over 0.5 m between samples.
+- Exactly one `ODOMETRY` per measured pose: the tracker publishes
+  about once per scan (~10 Hz), and nothing is interpolated or
+  extrapolated between poses, so every fused message is a real
+  measurement. `rate_hz` only caps the rate. Nothing is sent while
+  tracking is lost or the pose is older than 0.5 s.
+
+EKF source sets (`MAV_CMD_SET_EKF_SOURCE_SET`, resent up to three times
+until accepted):
+
+- `gps_primary: false`: `extnav_set` while the pose tracks; lost for
+  1 s switches to `fallback_set` (the flight controller's optical-flow
+  set); good for 3 s switches back.
+- `gps_primary: true`: `fallback_set` (GPS) while the fix is 3D; no 3D
+  fix for 2 s with a good pose switches to `extnav_set`; 3D for 10 s
+  switches back.
+
+When the flight controller reports no EKF origin within 5 s the plugin
+sends `MAV_CMD_DO_SET_GLOBAL_ORIGIN` (a `COMMAND_INT`) from `external_nav.origin_lla`, which the
+mode requires. The pre-arm card blocks with "External nav source
+missing" when the pose topic is not published by an installed plugin
+or reading it is not granted.
+
+## Obstacle feed
+
+With `obstacle.enabled`, the plugin turns the shared planar scan
+(default `plugin.world-engine.scan`, body FRD, clockwise from forward)
+into `OBSTACLE_DISTANCE` (#330) at up to 10 Hz on component 197: 72
+sectors of 5°, `MAV_FRAME_BODY_FRD`, the nearest return per sector in
+cm (5-1200), `max_distance + 1` for a sector with no return. Set
+`PRX1_TYPE 2` and `AVOID_ENABLE` on the flight controller.
+
+## `nav.state`
+
+The agent publishes a `nav.state` event (5 Hz in `external_nav`, 1 Hz
+otherwise):
+
+```json
+{"mode": "external_nav", "active_set": 1, "extnav_health": "good",
+ "odom_rate_hz": 30.0, "last_reset_counter": 0, "obstacle_rate_hz": 10.0,
+ "min_obstacle_m": 3.2, "gps_fix": 0}
+```
+
+Fields a mode does not produce are `null`. The Vision Nav tab shows it
+as the navigation feed card.
+
+## Public docs
 
 Public docs (full mode breakdown, per-mode pre-arm matrix, fallback
 ladder, calibration walkthrough, troubleshooting decision trees,
@@ -168,6 +236,9 @@ The node-detail tab hosts:
   offset)
 - Flow health card (live OF metrics)
 - Pre-arm status (mode-aware check rows)
+- Navigation feed (the live `nav.state`: active EKF source set,
+  external-nav tracking, ODOMETRY and obstacle rates, nearest obstacle,
+  GPS fix)
 - Fallback banner (fires when the estimator is degraded or failed
   with reason plus suggested next action)
 
@@ -180,9 +251,12 @@ Agent:
   CSI / depth permissions are not requested)
 - `hardware.uart` (the companion-wired TF-Luna)
 - `telemetry.extend`, `event.publish`
+- `event.subscribe`, `telemetry.read` (the shared pose and scan topics)
 - `mavlink.read`, `mavlink.write`
-- `mavlink.component.vio` (the host reserves component 198 for kind
-  `vio`)
+- `estimator.pose.inject` (`ODOMETRY` reaches the flight controller's
+  state estimator)
+- `mavlink.component.vio` (the host reserves components 197 and 198
+  for kind `vio`)
 
 GCS:
 
@@ -200,7 +274,7 @@ See `config-schema.json` for the per-drone configuration form. Key
 fields:
 
 - `mode`: one of `off` (default), `optical_flow`,
-  `optical_flow_degraded`.
+  `optical_flow_degraded`, `external_nav`.
 - `active`: written by the Engage Skill; `false` idles vision
   navigation.
 - `flow_quality_min`: flow quality gate, 0-255 (default 50).
@@ -211,6 +285,11 @@ fields:
   (`fc_relay` (default) or `tfluna_uart`), optional serial device,
   baud.
 - `firmware.type`: `ardupilot`, `px4`, or `inav`.
+- `external_nav`: `pose_topic`, `origin_lla` (`[lat, lon, alt_m]`,
+  required in `external_nav`), `rate_hz`, `extnav_set`, `fallback_set`,
+  `gps_primary`.
+- `obstacle`: `enabled` (default `false`), `scan_topic`, `sectors`,
+  `rate_hz`.
 
 The agent reads these keys live from the per-drone store once a second
 and restarts itself when any of them changes.
@@ -222,9 +301,10 @@ and restarts itself when any of them changes.
   stream requests,
   `DISTANCE_SENSOR` (when relaying a companion-wired rangefinder),
   `TIMESYNC`, and the 1 Hz companion `HEARTBEAT`.
-
-No other component is claimed, and no pose is injected into the
-firmware estimator.
+- Component 197, `sub_id` 2: kind `vio`, registered only in
+  `external_nav` or with the obstacle feed on. Emits `ODOMETRY`,
+  `OBSTACLE_DISTANCE`, and the `MAV_CMD_SET_EKF_SOURCE_SET` /
+  `MAV_CMD_REQUEST_MESSAGE` / `MAV_CMD_DO_SET_GLOBAL_ORIGIN` commands.
 
 ## License
 

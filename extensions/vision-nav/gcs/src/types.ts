@@ -7,7 +7,11 @@
  * object on the "navigation" telemetry topic.
  */
 
-export type EstimatorMode = "off" | "optical_flow" | "optical_flow_degraded";
+export type EstimatorMode =
+  | "off"
+  | "optical_flow"
+  | "optical_flow_degraded"
+  | "external_nav";
 
 export type EstimatorState =
   | "off"
@@ -94,3 +98,63 @@ export interface PreArmReport {
 }
 
 export type FirmwareType = "ardupilot" | "px4" | "betaflight" | "inav";
+
+/** The event topic the agent publishes the navigation feed state on. */
+export const NAV_STATE_TOPIC = "nav.state";
+
+export type ExtnavHealth = "good" | "degraded" | "lost";
+
+/** The `nav.state` payload as the agent sends it (snake_case). */
+export interface RawNavState {
+  mode?: string;
+  active_set?: number | null;
+  extnav_health?: ExtnavHealth | null;
+  odom_rate_hz?: number | null;
+  last_reset_counter?: number | null;
+  obstacle_rate_hz?: number | null;
+  min_obstacle_m?: number | null;
+  gps_fix?: number | null;
+}
+
+/** What the navigation feed is doing now. Absent fields are null. */
+export interface NavState {
+  mode: string | null;
+  activeSet: number | null;
+  extnavHealth: ExtnavHealth | null;
+  odomRateHz: number | null;
+  lastResetCounter: number | null;
+  obstacleRateHz: number | null;
+  minObstacleM: number | null;
+  gpsFix: number | null;
+}
+
+export const EMPTY_NAV_STATE: NavState = {
+  mode: null,
+  activeSet: null,
+  extnavHealth: null,
+  odomRateHz: null,
+  lastResetCounter: null,
+  obstacleRateHz: null,
+  minObstacleM: null,
+  gpsFix: null,
+};
+
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+export function normalizeNavState(raw: RawNavState | null | undefined): NavState {
+  if (!raw) return EMPTY_NAV_STATE;
+  const health = raw.extnav_health;
+  return {
+    mode: typeof raw.mode === "string" ? raw.mode : null,
+    activeSet: num(raw.active_set),
+    extnavHealth:
+      health === "good" || health === "degraded" || health === "lost" ? health : null,
+    odomRateHz: num(raw.odom_rate_hz),
+    lastResetCounter: num(raw.last_reset_counter),
+    obstacleRateHz: num(raw.obstacle_rate_hz),
+    minObstacleM: num(raw.min_obstacle_m),
+    gpsFix: num(raw.gps_fix),
+  };
+}

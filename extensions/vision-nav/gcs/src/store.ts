@@ -2,7 +2,14 @@ import { useEffect, useState } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import type { VisionNavTelemetry } from "./types";
+import {
+  EMPTY_NAV_STATE,
+  NAV_STATE_TOPIC,
+  normalizeNavState,
+  type NavState,
+  type RawNavState,
+  type VisionNavTelemetry,
+} from "./types";
 
 const EMPTY: VisionNavTelemetry = {
   opticalFlowSupported: false,
@@ -49,6 +56,12 @@ export function useVisionNavTelemetry(
           cameraIntrinsicsLoaded: next.cameraIntrinsicsLoaded,
           cameraImuSyncOffsetMs: next.cameraImuSyncOffsetMs,
           preArmReport: next.preArmReport,
+          // Diagnostics the agent publishes on the same block; the PX4
+          // parameter card reads fcParams.
+          emitErrors: next.emitErrors,
+          rangefinderError: next.rangefinderError,
+          degradedReasons: next.degradedReasons,
+          fcParams: next.fcParams,
         }));
       })
       .then((unsubscribe) => {
@@ -70,6 +83,24 @@ export function useVisionNavTelemetry(
   }, [ctx]);
 
   return snapshot;
+}
+
+/**
+ * Subscribe to the agent's `nav.state` event (active EKF source set,
+ * external-nav health, ODOMETRY and obstacle rates, nearest obstacle,
+ * GPS fix) and surface the latest as React state.
+ */
+export function useNavState(ctx: PluginContext): NavState {
+  const [state, setState] = useState<NavState>(EMPTY_NAV_STATE);
+
+  useEffect(() => {
+    const off = ctx.events.subscribe<RawNavState>(NAV_STATE_TOPIC, (raw) => {
+      setState(normalizeNavState(raw));
+    });
+    return off;
+  }, [ctx]);
+
+  return state;
 }
 
 export function resetSnapshot(): VisionNavTelemetry {

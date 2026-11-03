@@ -9,8 +9,8 @@
 //! The estimated offset converts the plugin's monotonic clock into FC
 //! time so the `time_usec` fields on emitted messages line up with the
 //! FC's notion of "now". A sudden drift larger than the breach
-//! threshold bumps a reset counter that pose emitters propagate into
-//! the `reset_counter` of `VISION_POSITION_ESTIMATE` / `ODOMETRY`.
+//! threshold bumps a drift counter, so a test or log can tell a real
+//! clock discontinuity from noise.
 //!
 //! The maths is a pure state machine over `(tc1, ts1)`; the tick loop
 //! and the MAVLink subscription live in the pipeline so this module

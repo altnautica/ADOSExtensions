@@ -14,6 +14,8 @@
 //! * `optical_flow_degraded` — companion active, flow quality above
 //!   gate, and a live scale source (rangefinder, baro, GPS or vision).
 //!   The 1.5 m static fallback blocks.
+//! * `external_nav` — pose source present, tracking health, EKF origin,
+//!   and the obstacle feed when enabled ([`crate::pre_arm_extnav`]).
 //!
 //! The gate is advisory: it reports readiness to the GCS and does not
 //! stop the flight controller from arming.
@@ -25,6 +27,8 @@
 use rmpv::Value;
 
 use crate::config::Mode;
+use crate::pre_arm_extnav::extnav_checks;
+pub use crate::pre_arm_extnav::{ExtnavPreArmInputs, ObstacleFeed};
 
 pub const DEFAULT_FLOW_QUALITY_GATE: i32 = 50;
 
@@ -56,21 +60,21 @@ pub struct PreArmCheck {
 }
 
 impl PreArmCheck {
-    fn ok(id: &'static str, detail: impl Into<String>) -> Self {
+    pub(crate) fn ok(id: &'static str, detail: impl Into<String>) -> Self {
         Self {
             id,
             severity: Severity::Ok,
             detail: detail.into(),
         }
     }
-    fn pending(id: &'static str, detail: impl Into<String>) -> Self {
+    pub(crate) fn pending(id: &'static str, detail: impl Into<String>) -> Self {
         Self {
             id,
             severity: Severity::Pending,
             detail: detail.into(),
         }
     }
-    fn blocking(id: &'static str, detail: impl Into<String>) -> Self {
+    pub(crate) fn blocking(id: &'static str, detail: impl Into<String>) -> Self {
         Self {
             id,
             severity: Severity::Blocking,
@@ -122,6 +126,8 @@ pub struct PreArmInputs {
     pub rangefinder_reading_m: Option<f32>,
     pub rangefinder_min_m: f32,
     pub rangefinder_max_m: f32,
+    /// The external-nav inputs; `None` outside `external_nav` mode.
+    pub extnav: Option<ExtnavPreArmInputs>,
 }
 
 /// Companion node state mirrored from the comp-198 heartbeat machine.
@@ -168,6 +174,7 @@ impl PreArmGate {
             Mode::Off => Vec::new(),
             Mode::OpticalFlow => self.of_checks(inputs, true),
             Mode::OpticalFlowDegraded => self.of_checks(inputs, false),
+            Mode::ExternalNav => extnav_checks(inputs.extnav.as_ref()),
         };
         let armable = if checks.is_empty() {
             true
@@ -271,6 +278,7 @@ mod tests {
             rangefinder_reading_m: None,
             rangefinder_min_m: 0.2,
             rangefinder_max_m: 8.0,
+            extnav: None,
         }
     }
 
