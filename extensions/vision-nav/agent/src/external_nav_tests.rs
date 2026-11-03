@@ -250,6 +250,12 @@ fn odometry_frame_packs_base_and_extension_fields() {
     let crc_at = 10 + ODOMETRY_LEN;
     let crc = u16::from_le_bytes([frame[crc_at], frame[crc_at + 1]]);
     assert_eq!(crc, x25_crc(&frame[1..crc_at], ODOMETRY_CRC_EXTRA));
+    // The plugin host refuses any `mavlink.send` buffer that is not one exact
+    // frame of its dialect, extension bytes included.
+    assert!(
+        ados_protocol::mavlink::decode_exact_frame(&frame).is_ok(),
+        "host mavlink gate refuses the frame"
+    );
     let (_, msg) = parse_v2(&frame).expect("dialect parses ODOMETRY");
     let MavMessage::ODOMETRY(d) = msg else {
         panic!("expected ODOMETRY");
