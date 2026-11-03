@@ -48,7 +48,8 @@ controller as `ODOMETRY` (#331) on component 197, at up to
 `external_nav.rate_hz` (30 Hz):
 
 - `frame_id` `MAV_FRAME_LOCAL_FRD`, `child_frame_id` `MAV_FRAME_BODY_FRD`.
-  The pose arrives in `map_frd` (a `map_flu` pose is converted with
+  The pose arrives in `map_ned` (north-aligned, the axes of the flight
+  controller's `LOCAL_POSITION_NED`; a `map_flu` pose is converted with
   `y = -y`, `z = -z`, `yaw = -yaw`).
 - x, y and yaw come from the pose; z and vertical speed from the
   flight controller's `LOCAL_POSITION_NED`, roll and pitch from its
@@ -70,13 +71,13 @@ until accepted):
 
 - `gps_primary: false`: `extnav_set` while the pose tracks; lost for
   1 s switches to `fallback_set` (the flight controller's optical-flow
-  set); good for 3 s switches back.
+  set); tracked (good or degraded) for 3 s switches back.
 - `gps_primary: true`: `fallback_set` (GPS) while the fix is 3D; no 3D
   fix for 2 s with a good pose switches to `extnav_set`; 3D for 10 s
   switches back.
 
 When the flight controller reports no EKF origin within 5 s the plugin
-sends `MAV_CMD_DO_SET_GLOBAL_ORIGIN` (a `COMMAND_INT`) from `external_nav.origin_lla`, which the
+sends `SET_GPS_GLOBAL_ORIGIN` from `external_nav.origin_lla`, which the
 mode requires. The pre-arm card blocks with "External nav source
 missing" when the pose topic is not published by an installed plugin
 or reading it is not granted.
@@ -304,7 +305,7 @@ and restarts itself when any of them changes.
 - Component 197, `sub_id` 2: kind `vio`, registered only in
   `external_nav` or with the obstacle feed on. Emits `ODOMETRY`,
   `OBSTACLE_DISTANCE`, and the `MAV_CMD_SET_EKF_SOURCE_SET` /
-  `MAV_CMD_REQUEST_MESSAGE` / `MAV_CMD_DO_SET_GLOBAL_ORIGIN` commands.
+  `MAV_CMD_REQUEST_MESSAGE` commands and `SET_GPS_GLOBAL_ORIGIN`.
 
 ## License
 

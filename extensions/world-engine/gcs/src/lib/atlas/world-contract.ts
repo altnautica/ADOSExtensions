@@ -25,7 +25,7 @@ export const ATLAS_CAPTURE_STATE_TOPIC = "atlas.capture.state";
 /** A selected pose-tagged keyframe, emitted drone-to-compute. */
 export const ATLAS_KEYFRAME_TOPIC = "atlas.keyframe";
 
-/** Shared-data: current 6-DoF navigation pose in `map_frd`. */
+/** Shared-data: current 6-DoF navigation pose in `map_ned`. */
 export const PLUGIN_ATLAS_POSE_TOPIC = "plugin.world-engine.pose";
 /** Shared-data: point-cloud descriptor, or the live sweep-cloud delta. */
 export const PLUGIN_ATLAS_POINTCLOUD_TOPIC = "plugin.world-engine.pointcloud";
@@ -103,12 +103,12 @@ export function atlasTopicSubscribeCapability(topic: string): string | null {
 
 // --- Live navigation and mapping payloads ----------------------------------
 //
-// Frames: `map_frd` is the planar SLAM world (body FLU at the first scan)
-// turned to FRD (`x`, `-y`, `-z`, `-yaw`); with no GNSS and the FC's yaw and
-// position sourced from this pose, the FC's local NED coincides with it.
-// `body_frd` is the vehicle body, forward-right-down.
+// Frames: `map_ned` is north-aligned (x north, y east, z down, metres, origin
+// at the first scan's position): the planar SLAM world rotated by the FC's
+// compass heading latched at the first pose, so its axes match the FC's
+// LOCAL_POSITION_NED. `body_frd` is the vehicle body, forward-right-down.
 
-export type NavFrame = "map_frd" | "body_frd";
+export type NavFrame = "map_ned" | "body_frd";
 export type NavHealth = "good" | "degraded" | "lost";
 export type NavPoseSource = "lidar_planar" | "fc_ekf" | "vio" | "replay";
 export type ComputePlacement = "onboard" | "stream" | "post_flight" | "hybrid";
@@ -152,7 +152,7 @@ export interface OccupancyTile {
 export interface LiveOccupancy {
   kind: "live";
   seq: number;
-  frame: "map_frd";
+  frame: "map_ned";
   res_m: number;
   tile_cells: number;
   tiles: OccupancyTile[];
@@ -163,7 +163,7 @@ export interface LiveOccupancy {
 export interface LivePointCloud {
   kind: "live";
   seq: number;
-  frame: "map_frd";
+  frame: "map_ned";
   voxel_m: number;
   count: number;
   points_b64: string;

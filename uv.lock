@@ -86,7 +86,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "altnautica-siyi-pod"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "extensions/siyi-pod/agent" }
 dependencies = [
     { name = "pymavlink" },

@@ -1,7 +1,7 @@
 //! A capture session's planar scans in their compact polar form:
 //! `lidar/<sensor>.polar.zst`, a zstd stream of
 //! [`PolarScan`](world_engine_protocol::atlas::PolarScan) records, each with
-//! the sensor's pose in `map_frd` as the drone's live SLAM and the flight
+//! the sensor's pose in `map_ned` as the drone's live SLAM and the flight
 //! controller's height placed it. A planar LiDAR records here instead of the
 //! Cartesian `/lidar/<id>/points` channel.
 
@@ -47,7 +47,7 @@ pub fn scan_input(scan: &PolarScan, t_ns: u64) -> ScanInput {
     }
 }
 
-/// Every return in a z-up world (`map_frd` turned back to FLU: `x`, `-y`,
+/// Every return in a z-up world (`map_ned` turned z-up: `x`, `-y`,
 /// `-z`), metres.
 pub fn world_points_flu(scan: &PolarScan) -> impl Iterator<Item = [f64; 3]> + '_ {
     scan.world_points()

@@ -63,6 +63,8 @@ pub struct RplidarStats {
     pub points: u64,
     /// Nodes with no return.
     pub no_return: u64,
+    /// Revolutions with no return at all, dropped as no data.
+    pub empty_revolutions: u64,
     /// Bytes skipped to regain node framing.
     pub resync_bytes: u64,
     /// Revolutions dropped because the consumer fell behind.
@@ -78,6 +80,7 @@ struct Shared {
     revolutions: AtomicU64,
     points: AtomicU64,
     no_return: AtomicU64,
+    empty_revolutions: AtomicU64,
     resync_bytes: AtomicU64,
     dropped_scans: AtomicU64,
     reconnects: AtomicU64,
@@ -150,6 +153,7 @@ impl Rplidar {
             revolutions: ld(&s.revolutions),
             points: ld(&s.points),
             no_return: ld(&s.no_return),
+            empty_revolutions: ld(&s.empty_revolutions),
             resync_bytes: ld(&s.resync_bytes),
             dropped_scans: ld(&s.dropped_scans),
             reconnects: ld(&s.reconnects),
@@ -278,6 +282,7 @@ fn stream(
                 let st = asm.stats();
                 shared.revolutions.store(st.revolutions, Ordering::Relaxed);
                 shared.no_return.store(st.no_return, Ordering::Relaxed);
+                shared.empty_revolutions.store(st.empty, Ordering::Relaxed);
                 shared
                     .resync_bytes
                     .store(st.resync_bytes, Ordering::Relaxed);

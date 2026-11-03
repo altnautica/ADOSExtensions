@@ -4,10 +4,12 @@
 //! the agent's MAVLink router on the drone profile; the plugin does not
 //! request their rates, so no two schedules fight.
 
+// `SET_GPS_GLOBAL_ORIGIN` is marked superseded (2025-04) by a command the
+// agent's dialect lacks; see `build_set_global_origin`.
+#[allow(deprecated)]
+use ados_protocol::mavlink::ardupilotmega::SET_GPS_GLOBAL_ORIGIN_DATA;
 use ados_protocol::mavlink::ardupilotmega::{MavCmd, COMMAND_LONG_DATA};
 use ados_protocol::mavlink::MavMessage;
-
-use crate::mavlink_emit::encode_v2;
 
 /// `GPS_GLOBAL_ORIGIN` message id (for `MAV_CMD_REQUEST_MESSAGE`).
 pub const GPS_GLOBAL_ORIGIN_ID: u32 = 49;
@@ -43,49 +45,31 @@ pub fn build_request_origin(target: (u8, u8)) -> MavMessage {
     )
 }
 
-/// `COMMAND_INT` message id and CRC extra.
-const COMMAND_INT_ID: u32 = 75;
-const COMMAND_INT_CRC_EXTRA: u8 = 158;
-/// `COMMAND_INT` payload length.
-pub const COMMAND_INT_LEN: usize = 35;
-/// `MAV_CMD_DO_SET_GLOBAL_ORIGIN`, which supersedes the
-/// `SET_GPS_GLOBAL_ORIGIN` message. It lives in the development dialect,
-/// so the shared codec has no variant for it and the frame is packed here.
-pub const MAV_CMD_DO_SET_GLOBAL_ORIGIN: u16 = 611;
-/// `MAV_FRAME_GLOBAL`: altitude above mean sea level.
-const MAV_FRAME_GLOBAL: u8 = 0;
-
-/// `MAV_CMD_DO_SET_GLOBAL_ORIGIN` as a `COMMAND_INT` (#75) from
-/// `[lat_deg, lon_deg, alt_m]`: `x`/`y` in degE7, `z` in metres AMSL,
-/// `MAV_FRAME_GLOBAL`. ArduPilot handles it as a COMMAND_INT only
-/// (`GCS_MAVLINK::handle_command_do_set_global_origin`).
-pub fn build_set_global_origin(
-    comp_id: u8,
-    sequence: u8,
-    target: (u8, u8),
-    lla: [f64; 3],
-) -> Vec<u8> {
-    let mut p = Vec::with_capacity(COMMAND_INT_LEN);
-    for param in [0f32; 4] {
-        p.extend_from_slice(&param.to_le_bytes());
-    }
-    p.extend_from_slice(&((lla[0] * 1e7).round() as i32).to_le_bytes());
-    p.extend_from_slice(&((lla[1] * 1e7).round() as i32).to_le_bytes());
-    p.extend_from_slice(&(lla[2] as f32).to_le_bytes());
-    p.extend_from_slice(&MAV_CMD_DO_SET_GLOBAL_ORIGIN.to_le_bytes());
-    p.push(target.0);
-    p.push(target.1);
-    p.push(MAV_FRAME_GLOBAL);
-    p.push(0); // current
-    p.push(0); // autocontinue
-    encode_v2(comp_id, sequence, COMMAND_INT_ID, COMMAND_INT_CRC_EXTRA, p)
+/// `SET_GPS_GLOBAL_ORIGIN` (#48) from `[lat_deg, lon_deg, alt_m]`:
+/// latitude/longitude in degE7, altitude in mm AMSL.
+///
+/// Not `MAV_CMD_DO_SET_GLOBAL_ORIGIN` (611), which the message definitions
+/// mark as its successor: that command lives only in the development
+/// dialect, so the plugin host's MAVLink gate, which forwards only frames
+/// its (ardupilotmega) dialect decodes whole, refused the `COMMAND_INT`
+/// carrying it and the origin never reached the flight controller. ArduPilot
+/// still handles the message (`AP_MAVLINK_SET_GPS_GLOBAL_ORIGIN_MESSAGE_ENABLED`,
+/// on by default).
+#[allow(deprecated)]
+pub fn build_set_global_origin(target_system: u8, lla: [f64; 3]) -> MavMessage {
+    MavMessage::SET_GPS_GLOBAL_ORIGIN(SET_GPS_GLOBAL_ORIGIN_DATA {
+        latitude: (lla[0] * 1e7).round() as i32,
+        longitude: (lla[1] * 1e7).round() as i32,
+        altitude: (lla[2] * 1000.0).round() as i32,
+        target_system,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::external_nav::COMPONENT_EXTNAV;
-    use crate::mavlink_emit::{frame_for, x25_crc};
+    use crate::mavlink_emit::frame_for;
     use ados_protocol::mavlink::parse_v2;
 
     fn roundtrip(msg: &MavMessage) -> MavMessage {
@@ -105,27 +89,29 @@ mod tests {
     }
 
     #[test]
-    fn global_origin_is_a_command_int_in_deg_e7_and_metres() {
-        let frame = build_set_global_origin(
-            COMPONENT_EXTNAV,
-            4,
-            (1, 1),
+    #[allow(deprecated)]
+    fn global_origin_is_set_gps_global_origin_in_deg_e7_and_mm() {
+        let MavMessage::SET_GPS_GLOBAL_ORIGIN(d) = roundtrip(&build_set_global_origin(
+            1,
             [52.0731234, -0.6276543, 110.25],
+        )) else {
+            panic!("expected SET_GPS_GLOBAL_ORIGIN");
+        };
+        assert_eq!(d.latitude, 520_731_234);
+        assert_eq!(d.longitude, -6_276_543);
+        assert_eq!(d.altitude, 110_250);
+        assert_eq!(d.target_system, 1);
+        // The plugin host forwards only frames its dialect decodes whole
+        // (`mavlink_gate::scan_outbound`); a refused origin never reaches the FC.
+        let frame = frame_for(
+            COMPONENT_EXTNAV,
+            &build_set_global_origin(1, [52.0, -0.6, 110.0]),
+        )
+        .unwrap();
+        assert!(
+            ados_protocol::mavlink::decode_exact_frame(&frame).is_ok(),
+            "the host MAVLink gate must accept the origin frame"
         );
-        assert_eq!(frame[6], COMPONENT_EXTNAV);
-        assert_eq!(u32::from_le_bytes([frame[7], frame[8], frame[9], 0]), 75);
-        // autocontinue/current/frame are zero, so MAVLink 2 truncates them.
-        let len = frame[1] as usize;
-        assert_eq!(len, 32);
-        let p = &frame[10..10 + len];
-        let i32_at = |at: usize| i32::from_le_bytes(p[at..at + 4].try_into().unwrap());
-        assert_eq!(i32_at(16), 520_731_234);
-        assert_eq!(i32_at(20), -6_276_543);
-        assert_eq!(f32::from_le_bytes(p[24..28].try_into().unwrap()), 110.25);
-        assert_eq!(u16::from_le_bytes([p[28], p[29]]), 611);
-        assert_eq!((p[30], p[31]), (1, 1));
-        let crc = u16::from_le_bytes([frame[10 + len], frame[11 + len]]);
-        assert_eq!(crc, x25_crc(&frame[1..10 + len], 158));
     }
 
     #[test]

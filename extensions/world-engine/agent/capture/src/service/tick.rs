@@ -140,10 +140,10 @@ impl Engine {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        let (fc_up, open) = (self.fc_up(), self.session.is_some());
+        let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
         let due = out
             .last()
-            .and_then(|e| self.nav.on_pose(e, fc_up, now_ms, open));
+            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, open));
         if out.is_empty() || self.recorder().is_none() {
             return due;
         }

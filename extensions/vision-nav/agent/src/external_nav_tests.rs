@@ -58,7 +58,7 @@ fn fc() -> FcNavSnapshot {
 }
 
 #[test]
-fn map_frd_payload_passes_through() {
+fn map_ned_payload_passes_through() {
     let args = Value::Map(vec![
         (
             Value::from("topic"),
@@ -66,7 +66,7 @@ fn map_frd_payload_passes_through() {
         ),
         (
             Value::from("payload"),
-            payload("map_frd", "good", yaw_matrix(0.5), [1.0, 2.0, 0.0]),
+            payload("map_ned", "good", yaw_matrix(0.5), [1.0, 2.0, 0.0]),
         ),
     ]);
     let p = parse_pose_event(&args).unwrap();
@@ -95,9 +95,9 @@ fn map_flu_converts_to_frd() {
 fn unknown_frames_and_health_are_refused() {
     let e = parse_pose_payload(&payload("enu", "good", IDENTITY, [0.0; 3])).unwrap_err();
     assert_eq!(e.reason(), "pose_frame_unsupported:enu");
-    let e = parse_pose_payload(&payload("map_frd", "great", IDENTITY, [0.0; 3])).unwrap_err();
+    let e = parse_pose_payload(&payload("map_ned", "great", IDENTITY, [0.0; 3])).unwrap_err();
     assert_eq!(e, PoseError::UnknownHealth("great".into()));
-    let mut short = payload("map_frd", "good", IDENTITY, [0.0; 3]);
+    let mut short = payload("map_ned", "good", IDENTITY, [0.0; 3]);
     if let Value::Map(e) = &mut short {
         e[0].1 = Value::Map(vec![(Value::from("t"), floats(&[0.0; 3]))]);
     }
@@ -274,12 +274,28 @@ fn ten_hz_poses_give_one_message_each() {
     let mut sent = 0;
     for i in 0..10i64 {
         let x = i as f64 * 0.2;
-        if let Some(o) = b.build(0, i * 100_000_000, &pose(x, 0.0, 0.0, ExtnavHealth::Good), &fc) {
+        if let Some(o) = b.build(
+            0,
+            i * 100_000_000,
+            &pose(x, 0.0, 0.0, ExtnavHealth::Good),
+            &fc,
+        ) {
             sent += 1;
-            assert!((o.x as f64 - x).abs() < 1e-6, "a message carries the measured pose");
+            assert!(
+                (o.x as f64 - x).abs() < 1e-6,
+                "a message carries the measured pose"
+            );
             assert!((o.vx - 2.0).abs() < 1e-4, "vx {}", o.vx);
         }
     }
     // The first pose has no velocity yet; every later pose is one message.
     assert_eq!(sent, 9);
+}
+
+#[test]
+fn the_retired_slam_heading_frame_is_refused() {
+    // `map_frd` was the SLAM frame at the first scan's heading; with the EKF
+    // yaw on the compass it would fly rotated, so it is not accepted.
+    let e = parse_pose_payload(&payload("map_frd", "good", IDENTITY, [0.0; 3])).unwrap_err();
+    assert!(matches!(e, PoseError::UnknownFrame(f) if f == "map_frd"));
 }

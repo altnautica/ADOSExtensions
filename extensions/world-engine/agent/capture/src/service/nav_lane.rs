@@ -22,6 +22,16 @@ impl Engine {
             .map(|e| e.t[2])
     }
 
+    /// The flight controller's attitude yaw (its compass heading), radians
+    /// clockwise from north: the map's north.
+    pub(super) fn fc_heading(&self) -> Option<f64> {
+        self.nav_deps
+            .fc_feed
+            .as_ref()
+            .and_then(|f| f.attitude())
+            .map(|(_, r_ned_frd)| crate::nav::frd_yaw(&r_ned_frd))
+    }
+
     fn lidar_mount(&self, sensor: &str) -> [f64; 16] {
         self.nav_deps
             .lidar_mount
@@ -82,18 +92,21 @@ impl Engine {
         if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
             return;
         }
-        let Some(e) = self
-            .nav_deps
-            .fc_feed
-            .as_ref()
-            .and_then(|f| f.track().latest())
+        // The attitude alone: a GNSS-denied FC reports no EKF position (so no
+        // pose estimate) until the external navigation it waits for arrives.
+        let Some((t_ns, r_ned_frd)) = self.nav_deps.fc_feed.as_ref().and_then(|f| f.attitude())
         else {
             return;
         };
-        if self.fc_imu_prev.is_some_and(|(t, _)| t == e.t_ns) {
+        if self.fc_imu_prev.is_some_and(|(t, _)| t == t_ns) {
             return;
         }
-        let cur = (e.t_ns, e.r);
+        // The bridge works in a z-up world with an FLU body.
+        let r_enu_flu = se3::mat_mul(
+            &crate::geodesy::R_ENU_NED,
+            &se3::mat_mul(&r_ned_frd, &crate::geodesy::R_FRD_FLU),
+        );
+        let cur = (t_ns, r_enu_flu);
         if let Some(s) = fc_imu::sample(self.fc_imu_prev, cur) {
             let batch = ImuBatch { samples: vec![s] };
             self.pose.feed_imu(fc_imu::FC_IMU_ID, &batch);

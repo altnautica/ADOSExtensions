@@ -69,8 +69,13 @@ fn main() -> ExitCode {
     }
     let st = lidar.stats();
     println!(
-        "stats: revolutions {} points {} no_return {} resync_bytes {} dropped {}",
-        st.revolutions, st.points, st.no_return, st.resync_bytes, st.dropped_scans
+        "stats: revolutions {} empty {} points {} no_return {} resync_bytes {} dropped {}",
+        st.revolutions,
+        st.empty_revolutions,
+        st.points,
+        st.no_return,
+        st.resync_bytes,
+        st.dropped_scans
     );
     ExitCode::SUCCESS
 }

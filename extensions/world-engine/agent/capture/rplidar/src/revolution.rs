@@ -8,7 +8,10 @@
 //! previous revolution; that revolution's node times are least-squares fitted
 //! to `a + b * k` over its node slots `k` (the device samples at a steady
 //! rate), which removes the read-scheduling jitter. Slots include nodes with
-//! no return, so the fit spacing stays the sampling interval.
+//! no return, so the fit spacing stays the sampling interval. A revolution
+//! in which no slot returned is not a scan: it is counted as `empty` and not
+//! emitted, so a device streaming before it sees anything (or an all-zero
+//! stream) reads as no data rather than as an empty world.
 
 use crate::proto::{decode_standard_node, flu_from_device_deg, node_framing_ok, NODE_LEN};
 
@@ -50,6 +53,8 @@ pub struct AssemblerStats {
     pub resync_bytes: u64,
     /// Revolutions emitted.
     pub revolutions: u64,
+    /// Revolutions dropped because no node in them returned.
+    pub empty: u64,
     /// Revolutions discarded for exceeding [`MAX_SLOTS`].
     pub overlong: u64,
 }
@@ -120,9 +125,13 @@ impl RevolutionAssembler {
         let start = b[0] & 1 == 1;
         if start {
             if let Some(rev) = self.cur.take() {
-                let scan = fit(rev);
-                self.stats.revolutions += 1;
-                emit(scan);
+                if rev.hits.is_empty() {
+                    self.stats.empty += 1;
+                } else {
+                    let scan = fit(rev);
+                    self.stats.revolutions += 1;
+                    emit(scan);
+                }
             }
             self.cur = Some(Rev {
                 t0: t_k,
@@ -321,6 +330,26 @@ mod tests {
         asm.push(&bytes, 1_000_000_000, |s| out.push(s));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].len(), 50);
+    }
+
+    #[test]
+    fn an_all_zero_revolution_is_no_data_not_a_scan() {
+        let mut asm = RevolutionAssembler::new(BAUD);
+        // Two revolutions with no return at all, then two real ones closed
+        // by a final start flag.
+        let mut nodes: Vec<[u8; 5]> = (0..2)
+            .flat_map(|_| (0..50).map(|k| encode_standard_node(k == 0, 0, k as f32 * 7.2, 0.0)))
+            .collect();
+        nodes.extend(stream(2, 50, None));
+        nodes.push(encode_standard_node(true, 40, 0.0, 2.0));
+        let mut out = Vec::new();
+        let bytes: Vec<u8> = nodes.iter().flatten().copied().collect();
+        asm.push(&bytes, 1_000_000_000, |s| out.push(s));
+        assert_eq!(out.len(), 2, "only the revolutions with returns are scans");
+        assert!(out.iter().all(|s| s.len() == 50));
+        let st = asm.stats();
+        assert_eq!((st.revolutions, st.empty), (2, 2));
+        assert_eq!(st.no_return, 100);
     }
 
     #[test]

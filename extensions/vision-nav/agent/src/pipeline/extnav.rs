@@ -154,15 +154,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                 {
                     if last_origin_set.is_none_or(|t| now - t >= ORIGIN_WAIT_NS) {
                         last_origin_set = Some(now);
-                        let frame = build_set_global_origin(
-                            COMPONENT_EXTNAV,
-                            next_sequence(COMPONENT_EXTNAV),
-                            target,
-                            lla,
-                        );
-                        task.router
-                            .send_as(&task.ctx, COMPONENT_EXTNAV, &frame)
-                            .await;
+                        task.send_msg(&build_set_global_origin(target.0, lla)).await;
                     }
                 }
             }

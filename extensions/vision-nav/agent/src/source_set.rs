@@ -3,9 +3,14 @@
 //! Two policies, picked by `external_nav.gps_primary`:
 //!
 //! * External nav primary (`false`): the external-nav set is active while
-//!   the pose is good or degraded. Lost (or no pose) for 1 s switches to
-//!   the fallback set (the flight controller's optical-flow set); good
-//!   for 3 s switches back. Degraded holds whichever set is active.
+//!   the pose is tracked (good or degraded). Lost (or no pose) for 1 s
+//!   switches to the fallback set (the flight controller's optical-flow
+//!   set); tracked for 3 s switches back. A degraded pose re-engages too:
+//!   a planar lidar between two parallel walls (an aisle, a drift) is
+//!   degenerate along them for as long as it stays there, and its
+//!   ODOMETRY carries the degraded covariance and quality, so the EKF
+//!   weighs it; waiting for `good` left the flow set active for the whole
+//!   corridor.
 //! * GPS primary (`true`): the fallback (GPS) set is active while
 //!   `GPS_RAW_INT.fix_type >= 3`. No 3D fix for 2 s with a good pose
 //!   switches to the external-nav set; a 3D fix for 10 s switches back.
@@ -19,7 +24,7 @@ use crate::external_nav::ExtnavHealth;
 use crate::nav_config::ExternalNavConfig;
 
 const EXTNAV_LOST_NS: i64 = 1_000_000_000;
-const EXTNAV_GOOD_NS: i64 = 3_000_000_000;
+const EXTNAV_TRACKED_NS: i64 = 3_000_000_000;
 const GPS_LOST_NS: i64 = 2_000_000_000;
 const GPS_BACK_NS: i64 = 10_000_000_000;
 /// `GPS_FIX_TYPE_3D_FIX`.
@@ -31,6 +36,7 @@ pub struct SourceSwitch {
     fallback_set: u8,
     gps_primary: bool,
     active: Option<u8>,
+    tracked_since: Option<i64>,
     good_since: Option<i64>,
     lost_since: Option<i64>,
     fix_since: Option<i64>,
@@ -44,6 +50,7 @@ impl SourceSwitch {
             fallback_set: cfg.fallback_set,
             gps_primary: cfg.gps_primary,
             active: None,
+            tracked_since: None,
             good_since: None,
             lost_since: None,
             fix_since: None,
@@ -61,6 +68,11 @@ impl SourceSwitch {
     pub fn update(&mut self, now_ns: i64, health: Option<ExtnavHealth>, gps_fix: u8) -> Option<u8> {
         let health = health.unwrap_or(ExtnavHealth::Lost);
         since(&mut self.good_since, health == ExtnavHealth::Good, now_ns);
+        since(
+            &mut self.tracked_since,
+            health != ExtnavHealth::Lost,
+            now_ns,
+        );
         since(&mut self.lost_since, health == ExtnavHealth::Lost, now_ns);
         since(&mut self.fix_since, gps_fix >= FIX_3D, now_ns);
         since(&mut self.no_fix_since, gps_fix < FIX_3D, now_ns);
@@ -81,7 +93,7 @@ impl SourceSwitch {
             let on_extnav = self.active == Some(self.extnav_set);
             if on_extnav {
                 held(self.lost_since, EXTNAV_LOST_NS).then_some(self.fallback_set)
-            } else if held(self.good_since, EXTNAV_GOOD_NS) {
+            } else if held(self.tracked_since, EXTNAV_TRACKED_NS) {
                 Some(self.extnav_set)
             } else if self.active.is_none() && held(self.lost_since, EXTNAV_LOST_NS) {
                 Some(self.fallback_set)
@@ -141,11 +153,15 @@ mod tests {
     }
 
     #[test]
-    fn extnav_primary_engages_after_three_good_seconds() {
+    fn extnav_primary_engages_after_three_tracked_seconds() {
         let mut s = switch(false);
         let cmds = run(&mut s, 0, 4 * S, Some(ExtnavHealth::Good), 0);
         assert_eq!(cmds, vec![(3 * S, 1)]);
         assert_eq!(s.active(), Some(1));
+        // A degraded pose (a planar lidar in a corridor) engages as well.
+        let mut s = switch(false);
+        let cmds = run(&mut s, 0, 4 * S, Some(ExtnavHealth::Degraded), 0);
+        assert_eq!(cmds, vec![(3 * S, 1)]);
     }
 
     #[test]
@@ -161,6 +177,16 @@ mod tests {
         assert_eq!(lost, vec![(8 * S, 2)]);
         let back = run(&mut s, 9 * S, 13 * S, Some(ExtnavHealth::Good), 0);
         assert_eq!(back, vec![(12 * S, 1)]);
+    }
+
+    #[test]
+    fn extnav_primary_returns_from_the_startup_fallback_on_a_degraded_pose() {
+        // Lost until the first submap fills, then degraded in an aisle: the
+        // boot-time fallback must not become permanent.
+        let mut s = switch(false);
+        assert_eq!(run(&mut s, 0, 2 * S, None, 0), vec![(S, 2)]);
+        let back = run(&mut s, 2 * S, 6 * S, Some(ExtnavHealth::Degraded), 0);
+        assert_eq!(back, vec![(5 * S, 1)]);
     }
 
     #[test]

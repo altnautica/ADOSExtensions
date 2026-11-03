@@ -2,7 +2,7 @@
 //! while the pose provider runs (`atlas.nav_pose = always`, or only with a
 //! session open for `capture`) the capture service publishes
 //!
-//! - `plugin.world-engine.pose` in `map_frd` at most every
+//! - `plugin.world-engine.pose` in the north-aligned `map_ned` at most every
 //!   `atlas.pose_publish_interval_ms` (no faster than the provider estimates);
 //! - `plugin.world-engine.scan`, each LiDAR scan binned in the body frame;
 //! - `plugin.world-engine.occupancy` live tiles and
@@ -93,11 +93,27 @@ pub struct NavMap {
     settings: NavSettings,
     map: LiveMap,
     last_pub_ms: Option<i64>,
-    /// The flight controller's up height at the first nav pose: `map_frd` z is
+    /// The flight controller's up height at the first nav pose: `map_ned` z is
     /// measured from it.
     fc_up0: Option<f64>,
-    /// The latest pose in `map_frd`: `(R, t)`.
+    /// The heading of the SLAM world's x axis, radians clockwise from north:
+    /// `map_ned = Rz(yaw0) · map_frd`. Latched from the flight controller's
+    /// attitude yaw (its compass) at the first pose that has one; until then
+    /// nothing is placed in the map.
+    yaw0: Option<f64>,
+    /// The latest pose in `map_ned`: `(R, t)`.
     latest: Option<([f64; 9], [f64; 3])>,
+}
+
+/// `Rz(yaw)` about the down axis, row-major.
+fn rz(yaw: f64) -> [f64; 9] {
+    let (s, c) = yaw.sin_cos();
+    [c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]
+}
+
+/// The FRD yaw of a world-from-body FRD rotation (body x's heading).
+pub fn frd_yaw(r: &[f64; 9]) -> f64 {
+    r[3].atan2(r[0])
 }
 
 impl NavMap {
@@ -107,12 +123,18 @@ impl NavMap {
             settings,
             last_pub_ms: None,
             fc_up0: None,
+            yaw0: None,
             latest: None,
         }
     }
 
     pub fn settings(&self) -> &NavSettings {
         &self.settings
+    }
+
+    /// Whether the map is north-aligned yet (the FC heading has been seen).
+    pub fn heading_known(&self) -> bool {
+        self.yaw0.is_some()
     }
 
     /// Whether the lanes publish now.
@@ -125,9 +147,9 @@ impl NavMap {
         self.settings.placement.streams_live()
     }
 
-    /// The provider's world-from-body (FLU) turned to `map_frd`, with z from
-    /// the flight controller's height above the first pose when known.
-    fn place_in_map(&mut self, r: &[f64; 9], t: [f64; 3], fc_up: Option<f64>) -> ([f64; 9], [f64; 3]) {
+    /// The provider's world-from-body (FLU) turned to FRD (`map_frd`), with z
+    /// from the flight controller's height above the first pose when known.
+    fn place_frd(&mut self, r: &[f64; 9], t: [f64; 3], fc_up: Option<f64>) -> ([f64; 9], [f64; 3]) {
         let mut t_frd = frames::flu_to_frd_vec(t);
         if let Some(up) = fc_up {
             let up0 = *self.fc_up0.get_or_insert(up);
@@ -136,16 +158,33 @@ impl NavMap {
         (frames::flu_to_frd_rot(r), t_frd)
     }
 
+    /// `map_frd` to the north-aligned `map_ned`, or `None` before the heading
+    /// is known.
+    fn ned_of(&self, r: &[f64; 9], t: [f64; 3]) -> Option<([f64; 9], [f64; 3])> {
+        let rot = rz(self.yaw0?);
+        Some((se3::mat_mul(&rot, r), se3::mat_vec(&rot, t)))
+    }
+
     /// Fold one provider estimate; the descriptor to publish when the lanes
-    /// are on and the interval is due.
+    /// are on and the interval is due. `fc_heading` is the flight
+    /// controller's attitude yaw now (radians from north); the first one seen
+    /// with a pose fixes the map's north. Nothing is published before it.
     pub fn on_pose(
         &mut self,
         e: &PoseEstimate,
         fc_up: Option<f64>,
+        fc_heading: Option<f64>,
         now_ms: i64,
         session_open: bool,
     ) -> Option<PoseDescriptor> {
-        let (r, t) = self.place_in_map(&e.r, e.t, fc_up);
+        let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
+        if self.yaw0.is_none() {
+            let heading = fc_heading?;
+            let yaw0 = heading - frd_yaw(&r_frd);
+            tracing::info!(heading_rad = heading, yaw0_rad = yaw0, "nav_map_north_latched");
+            self.yaw0 = Some(yaw0);
+        }
+        let (r, t) = self.ned_of(&r_frd, t_frd)?;
         self.latest = Some((r, t));
         if !self.active(session_open) {
             return None;
@@ -162,13 +201,14 @@ impl NavMap {
             anchor: None,
             ts_ms: now_ms,
             health: e.health,
-            frame: NavFrame::MapFrd,
+            frame: NavFrame::MapNed,
             source: nav_source(e.source),
         })
     }
 
     /// Fold one LiDAR scan. `world` is the provider's body pose at the scan
-    /// time (FLU world), when known; `t_body_sensor` the mount.
+    /// time (FLU world), when known; `t_body_sensor` the mount. The polar
+    /// record and the live map wait for the map's north.
     pub fn on_scan(
         &mut self,
         scan: &LidarScan,
@@ -187,12 +227,15 @@ impl NavMap {
         let r_ws = se3::mat_mul(&e.r, &r_bs);
         let off = se3::mat_vec(&e.r, t_bs);
         let t_ws = [e.t[0] + off[0], e.t[1] + off[1], e.t[2] + off[2]];
-        let (r_map, mut t_map) = self.place_in_map(&r_ws, t_ws, None);
+        let (r_frd, mut t_frd) = self.place_frd(&r_ws, t_ws, None);
         if let (Some(up), Some(up0)) = (fc_up, self.fc_up0) {
             // The sensor sits `off` from the body origin; keep that offset
             // under the flight controller's height.
-            t_map[2] = -(up - up0) - off[2];
+            t_frd[2] = -(up - up0) - off[2];
         }
+        let Some((r_map, t_map)) = self.ned_of(&r_frd, t_frd) else {
+            return out;
+        };
         let polar = frames::polar_scan(scan, scan.t_ns, &r_map, t_map, e.health);
         if active {
             self.map.insert(&polar);

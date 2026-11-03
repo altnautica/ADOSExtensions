@@ -372,7 +372,7 @@ def test_scan_payload_parses_only_body_frame_scans() -> None:
         }
     )
     assert ok is not None and len(ok.ranges_m) == 360
-    assert follow_me.parse_scan({"frame": "map_frd", "ranges_m": [1.0]}) is None
+    assert follow_me.parse_scan({"frame": "map_ned", "ranges_m": [1.0]}) is None
     assert follow_me.parse_scan({"frame": "body_frd"}) is None
 
 

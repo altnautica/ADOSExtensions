@@ -9,7 +9,7 @@
 //! | `angle_start_rad` | `f32`       | bin 0, clockwise from body +x (FRD yaw) |
 //! | `angle_inc_rad`   | `f32`       |                                         |
 //! | `n`               | `u32`       | bins                                    |
-//! | `t`               | `[f32; 3]`  | sensor origin in `map_frd`, metres      |
+//! | `t`               | `[f32; 3]`  | sensor origin in `map_ned`, metres      |
 //! | `q`               | `[f32; 4]`  | `w, x, y, z`, world-from-sensor (FRD)   |
 //! | `health`          | `u8`        | 0 good, 1 degraded, 2 lost              |
 //! | bins              | `n × 3 B`   | `u16` range in mm (0 = none), `u8` quality |
@@ -32,7 +32,7 @@ pub struct PolarScan {
     pub t_ns: u64,
     pub angle_start_rad: f32,
     pub angle_inc_rad: f32,
-    /// Sensor origin in `map_frd`.
+    /// Sensor origin in `map_ned`.
     pub t: [f32; 3],
     /// World-from-sensor (FRD) rotation, `w, x, y, z`.
     pub q: [f32; 4],
@@ -177,7 +177,7 @@ impl PolarScan {
         ]
     }
 
-    /// Every return in `map_frd`, metres.
+    /// Every return in `map_ned`, metres.
     pub fn world_points(&self) -> impl Iterator<Item = [f32; 3]> + '_ {
         let r = self.rotation();
         (0..self.range_mm.len()).filter_map(move |k| {

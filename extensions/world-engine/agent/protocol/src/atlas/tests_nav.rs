@@ -25,12 +25,12 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         anchor: None,
         ts_ms: 7,
         health: VioHealth::Good,
-        frame: NavFrame::MapFrd,
+        frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,
     };
     let v = serde_json::to_value(&pd).unwrap();
     assert_eq!(v["health"], "good");
-    assert_eq!(v["frame"], "map_frd");
+    assert_eq!(v["frame"], "map_ned");
     assert_eq!(v["source"], "lidar_planar");
     assert_eq!(v["pose"]["R"][0], 1.0);
     assert_eq!(PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(), pd);
@@ -41,7 +41,7 @@ fn live_and_product_payloads_are_told_apart_by_kind() {
     let live = LiveOccupancy {
         kind: MapPayloadKind::Live,
         seq: 12,
-        frame: NavFrame::MapFrd,
+        frame: NavFrame::MapNed,
         res_m: 0.05,
         tile_cells: nav::OCCUPANCY_TILE_CELLS,
         tiles: vec![OccupancyTile {
@@ -58,7 +58,7 @@ fn live_and_product_payloads_are_told_apart_by_kind() {
     let cloud = LivePointCloud {
         kind: MapPayloadKind::Live,
         seq: 3,
-        frame: NavFrame::MapFrd,
+        frame: NavFrame::MapNed,
         voxel_m: 0.05,
         count: 0,
         points_b64: String::new(),

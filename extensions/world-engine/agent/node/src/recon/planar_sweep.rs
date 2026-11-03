@@ -12,7 +12,7 @@
 //!
 //! Heights are metres above the first scan's sensor height, so a flight that
 //! takes off from the ground reads its bands from the ground. The world is the
-//! drone's `map_frd` turned z-up (`x`, `-y`, `-z`).
+//! drone's north-aligned `map_ned` turned z-up (`x`, `-y`, `-z`).
 
 use std::collections::HashSet;
 use std::fs;

@@ -84,7 +84,7 @@ impl SweepCloud {
         ]
     }
 
-    /// Merge `points` (map_frd, metres). Coarsens first whenever a new voxel
+    /// Merge `points` (map_ned, metres). Coarsens first whenever a new voxel
     /// would pass the cap.
     pub fn insert(&mut self, points: impl IntoIterator<Item = [f32; 3]>) {
         for p in points {

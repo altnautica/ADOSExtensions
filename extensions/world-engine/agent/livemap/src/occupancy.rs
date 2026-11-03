@@ -1,4 +1,4 @@
-//! The live 2D occupancy grid in `map_frd`, held as 64×64-cell tiles at 5 cm.
+//! The live 2D occupancy grid in `map_ned`, held as 64×64-cell tiles at 5 cm.
 //!
 //! Each scan return is ray-traced from the sensor origin: the cells it
 //! crosses lose evidence (free), the end cell gains it (occupied). A cell
@@ -93,7 +93,7 @@ impl OccupancyGrid {
         }
     }
 
-    /// Ray-trace one return from `origin` to `hit` (map_frd x, y, metres).
+    /// Ray-trace one return from `origin` to `hit` (map_ned x, y, metres).
     pub fn insert_ray(&mut self, origin: [f32; 2], hit: [f32; 2]) {
         let (x0, y0) = (cell_of(origin[0]), cell_of(origin[1]));
         let (x1, y1) = (cell_of(hit[0]), cell_of(hit[1]));

@@ -22,7 +22,7 @@ pub struct ExternalNavConfig {
     /// Shared topic carrying the pose descriptor.
     pub pose_topic: String,
     /// EKF origin `[lat_deg, lon_deg, alt_m_amsl]`, sent as
-    /// `MAV_CMD_DO_SET_GLOBAL_ORIGIN` when the flight controller reports none.
+    /// `SET_GPS_GLOBAL_ORIGIN` when the flight controller reports none.
     /// Required in `external_nav` mode.
     pub origin_lla: Option<[f64; 3]>,
     /// `ODOMETRY` rate cap in Hz.

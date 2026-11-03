@@ -3,10 +3,13 @@
 //! occupancy tiles, the live sweep-cloud delta and the map status.
 //!
 //! Frames:
-//! - `map_frd` is the planar SLAM world (body FLU at the first scan) turned to
-//!   FRD: `x_frd = x`, `y_frd = -y`, `z_frd = -z`, `yaw_frd = -yaw`. With the
-//!   flight controller's yaw and position sourced from this pose and no GNSS,
-//!   its local NED frame coincides with `map_frd`.
+//! - `map_ned` is north-aligned: x north, y east, z down, metres, origin at
+//!   the first scan's position (z from the flight controller's height above
+//!   it). The planar SLAM world (body FLU at the first scan) is turned to FRD
+//!   and rotated about down by the flight controller's attitude yaw (its
+//!   compass heading) latched at the first pose, so it matches the FC's
+//!   `LOCAL_POSITION_NED` axes. Nothing in it is published before that
+//!   heading is known.
 //! - `body_frd` is the vehicle body, forward-right-down.
 
 use serde::{Deserialize, Serialize};
@@ -28,9 +31,9 @@ pub const POINTCLOUD_DELTA_MAX_POINTS: usize = 20_000;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NavFrame {
-    /// The planar SLAM world turned to FRD (see the module docs).
+    /// North-aligned local frame (see the module docs).
     #[default]
-    MapFrd,
+    MapNed,
     /// The vehicle body, forward-right-down.
     BodyFrd,
 }

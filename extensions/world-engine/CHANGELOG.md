@@ -8,7 +8,9 @@ All notable changes to the World Engine extension.
 
 - **Navigation lanes independent of capture.** With `atlas.nav_pose =
   always` (the default when an RPLIDAR device is set) the capture service
-  publishes the navigation pose in `map_frd` with its `health`, `frame` and
+  publishes the navigation pose in the north-aligned `map_ned` (the SLAM
+  world rotated to the flight controller's compass heading at the first pose,
+  so it matches `LOCAL_POSITION_NED`) with its `health`, `frame` and
   `source`, the binned body-frame scan (`plugin.world-engine.scan`), live
   occupancy tiles and sweep-cloud deltas, and `plugin.world-engine.map_status`
   whether or not a session is open. The pose is no longer published from the

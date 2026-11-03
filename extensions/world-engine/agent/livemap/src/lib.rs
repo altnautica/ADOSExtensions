@@ -24,7 +24,7 @@ pub struct LiveMap {
     occ_seq: u64,
     cloud_seq: u64,
     last_voxel_m: f32,
-    /// The latest sensor position, map_frd x, y.
+    /// The latest sensor position, map_ned x, y.
     pub vehicle: [f32; 2],
 }
 
@@ -67,7 +67,7 @@ impl LiveMap {
             LiveOccupancy {
                 kind: MapPayloadKind::Live,
                 seq: self.occ_seq,
-                frame: NavFrame::MapFrd,
+                frame: NavFrame::MapNed,
                 res_m: occupancy::RES_M,
                 tile_cells: OCCUPANCY_TILE_CELLS,
                 tiles,
@@ -81,7 +81,7 @@ impl LiveMap {
             LivePointCloud {
                 kind: MapPayloadKind::Live,
                 seq: self.cloud_seq,
-                frame: NavFrame::MapFrd,
+                frame: NavFrame::MapNed,
                 voxel_m: self.sweep.voxel_m(),
                 count,
                 points_b64,

@@ -116,7 +116,7 @@ impl AtlasPublisher {
         }
     }
 
-    /// Publish the navigation pose (`map_frd`, shared).
+    /// Publish the navigation pose (`map_ned`, shared).
     pub async fn publish_pose(&self, pose: &PoseDescriptor) {
         self.publish_encoded(PLUGIN_ATLAS_POSE_TOPIC, pose.to_msgpack())
             .await;

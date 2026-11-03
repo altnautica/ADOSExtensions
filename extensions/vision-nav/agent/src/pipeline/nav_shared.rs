@@ -215,7 +215,7 @@ mod tests {
                     ]),
                 ),
                 (Value::from("health"), Value::from(health)),
-                (Value::from("frame"), Value::from("map_frd")),
+                (Value::from("frame"), Value::from("map_ned")),
             ]),
         )])
     }

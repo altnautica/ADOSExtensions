@@ -43,7 +43,7 @@ pub const ATLAS_KEYFRAME_TOPIC: &str = "atlas.keyframe";
 /// full-resolution live map.
 pub const ATLAS_SCAN_TOPIC: &str = "atlas.scan";
 
-/// Shared-data: current 6-DoF navigation pose in `map_frd` (see [`nav`]),
+/// Shared-data: current 6-DoF navigation pose in `map_ned` (see [`nav`]),
 /// published while the pose provider runs (`atlas.nav_pose`).
 pub const PLUGIN_ATLAS_POSE_TOPIC: &str = "plugin.world-engine.pose";
 

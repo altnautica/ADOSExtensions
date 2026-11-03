@@ -2,8 +2,13 @@
 //!
 //! The pose descriptor carries `R` (row-major 3x3) and `t` of the body
 //! FRD frame in the map frame, the tracker `health`, and its `frame`.
-//! `map_frd` is used as is; `map_flu` (the planar SLAM world: body FLU at
-//! the first scan) is converted with `x = x, y = -y, z = -z, yaw = -yaw`.
+//! `map_ned` (north-aligned: the world-engine map rotated to the flight
+//! controller's compass heading, so its axes are those of the FC's
+//! `LOCAL_POSITION_NED`) is used as is; `map_flu` (the planar SLAM world: body
+//! FLU at the first scan) is converted with `x = x, y = -y, z = -z,
+//! yaw = -yaw`. Sent as `MAV_FRAME_LOCAL_FRD`: with the EKF yaw from the
+//! compass, ArduPilot aligns the external-navigation yaw to its own heading,
+//! which `map_ned` already matches.
 //!
 //! `ODOMETRY` goes out on component 197 with `frame_id = MAV_FRAME_LOCAL_FRD`
 //! and `child_frame_id = MAV_FRAME_BODY_FRD`, the only pair ArduPilot
@@ -161,7 +166,7 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
     };
     let ts_ms = get(p, "ts_ms").and_then(Value::as_i64).unwrap_or(0);
     let (r, t) = match get(p, "frame").and_then(Value::as_str) {
-        Some("map_frd") => (r, t),
+        Some("map_ned") => (r, t),
         Some("map_flu") => flu_to_frd(&r, &t),
         Some(other) => return Err(PoseError::UnknownFrame(other.into())),
         None => return Err(PoseError::UnknownFrame("missing".into())),

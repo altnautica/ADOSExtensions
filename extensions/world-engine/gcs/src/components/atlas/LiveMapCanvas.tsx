@@ -2,7 +2,7 @@
  * @module atlas/LiveMapCanvas
  * @description A top-down view of the live map a device builds as it flies:
  * the occupancy tiles (grey PNG, north up) and the sweep-cloud points over
- * them, in the `map_frd` frame (north up, east right). Draws nothing until a
+ * them, in the `map_ned` frame (north up, east right). Draws nothing until a
  * live payload has arrived.
  */
 

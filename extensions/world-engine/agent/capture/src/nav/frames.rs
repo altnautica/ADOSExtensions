@@ -3,7 +3,8 @@
 //! The pose provider's world is FLU (for the planar provider, the body frame
 //! at the first scan). `map_frd` is that world turned to FRD with
 //! `F = diag(1, -1, -1)`: a world-from-body rotation `R` becomes `F·R·F`, a
-//! position `t` becomes `F·t`, and yaw changes sign.
+//! position `t` becomes `F·t`, and yaw changes sign. The published frame,
+//! `map_ned`, rotates `map_frd` about down to north (see `crate::nav`).
 
 use std::f32::consts::TAU;
 
@@ -61,7 +62,7 @@ pub fn body_scan(scan: &LidarScan, t_body_sensor: &[f64; 16]) -> ScanDescriptor 
 
 /// The scan in its sensor FRD frame as [`POLAR_BINS`] polar bins (nearest
 /// return, its reflectivity as quality), stamped with the sensor's pose in
-/// `map_frd` (`r_world_sensor`, `t_world_sensor` already FRD).
+/// `map_ned` (`r_world_sensor`, `t_world_sensor` already in it).
 pub fn polar_scan(
     scan: &LidarScan,
     t_ns: u64,

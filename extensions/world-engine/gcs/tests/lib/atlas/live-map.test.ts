@@ -22,7 +22,7 @@ function pointB64(x: number, y: number, z: number): string {
 const occ = encodeTestMap({
   kind: "live",
   seq: 1,
-  frame: "map_frd",
+  frame: "map_ned",
   res_m: 0.05,
   tile_cells: 64,
   tiles: [{ ix: 0, iy: 1, png_b64: "AA==" }],
@@ -32,7 +32,7 @@ const cloud = (voxel: number, seq: number) =>
   encodeTestMap({
     kind: "live",
     seq,
-    frame: "map_frd",
+    frame: "map_ned",
     voxel_m: voxel,
     count: 1,
     points_b64: pointB64(1.5, -2, 0.25),

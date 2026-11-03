@@ -5,7 +5,7 @@
  * occupancy and point-cloud topics with `kind: "live"`. Decodes them and
  * folds them into one accumulated map per device.
  *
- * Frame: `map_frd` (north/east metres from the first scan). A tile `(ix, iy)`
+ * Frame: `map_ned` (north/east metres from the first scan). A tile `(ix, iy)`
  * covers x in `[ix, ix+1) * tile_cells * res_m`, y likewise; its PNG row 0 is
  * the largest x (north up), column 0 the smallest y (west left).
  */

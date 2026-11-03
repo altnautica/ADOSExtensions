@@ -114,8 +114,7 @@ agent:
     - id: mavlink.read
     # OPTICAL_FLOW, OPTICAL_FLOW_RAD, DISTANCE_SENSOR, OBSTACLE_DISTANCE,
     # COMMAND_LONG (MAV_CMD_SET_EKF_SOURCE_SET, MAV_CMD_REQUEST_MESSAGE,
-    # MAV_CMD_SET_MESSAGE_INTERVAL) and COMMAND_INT
-    # (MAV_CMD_DO_SET_GLOBAL_ORIGIN).
+    # MAV_CMD_SET_MESSAGE_INTERVAL) and SET_GPS_GLOBAL_ORIGIN.
     - id: mavlink.write
     # ODOMETRY (#331) reaches the flight controller's state estimator.
     - id: estimator.pose.inject

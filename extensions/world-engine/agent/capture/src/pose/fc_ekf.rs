@@ -91,6 +91,19 @@ impl FcEkfPose {
         self.inner.lock().origin
     }
 
+    /// The newest FC attitude on the host clock: `(host ns, R_ned_frd)`,
+    /// row-major. Known as soon as `ATTITUDE_QUATERNION` arrives, with or
+    /// without an EKF position (a GNSS-denied FC reports none until the
+    /// external navigation it waits for is fused). Its yaw is the FC's own
+    /// heading source (the compass).
+    pub fn attitude(&self) -> Option<(u64, [f64; 9])> {
+        let g = self.inner.lock();
+        let att = g.attitude?;
+        let offset = *g.offsets.iter().min()?;
+        let t_ns = (att.time_boot_ms as i128 * 1_000_000 + offset).max(0) as u64;
+        Some((t_ns, se3::matrix_from_quat(att.q)))
+    }
+
     /// Fold one delivered raw frame, read at host monotonic `arrival_ns`.
     pub fn on_frame(&self, frame: &[u8], arrival_ns: u64) {
         let Some(msg) = decode(frame) else {
@@ -254,5 +267,18 @@ mod tests {
         p.on_frame(&pos(2_000, [2.0, 0.0, 0.0]), 6_000_000_000);
         assert_eq!(p.latest().unwrap().t_ns, 5_020_000_000);
         assert!(p.local_frame());
+    }
+
+    #[test]
+    fn the_attitude_alone_gives_the_heading_without_a_position() {
+        let p = FcEkfPose::new();
+        assert!(p.attitude().is_none());
+        // Yaw +90° about down: the nose faces east.
+        let h = std::f32::consts::FRAC_PI_4;
+        p.on_frame(&att(1_000, [h.cos(), 0.0, 0.0, h.sin()]), 5_000_000_000);
+        let (t_ns, r) = p.attitude().expect("attitude without LOCAL_POSITION_NED");
+        assert_eq!(t_ns, 5_000_000_000);
+        assert!((r[3].atan2(r[0]) - std::f64::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!(p.latest().is_none(), "no position, no pose estimate");
     }
 }
