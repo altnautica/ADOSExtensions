@@ -1,9 +1,17 @@
-//! The three flight-controller messages the EKF pose reads, decoded from the
-//! raw MAVLink frames the plugin host delivers (`mavlink.read`).
+//! The flight-controller messages the EKF pose and the navigation lane's
+//! heading read, decoded from the raw MAVLink frames the plugin host delivers
+//! (`mavlink.read`).
 //!
 //! MAVLink 2 truncates trailing zero bytes of a payload, so a short payload is
 //! zero-extended to the message's full length before decoding.
+//!
+//! The attitude arrives as `ATTITUDE_QUATERNION` or as `ATTITUDE` (Euler
+//! angles): ArduPilot streams only `ATTITUDE` unless asked for the quaternion,
+//! and the drone stream table asks for `ATTITUDE` alone outside a capture
+//! session. Both decode to the same [`AttitudeQuaternion`].
 
+/// `ATTITUDE` (30): body FRD → local NED as roll, pitch and yaw, radians.
+pub const MSG_ATTITUDE: u32 = 30;
 /// `ATTITUDE_QUATERNION` (31): body FRD → local NED.
 pub const MSG_ATTITUDE_QUATERNION: u32 = 31;
 /// `LOCAL_POSITION_NED` (32): EKF position in the local NED frame.
@@ -78,6 +86,13 @@ fn f32_at(b: &[u8], at: usize) -> f64 {
 pub fn decode(frame: &[u8]) -> Option<FcMessage> {
     let (id, payload) = split_frame(frame)?;
     Some(match id {
+        MSG_ATTITUDE => {
+            let b: [u8; 28] = padded(payload);
+            FcMessage::Attitude(AttitudeQuaternion {
+                time_boot_ms: u32_at(&b, 0),
+                q: quat_from_euler(f32_at(&b, 4), f32_at(&b, 8), f32_at(&b, 12)),
+            })
+        }
         MSG_ATTITUDE_QUATERNION => {
             let b: [u8; 32] = padded(payload);
             FcMessage::Attitude(AttitudeQuaternion {
@@ -102,6 +117,19 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
         }
         _ => return None,
     })
+}
+
+/// `[w, x, y, z]` of the ZYX (yaw, pitch, roll) rotation, body FRD → NED.
+pub fn quat_from_euler(roll: f64, pitch: f64, yaw: f64) -> [f64; 4] {
+    let (sr, cr) = (roll / 2.0).sin_cos();
+    let (sp, cp) = (pitch / 2.0).sin_cos();
+    let (sy, cy) = (yaw / 2.0).sin_cos();
+    [
+        cr * cp * cy + sr * sp * sy,
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+    ]
 }
 
 /// Build a MAVLink 2 frame around `payload` (zero CRC; the decoder does not
@@ -131,6 +159,33 @@ mod tests {
 
     fn le32(v: f32) -> [u8; 4] {
         v.to_le_bytes()
+    }
+
+    /// ArduPilot's drone stream carries `ATTITUDE`, not the quaternion: its
+    /// Euler angles decode to the same attitude `ATTITUDE_QUATERNION` gives.
+    #[test]
+    fn euler_attitude_decodes_to_the_quaternion_of_the_same_rotation() {
+        let (roll, pitch, yaw) = (0.1f32, -0.2f32, 2.5f32);
+        let mut p = Vec::new();
+        p.extend_from_slice(&777u32.to_le_bytes());
+        for v in [roll, pitch, yaw, 0.0, 0.0, 0.0] {
+            p.extend_from_slice(&le32(v));
+        }
+        while p.last() == Some(&0) {
+            p.pop();
+        }
+        let FcMessage::Attitude(a) = decode(&frame_v2(MSG_ATTITUDE, &p)).unwrap() else {
+            panic!()
+        };
+        assert_eq!(a.time_boot_ms, 777);
+        let m = crate::pose::se3::matrix_from_quat(a.q);
+        // R = Rz(yaw)·Ry(pitch)·Rx(roll): its yaw, pitch and roll read back.
+        let (r0, p0, y0) = (f64::from(roll), f64::from(pitch), f64::from(yaw));
+        assert!((m[3].atan2(m[0]) - y0).abs() < 1e-6);
+        assert!(((-m[6]).asin() - p0).abs() < 1e-6);
+        assert!((m[7].atan2(m[8]) - r0).abs() < 1e-6);
+        let n = a.q.iter().map(|v| v * v).sum::<f64>();
+        assert!((n - 1.0).abs() < 1e-12);
     }
 
     #[test]

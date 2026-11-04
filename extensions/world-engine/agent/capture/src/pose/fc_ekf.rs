@@ -1,9 +1,10 @@
 //! [`FcEkfPose`]: the flight controller's EKF as a pose provider.
 //!
-//! Inputs are the raw `ATTITUDE_QUATERNION`, `LOCAL_POSITION_NED` and
-//! `GPS_GLOBAL_ORIGIN` frames the plugin host delivers (`mavlink.read`). One
-//! estimate is produced per position message, paired with the latest
-//! attitude no more than [`MAX_PAIR_NS`] older on the FC clock.
+//! Inputs are the raw `ATTITUDE_QUATERNION` or `ATTITUDE`,
+//! `LOCAL_POSITION_NED` and `GPS_GLOBAL_ORIGIN` frames the plugin host
+//! delivers (`mavlink.read`). One estimate is produced per position message,
+//! paired with the latest attitude no more than [`MAX_PAIR_NS`] older on the
+//! FC clock.
 //!
 //! Time: the FC stamps `time_boot_ms`. The FC-to-host offset is the minimum of
 //! `arrival_mono − fc_time` over the last [`OFFSET_WINDOW`] messages (the
@@ -92,7 +93,7 @@ impl FcEkfPose {
     }
 
     /// The newest FC attitude on the host clock: `(host ns, R_ned_frd)`,
-    /// row-major. Known as soon as `ATTITUDE_QUATERNION` arrives, with or
+    /// row-major. Known as soon as `ATTITUDE_QUATERNION` or `ATTITUDE` arrives, with or
     /// without an EKF position (a GNSS-denied FC reports none until the
     /// external navigation it waits for is fused). Its yaw is the FC's own
     /// heading source (the compass).
@@ -248,6 +249,30 @@ mod tests {
         assert!((t[0]).abs() < 1e-6 && (t[1] - 100.0).abs() < 1e-6, "{t:?}");
         // The earth curves away under a 100 m chord by ~0.8 mm.
         assert!(t[2] < 0.0 && t[2] > -0.002, "{t:?}");
+    }
+
+    /// A drone outside a capture session streams `ATTITUDE` and no
+    /// quaternion: its heading must still reach the navigation lane, or the
+    /// lidar SLAM pose is never north-aligned and never published.
+    #[test]
+    fn euler_attitude_alone_gives_the_heading() {
+        let p = FcEkfPose::new();
+        let mut b = 2_000u32.to_le_bytes().to_vec();
+        for v in [0.0f32, 0.0, 3.0, 0.0, 0.0, 0.0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        p.on_frame(
+            &frame_v2(crate::mavlink_msg::MSG_ATTITUDE, &b),
+            9_000_000_000,
+        );
+        let (t_ns, r) = p.attitude().expect("ATTITUDE sets the attitude");
+        assert_eq!(t_ns, 9_000_000_000);
+        assert!((crate::nav::frd_yaw(&r) - 3.0).abs() < 1e-6);
+        p.on_frame(&pos(2_010, [1.0, 2.0, 0.0]), 9_010_000_000);
+        assert!(
+            p.latest().is_some(),
+            "positions pair with the Euler attitude"
+        );
     }
 
     #[test]

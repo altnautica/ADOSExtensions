@@ -4,7 +4,7 @@
 # search. No threads, no I/O; callers feed scans and IMU samples.
 [package]
 name = "ados-scan2d"
-version = "2.1.0"
+version = "2.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

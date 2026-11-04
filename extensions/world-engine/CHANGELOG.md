@@ -133,6 +133,14 @@ All notable changes to the World Engine extension.
   Brush 0.3.0 prints none, so a 10597-splat output showed
   `gaussian_count: 0`. The count is now the PLY header's `element vertex N`,
   with the log parse only as a fallback when the file cannot be read.
+- **The navigation pose reaches the flight controller on an ArduPilot drone
+  outside a capture session.** The map's north and the planar matcher's
+  levelling came only from `ATTITUDE_QUATERNION`, which the drone stream
+  table does not request (it asks for `ATTITUDE`; the quaternion only while a
+  capture session runs). With no attitude the lidar SLAM pose was never
+  north-aligned and never published, so external navigation sent no
+  `ODOMETRY` and a GNSS-denied drone could not arm. The capture service now
+  also reads `ATTITUDE` (Euler angles) for the same attitude. 2.1.1.
 
 ## [2.0.0]
 

@@ -42,8 +42,11 @@ use crate::vehicle::VehicleFeed;
 /// How often the plugin config is re-read.
 pub const CONFIG_POLL: Duration = Duration::from_secs(5);
 
-/// The FC messages the EKF pose reads.
-const FC_MESSAGES: [&str; 3] = [
+/// The FC messages the EKF pose and the navigation heading read. `ATTITUDE`
+/// is there because the drone stream table carries it and not the quaternion
+/// outside a capture session ([`crate::mavlink_msg`]).
+const FC_MESSAGES: [&str; 4] = [
+    "ATTITUDE",
     "ATTITUDE_QUATERNION",
     "LOCAL_POSITION_NED",
     "GPS_GLOBAL_ORIGIN",
