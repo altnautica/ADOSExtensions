@@ -62,6 +62,9 @@ function fakeCtx(locale: Record<string, string> = {}): PluginContext {
     theme: {
       onChange: () => () => undefined,
     },
+    videoOverlay: {
+      onProps: () => () => undefined,
+    },
     i18n: {
       t: (key) => locale[key] ?? key,
     },
