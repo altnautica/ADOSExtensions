@@ -255,6 +255,9 @@ impl CaptureSession {
             anchored: self.anchored,
             pose_tier: self.pose_tier,
             dropped_keyframes: self.dropped_keyframes,
+            // Not a session setting: the capture loop stamps the drone's live
+            // `atlas.reconstruct_steps` on the status it publishes.
+            reconstruct_steps: None,
         }
     }
 

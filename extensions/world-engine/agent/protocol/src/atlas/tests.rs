@@ -120,6 +120,7 @@ fn world_model_descriptors_round_trip() {
         anchored: true,
         pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
+        reconstruct_steps: Some(12_000),
     };
     let back = CaptureStatus::from_msgpack(&status.to_msgpack().unwrap()).unwrap();
     assert_eq!(status, back);

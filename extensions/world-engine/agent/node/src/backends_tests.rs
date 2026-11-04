@@ -101,6 +101,25 @@ fn gaussian_count_parses_the_first_run_only() {
 }
 
 #[test]
+fn gaussian_count_comes_from_the_exported_ply_header() {
+    // A Brush 0.3.0 export: binary PLY whose header states the splat count, and
+    // a training log that never prints one.
+    let dir = tempfile::tempdir().unwrap();
+    let ply = dir.path().join("output.ply");
+    let mut bytes = b"ply\nformat binary_little_endian 1.0\ncomment Exported from Brush\nelement vertex 10597\nproperty float x\nproperty float y\nproperty float z\nproperty float opacity\nend_header\n".to_vec();
+    bytes.extend_from_slice(&[0u8; 64]);
+    std::fs::write(&ply, bytes).unwrap();
+    let brush_log = "Loading dataset\nTraining step 30000/30000\nExported output.ply\n";
+    assert_eq!(parse_gaussian_count(brush_log), 0);
+    assert_eq!(splat_gaussian_count(&ply, brush_log), 10597);
+    // The file wins over a stale densification count in the log.
+    assert_eq!(splat_gaussian_count(&ply, "gaussians: 2500\n"), 10597);
+    // No readable artifact: the log is the fallback.
+    let missing = dir.path().join("missing.ply");
+    assert_eq!(splat_gaussian_count(&missing, "Num splats: 4321\n"), 4321);
+}
+
+#[test]
 fn selection_never_falls_back_to_a_placeholder() {
     let r = select_reconstructor(&serde_json::json!({ "backend": "msplat" }), "/work");
     assert_eq!(r.name(), "seeded-splat");

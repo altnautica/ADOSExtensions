@@ -224,7 +224,7 @@ impl Reconstructor for CliReconstructor {
         Ok(ReconstructOutput {
             kind: "splat".into(),
             uri: cmd.output_uri,
-            gaussian_count: parse_gaussian_count(&stdout),
+            gaussian_count: splat_gaussian_count(&cmd.output_path, &stdout),
             backend: self.kind.name().into(),
         })
     }
@@ -273,8 +273,17 @@ pub fn file_uri_to_path(uri: &str) -> PathBuf {
     PathBuf::from(out)
 }
 
+/// The gaussian count of a trained splat. The exported PLY's `element vertex N`
+/// header is the source of truth (a trainer's log may report counts only while
+/// it densifies, or not at all); the trainer's stdout is the fallback when the
+/// file is missing or its header carries no vertex element.
+pub fn splat_gaussian_count(ply: &Path, stdout: &str) -> u64 {
+    crate::recon::train::ply_vertex_count(ply).unwrap_or_else(|| parse_gaussian_count(stdout))
+}
+
 /// Pull a gaussian count out of a splat trainer's output (`gaussians: N`,
-/// `Num splats: N`); the last match wins, 0 when absent.
+/// `Num splats: N`); the last match wins, 0 when absent. Only a fallback for
+/// [`splat_gaussian_count`] when the exported PLY cannot be read.
 pub fn parse_gaussian_count(stdout: &str) -> u64 {
     let mut count = 0u64;
     for line in stdout.lines() {

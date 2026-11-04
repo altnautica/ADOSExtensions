@@ -63,6 +63,16 @@ fn keyframe_event_from(session: &str, kf_id: u64, device: &str) -> AtlasEvent {
 }
 
 fn capture_state(session: &str, state: CaptureState, keyframes: u64) -> AtlasEvent {
+    capture_state_steps(session, state, keyframes, None)
+}
+
+/// A capture-state event carrying the drone's `atlas.reconstruct_steps`.
+fn capture_state_steps(
+    session: &str,
+    state: CaptureState,
+    keyframes: u64,
+    reconstruct_steps: Option<u64>,
+) -> AtlasEvent {
     let status = CaptureStatus {
         session_id: session.into(),
         state,
@@ -74,6 +84,7 @@ fn capture_state(session: &str, state: CaptureState, keyframes: u64) -> AtlasEve
         anchored: true,
         pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
+        reconstruct_steps,
     };
     AtlasEvent::new(
         ATLAS_CAPTURE_STATE_TOPIC,
@@ -312,18 +323,26 @@ fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
             placement,
             ..MapStatus::default()
         };
-        AtlasEvent::new(PLUGIN_ATLAS_MAP_STATUS_TOPIC, None, st.to_msgpack().unwrap())
+        AtlasEvent::new(
+            PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+            None,
+            st.to_msgpack().unwrap(),
+        )
     };
     assert!(!ingest.live_active());
     ingest.step(&status(ComputePlacement::Stream), 50).unwrap();
     assert!(ingest.live_active());
     for kf in 0..3 {
-        ingest.step(&real_keyframe_event("stream", kf), 100).unwrap();
+        ingest
+            .step(&real_keyframe_event("stream", kf), 100)
+            .unwrap();
     }
     assert_eq!(ingest.due_reconstructs(200).unwrap().len(), 1);
 
     // A drone that stops streaming takes its session off the live path.
-    ingest.step(&status(ComputePlacement::PostFlight), 300).unwrap();
+    ingest
+        .step(&status(ComputePlacement::PostFlight), 300)
+        .unwrap();
     assert!(!ingest.live_active());
 }
 
@@ -459,4 +478,47 @@ fn a_bagged_reconstruct_job_carries_the_default_train_iters() {
         .unwrap()
         .expect("a session with a persisted keyframe yields a job");
     assert_eq!(job.params["steps"], 30000);
+}
+
+#[test]
+fn a_bagged_reconstruct_job_trains_for_the_drones_steps() {
+    // The drone's `atlas.reconstruct_steps` rides its capture status and wins
+    // over the node's default for that session's job.
+    let dir = tempfile::tempdir().unwrap();
+    let mut ingest = AtlasIngest::new(dir.path());
+    ingest.step(&real_keyframe_event("sD", 0), 100).unwrap();
+    let (_dataset, job) = ingest
+        .step(
+            &capture_state_steps("sD", CaptureState::Bagged, 1, Some(7000)),
+            200,
+        )
+        .unwrap()
+        .expect("a session with a persisted keyframe yields a job");
+    assert_eq!(job.params["steps"], 7000);
+}
+
+#[test]
+fn steps_learned_while_capturing_reach_the_idle_bag_and_live_cycles() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ingest = AtlasIngest::with_live_config(dir.path(), live(2, 2));
+    ingest
+        .step(
+            &capture_state_steps("sI", CaptureState::Capturing, 0, Some(12_000)),
+            100,
+        )
+        .unwrap();
+    // A later status without the field keeps the learned value.
+    ingest
+        .step(&capture_state("sI", CaptureState::Capturing, 0), 100)
+        .unwrap();
+    for kf in 0..2 {
+        ingest.step(&real_keyframe_event("sI", kf), 100).unwrap();
+    }
+    let cycles = ingest.due_reconstructs(200).unwrap();
+    assert_eq!(cycles.len(), 1);
+    assert_eq!(cycles[0].1.params["steps"], 12_000);
+    // The bag never arrives: the idle finalize still trains for the drone's steps.
+    let bags = ingest.idle_bags(100 + SESSION_IDLE_MS).unwrap();
+    assert_eq!(bags.len(), 1);
+    assert_eq!(bags[0].1.params["steps"], 12_000);
 }

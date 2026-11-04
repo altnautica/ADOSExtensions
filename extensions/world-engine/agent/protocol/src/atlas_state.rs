@@ -125,6 +125,7 @@ mod tests {
             anchored: true,
             pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
+            reconstruct_steps: None,
         }
     }
 

@@ -22,7 +22,7 @@ use crate::control::ControlMsg;
 use crate::frame_source::{AtlasFrameSource, SyntheticFrameSource};
 use crate::pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
-use crate::runtime::AtlasRuntimeConfig;
+use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
 use crate::sensor_bus::{BusEvent, SensorState};
 use crate::vehicle::VehicleFeed;
 
@@ -72,6 +72,8 @@ async fn a_hub_session_records_on_its_own_timebase() {
     let (bus_tx, bus_rx) = mpsc::channel(1024);
     let (ctl_tx, ctl_rx) = mpsc::channel(4);
     let cancel = Shutdown::new();
+    let steps = SharedSteps::default();
+    steps.set(Some(9000));
     let deps = LoopDeps {
         cfg: AtlasRuntimeConfig::from_values("bench", &BTreeMap::new()).unwrap(),
         profile: "visor".into(),
@@ -92,8 +94,16 @@ async fn a_hub_session_records_on_its_own_timebase() {
         camera: None,
         paths,
         nav: Default::default(),
+        reconstruct_steps: steps.clone(),
     };
     let task = tokio::spawn(run_capture_loop(deps, cancel.clone()));
+    // The drone's training length rides the status, and a new value from the
+    // supervisor's config poll reaches the running loop without a restart.
+    let status = request(&ctl_tx, CtlRequest::Status).await;
+    assert_eq!(status.result["reconstruct_steps"], 9000);
+    steps.set(Some(11_000));
+    let status = request(&ctl_tx, CtlRequest::Status).await;
+    assert_eq!(status.result["reconstruct_steps"], 11_000);
     // What the ingest task does: fold into the shared state, then forward.
     let publish = |ev: BusEvent| {
         sensors.lock().apply(&ev);

@@ -181,6 +181,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
         anchored: true,
         pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
+        reconstruct_steps: None,
     };
     ladder
         .send(&AtlasEvent::new(

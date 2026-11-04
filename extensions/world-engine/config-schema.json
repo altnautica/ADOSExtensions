@@ -25,7 +25,7 @@
     "atlas.reconstruct_steps": {
       "type": "integer",
       "title": "Reconstruction detail",
-      "description": "Default splat training steps used when a reconstruction is submitted.",
+      "description": "Splat training steps for this drone's reconstructions: the ones submitted from the GCS and the ones the compute node runs on its own (the final bag, a session finalized after going silent, live cycles). Unset, the node uses its own default.",
       "minimum": 1000,
       "maximum": 200000,
       "default": 30000

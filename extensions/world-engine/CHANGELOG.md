@@ -117,6 +117,23 @@ All notable changes to the World Engine extension.
 - The mirror/glass mask pass ignores cloud points beyond the rig LiDAR's
   maximum range (`masks.py --lidar-max-range`).
 
+### Fixed
+
+- **The drone's detail level reaches the compute node's own reconstructions.**
+  `atlas.reconstruct_steps` was read only by the Atlas API, so the reconstruct
+  jobs the node submits itself (the final bag, a session finalized after going
+  silent, and live cycles) always trained for the node's
+  `ADOS_COMPUTE_TRAIN_ITERS` (default 30000). The capture service now carries
+  the setting on every capture status (`reconstruct_steps`, omitted when
+  unset), the node stamps it on that session's jobs, and the node default
+  applies only when the drone sends none. A new value reaches a running
+  capture on the next config poll without restarting it.
+- **A splat's gaussian count is read from the exported PLY.** The live-lane
+  trainers (Brush, msplat) reported the count parsed from their log, and
+  Brush 0.3.0 prints none, so a 10597-splat output showed
+  `gaussian_count: 0`. The count is now the PLY header's `element vertex N`,
+  with the log parse only as a fallback when the file cannot be read.
+
 ## [2.0.0]
 
 ### Added

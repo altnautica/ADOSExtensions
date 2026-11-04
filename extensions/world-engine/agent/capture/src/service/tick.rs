@@ -242,7 +242,15 @@ impl Engine {
 
     pub(super) async fn publish_status(&self) {
         self.publisher
-            .publish_capture_state(&self.keyframes.status())
+            .publish_capture_state(&self.capture_status())
             .await;
+    }
+
+    /// The keyframe session's status, carrying the drone's live
+    /// `atlas.reconstruct_steps` for the compute node.
+    pub(super) fn capture_status(&self) -> world_engine_protocol::atlas::CaptureStatus {
+        let mut status = self.keyframes.status();
+        status.reconstruct_steps = self.reconstruct_steps.get();
+        status
     }
 }

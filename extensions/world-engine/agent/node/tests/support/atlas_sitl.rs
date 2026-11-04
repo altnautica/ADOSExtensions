@@ -48,6 +48,7 @@ pub fn bagged(keyframes: u64) -> AtlasEvent {
         anchored: true,
         pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
+        reconstruct_steps: None,
     };
     AtlasEvent::new(
         ATLAS_CAPTURE_STATE_TOPIC,

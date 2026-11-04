@@ -34,6 +34,7 @@ fn atlas_event_round_trips_and_carries_a_struct_payload() {
         anchored: true,
         pose_tier: PoseSource::FcEkf,
         dropped_keyframes: 0,
+        reconstruct_steps: None,
     };
     let ev = AtlasEvent::new(
         ATLAS_CAPTURE_STATE_TOPIC,

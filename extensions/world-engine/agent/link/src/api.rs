@@ -218,8 +218,9 @@ struct AtlasConfigBody {
     enabled: Option<bool>,
     /// `orbit` / `lawnmower` / `freeform` / `inspection`.
     capture_profile: Option<String>,
-    /// Default reconstruction detail level, in training steps. Read by the GCS
-    /// at reconstruct-submit time; the capture service does not consume it.
+    /// Default reconstruction detail level, in training steps. The GCS reads it
+    /// at reconstruct-submit time, and the capture service carries it on every
+    /// capture status so the compute node's own reconstruct jobs use it too.
     reconstruct_steps: Option<u32>,
     /// The camera set, each `{id, role, enabled, reconstruct}`, written verbatim.
     cameras: Option<Value>,

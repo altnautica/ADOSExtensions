@@ -46,7 +46,7 @@ impl Engine {
 
     async fn answer(&mut self, req: CtlRequest) -> CtlReply {
         match req {
-            CtlRequest::Status => CtlReply::ok(self.keyframes.status()),
+            CtlRequest::Status => CtlReply::ok(self.capture_status()),
             CtlRequest::State => CtlReply::ok(self.state_view()),
             CtlRequest::Coverage => CtlReply::ok(self.coverage.view()),
             CtlRequest::Start(args) => match self.start(args).await {

@@ -111,6 +111,7 @@ fn render() -> String {
         anchored: true,
         pose_tier: PoseSource::Vio,
         dropped_keyframes: 4,
+        reconstruct_steps: None,
     };
     let splat_bytes = splat().to_msgpack().unwrap();
     let event = AtlasEvent::new(

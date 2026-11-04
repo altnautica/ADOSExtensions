@@ -105,7 +105,7 @@ Per-node plugin configuration (`config-schema.json`):
 | `atlas.compute_placement` | Where the heavy map products are built: `onboard` (5 cm sweep cloud on the drone), `stream` (keyframes, poses and raw polar scans stream to the compute node, which reconstructs in flight and serves a full-resolution live map on the device's world stream; the drone keeps a 20 cm cloud), `post_flight` (record, upload after landing), `hybrid` (10 cm on board plus the post-flight upload; default). Navigation SLAM and the live occupancy always stay on board |
 | `atlas.memory_budget_mb` | RAM the live map stores may hold (keyframe queue 40 %, scan ring 10 %, sweep cloud 30 %, occupancy 20 %); unset, 80 % of the capture unit's memory cap. A full sweep cloud doubles its voxel (`sweep_cloud_coarsened`); full queues drop their oldest entry and count it |
 | `atlas.rig_id` | Rig whose calibrations `GET /atlas/calib` lists; empty uses the only rig in the device calibration store |
-| `atlas.reconstruct_steps` | Training steps for the reconstruction (the detail level) |
+| `atlas.reconstruct_steps` | Splat training steps (the detail level) for this drone's reconstructions, the GCS-submitted ones and those the compute node runs itself from the capture stream; carried on every capture status. Unset, the node uses `ADOS_COMPUTE_TRAIN_ITERS` (default 30000) |
 | `atlas.hfov_deg` | Camera horizontal field of view used when no intrinsics are given |
 | `atlas.cameras[]` | Cameras the capture service reads |
 | `atlas.selection.*` | Keyframe selection thresholds |

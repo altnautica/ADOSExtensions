@@ -77,8 +77,8 @@ pub use artifacts::{
 pub use auth::{admits, job_api_lane, require_job_api, require_lane, ComputeAuth, RateLimiter};
 pub use backends::{
     file_uri_to_path, is_apple_silicon, parse_gaussian_count, path_to_file_uri,
-    select_reconstructor, CliReconstructor, ReconstructCommand, ReconstructorKind,
-    SeededSplatReconstructor, SelectingReconstructor,
+    select_reconstructor, splat_gaussian_count, CliReconstructor, ReconstructCommand,
+    ReconstructorKind, SeededSplatReconstructor, SelectingReconstructor,
 };
 pub use cluster::Cluster;
 pub use compute_status::{compute_status_router, operator_socket_router, LatestComputeStatus};

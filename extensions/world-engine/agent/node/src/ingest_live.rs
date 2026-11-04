@@ -110,9 +110,10 @@ impl AtlasIngest {
                 // skip without arming a cycle.
                 continue;
             };
-            // Read the capturing drone before the mutable session borrow (disjoint
-            // fields; sequential keeps it obvious).
+            // Read the capturing drone and its training length before the mutable
+            // session borrow (disjoint fields; sequential keeps it obvious).
             let device_id = self.session_devices.get(&session_id).cloned();
+            let steps = self.session_steps(&session_id);
             let live = self
                 .sessions
                 .get_mut(&session_id)
@@ -145,7 +146,7 @@ impl AtlasIngest {
             let mut params = serde_json::json!({
                 "backend": DEFAULT_RECONSTRUCT_BACKEND,
                 "session_id": session_id.clone(),
-                "steps": self.train_iters,
+                "steps": steps,
                 "generation": cycle,
             });
             if let Some(dev) = &device_id {

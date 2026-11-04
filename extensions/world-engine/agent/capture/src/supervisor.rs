@@ -4,9 +4,11 @@
 //! While capture is enabled and the config validates, one [`CaptureRun`] is
 //! alive: the atlas bus and the control socket bound, the sensor-bus ingest,
 //! the pose provider, the HUD page and the capture loop running. A changed
-//! config stops the run (closing an open session) and starts a new one; a
-//! disabled or invalid config leaves nothing bound, so the link reports the
-//! service as not running. The pose provider and LiDAR source are chosen
+//! config stops the run (closing an open session) and starts a new one,
+//! except `atlas.reconstruct_steps`, which reaches the running loop through
+//! [`Feeds::reconstruct_steps`]; a disabled or invalid config leaves nothing
+//! bound, so the link reports the service as not running. The pose provider
+//! and LiDAR source are chosen
 //! from the rig document when a run starts, so a run that is not recording
 //! is restarted when `rig.json` changes (a rig pushed after the service
 //! started would otherwise never get its stereo VIO).
@@ -32,7 +34,7 @@ use crate::frame_source::{AtlasFrameSource, FrameRouter};
 use crate::hud::{button_action, HudAction};
 use crate::pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
-use crate::runtime::{AtlasRuntimeConfig, ConfigError, CONFIG_KEYS};
+use crate::runtime::{AtlasRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
 use crate::sensor_bus::{run_ingest, SensorState};
 use crate::service::{run_capture_loop, LoopDeps, Paths};
 use crate::vehicle::VehicleFeed;
@@ -111,6 +113,8 @@ pub struct Feeds {
     pub fc: FcEkfPose,
     /// Where front-panel actions go: the current run, if any.
     pub hud: HudSlot,
+    /// The live `atlas.reconstruct_steps`, refreshed on every config poll.
+    pub reconstruct_steps: SharedSteps,
 }
 
 /// One running capture.
@@ -208,6 +212,7 @@ impl CaptureRun {
             ))),
             paths,
             nav,
+            reconstruct_steps: feeds.reconstruct_steps.clone(),
         };
         let capture = tokio::spawn(run_capture_loop(deps, cancel.clone()));
         Ok(Self {
@@ -364,6 +369,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
         vehicle: VehicleFeed::new(),
         fc: FcEkfPose::new(),
         hud: Arc::new(Mutex::new(None)),
+        reconstruct_steps: SharedSteps::default(),
     };
     let profile = match ctx.node.info().await {
         Ok(info) => info.profile,
@@ -396,6 +402,9 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             }
         };
         let desired = capture_config(resolved);
+        if let Ok(c) = &desired {
+            feeds.reconstruct_steps.set(c.reconstruct_steps);
+        }
         let idle = desired.as_ref().err().cloned();
         if idle != last_idle {
             match &idle {
@@ -404,7 +413,11 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             }
             last_idle = idle;
         }
-        if run.as_ref().map(CaptureRun::config) == desired.as_ref().ok() {
+        if run
+            .as_ref()
+            .zip(desired.as_ref().ok())
+            .is_some_and(|(r, d)| r.config().same_run(d))
+        {
             if !run
                 .as_ref()
                 .is_some_and(|r| r.rig_stale(&Paths::from_env()))

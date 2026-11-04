@@ -25,6 +25,34 @@ fn vio_scale_is_one_or_a_half() {
 }
 
 #[test]
+fn reconstruct_steps_resolve_and_never_restart_a_run() {
+    let load =
+        |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_RECONSTRUCT_STEPS, v)]));
+    assert_eq!(load(json!(7000)).unwrap().reconstruct_steps, Some(7000));
+    // An editor may store an integral float.
+    assert_eq!(load(json!(15000.0)).unwrap().reconstruct_steps, Some(15000));
+    // Unset or 0 leaves the compute node's default in charge.
+    assert_eq!(load(Value::Null).unwrap().reconstruct_steps, None);
+    assert_eq!(load(json!(0)).unwrap().reconstruct_steps, None);
+    assert!(load(json!("many")).is_err());
+
+    // A new detail level keeps the run; any capture setting still restarts it.
+    let running = load(json!(7000)).unwrap();
+    assert!(running.same_run(&load(json!(30000)).unwrap()));
+    assert!(running.same_run(&load(Value::Null).unwrap()));
+    let mut other = load(json!(7000)).unwrap();
+    other.capture.profile = CaptureProfile::Orbit;
+    assert!(!running.same_run(&other));
+
+    let shared = SharedSteps::default();
+    assert_eq!(shared.get(), None);
+    shared.set(Some(9000));
+    assert_eq!(shared.clone().get(), Some(9000));
+    shared.set(None);
+    assert_eq!(shared.get(), None);
+}
+
+#[test]
 fn no_keys_is_the_disabled_default() {
     let c = AtlasRuntimeConfig::from_values("drone-42", &BTreeMap::new()).unwrap();
     assert!(!c.enabled);
@@ -294,7 +322,11 @@ fn the_pre_contract_override_shape_fails_loudly() {
 #[test]
 fn nav_lanes_default_on_with_a_planar_lidar_and_placement_defaults_to_hybrid() {
     let d = AtlasRuntimeConfig::from_values("", &BTreeMap::new()).unwrap();
-    assert_eq!(d.nav_pose, NavPoseMode::Always, "the RPLIDAR device defaults to auto");
+    assert_eq!(
+        d.nav_pose,
+        NavPoseMode::Always,
+        "the RPLIDAR device defaults to auto"
+    );
     assert_eq!(d.placement, ComputePlacement::Hybrid);
     assert_eq!(d.memory_budget_mb, None);
 

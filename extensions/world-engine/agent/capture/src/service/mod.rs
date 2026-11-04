@@ -45,7 +45,7 @@ use crate::quality::coverage::Coverage;
 use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::QualityMonitor;
 use crate::recording::ActiveSession;
-use crate::runtime::AtlasRuntimeConfig;
+use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
 use crate::sensor_bus::{BusEvent, SensorState};
 use crate::session::CaptureSession;
 use crate::vehicle::VehicleFeed;
@@ -100,6 +100,8 @@ pub struct LoopDeps {
     pub camera: Option<Arc<dyn CameraControl>>,
     pub paths: Paths,
     pub nav: NavDeps,
+    /// The live `atlas.reconstruct_steps`, stamped on every capture status.
+    pub reconstruct_steps: SharedSteps,
 }
 
 /// What the navigation lanes need beyond the capture loop's own inputs.
@@ -179,6 +181,8 @@ pub(crate) struct Engine {
     /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
     /// "fc"`).
     fc_imu_prev: Option<(u64, [f64; 9])>,
+    /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
+    reconstruct_steps: SharedSteps,
 }
 
 /// Run the capture loop until `cancel`. An open session is closed (manifest
@@ -202,6 +206,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         camera,
         paths,
         nav: nav_deps,
+        reconstruct_steps,
     } = deps;
     if let Some(fc) = &fc {
         fc.set_covariance(cfg.pose_prior.fc_covariance());
@@ -221,7 +226,9 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     let bus_timebase = crate::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
     let budget = crate::nav::budget::resolve(
         cfg.memory_budget_mb,
-        std::env::var(crate::nav::budget::MEMORY_MAX_ENV).ok().as_deref(),
+        std::env::var(crate::nav::budget::MEMORY_MAX_ENV)
+            .ok()
+            .as_deref(),
         std::path::Path::new("/"),
     );
     let nav = NavMap::new(NavSettings {
@@ -271,6 +278,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         nav,
         nav_deps,
         fc_imu_prev: None,
+        reconstruct_steps,
     };
     // Frames are pulled on their own task so a source read is never
     // cancelled mid-frame by the select below.

@@ -44,15 +44,16 @@ use live::SessionLive;
 /// the written `transforms.json` (Brush random-init, no pose search).
 const DEFAULT_RECONSTRUCT_BACKEND: &str = "auto";
 
-/// The default gaussian-splat training length (`steps` job param) when nothing
-/// overrides it. A splat trainer's quality-vs-time knob; the backend reads it as
-/// `--total-steps` (Brush) / `-n` (msplat).
+/// The default gaussian-splat training length (`steps` job param) when the
+/// capturing drone sets none. A splat trainer's quality-vs-time knob; the backend
+/// reads it as `--total-steps` (Brush) / `-n` (msplat).
 const DEFAULT_TRAIN_ITERS: u64 = 30_000;
 
-/// Resolve the reconstruct training length: the `ADOS_COMPUTE_TRAIN_ITERS`
+/// Resolve the node's default training length: the `ADOS_COMPUTE_TRAIN_ITERS`
 /// override when set to a valid `u64`, else [`DEFAULT_TRAIN_ITERS`]. Read once at
-/// ingest-construction time (the daemon builds one `AtlasIngest`), so a shorter
-/// training run for a fast node is a single env var, not a per-job edit.
+/// ingest-construction time (the daemon builds one `AtlasIngest`). The drone's
+/// `atlas.reconstruct_steps`, carried on its capture status, wins over it for
+/// that drone's sessions.
 fn default_train_iters() -> u64 {
     std::env::var("ADOS_COMPUTE_TRAIN_ITERS")
         .ok()
@@ -72,6 +73,8 @@ struct SessionAccount {
     persisted: u64,
     cameras: HashSet<String>,
     last_event_ms: i64,
+    /// The drone's `atlas.reconstruct_steps`, from the session's capture status.
+    reconstruct_steps: Option<u64>,
 }
 
 /// Accumulates a capture session's events: persists each keyframe's image and, on
@@ -120,9 +123,9 @@ pub struct AtlasIngest {
     /// totals that mix in other sessions and other drones; the last-event time
     /// lets a session whose `Bagged` frame never arrived be finalized anyway.
     accounts: HashMap<String, SessionAccount>,
-    /// The training length stamped onto every reconstruct job's `steps` param, so
-    /// the backend trains for a configurable number of iterations instead of the
-    /// hardcoded default. Resolved once from [`default_train_iters`].
+    /// The node's default training length, stamped onto a reconstruct job's
+    /// `steps` param when the capturing drone set none. Resolved once from
+    /// [`default_train_iters`].
     train_iters: u64,
 }
 
@@ -250,6 +253,7 @@ impl AtlasIngest {
             ATLAS_CAPTURE_STATE_TOPIC => match CaptureStatus::from_msgpack(&event.payload) {
                 Ok(status) if status.state == CaptureState::Bagged => {
                     self.note_device(&status.session_id, event.device_id.as_deref());
+                    self.note_steps(&status);
                     // `bag` yields `None` for a session that persisted zero
                     // keyframes (no reconstruct to run); the Option propagates.
                     let result = self.bag(&status, now_ms)?;
@@ -262,6 +266,7 @@ impl AtlasIngest {
                 }
                 Ok(status) => {
                     self.note_device(&status.session_id, event.device_id.as_deref());
+                    self.note_steps(&status);
                     self.accounts
                         .entry(status.session_id.clone())
                         .or_default()
@@ -343,6 +348,10 @@ impl AtlasIngest {
                 anchored: true,
                 pose_tier: PoseSource::FcEkf,
                 dropped_keyframes: 0,
+                reconstruct_steps: self
+                    .accounts
+                    .get(&session_id)
+                    .and_then(|a| a.reconstruct_steps),
             };
             let result = self.bag(&status, now_ms)?;
             self.forget_session(&session_id);
@@ -362,6 +371,26 @@ impl AtlasIngest {
                     .insert(session_id.to_string(), dev.to_string());
             }
         }
+    }
+
+    /// Record the drone's training length for a session from its capture status.
+    /// A status without one leaves an earlier value in place.
+    fn note_steps(&mut self, status: &CaptureStatus) {
+        if let Some(steps) = status.reconstruct_steps.filter(|n| *n > 0) {
+            self.accounts
+                .entry(status.session_id.clone())
+                .or_default()
+                .reconstruct_steps = Some(steps);
+        }
+    }
+
+    /// The training length for a session's reconstruct jobs: the capturing
+    /// drone's `atlas.reconstruct_steps` when it sent one, else the node default.
+    fn session_steps(&self, session_id: &str) -> u64 {
+        self.accounts
+            .get(session_id)
+            .and_then(|a| a.reconstruct_steps)
+            .unwrap_or(self.train_iters)
     }
 
     /// Finalize a bagged session: write `transforms.json` and build the dataset +
@@ -422,7 +451,7 @@ impl AtlasIngest {
         let mut params = serde_json::json!({
             "backend": DEFAULT_RECONSTRUCT_BACKEND,
             "session_id": status.session_id.clone(),
-            "steps": self.train_iters,
+            "steps": self.session_steps(&status.session_id),
             "generation": generation,
         });
         if let Some(dev) = &device_id {

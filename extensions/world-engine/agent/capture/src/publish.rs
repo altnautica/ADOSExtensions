@@ -154,7 +154,6 @@ impl AtlasPublisher {
             .await;
     }
 
-
     /// Publish the capture-session state. The link folds the latest one into
     /// the extension's `status` telemetry, so the capture loop publishes it on
     /// every change and re-publishes it on a fixed cadence while running.
@@ -184,6 +183,7 @@ mod tests {
             anchored: true,
             pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
+            reconstruct_steps: None,
         };
         let frame =
             encode_event_frame(ATLAS_CAPTURE_STATE_TOPIC, status.to_msgpack().unwrap()).unwrap();

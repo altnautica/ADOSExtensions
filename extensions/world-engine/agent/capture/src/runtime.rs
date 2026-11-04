@@ -202,6 +202,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_NAV_POSE,
     KEY_COMPUTE_PLACEMENT,
     KEY_MEMORY_BUDGET_MB,
+    KEY_RECONSTRUCT_STEPS,
 ];
 
 pub const KEY_ENABLED: &str = "atlas.enabled";
@@ -226,6 +227,7 @@ pub const KEY_SEGMENT: &str = "atlas.segment";
 pub const KEY_NAV_POSE: &str = "atlas.nav_pose";
 pub const KEY_COMPUTE_PLACEMENT: &str = "atlas.compute_placement";
 pub const KEY_MEMORY_BUDGET_MB: &str = "atlas.memory_budget_mb";
+pub const KEY_RECONSTRUCT_STEPS: &str = "atlas.reconstruct_steps";
 
 /// The initial exposure lock: unlocked, walking caps.
 fn default_exposure() -> ExposureView {
@@ -269,6 +271,32 @@ pub struct AtlasRuntimeConfig {
     pub placement: ComputePlacement,
     /// `atlas.memory_budget_mb`; `None` resolves from the unit's cap.
     pub memory_budget_mb: Option<u64>,
+    /// `atlas.reconstruct_steps`: the splat training length the compute node
+    /// uses for this drone's sessions, carried on every capture status. `None`
+    /// (absent or 0) leaves the node's default in charge. Not a capture
+    /// setting: a change reaches the running service without a restart (see
+    /// [`AtlasRuntimeConfig::same_run`]).
+    pub reconstruct_steps: Option<u64>,
+}
+
+/// The live `atlas.reconstruct_steps`, shared between the supervisor (which
+/// re-reads it on every config poll) and the running capture loop (which
+/// stamps it on every capture status), so a new detail level reaches the
+/// compute node without restarting a capture in flight.
+#[derive(Debug, Clone, Default)]
+pub struct SharedSteps(std::sync::Arc<std::sync::atomic::AtomicU64>);
+
+impl SharedSteps {
+    /// Store the resolved value; `None` is kept as 0 (unset).
+    pub fn set(&self, steps: Option<u64>) {
+        self.0
+            .store(steps.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The current value, `None` when unset.
+    pub fn get(&self) -> Option<u64> {
+        Some(self.0.load(std::sync::atomic::Ordering::Relaxed)).filter(|n| *n > 0)
+    }
 }
 
 /// `atlas.nav_pose` when the key is absent: `always` with a planar LiDAR
@@ -302,6 +330,7 @@ impl Default for AtlasRuntimeConfig {
             nav_pose: default_nav_pose(&LidarSettings::default()),
             placement: ComputePlacement::default(),
             memory_budget_mb: None,
+            reconstruct_steps: None,
         }
     }
 }
@@ -435,6 +464,8 @@ impl AtlasRuntimeConfig {
             None => None,
             Some(_) => Some(unsigned(values, KEY_MEMORY_BUDGET_MB, 0)?),
         };
+        let reconstruct_steps =
+            Some(unsigned(values, KEY_RECONSTRUCT_STEPS, 0)?).filter(|n| *n > 0);
         Ok(Self {
             enabled: typed(values, KEY_ENABLED, false)?,
             device_id: device_id.to_string(),
@@ -462,7 +493,18 @@ impl AtlasRuntimeConfig {
             segment: typed(values, KEY_SEGMENT, SegmentSettings::default())?,
             placement: typed(values, KEY_COMPUTE_PLACEMENT, ComputePlacement::default())?,
             memory_budget_mb,
+            reconstruct_steps,
         })
+    }
+
+    /// Whether a run started with `self` can keep running under `desired`:
+    /// everything but `reconstruct_steps` (which only rides the status and
+    /// never changes how the service captures) is equal. A capture in flight is
+    /// not torn down because the operator picked a different detail level.
+    pub fn same_run(&self, desired: &Self) -> bool {
+        let mut running = self.clone();
+        running.reconstruct_steps = desired.reconstruct_steps;
+        running == *desired
     }
 
     /// The camera model for a camera: the configured override if present, else
