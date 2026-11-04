@@ -116,7 +116,10 @@ pub fn drain(
     let mut bad = Vec::new();
     for (file, jpeg) in side.keyframes.drain() {
         if !crate::storage::safe_session_id(file.trim_end_matches(".jpg")) {
-            bad.push(("keyframe", anyhow::anyhow!("bad keyframe file name `{file}`")));
+            bad.push((
+                "keyframe",
+                anyhow::anyhow!("bad keyframe file name `{file}`"),
+            ));
             continue;
         }
         if let Err(e) = fs::write(dir.join("keyframes").join(&file), jpeg) {
@@ -172,7 +175,9 @@ mod tests {
         let back = read_polar(dir.path(), "lidar0").unwrap();
         assert_eq!(back.len(), 20);
         assert_eq!(back[7], scan(7));
-        let on_disk = fs::metadata(dir.path().join(polar_file("lidar0"))).unwrap().len();
+        let on_disk = fs::metadata(dir.path().join(polar_file("lidar0")))
+            .unwrap()
+            .len();
         let raw = 20 * scan(0).encoded_len() as u64;
         assert!(on_disk < raw, "{on_disk} >= {raw}");
     }

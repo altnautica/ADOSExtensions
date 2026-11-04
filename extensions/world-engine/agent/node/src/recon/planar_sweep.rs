@@ -171,9 +171,13 @@ pub fn band(swept: &Swept, lo: f64, hi: f64) -> Option<BandGrid> {
         if !in_band(o[2]) {
             continue;
         }
-        let Some((x0, y0)) = g.index(o[0], o[1]) else { continue };
+        let Some((x0, y0)) = g.index(o[0], o[1]) else {
+            continue;
+        };
         for h in hits {
-            let Some((x1, y1)) = g.index(h[0], h[1]) else { continue };
+            let Some((x1, y1)) = g.index(h[0], h[1]) else {
+                continue;
+            };
             trace(&mut g, (x0, y0), (x1, y1));
         }
     }
@@ -188,7 +192,10 @@ pub fn band(swept: &Swept, lo: f64, hi: f64) -> Option<BandGrid> {
 /// Mark free the cells from `a` up to (not including) `b`.
 fn trace(g: &mut BandGrid, a: (i64, i64), b: (i64, i64)) {
     let (dx, dy) = ((b.0 - a.0).abs(), -(b.1 - a.1).abs());
-    let (sx, sy) = (if a.0 < b.0 { 1 } else { -1 }, if a.1 < b.1 { 1 } else { -1 });
+    let (sx, sy) = (
+        if a.0 < b.0 { 1 } else { -1 },
+        if a.1 < b.1 { 1 } else { -1 },
+    );
     let (mut x, mut y, mut err) = (a.0, a.1, dx + dy);
     while (x, y) != b {
         g.set(x, y, FREE);
@@ -231,7 +238,11 @@ pub struct LoopSummary {
 
 /// `(roll, pitch, yaw)` of an FLU rotation `Rz·Ry·Rx` (row-major).
 fn rpy_of(r: &[f64; 9]) -> (f64, f64, f64) {
-    (r[7].atan2(r[8]), (-r[6]).clamp(-1.0, 1.0).asin(), r[3].atan2(r[0]))
+    (
+        r[7].atan2(r[8]),
+        (-r[6]).clamp(-1.0, 1.0).asin(),
+        r[3].atan2(r[0]),
+    )
 }
 
 fn rot_rpy(roll: f64, pitch: f64, yaw: f64) -> [f64; 9] {
@@ -270,16 +281,36 @@ fn rot_to_quat(r: &[f64; 9]) -> [f32; 4] {
     let tr = r[0] + r[4] + r[8];
     let q = if tr > 0.0 {
         let s = (tr + 1.0).sqrt() * 2.0;
-        [0.25 * s, (r[7] - r[5]) / s, (r[2] - r[6]) / s, (r[3] - r[1]) / s]
+        [
+            0.25 * s,
+            (r[7] - r[5]) / s,
+            (r[2] - r[6]) / s,
+            (r[3] - r[1]) / s,
+        ]
     } else if r[0] > r[4] && r[0] > r[8] {
         let s = (1.0 + r[0] - r[4] - r[8]).sqrt() * 2.0;
-        [(r[7] - r[5]) / s, 0.25 * s, (r[1] + r[3]) / s, (r[2] + r[6]) / s]
+        [
+            (r[7] - r[5]) / s,
+            0.25 * s,
+            (r[1] + r[3]) / s,
+            (r[2] + r[6]) / s,
+        ]
     } else if r[4] > r[8] {
         let s = (1.0 + r[4] - r[0] - r[8]).sqrt() * 2.0;
-        [(r[2] - r[6]) / s, (r[1] + r[3]) / s, 0.25 * s, (r[5] + r[7]) / s]
+        [
+            (r[2] - r[6]) / s,
+            (r[1] + r[3]) / s,
+            0.25 * s,
+            (r[5] + r[7]) / s,
+        ]
     } else {
         let s = (1.0 + r[8] - r[0] - r[4]).sqrt() * 2.0;
-        [(r[3] - r[1]) / s, (r[2] + r[6]) / s, (r[5] + r[7]) / s, 0.25 * s]
+        [
+            (r[3] - r[1]) / s,
+            (r[2] + r[6]) / s,
+            (r[5] + r[7]) / s,
+            0.25 * s,
+        ]
     };
     let n = q.iter().map(|v| v * v).sum::<f64>().sqrt();
     q.map(|v| (v / n) as f32)
@@ -368,7 +399,9 @@ pub fn write_products(
     )?;
     arts.push(art("pointcloud", "cloud.laz", "laz", Some(sidecar)));
     for (lo, hi) in HEIGHT_BANDS {
-        let Some(g) = band(swept, lo, hi) else { continue };
+        let Some(g) = band(swept, lo, hi) else {
+            continue;
+        };
         let png = write_band(out, lo, hi, &g)?;
         let mut a = art("occupancy", &png, "png", None);
         a.meta = serde_json::json!({
@@ -387,7 +420,10 @@ pub fn write_products(
         &crate::products::floorplan::FloorplanOptions::default(),
     );
     let value = serde_json::to_value(&plan)?;
-    fs::write(out.join("floorplan.json"), serde_json::to_vec_pretty(&value)?)?;
+    fs::write(
+        out.join("floorplan.json"),
+        serde_json::to_vec_pretty(&value)?,
+    )?;
     arts.push(art("floorplan", "floorplan.json", "json", None));
     for fl in value["floors"].as_array().cloned().unwrap_or_default() {
         let floor = fl["floor"].as_i64().unwrap_or(0) as i32;
@@ -398,7 +434,9 @@ pub fn write_products(
         }
     }
     for a in &mut arts {
-        let size = fs::metadata(out.join(&a.file)).map(|m| m.len()).unwrap_or(0);
+        let size = fs::metadata(out.join(&a.file))
+            .map(|m| m.len())
+            .unwrap_or(0);
         match &mut a.meta {
             serde_json::Value::Object(m) => {
                 m.insert("size_bytes".into(), size.into());

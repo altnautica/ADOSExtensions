@@ -15,7 +15,9 @@ use super::StageError;
 
 /// The polar stream of `sensor` under `session_dir`.
 pub fn polar_path(session_dir: &Path, sensor: &str) -> PathBuf {
-    session_dir.join("lidar").join(format!("{sensor}.polar.zst"))
+    session_dir
+        .join("lidar")
+        .join(format!("{sensor}.polar.zst"))
 }
 
 /// Every record of `sensor`'s polar stream, `None` when the session has none.

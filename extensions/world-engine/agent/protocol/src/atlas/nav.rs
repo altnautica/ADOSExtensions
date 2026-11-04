@@ -150,7 +150,10 @@ impl ComputePlacement {
 
     /// Whether the finished session uploads after landing.
     pub fn uploads_after_flight(self) -> bool {
-        matches!(self, ComputePlacement::PostFlight | ComputePlacement::Hybrid)
+        matches!(
+            self,
+            ComputePlacement::PostFlight | ComputePlacement::Hybrid
+        )
     }
 
     /// Whether the compute node reconstructs live as data arrives.

@@ -53,7 +53,13 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
     // The FC heading equals the SLAM heading here, so map_ned = map_frd.
     let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
     let pd = nav
-        .on_pose(&estimate(1.0, 2.0, PI / 2.0), Some(10.0), Some(-PI / 2.0), 1_000, false)
+        .on_pose(
+            &estimate(1.0, 2.0, PI / 2.0),
+            Some(10.0),
+            Some(-PI / 2.0),
+            1_000,
+            false,
+        )
         .expect("always publishes with no session");
     assert_eq!(pd.pose.t[0], 1.0);
     assert_eq!(pd.pose.t[1], -2.0, "FLU left is FRD negative y");
@@ -63,7 +69,9 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
     assert_eq!(pd.source, NavPoseSource::LidarPlanar);
     assert_eq!(pd.frame, NavFrame::MapNed);
 
-    assert!(nav.on_pose(&estimate(1.0, 2.0, 0.0), Some(10.0), None, 1_020, false).is_none());
+    assert!(nav
+        .on_pose(&estimate(1.0, 2.0, 0.0), Some(10.0), None, 1_020, false)
+        .is_none());
     let up = nav
         .on_pose(&estimate(1.0, 2.0, 0.0), Some(12.5), None, 1_034, false)
         .unwrap();
@@ -73,9 +81,22 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
 #[test]
 fn capture_mode_publishes_only_with_a_session_open() {
     let mut nav = NavMap::new(settings(NavPoseMode::Capture, ComputePlacement::Hybrid));
-    assert!(nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, false).is_none());
-    assert!(nav.on_scan(&ring(), &mount(), Some(&estimate(0.0, 0.0, 0.0)), None, false).scan.is_none());
-    assert!(nav.on_pose(&estimate(0.0, 0.0, 0.0), None, None, 100, true).is_some());
+    assert!(nav
+        .on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, false)
+        .is_none());
+    assert!(nav
+        .on_scan(
+            &ring(),
+            &mount(),
+            Some(&estimate(0.0, 0.0, 0.0)),
+            None,
+            false
+        )
+        .scan
+        .is_none());
+    assert!(nav
+        .on_pose(&estimate(0.0, 0.0, 0.0), None, None, 100, true)
+        .is_some());
 }
 
 #[test]
@@ -103,7 +124,10 @@ fn scans_build_the_live_map_and_the_status_reports_it() {
     assert_eq!(st.sweep_points, cloud.count as u64);
 
     let again = nav.tick(&TickInputs::default(), false);
-    assert!(again.occupancy.is_none() && again.pointcloud.is_none(), "nothing new");
+    assert!(
+        again.occupancy.is_none() && again.pointcloud.is_none(),
+        "nothing new"
+    );
 }
 
 #[test]
@@ -123,10 +147,23 @@ fn streaming_keeps_the_coarse_cloud_and_waits_for_the_link() {
     let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Stream));
     assert!(nav.streams());
     nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, false);
-    nav.on_scan(&ring(), &mount(), Some(&estimate(0.0, 0.0, 0.0)), None, false);
+    nav.on_scan(
+        &ring(),
+        &mount(),
+        Some(&estimate(0.0, 0.0, 0.0)),
+        None,
+        false,
+    );
     let st = nav.tick(&TickInputs::default(), false).status;
-    assert_eq!(st.stream.state, world_engine_protocol::atlas::StreamPhase::Connecting);
-    assert_eq!(nav.map.sweep.voxel_m(), 0.20, "the drone keeps the coarse cloud");
+    assert_eq!(
+        st.stream.state,
+        world_engine_protocol::atlas::StreamPhase::Connecting
+    );
+    assert_eq!(
+        nav.map.sweep.voxel_m(),
+        0.20,
+        "the drone keeps the coarse cloud"
+    );
 }
 
 #[test]
@@ -140,7 +177,12 @@ fn a_closing_session_gets_the_cloud_and_the_tiles() {
     let cloud = std::fs::metadata(dir.path().join(SESSION_MAP_DIR).join(SWEEP_FILE)).unwrap();
     assert_eq!(cloud.len() % 12, 0);
     assert!(cloud.len() > 0);
-    assert!(dir.path().join(SESSION_MAP_DIR).join(TILES_DIR).join("0_0.png").exists());
+    assert!(dir
+        .path()
+        .join(SESSION_MAP_DIR)
+        .join(TILES_DIR)
+        .join("0_0.png")
+        .exists());
 }
 
 #[test]
@@ -165,17 +207,37 @@ fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
         .on_pose(&estimate(0.0, 0.0, 0.0), None, Some(PI / 2.0), 0, false)
         .unwrap();
     assert!(nav.heading_known());
-    assert!((pd.pose.r[3].atan2(pd.pose.r[0]) - PI / 2.0).abs() < 1e-12, "yaw reads east");
+    assert!(
+        (pd.pose.r[3].atan2(pd.pose.r[0]) - PI / 2.0).abs() < 1e-12,
+        "yaw reads east"
+    );
     // One metre forward in SLAM is one metre east in map_ned.
     let pd = nav
         .on_pose(&estimate(1.0, 0.0, 0.0), None, Some(0.3), 1_000, false)
         .unwrap();
-    assert!(pd.pose.t[0].abs() < 1e-12 && (pd.pose.t[1] - 1.0).abs() < 1e-12, "{:?}", pd.pose.t);
+    assert!(
+        pd.pose.t[0].abs() < 1e-12 && (pd.pose.t[1] - 1.0).abs() < 1e-12,
+        "{:?}",
+        pd.pose.t
+    );
     // A later heading reading does not move the latched north.
-    let out = nav.on_scan(&ring(), &mount(), Some(&estimate(1.0, 0.0, 0.0)), None, false);
+    let out = nav.on_scan(
+        &ring(),
+        &mount(),
+        Some(&estimate(1.0, 0.0, 0.0)),
+        None,
+        false,
+    );
     let polar = out.polar.unwrap();
-    assert!(polar.t[0].abs() < 1e-5 && (polar.t[1] - 1.0).abs() < 1e-5, "{:?}", polar.t);
+    assert!(
+        polar.t[0].abs() < 1e-5 && (polar.t[1] - 1.0).abs() < 1e-5,
+        "{:?}",
+        polar.t
+    );
     // The ring's forward return (3.02 m ahead) lands 3.02 m further east.
     let ahead = polar.world_points().next().unwrap();
-    assert!(ahead[0].abs() < 1e-3 && (ahead[1] - 4.02).abs() < 1e-3, "{ahead:?}");
+    assert!(
+        ahead[0].abs() < 1e-3 && (ahead[1] - 4.02).abs() < 1e-3,
+        "{ahead:?}"
+    );
 }

@@ -91,6 +91,9 @@ mod tests {
         let b = rpy(0.0, 0.0, 0.02);
         let s = sample(Some((0, a)), (20_000_000, b)).unwrap();
         assert!((s.gyro[2] - 1.0).abs() < 1e-6, "{:?}", s.gyro);
-        assert!(sample(Some((0, a)), (2_000_000_000, b)).is_none(), "a gap restarts");
+        assert!(
+            sample(Some((0, a)), (2_000_000_000, b)).is_none(),
+            "a gap restarts"
+        );
     }
 }

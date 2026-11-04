@@ -55,9 +55,7 @@ impl Engine {
             .map(|e| se3::mat_mul(&e.r, &se3::from_mat4(&mount).0));
         self.lidar_depth = Some(LidarDepth::from_scan(&scan, r_world_sensor.as_ref()));
         let (fc_up, open) = (self.fc_up(), self.session.is_some());
-        let out = self
-            .nav
-            .on_scan(&scan, &mount, world.as_ref(), fc_up, open);
+        let out = self.nav.on_scan(&scan, &mount, world.as_ref(), fc_up, open);
         if let Some(d) = &out.scan {
             self.publisher.publish_scan(d).await;
         }
@@ -135,7 +133,11 @@ impl Engine {
         let inputs = TickInputs {
             session_id: recorder.map(|r| r.session_id()),
             evict_dir: recorder
-                .map(|r| r.dir().join(crate::nav::SESSION_MAP_DIR).join(crate::nav::TILES_DIR))
+                .map(|r| {
+                    r.dir()
+                        .join(crate::nav::SESSION_MAP_DIR)
+                        .join(crate::nav::TILES_DIR)
+                })
                 .or_else(|| self.nav_deps.scratch_dir.clone()),
             queued_bytes: recorder.map_or(0, |r| r.sidecars().bytes()),
             keyframes_dropped: recorder.map_or(0, |r| r.sidecars().keyframes.dropped()),

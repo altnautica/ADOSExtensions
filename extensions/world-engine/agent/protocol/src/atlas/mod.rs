@@ -197,12 +197,12 @@ pub use keyframe::{
     KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, Pose, PoseDescriptor, PoseSource,
     TimeAlignment, VioHealth, KEYFRAME_MAX_SIGMA_NS, POSE_COV_LEN,
 };
-pub use polar::{PolarError, PolarScan};
 pub use nav::{
     ComputePlacement, LiveOccupancy, LivePointCloud, MapPayloadKind, MapStatus, NavFrame,
     NavPoseMode, NavPoseSource, OccupancyTile, ScanDescriptor, StreamPhase, StreamProgress,
     UploadPhase, UploadProgress,
 };
+pub use polar::{PolarError, PolarScan};
 
 /// The on-wire version stamped on every [`AtlasEvent`] envelope. Every atlas
 /// message crosses as an envelope, and the inner topic structs are decoded from

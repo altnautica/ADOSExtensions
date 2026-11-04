@@ -6,12 +6,21 @@ use super::*;
 #[test]
 fn the_nav_topics_are_shared_and_gated_by_telemetry_read() {
     assert_eq!(PLUGIN_ATLAS_SCAN_TOPIC, "plugin.world-engine.scan");
-    assert_eq!(PLUGIN_ATLAS_MAP_STATUS_TOPIC, "plugin.world-engine.map_status");
+    assert_eq!(
+        PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+        "plugin.world-engine.map_status"
+    );
     for topic in [PLUGIN_ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_MAP_STATUS_TOPIC] {
         assert!(PLUGIN_ATLAS_TOPICS.contains(&topic));
-        assert_eq!(atlas_topic_subscribe_capability(topic), Some(ATLAS_POSE_READ_CAP));
+        assert_eq!(
+            atlas_topic_subscribe_capability(topic),
+            Some(ATLAS_POSE_READ_CAP)
+        );
     }
-    assert_eq!(atlas_topic_subscribe_capability("plugin.world-engine.scan.x"), None);
+    assert_eq!(
+        atlas_topic_subscribe_capability("plugin.world-engine.scan.x"),
+        None
+    );
 }
 
 #[test]
@@ -33,7 +42,10 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
     assert_eq!(v["frame"], "map_ned");
     assert_eq!(v["source"], "lidar_planar");
     assert_eq!(v["pose"]["R"][0], 1.0);
-    assert_eq!(PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(), pd);
+    assert_eq!(
+        PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(),
+        pd
+    );
 }
 
 #[test]
@@ -53,7 +65,10 @@ fn live_and_product_payloads_are_told_apart_by_kind() {
     let v = serde_json::to_value(&live).unwrap();
     assert_eq!(v["kind"], "live");
     assert_eq!(v["tiles"][0]["iy"], -1);
-    assert_eq!(LiveOccupancy::from_msgpack(&live.to_msgpack().unwrap()).unwrap(), live);
+    assert_eq!(
+        LiveOccupancy::from_msgpack(&live.to_msgpack().unwrap()).unwrap(),
+        live
+    );
 
     let cloud = LivePointCloud {
         kind: MapPayloadKind::Live,

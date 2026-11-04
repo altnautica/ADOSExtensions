@@ -30,9 +30,9 @@ fn scan_input(s: &PolarScan) -> ScanInput {
 
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args().skip(1);
-    let path = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("usage: scan2d_replay <scan log .polar.zst> [--repeat N]"))?;
+    let path = args.next().ok_or_else(|| {
+        anyhow::anyhow!("usage: scan2d_replay <scan log .polar.zst> [--repeat N]")
+    })?;
     let repeat = match (args.next().as_deref(), args.next()) {
         (Some("--repeat"), Some(n)) => n.parse::<usize>()?.max(1),
         (None, _) => 1,

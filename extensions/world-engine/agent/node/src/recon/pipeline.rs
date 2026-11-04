@@ -304,15 +304,16 @@ fn reconstruct(
         // `Some(reason)`: train with Brush, which stands in at full length
         // (and the stage says why) when the gsplat kernels do not run on this
         // node (no CUDA toolkit, no GPU).
-        let brush: Option<Option<String>> = if matches!(preset, Preset::Preview | Preset::PlanarSweep) {
-            Some(None)
-        } else if let Err(why) = train::gsplat_available(ctx.runner, &train_dir) {
-            tracing::warn!(error = %why, "gsplat unavailable; training with brush");
-            ctx.runner.resolve("brush")?;
-            Some(Some(format!("gsplat unavailable: {}", why.message)))
-        } else {
-            None
-        };
+        let brush: Option<Option<String>> =
+            if matches!(preset, Preset::Preview | Preset::PlanarSweep) {
+                Some(None)
+            } else if let Err(why) = train::gsplat_available(ctx.runner, &train_dir) {
+                tracing::warn!(error = %why, "gsplat unavailable; training with brush");
+                ctx.runner.resolve("brush")?;
+                Some(Some(format!("gsplat unavailable: {}", why.message)))
+            } else {
+                None
+            };
         let (steps, runner) = (spec.train_steps, ctx.runner);
         let train_one = |ds: &Path, out: &Path, p: &mut dyn FnMut(f32)| match &brush {
             Some(reason) => train::brush(runner, ds, out, steps, max_splats, reason.as_deref(), p),
@@ -448,7 +449,10 @@ fn planar_sweep_job(
             "points": swept.cloud.points.len(),
         }))
     })?;
-    stages.skip("train", "the session has no camera frames to train a splat from");
+    stages.skip(
+        "train",
+        "the session has no camera frames to train a splat from",
+    );
     stages.skip("mesh", "the session has no camera frames to mesh");
     stages.run("products", |p| {
         let out = dir.join("out");

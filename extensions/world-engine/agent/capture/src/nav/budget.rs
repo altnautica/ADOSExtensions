@@ -115,16 +115,24 @@ mod tests {
             "0::/ados.slice/ados-plugin-x.service\n",
         )
         .unwrap();
-        let unit = root.path().join("sys/fs/cgroup/ados.slice/ados-plugin-x.service");
+        let unit = root
+            .path()
+            .join("sys/fs/cgroup/ados.slice/ados-plugin-x.service");
         std::fs::create_dir_all(&unit).unwrap();
         std::fs::write(unit.join("memory.max"), "805306368\n").unwrap();
         // 768 MiB * 0.8.
         assert_eq!(resolve(None, None, root.path()).total, 614 * MIB);
         assert_eq!(resolve(Some(64), None, root.path()).total, 64 * MIB);
         // The host's export wins over the cgroup read.
-        assert_eq!(resolve(None, Some("1073741824"), root.path()).total, 819 * MIB);
+        assert_eq!(
+            resolve(None, Some("1073741824"), root.path()).total,
+            819 * MIB
+        );
 
         std::fs::write(unit.join("memory.max"), "max\n").unwrap();
-        assert_eq!(resolve(None, None, root.path()).total, FALLBACK_BUDGET_MB * MIB);
+        assert_eq!(
+            resolve(None, None, root.path()).total,
+            FALLBACK_BUDGET_MB * MIB
+        );
     }
 }

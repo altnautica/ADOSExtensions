@@ -93,7 +93,9 @@ impl SweepCloud {
             }
             let mut key = self.key(p);
             if !self.voxels.contains_key(&key) {
-                while self.bytes() + VOXEL_BYTES + PENDING_BYTES > self.cap_bytes && !self.voxels.is_empty() {
+                while self.bytes() + VOXEL_BYTES + PENDING_BYTES > self.cap_bytes
+                    && !self.voxels.is_empty()
+                {
                     self.coarsen();
                 }
                 key = self.key(p);
@@ -122,7 +124,11 @@ impl SweepCloud {
             let key = self.key(v.centroid());
             match self.voxels.get_mut(&key) {
                 Some(m) => {
-                    m.sum = [m.sum[0] + v.sum[0], m.sum[1] + v.sum[1], m.sum[2] + v.sum[2]];
+                    m.sum = [
+                        m.sum[0] + v.sum[0],
+                        m.sum[1] + v.sum[1],
+                        m.sum[2] + v.sum[2],
+                    ];
                     m.n += v.n;
                 }
                 None => {
@@ -132,7 +138,11 @@ impl SweepCloud {
         }
         self.pending.extend(self.voxels.keys().copied());
         self.voxels.shrink_to_fit();
-        tracing::warn!(voxel_m = self.voxel_m, voxels = self.voxels.len(), "sweep_cloud_coarsened");
+        tracing::warn!(
+            voxel_m = self.voxel_m,
+            voxels = self.voxels.len(),
+            "sweep_cloud_coarsened"
+        );
     }
 
     /// Up to [`POINTCLOUD_DELTA_MAX_POINTS`] centroids new since the last
@@ -178,7 +188,9 @@ mod tests {
         assert_eq!(c.len(), 2);
         let (n, b64) = c.take_delta();
         assert_eq!(n, 2);
-        let raw = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let raw = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
         let x0 = f32::from_le_bytes(raw[0..4].try_into().unwrap());
         assert!((x0 - 0.02).abs() < 1e-6);
         assert_eq!(c.take_delta().0, 0, "a delta is sent once");

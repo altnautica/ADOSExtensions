@@ -60,7 +60,8 @@ impl LiveMap {
         occupancy_cap_bytes: usize,
         evict_dir: Option<&Path>,
     ) -> (Option<LiveOccupancy>, Option<LivePointCloud>) {
-        self.grid.evict(self.vehicle, occupancy_cap_bytes, evict_dir);
+        self.grid
+            .evict(self.vehicle, occupancy_cap_bytes, evict_dir);
         let tiles = self.grid.take_changed();
         let occ = (!tiles.is_empty()).then(|| {
             self.occ_seq += 1;

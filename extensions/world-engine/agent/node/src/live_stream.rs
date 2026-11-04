@@ -64,7 +64,8 @@ impl LiveStreams {
         for (device, map) in &mut self.maps {
             let dir = self.root.join(device).join("occupancy");
             let (occ, cloud) = map.tick(NODE_OCCUPANCY_CAP_BYTES, Some(&dir));
-            let mut push = |topic: &str, body: Result<Vec<u8>, rmp_serde::encode::Error>| match body {
+            let mut push = |topic: &str, body: Result<Vec<u8>, rmp_serde::encode::Error>| match body
+            {
                 Ok(body) => out.push((
                     device.clone(),
                     AtlasEvent::new(topic, Some(device.clone()), body),
@@ -117,13 +118,20 @@ mod tests {
         assert_eq!(live.rejected, 1);
         let out = live.tick();
         assert_eq!(out.len(), 2);
-        assert!(out.iter().all(|(d, e)| d == "drone-1"
-            && e.device_id.as_deref() == Some("drone-1")));
-        let occ = out.iter().find(|(_, e)| e.topic == PLUGIN_ATLAS_OCCUPANCY_TOPIC).unwrap();
+        assert!(out
+            .iter()
+            .all(|(d, e)| d == "drone-1" && e.device_id.as_deref() == Some("drone-1")));
+        let occ = out
+            .iter()
+            .find(|(_, e)| e.topic == PLUGIN_ATLAS_OCCUPANCY_TOPIC)
+            .unwrap();
         let occ = LiveOccupancy::from_msgpack(&occ.1.payload).unwrap();
         assert_eq!(occ.kind, MapPayloadKind::Live);
         assert!(!occ.tiles.is_empty());
-        let cloud = out.iter().find(|(_, e)| e.topic == PLUGIN_ATLAS_POINTCLOUD_TOPIC).unwrap();
+        let cloud = out
+            .iter()
+            .find(|(_, e)| e.topic == PLUGIN_ATLAS_POINTCLOUD_TOPIC)
+            .unwrap();
         let cloud = LivePointCloud::from_msgpack(&cloud.1.payload).unwrap();
         assert!(cloud.count > 100);
         assert!(live.tick().is_empty(), "nothing new");

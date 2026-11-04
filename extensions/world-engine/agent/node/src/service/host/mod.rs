@@ -287,9 +287,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         let rs = state.clone();
         let wr = work_root.clone();
         let world = world_broadcaster.clone();
-        tokio::spawn(async move {
-            atlas_receiver_loop(atlas_rx, rs, wr, live_config, world).await
-        });
+        tokio::spawn(
+            async move { atlas_receiver_loop(atlas_rx, rs, wr, live_config, world).await },
+        );
     }
     tracing::info!(
         channel_cap = ATLAS_EVENT_CHANNEL_CAP,

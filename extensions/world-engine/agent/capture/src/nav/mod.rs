@@ -181,7 +181,11 @@ impl NavMap {
         if self.yaw0.is_none() {
             let heading = fc_heading?;
             let yaw0 = heading - frd_yaw(&r_frd);
-            tracing::info!(heading_rad = heading, yaw0_rad = yaw0, "nav_map_north_latched");
+            tracing::info!(
+                heading_rad = heading,
+                yaw0_rad = yaw0,
+                "nav_map_north_latched"
+            );
             self.yaw0 = Some(yaw0);
         }
         let (r, t) = self.ned_of(&r_frd, t_frd)?;
@@ -189,9 +193,9 @@ impl NavMap {
         if !self.active(session_open) {
             return None;
         }
-        let due = self.last_pub_ms.is_none_or(|last| {
-            now_ms < last || now_ms - last >= self.settings.pose_interval_ms
-        });
+        let due = self
+            .last_pub_ms
+            .is_none_or(|last| now_ms < last || now_ms - last >= self.settings.pose_interval_ms);
         if !due {
             return None;
         }
@@ -248,9 +252,10 @@ impl NavMap {
     /// the map status.
     pub fn tick(&mut self, inputs: &TickInputs, session_open: bool) -> TickOut {
         let active = self.active(session_open);
-        let (occupancy, pointcloud) = self
-            .map
-            .tick(self.settings.budget.occupancy(), inputs.evict_dir.as_deref());
+        let (occupancy, pointcloud) = self.map.tick(
+            self.settings.budget.occupancy(),
+            inputs.evict_dir.as_deref(),
+        );
         let (occupancy, pointcloud) = if active {
             (occupancy, pointcloud)
         } else {

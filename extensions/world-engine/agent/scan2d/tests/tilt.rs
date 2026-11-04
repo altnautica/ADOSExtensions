@@ -64,8 +64,15 @@ fn levelling_a_10_degree_roll_puts_points_on_the_wall_footprint() {
         let scan = tilted_scan(&world, 0, roll, pitch);
         // Unlevelled, the tilted plane reads the walls too far away.
         let raw = Scan2d::from_cloud(&scan, &cfg(), &Motion::default());
-        let off = raw.points.iter().filter(|p| !on_wall(**p, half, 0.02)).count();
-        assert!(off > raw.points.len() / 4, "a 10° tilt must distort the raw scan");
+        let off = raw
+            .points
+            .iter()
+            .filter(|p| !on_wall(**p, half, 0.02))
+            .count();
+        assert!(
+            off > raw.points.len() / 4,
+            "a 10° tilt must distort the raw scan"
+        );
 
         let levelled = Scan2d::from_cloud(
             &scan,
@@ -78,7 +85,10 @@ fn levelling_a_10_degree_roll_puts_points_on_the_wall_footprint() {
         );
         assert!(levelled.points.len() > BEAMS * 9 / 10);
         for p in &levelled.points {
-            assert!(on_wall(*p, half, 1e-3), "{p:?} off the wall at roll {roll} pitch {pitch}");
+            assert!(
+                on_wall(*p, half, 1e-3),
+                "{p:?} off the wall at roll {roll} pitch {pitch}"
+            );
         }
     }
 }
@@ -92,8 +102,8 @@ fn a_still_sensor_rolled_10_degrees_holds_its_pose() {
         w.extend(rect(-3.0, -2.0, -2.4, -0.8));
         w
     };
-    let g = UnitQuaternion::from_euler_angles(TILT, 0.0, 0.0).inverse()
-        * Vector3::new(0.0, 0.0, 9.81);
+    let g =
+        UnitQuaternion::from_euler_angles(TILT, 0.0, 0.0).inverse() * Vector3::new(0.0, 0.0, 9.81);
     let mut slam = LocalSlam::new(cfg());
     let mut imu_t = 0u64;
     let mut last = None;

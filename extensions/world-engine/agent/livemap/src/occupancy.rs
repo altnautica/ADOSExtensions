@@ -136,7 +136,8 @@ impl OccupancyGrid {
 
     /// Observed area, m², evicted tiles included.
     pub fn area_m2(&self) -> f32 {
-        let known: u64 = self.tiles.values().map(|t| t.known as u64).sum::<u64>() + self.evicted_known;
+        let known: u64 =
+            self.tiles.values().map(|t| t.known as u64).sum::<u64>() + self.evicted_known;
         known as f32 * RES_M * RES_M
     }
 
@@ -174,7 +175,9 @@ impl OccupancyGrid {
             if d <= EVICT_RADIUS_M && self.tiles.len() <= max_tiles {
                 break;
             }
-            let Some(t) = self.tiles.remove(&k) else { continue };
+            let Some(t) = self.tiles.remove(&k) else {
+                continue;
+            };
             self.changed.remove(&k);
             self.evicted_known += t.known as u64;
             if let Some(dir) = dir {
@@ -250,8 +253,14 @@ mod tests {
             g.insert_ray([0.01, 0.01], [3.16, 0.01]);
         }
         let tiles = g.take_changed();
-        assert_eq!(tiles.iter().map(|t| (t.ix, t.iy)).collect::<Vec<_>>(), vec![(0, 0)]);
-        assert!(g.take_changed().is_empty(), "unchanged tiles are not re-sent");
+        assert_eq!(
+            tiles.iter().map(|t| (t.ix, t.iy)).collect::<Vec<_>>(),
+            vec![(0, 0)]
+        );
+        assert!(
+            g.take_changed().is_empty(),
+            "unchanged tiles are not re-sent"
+        );
         let png = base64::engine::general_purpose::STANDARD
             .decode(&tiles[0].png_b64)
             .unwrap();
@@ -272,7 +281,10 @@ mod tests {
         assert_eq!(g.evict([0.0, 0.0], usize::MAX, Some(dir.path())), 1);
         assert_eq!(g.tile_count(), 1);
         assert!(dir.path().join("93_0.png").exists());
-        assert!((g.area_m2() - before).abs() < 1e-4, "evicted area still counts");
+        assert!(
+            (g.area_m2() - before).abs() < 1e-4,
+            "evicted area still counts"
+        );
 
         g.insert_ray([0.0, 0.0], [0.0, 5.0]);
         let n = g.tile_count();
