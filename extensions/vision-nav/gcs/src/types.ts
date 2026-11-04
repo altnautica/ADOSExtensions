@@ -43,9 +43,9 @@ export interface VisionNavTelemetry {
    */
   rangefinderTopology?: "companion" | "fc" | "both" | null;
   /**
-   * Camera device id the agent suggests as the primary capture source.
-   * Surfaced verbatim in the GCS so the operator can confirm the path
-   * the agent picked.
+   * The camera the flow reads: the configured ``camera.camera_id`` when
+   * set, else the configured device path (the flow then takes every
+   * camera). Surfaced verbatim in the GCS so the operator can confirm it.
    */
   recommendedCameraId?: string | null;
   /**

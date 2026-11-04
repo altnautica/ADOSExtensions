@@ -147,3 +147,14 @@ fn health_flow_quality_clears_on_a_none_sample() {
     let v = health.lock().unwrap().to_value();
     assert!(matches!(field(&v, "flowQuality"), Some(Value::Nil)));
 }
+
+#[test]
+fn flow_takes_only_the_configured_camera() {
+    let mut cam = crate::config::CameraConfig::default();
+    assert_eq!(cam.flow_camera(), None);
+    assert!(accepts_camera(cam.flow_camera(), "main"));
+    cam.camera_id = "belly".to_string();
+    assert_eq!(cam.flow_camera(), Some("belly"));
+    assert!(accepts_camera(cam.flow_camera(), "belly"));
+    assert!(!accepts_camera(cam.flow_camera(), "main"));
+}

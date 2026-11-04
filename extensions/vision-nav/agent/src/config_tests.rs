@@ -200,3 +200,18 @@ fn external_nav_with_origin_parses_and_ignores_the_camera() {
     assert!(cfg.obstacle.enabled);
     assert_eq!(Mode::parse("external_nav"), Some(Mode::ExternalNav));
 }
+
+#[test]
+fn camera_id_parses_trimmed() {
+    let v = map(&[("camera", map(&[("camera_id", Value::from(" belly "))]))]);
+    let cfg = VisionNavConfig::from_value(&v).unwrap();
+    assert_eq!(cfg.camera.flow_camera(), Some("belly"));
+    assert_eq!(cfg.camera.reported_camera(), "belly");
+}
+
+#[test]
+fn reported_camera_falls_back_to_the_device_path() {
+    let cfg = VisionNavConfig::from_value(&map(&[])).unwrap();
+    assert_eq!(cfg.camera.flow_camera(), None);
+    assert_eq!(cfg.camera.reported_camera(), "/dev/video0");
+}

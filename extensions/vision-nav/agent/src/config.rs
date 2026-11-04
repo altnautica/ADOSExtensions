@@ -121,6 +121,9 @@ impl Topology {
 /// Camera capture settings.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CameraConfig {
+    /// Vision-bus camera id the flow is computed from. Empty takes every
+    /// camera, which mixes frames when the agent captures more than one.
+    pub camera_id: String,
     pub device_path: String,
     pub bus_type: String, // "uvc" | "csi"
     pub orientation: Orientation,
@@ -129,9 +132,24 @@ pub struct CameraConfig {
     pub fps: u32,
 }
 
+impl CameraConfig {
+    /// The camera filter for the frame subscription: `None` when no id is
+    /// configured.
+    pub fn flow_camera(&self) -> Option<&str> {
+        (!self.camera_id.is_empty()).then_some(self.camera_id.as_str())
+    }
+
+    /// The camera reported to the GCS as `recommendedCameraId`: the flow
+    /// camera when one is configured, else the configured device path.
+    pub fn reported_camera(&self) -> &str {
+        self.flow_camera().unwrap_or(&self.device_path)
+    }
+}
+
 impl Default for CameraConfig {
     fn default() -> Self {
         Self {
+            camera_id: String::new(),
             device_path: "/dev/video0".to_string(),
             bus_type: "uvc".to_string(),
             orientation: Orientation::Auto,
@@ -325,6 +343,9 @@ impl VisionNavConfig {
 fn parse_camera(v: &Value) -> Result<CameraConfig, ConfigError> {
     let map = value_to_map(v);
     let mut cam = CameraConfig::default();
+    if let Some(s) = map.get("camera_id").and_then(Value::as_str) {
+        cam.camera_id = s.trim().to_string();
+    }
     if let Some(s) = map.get("device_path").and_then(Value::as_str) {
         cam.device_path = s.to_string();
     }

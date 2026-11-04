@@ -166,6 +166,18 @@ describe("NavigationTab", () => {
     );
   });
 
+  it("names the camera the agent reports flow from on the camera row", () => {
+    const ctx = fakeCtx();
+    render(
+      <NavigationTab
+        ctx={ctx}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({ recommendedCameraId: "belly" })}
+      />,
+    );
+    expect(screen.getByTestId("vn-sensors-camera").textContent).toContain("belly");
+  });
+
   it("renders the iNav params panel when firmware is inav", () => {
     const ctx = fakeCtx();
     render(

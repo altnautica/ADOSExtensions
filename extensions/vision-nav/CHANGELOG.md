@@ -11,6 +11,11 @@ All notable changes to the Vision Navigation extension.
 - The Vision Nav tab keeps `emitErrors`, `rangefinderError`,
   `degradedReasons` and `fcParams` from the health block; the PX4 parameter
   card read `fcParams` and never received it.
+- Optical flow reads frames from one camera, `camera.camera_id`, instead of
+  every camera on the vision bus; with two cameras captured the frames of
+  both reached the flow estimator. Empty keeps the old any-camera behaviour.
+  `recommendedCameraId`, the Sensors card's camera row, reports that camera
+  when it is set, and the device path otherwise.
 
 ## [0.5.0]
 

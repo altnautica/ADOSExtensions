@@ -173,10 +173,16 @@
     "camera": {
       "type": "object",
       "properties": {
+        "camera_id": {
+          "type": "string",
+          "title": "Flow camera id",
+          "description": "Agent camera id the flow is computed from, for example the downward camera. Empty takes frames from every camera.",
+          "default": ""
+        },
         "device_path": {
           "type": "string",
           "title": "Device path",
-          "description": "Reported to the GCS as the recommended camera. Frames come from the agent's vision bus; choose the captured camera in the agent's camera settings.",
+          "description": "Reported to the GCS as the camera when no flow camera id is set. Frames come from the agent's vision bus; choose the captured camera in the agent's camera settings.",
           "default": "/dev/video0",
           "pattern": "^/dev/video[0-9]+$"
         },

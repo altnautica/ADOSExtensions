@@ -146,7 +146,7 @@ impl Plugin for VisionNavPlugin {
                 .map(|s| s.to_string())
                 .collect();
             h.companion_state = Some(CompanionState::Inactive);
-            h.recommended_camera_id = Some(cfg.camera.device_path.clone());
+            h.recommended_camera_id = Some(cfg.camera.reported_camera().to_string());
             h.imu_source = Some(crate::imu::SOURCE_ID_MAVLINK_RAW_IMU.to_string());
             if cfg.rangefinder.topology != Topology::None {
                 h.rangefinder_topology = Some(cfg.rangefinder.topology.as_str().to_string());
@@ -232,7 +232,7 @@ impl Plugin for VisionNavPlugin {
                 publish_now,
             };
             self.tasks.push(tokio::spawn(worker.run(rx)));
-            subscribe_frames(ctx, tx).await?;
+            subscribe_frames(ctx, cfg.camera.flow_camera(), tx).await?;
         }
 
         eprintln!("vision-nav: started (mode={})", mode.as_str());
@@ -255,9 +255,14 @@ struct GrayFramePair {
 
 async fn subscribe_frames(
     ctx: &PluginContext,
+    camera: Option<&str>,
     tx: mpsc::Sender<GrayFramePair>,
 ) -> Result<(), ClientError> {
+    let want = camera.map(str::to_string);
     let on_frame = Arc::new(move |frame: ados_sdk::vision::Frame| {
+        if !accepts_camera(want.as_deref(), &frame.descriptor.camera_id) {
+            return;
+        }
         let Some(gray) = frame_to_gray(&frame) else {
             return;
         };
@@ -268,7 +273,14 @@ async fn subscribe_frames(
             ts_ns: monotonic_ns(),
         });
     });
-    ctx.vision.subscribe_frames(None, on_frame).await
+    ctx.vision.subscribe_frames(camera, on_frame).await
+}
+
+/// Whether a frame from `camera_id` feeds the flow estimator. The SDK filters
+/// a named subscription already; this keeps another camera's frames out even
+/// when that filter is bypassed.
+fn accepts_camera(want: Option<&str>, camera_id: &str) -> bool {
+    want.is_none_or(|w| w == camera_id)
 }
 
 /// The per-frame loop.
