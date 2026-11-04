@@ -10,6 +10,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
+use ados_protocol::mavlink::ardupilotmega::{MavAutopilot, MavType};
 use ados_protocol::mavlink::{parse_v1, parse_v2, MavMessage};
 use ados_sdk::context::PluginContext;
 use rmpv::Value;
@@ -26,7 +27,10 @@ use crate::scale::ScaleLadder;
 pub const WATCHED_FC_PARAMS: &[&str] = &["EKF2_OF_CTRL", "EKF2_AID_MASK"];
 
 /// The flight controller's system and component id, learned from the
-/// header of its RAW_IMU stream. 1/1 until the first frame arrives.
+/// header of its HEARTBEAT or RAW_IMU. 1/1 until the first one arrives.
+/// The FC is not always system 1 (a SITL on another instance takes the
+/// next id), and RAW_IMU streams only once the FC is asked at its own
+/// address, so the heartbeat is what finds it.
 pub struct FcTarget(AtomicU16);
 
 impl Default for FcTarget {
@@ -90,6 +94,14 @@ pub fn decode_frame(frame: &[u8]) -> Option<(u8, u8, MavMessage)> {
 /// so tests drive it without a host.
 pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns: i64) {
     match msg {
+        // An autopilot's heartbeat names the FC. Our own and the agent's
+        // heartbeats carry MAV_AUTOPILOT_INVALID; a GCS has MAV_TYPE_GCS.
+        MavMessage::HEARTBEAT(h)
+            if h.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID
+                && h.mavtype != MavType::MAV_TYPE_GCS =>
+        {
+            sinks.fc_target.set(system, component)
+        }
         MavMessage::RAW_IMU(d) => {
             sinks.fc_target.set(system, component);
             sinks.imu.record_raw_imu(
@@ -162,13 +174,14 @@ pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns:
 }
 
 /// Whether a message comes from the flight controller (learned from its
-/// RAW_IMU stream).
+/// HEARTBEAT or RAW_IMU).
 fn is_fc(sinks: &Sinks, system: u8, component: u8) -> bool {
     sinks.fc_target.get() == (system, component)
 }
 
 /// The streams every mode consumes.
 pub const SUBSCRIBED: &[&str] = &[
+    "HEARTBEAT",
     "RAW_IMU",
     "DISTANCE_SENSOR",
     "TIMESYNC",
@@ -306,5 +319,71 @@ mod tests {
         let (sys, comp, m) = decode_delivery(&delivery(1, 1, &pos)).unwrap();
         apply(&s, sys, comp, &m, 0);
         assert_eq!(s.fc_nav.snapshot(0).local.unwrap().z, -4.0);
+    }
+
+    fn heartbeat(autopilot: MavAutopilot, mavtype: MavType) -> MavMessage {
+        use ados_protocol::mavlink::ardupilotmega::HEARTBEAT_DATA;
+        MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+            autopilot,
+            mavtype,
+            ..HEARTBEAT_DATA::DEFAULT
+        })
+    }
+
+    /// A SITL on its second instance is system 2: only its heartbeat names
+    /// it before any RAW_IMU streams, and its source-set ack must count.
+    #[test]
+    fn the_fc_heartbeat_sets_the_target_and_its_ack_is_accepted() {
+        use ados_protocol::mavlink::ardupilotmega::{MavCmd, MavResult, COMMAND_ACK_DATA};
+        let s = sinks();
+        for (sys, comp, hb) in [
+            (
+                2,
+                1,
+                heartbeat(
+                    MavAutopilot::MAV_AUTOPILOT_ARDUPILOTMEGA,
+                    MavType::MAV_TYPE_QUADROTOR,
+                ),
+            ),
+            // A GCS and a companion component (ours, the agent's) never move it.
+            (
+                255,
+                190,
+                heartbeat(MavAutopilot::MAV_AUTOPILOT_INVALID, MavType::MAV_TYPE_GCS),
+            ),
+            (
+                1,
+                197,
+                heartbeat(
+                    MavAutopilot::MAV_AUTOPILOT_INVALID,
+                    MavType::MAV_TYPE_GENERIC,
+                ),
+            ),
+            (
+                1,
+                191,
+                heartbeat(
+                    MavAutopilot::MAV_AUTOPILOT_INVALID,
+                    MavType::MAV_TYPE_ONBOARD_CONTROLLER,
+                ),
+            ),
+        ] {
+            let (sys, comp, m) = decode_delivery(&delivery(sys, comp, &hb)).unwrap();
+            apply(&s, sys, comp, &m, 0);
+        }
+        assert_eq!(s.fc_target.get(), (2, 1));
+
+        // COMMAND_ACK here is the base message (no target extension fields).
+        let ack = MavMessage::COMMAND_ACK(COMMAND_ACK_DATA {
+            command: MavCmd::MAV_CMD_SET_EKF_SOURCE_SET,
+            result: MavResult::MAV_RESULT_ACCEPTED,
+        });
+        // From the old default address the ack is someone else's.
+        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &ack)).unwrap();
+        apply(&s, sys, comp, &m, 0);
+        assert_eq!(s.fc_nav.snapshot(0).source_set_ack, None);
+        let (sys, comp, m) = decode_delivery(&delivery(2, 1, &ack)).unwrap();
+        apply(&s, sys, comp, &m, 0);
+        assert_eq!(s.fc_nav.snapshot(0).source_set_ack, Some(0));
     }
 }

@@ -6,6 +6,11 @@ All notable changes to the Vision Navigation extension.
 
 ### Fixed
 
+- The flight controller is found from its HEARTBEAT as well as its RAW_IMU.
+  With an FC that is not system 1 (a second SITL instance, or a board set to
+  another system id) the plugin kept the 1/1 default: it asked the wrong
+  system to stream RAW_IMU, so the address was never learned, and it dropped
+  every COMMAND_ACK, resending the EKF source-set switch without end.
 - A MAVLink send the host reports as not sent (`sent: false`, or no router)
   now counts in health `emitErrors` instead of passing as delivered.
 - The Vision Nav tab keeps `emitErrors`, `rangefinderError`,
