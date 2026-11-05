@@ -10,7 +10,7 @@ use crate::attitude::{Attitude, ImuSample, VelocitySample};
 use crate::config::Scan2dConfig;
 use crate::matcher::{
     constraint_information, correlative, degeneracy, keep_constrained, refine,
-    unconstrained_directions, Prior, Window,
+    rotation_information, unconstrained_directions, Prior, Window,
 };
 use crate::pose::{wrap, Pose2};
 use crate::scan::{Motion, Scan2d, ScanInput};
@@ -33,6 +33,17 @@ const COAST_TAU_S: f64 = 1.0;
 const MAX_VELOCITY_AGE_NS: u64 = 250_000_000;
 /// How long measured velocities are kept.
 const VELOCITY_KEEP_NS: u64 = 1_000_000_000;
+/// A match teaches the gyro its z bias ([`Attitude::learn_bias`]) only when
+/// its points pin the rotation to this, one sigma, each point good to the
+/// grid resolution: where the scene leaves the rotation loose the matched
+/// heading is the prior's or noise, not the gyro's error.
+const BIAS_MAX_ROTATION_SIGMA_RAD: f64 = 0.1 * std::f64::consts::PI / 180.0;
+/// A match teaches the gyro its z bias only while the heading turns slower
+/// than this, rad/s (20 degrees/s). Through a fast turn the heading the
+/// scans and the gyro disagree on is the gyro's scale error and the IMU's
+/// timing, which grow with the rate; at a bias's 0.1 degree/s they would
+/// swamp it.
+const BIAS_MAX_TURN_RATE: f64 = 20.0 * std::f64::consts::PI / 180.0;
 
 /// The translation directions the last match left unconstrained.
 #[derive(Debug, Clone, Copy)]
@@ -135,6 +146,12 @@ impl LocalSlam {
         self.inserted
     }
 
+    /// The gyro bias about the LiDAR's z axis the matches have taught the
+    /// attitude so far, rad/s ([`Attitude::learn_bias`]).
+    pub fn gyro_bias_z(&self) -> f64 {
+        self.att.gyro_bias_z()
+    }
+
     pub fn feed_imu(&mut self, s: &ImuSample) {
         self.att.update(s);
     }
@@ -235,6 +252,18 @@ impl LocalSlam {
             );
             let info = constraint_information(&scan, r.pose);
             let deg = degeneracy(&info);
+            // The heading the scans turned since the last scan against the
+            // gyro's, for the gyro's z bias; never the FC's fused yaw.
+            let min_rotation_info = (self.cfg.resolution_m / BIAS_MAX_ROTATION_SIGMA_RAD).powi(2);
+            if let Some((t1, _, _)) = self.last {
+                if self.att.has_data()
+                    && yaw_rate.abs() <= BIAS_MAX_TURN_RATE
+                    && rotation_information(&info) >= min_rotation_info
+                {
+                    let dt = t.saturating_sub(t1) as f64 * 1e-9;
+                    self.att.learn_bias(wrap(r.pose.th - pull.pose.th), dt);
+                }
+            }
             if deg < self.cfg.degenerate_ratio {
                 in_submap = keep_constrained(in_submap, r.pose, &info, self.cfg.degenerate_ratio);
                 // The information is in the submap frame.

@@ -233,6 +233,37 @@ All notable changes to the World Engine extension.
   revolutions, gyro and flow, the distance matched down the drift went from
   39 % to 97 % of the distance flown. The vision-nav plugin (0.6.4) asks the
   FC for `OPTICAL_FLOW` at 20 Hz. 2.1.8.
+- **The lidar SLAM learns the flight controller's gyro bias from its scans
+  and levels with the FC's attitude, not its accelerometer.** Since the
+  rotation prior became the FC's `RAW_IMU` gyro (2.1.7) the matcher, which
+  keeps most of its prior on every scan, adopted the gyro's z bias: a
+  simulated FC whose bias drifted between 0.03 and 0.23°/s turned the
+  heading of a GNSS-denied forest flight 1.8° off within a minute, and the
+  map with it. The matcher now learns that bias from the heading the scans
+  turned against the gyro's, on scans whose points pin the rotation to 0.1°
+  while the heading turns slower than 20°/s, over a 12 s time constant and
+  bounded to 1°/s, and takes it out of every sample before the prior and the
+  deskew; only the scans teach it, so the EKF's yaw still never reaches the
+  prior. The specific force beside the gyro was `RAW_IMU`'s accelerometer,
+  which on a multirotor reads the thrust: braking into and out of two fast
+  turns at an aisle end it leant 15 to 20° off gravity, the matcher's
+  attitude filter levelled with it, and the heading came out of the turns 2
+  to 4° off and stayed there up the return aisle. It is now gravity in the
+  attitude the FC last reported (its EKF has the manoeuvre taken out, and
+  gravity carries none of its yaw). Replayed on those flights' revolutions
+  with the FC's own 25 Hz IMU, the forest heading 15, 45, 60 and 150 s on
+  from a reference went from -0.07, -0.73, -1.77 and -1.79° off to +0.02,
+  +0.06, +0.24 and +0.28° (on the true attitude: +0.01, +0.04, +0.16,
+  +0.25°), and the warehouse return leg from 4.5° off on average to 0.02°
+  (worst 0.11°).
+  New recorded-sequence tests: a forest slice whose bias rises from 0.08 to
+  0.13°/s (learnt to within 0.01°/s, heading 0.09° off on average against
+  0.35° before) and the warehouse return leg (0.05° off on average with the
+  FC's gravity, 3.3° with the accelerometer). 2.1.9.
+- **Low-quality optical flow is not used as the ground velocity.** An
+  `OPTICAL_FLOW` sample below quality 128 (of 255), a sensor tracking too few
+  features over dark or bare ground, no longer reaches the matcher's motion
+  prior. 2.1.9.
 
 ## [2.0.0]
 

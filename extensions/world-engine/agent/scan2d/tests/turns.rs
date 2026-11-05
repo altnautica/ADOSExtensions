@@ -5,8 +5,8 @@
 //! Each recording carries either the LiDAR's true attitude at the rate a
 //! flight controller reports it (20 Hz), turned into an IMU stream the way
 //! the capture service does when the FC streams no IMU (body rate from
-//! consecutive attitudes, gravity as the specific force), or a 100 Hz IMU
-//! (the FC's `RAW_IMU`) together with the attitude the FC itself reported.
+//! consecutive attitudes, gravity as the specific force), or the FC's own
+//! IMU (`RAW_IMU`) together with the attitude the FC itself reported.
 
 use std::f64::consts::PI;
 
@@ -18,11 +18,12 @@ const BEAMS: u64 = 500;
 const PERIOD_NS: u64 = 100_000_000;
 
 /// One recording: the matcher's IMU stream, the stream synthesised from the
-/// flight controller's own attitude (empty when not recorded), and
-/// `(revolution, true yaw)` in time order.
+/// flight controller's own attitude (empty when not recorded) and that
+/// attitude, and `(revolution, true yaw)` in time order.
 struct Recording {
     imu: Vec<ImuSample>,
     fc_attitude_imu: Vec<ImuSample>,
+    fc_attitudes: Vec<(u64, Rotation3<f64>)>,
     scans: Vec<(ScanInput, f64)>,
 }
 
@@ -75,6 +76,7 @@ fn recorded(text: &str) -> Recording {
     Recording {
         imu,
         fc_attitude_imu: from_attitudes(&fc_atts),
+        fc_attitudes: fc_atts,
         scans,
     }
 }
@@ -98,12 +100,14 @@ fn from_attitudes(atts: &[(u64, Rotation3<f64>)]) -> Vec<ImuSample> {
 
 /// Replay as the capture service feeds the matcher (each revolution after
 /// the IMU up to its last return) and return the heading error of every
-/// scan against the truth, relative to the first scan, radians.
-fn heading_errors(rec: &Recording, imu: &[ImuSample]) -> Vec<f64> {
+/// scan against the truth, relative to the first scan, radians, and the
+/// matcher.
+fn replay(rec: &Recording, imu: &[ImuSample]) -> (Vec<f64>, LocalSlam) {
     let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
     let mut imu = imu.iter().peekable();
     let mut first = None;
-    rec.scans
+    let errs = rec
+        .scans
         .iter()
         .map(|(scan, yaw)| {
             while let Some(s) = imu.next_if(|s| s.t_ns <= scan.t_ns + PERIOD_NS) {
@@ -113,11 +117,39 @@ fn heading_errors(rec: &Recording, imu: &[ImuSample]) -> Vec<f64> {
             let (y0, t0) = *first.get_or_insert((out.yaw, *yaw));
             wrap((out.yaw - y0) - (yaw - t0))
         })
-        .collect()
+        .collect();
+    (errs, slam)
+}
+
+fn heading_errors(rec: &Recording, imu: &[ImuSample]) -> Vec<f64> {
+    replay(rec, imu).0
 }
 
 fn worst_deg(errs: &[f64]) -> f64 {
     errs.iter().map(|e| e.abs().to_degrees()).fold(0.0, f64::max)
+}
+
+fn mean_deg(errs: &[f64]) -> f64 {
+    errs.iter().sum::<f64>().to_degrees() / errs.len() as f64
+}
+
+/// The recording's IMU with the specific force the capture service feeds
+/// beside the FC's gyro: gravity in the attitude the FC last reported, not
+/// the accelerometer, which on a multirotor reads the thrust.
+fn with_fc_gravity(rec: &Recording) -> Vec<ImuSample> {
+    rec.imu
+        .iter()
+        .map(|s| {
+            let k = rec.fc_attitudes.partition_point(|(t, _)| *t <= s.t_ns);
+            let accel = match k.checked_sub(1).map(|k| rec.fc_attitudes[k]) {
+                Some((t, r)) if s.t_ns - t <= 500_000_000 => {
+                    (r.inverse() * Vector3::new(0.0, 0.0, 9.81)).into()
+                }
+                _ => s.accel,
+            };
+            ImuSample { accel, ..*s }
+        })
+        .collect()
 }
 
 /// 25 s and 66 m of a forest trail, 56 degrees of bends, the airframe
@@ -168,7 +200,8 @@ fn aisle_waypoint_turns_are_tracked() {
 /// yaw. The flight controller here fused the lidar pose back into its EKF,
 /// and its reported yaw ends 10 degrees off. With a prior from that
 /// attitude the matched heading follows it; integrating the 100 Hz gyro
-/// (`RAW_IMU`) it stays on the scans.
+/// (`RAW_IMU`) it stays on the scans, also when that gyro reads 0.155
+/// degrees/s high.
 #[test]
 fn aisle_yaw_wobble_holds_the_heading_on_the_gyro() {
     let rec = recorded(include_str!("data/aisle_yaw_wobble.txt"));
@@ -179,8 +212,75 @@ fn aisle_yaw_wobble_holds_the_heading_on_the_gyro() {
     assert!(worst_deg(&errs) < 0.5, "worst {:.3} deg", worst_deg(&errs));
     assert!(last.abs() < 0.3, "last {last:+.3} deg");
 
+    // The same gyro reading 0.155 degrees/s high about its body z axis
+    // (FRD; FLU -0.155): the heading stays on the scans.
+    let bias = 0.155f64.to_radians();
+    let biased: Vec<ImuSample> = rec
+        .imu
+        .iter()
+        .map(|s| ImuSample {
+            gyro: [s.gyro[0], s.gyro[1], s.gyro[2] - bias],
+            ..*s
+        })
+        .collect();
+    let errs = heading_errors(&rec, &biased);
+    let last = errs.last().unwrap().to_degrees();
+    eprintln!("wobble, biased gyro: worst {:.3} deg, last {last:+.3} deg", worst_deg(&errs));
+    assert!(worst_deg(&errs) < 0.5, "worst {:.3} deg", worst_deg(&errs));
+    assert!(last.abs() < 0.3, "last {last:+.3} deg");
+
     let fc = heading_errors(&rec, &rec.fc_attitude_imu);
     let fc_last = fc.last().unwrap().to_degrees();
     eprintln!("wobble, FC attitude: last {fc_last:+.3} deg");
     assert!(fc_last.abs() > 5.0, "the FC attitude's yaw error reaches the match: {fc_last:+.3} deg");
+}
+
+/// 70 s of a forest trail on the flight controller's own IMU, whose gyro
+/// bias about body z rises from 0.08 to 0.13 degrees/s (FRD): 8 degrees of
+/// heading over the slice. The matcher keeps most of its rotation prior on
+/// every scan, so it adopted part of that drift, its map turning with it:
+/// 0.35 degrees off on average and 0.63 by the end (worst 0.74). It now
+/// learns the bias from the heading the scans turned against the gyro's,
+/// tracks it as it rises, and takes it out of the prior.
+#[test]
+fn forest_gyro_bias_is_learnt_from_the_scans() {
+    let rec = recorded(include_str!("data/forest_gyro_bias.txt"));
+    assert_eq!(rec.scans.len(), 700);
+    let (errs, slam) = replay(&rec, &with_fc_gravity(&rec));
+    let (last, mean) = (errs.last().unwrap().to_degrees(), mean_deg(&errs));
+    let bias = slam.gyro_bias_z().to_degrees();
+    eprintln!(
+        "forest, FC gyro: worst {:.3} deg, mean {mean:+.3} deg, last {last:+.3} deg, bias {bias:+.4} deg/s",
+        worst_deg(&errs)
+    );
+    // The gyro's bias over the last 15 s, FLU.
+    assert!((bias + 0.132).abs() < 0.04, "learnt bias {bias:+.4} deg/s");
+    assert!(mean.abs() < 0.2, "mean {mean:+.3} deg");
+    assert!(last.abs() < 0.25, "last {last:+.3} deg");
+    assert!(worst_deg(&errs) < 0.5, "worst {:.3} deg", worst_deg(&errs));
+}
+
+/// Down a warehouse aisle, two fast turns at its end and back up the next
+/// aisle on the flight controller's IMU. Braking into and out of the turns
+/// the accelerometer leans with the thrust, up to 20 degrees off gravity;
+/// levelled by it, the heading came out of the turns 4 degrees off and held
+/// that up the return aisle. With gravity from the attitude the FC reported
+/// (what the capture service feeds) the return leg stays on the scans.
+#[test]
+fn warehouse_return_leg_holds_the_heading() {
+    let rec = recorded(include_str!("data/warehouse_return_leg.txt"));
+    assert_eq!(rec.scans.len(), 750);
+    // The return aisle: after the second turn, 41 s in.
+    let leg = rec.scans.iter().position(|(s, _)| s.t_ns >= 41_000_000_000).unwrap();
+
+    let errs = heading_errors(&rec, &with_fc_gravity(&rec));
+    let (mean, worst) = (mean_deg(&errs[leg..]), worst_deg(&errs[leg..]));
+    eprintln!("warehouse return leg, FC gravity: mean {mean:+.3} deg, worst {worst:.3} deg");
+    assert!(mean.abs() < 0.3, "mean {mean:+.3} deg");
+    assert!(worst < 0.5, "worst {worst:.3} deg");
+
+    let raw = heading_errors(&rec, &rec.imu);
+    let raw_mean = mean_deg(&raw[leg..]);
+    eprintln!("warehouse return leg, accelerometer: mean {raw_mean:+.3} deg");
+    assert!(raw_mean.abs() > 1.0, "the accelerometer's lean reaches the heading: {raw_mean:+.3} deg");
 }

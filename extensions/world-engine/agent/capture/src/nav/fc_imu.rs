@@ -3,13 +3,22 @@
 //! from the flight controller. Set `atlas.lidar.imu = "fc"` and declare a rig
 //! IMU sensor `fc` mounted at the body origin.
 //!
-//! The FC's `RAW_IMU` (its calibrated gyro and accelerometer, body FRD) is
-//! the stream, turned into FLU ([`from_raw`]). The planar matcher integrates
-//! the gyro for its rotation prior, so the prior turns with the airframe and
-//! nothing else: the EKF's yaw corrections never reach it. That matters with
+//! The FC's `RAW_IMU` (its calibrated gyro, body FRD) is the stream's rate,
+//! turned into FLU ([`from_raw`]). The planar matcher integrates the gyro
+//! for its rotation prior, so the prior turns with the airframe and nothing
+//! else: the EKF's yaw corrections never reach it. That matters with
 //! external navigation, where the EKF fuses the matcher's own pose; a prior
 //! that followed the fused yaw would feed every heading error back into the
 //! matcher.
+//!
+//! The stream's specific force is gravity in the attitude the FC last
+//! reported, not `RAW_IMU`'s accelerometer. A multirotor's accelerometer
+//! reads its thrust, which leans off the vertical by whatever the airframe
+//! is accelerating at: braking into and out of a turn at the end of an
+//! aisle it leant 15 to 20 degrees, the matcher's attitude filter levelled
+//! with it, and the heading of the levelled frame came out of the turn 2 to
+//! 4 degrees off. The FC's EKF attitude has the manoeuvre taken out (it
+//! fuses velocity), and gravity carries none of its yaw.
 //!
 //! Until `RAW_IMU` arrives (an FC that has not been asked to stream it), the
 //! stream is synthesised from consecutive FC EKF attitudes ([`sample`]: `R`
@@ -44,13 +53,22 @@ fn rotation_vector(r: &[f64; 9]) -> [f64; 3] {
 }
 
 /// A `RAW_IMU` sample at host `t_ns` in the FLU body: `(x, -y, -z)` of the
-/// FRD rate and specific force.
-pub fn from_raw(t_ns: u64, s: &RawImu) -> ImuSample {
+/// FRD rate. Its specific force is gravity in `attitude` (host time and
+/// `R` world-from-body, ENU world, FLU body), the FC's latest, when that is
+/// no more than [`MAX_GAP_NS`] from the sample; without one, the
+/// accelerometer's own reading.
+pub fn from_raw(t_ns: u64, s: &RawImu, attitude: Option<(u64, [f64; 9])>) -> ImuSample {
     let flu = |v: [f64; 3]| vec![v[0], -v[1], -v[2]];
+    let accel = match attitude {
+        Some((t, r)) if t.abs_diff(t_ns) <= MAX_GAP_NS => {
+            se3::mat_vec(&se3::transpose(&r), [0.0, 0.0, G]).to_vec()
+        }
+        _ => flu(s.accel),
+    };
     ImuSample {
         t_ns,
         gyro: flu(s.gyro),
-        accel: flu(s.accel),
+        accel,
         ..Default::default()
     }
 }
@@ -121,16 +139,34 @@ mod tests {
 
     #[test]
     fn raw_imu_turns_into_the_flu_body() {
-        let s = from_raw(
-            7,
-            &RawImu {
-                time_usec: 1,
-                gyro: [0.1, 0.2, 0.3],
-                accel: [0.5, 0.0, -9.8],
-            },
-        );
+        let raw = RawImu {
+            time_usec: 1,
+            gyro: [0.1, 0.2, 0.3],
+            accel: [0.5, 0.0, -9.8],
+        };
+        let s = from_raw(7, &raw, None);
         assert_eq!(s.t_ns, 7);
         assert_eq!(s.gyro, vec![0.1, -0.2, -0.3], "a right yaw (FRD +z) is FLU -z");
         assert_eq!(s.accel, vec![0.5, -0.0, 9.8], "level and still reads +g on FLU z");
+    }
+
+    /// Braking hard, the accelerometer leans back with the thrust; the
+    /// specific force fed is gravity in the FC's attitude (rolled 10 degrees
+    /// here) while that attitude is recent, the reading only without one.
+    #[test]
+    fn raw_imu_takes_gravity_from_the_fc_attitude() {
+        let raw = RawImu {
+            time_usec: 1,
+            gyro: [0.0, 0.0, 0.3],
+            accel: [3.0, 0.0, -9.8],
+        };
+        let r = rpy(0.1745, 0.0, 1.0);
+        let s = from_raw(100_000_000, &raw, Some((60_000_000, r)));
+        assert_eq!(s.gyro, vec![0.0, -0.0, -0.3]);
+        let roll = s.accel[1].atan2(s.accel[2]);
+        assert!((roll - 0.1745).abs() < 1e-6, "{roll}");
+        assert!(s.accel[0].abs() < 1e-9, "no lean along x: {:?}", s.accel);
+        let stale = from_raw(2_000_000_000, &raw, Some((60_000_000, r)));
+        assert_eq!(stale.accel, vec![3.0, -0.0, 9.8], "a stale attitude is not used");
     }
 }

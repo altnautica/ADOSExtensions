@@ -11,6 +11,12 @@
 //! `ψ̇` by `roll̇·sin(pitch)`, which does not average out on a vehicle that
 //! pitches and rolls as it manoeuvres, and would leave the prior turning
 //! short of (or past) the scans.
+//!
+//! A gyro's bias about the vertical turns the heading at a steady rate the
+//! gravity direction cannot see. The scan matcher can: [`Attitude::learn_bias`]
+//! takes the heading the scans turned against the gyro's and integrates the
+//! difference, slowly, into a bias about the LiDAR's z axis that is removed
+//! from every sample before it is integrated.
 
 use std::collections::VecDeque;
 
@@ -48,6 +54,17 @@ const MAX_LEVEL_TILT_RAD: f64 = 1.0;
 const MAX_GAP_S: f64 = 0.5;
 /// How long the heading history reaches back.
 const HISTORY_NS: u64 = 2_000_000_000;
+/// Time constant of the gyro z-bias estimate: long against a scan's match
+/// noise, short against a gyro bias that drifts with temperature (a
+/// simulated one went from 0.03 to 0.23 degrees/s and back over eight
+/// minutes) and the minutes a biased heading takes to pull a map off. The
+/// matcher corrects only part of the prior's error on each scan, so the
+/// estimate settles over a few of these.
+const BIAS_TAU_S: f64 = 12.0;
+/// Bound on the gyro z bias, rad/s (1 degree/s, several times a calibrated
+/// MEMS gyro's): one scan's heading error can move the estimate no faster
+/// than this over [`BIAS_TAU_S`].
+pub const MAX_GYRO_BIAS_RAD_S: f64 = std::f64::consts::PI / 180.0;
 
 /// Attitude of the LiDAR frame from IMU samples.
 #[derive(Debug, Clone)]
@@ -62,6 +79,8 @@ pub struct Attitude {
     heading: f64,
     /// `(t_ns, heading)` per sample, oldest first.
     history: VecDeque<(u64, f64)>,
+    /// Estimated gyro bias about the LiDAR's z axis, rad/s.
+    bias_z: f64,
 }
 
 impl Attitude {
@@ -81,6 +100,7 @@ impl Attitude {
             heading_rate: 0.0,
             heading: 0.0,
             history: VecDeque::new(),
+            bias_z: 0.0,
         }
     }
 
@@ -90,7 +110,7 @@ impl Attitude {
     }
 
     pub fn update(&mut self, s: &ImuSample) {
-        let w = self.r_lidar_imu * Vector3::from(s.gyro);
+        let w = self.r_lidar_imu * Vector3::from(s.gyro) - Vector3::new(0.0, 0.0, self.bias_z);
         let a = self.r_lidar_imu * Vector3::from(s.accel);
         let Some(last) = self.last_t_ns else {
             self.last_t_ns = Some(s.t_ns);
@@ -212,6 +232,28 @@ impl Attitude {
         let vz = -(up[0] * v_xy[0] + up[1] * v_xy[1]) / up[2];
         let v = r * Vector3::new(v_xy[0], v_xy[1], vz);
         Some([v.x, v.y])
+    }
+
+    /// Estimated gyro bias about the LiDAR's z axis, rad/s, removed from
+    /// every sample before it is integrated.
+    pub fn gyro_bias_z(&self) -> f64 {
+        self.bias_z
+    }
+
+    /// Learn the gyro's z bias from the heading the scans turned over `dt_s`
+    /// seconds minus the heading the (bias-corrected) gyro turned over the
+    /// same interval, radians. The difference, as a rate bounded by
+    /// [`MAX_GYRO_BIAS_RAD_S`], moves the bias over [`BIAS_TAU_S`]: an
+    /// integral on the scans' heading, so a bias the matcher only partly
+    /// corrects on each scan is still removed in full. Only the scans feed
+    /// it, never the flight controller's fused yaw.
+    pub fn learn_bias(&mut self, scan_minus_gyro: f64, dt_s: f64) {
+        if dt_s <= 0.0 || !dt_s.is_finite() || !scan_minus_gyro.is_finite() {
+            return;
+        }
+        let rate = (scan_minus_gyro / dt_s).clamp(-MAX_GYRO_BIAS_RAD_S, MAX_GYRO_BIAS_RAD_S);
+        let gain = (dt_s / BIAS_TAU_S).min(1.0);
+        self.bias_z = (self.bias_z - rate * gain).clamp(-MAX_GYRO_BIAS_RAD_S, MAX_GYRO_BIAS_RAD_S);
     }
 }
 
@@ -341,5 +383,56 @@ mod tests {
         assert_eq!(Attitude::new(2.0, 0.005, id).level_velocity([1.0, 0.0]), None);
         assert_eq!(still(1.2, 0.0, id).level_velocity([1.0, 0.0]), None);
         assert!(still(0.8, 0.0, id).level_velocity([1.0, 0.0]).is_some());
+    }
+
+    /// A still IMU whose gyro reads 0.2 degrees/s about z: the scans see no
+    /// turn, so every scan's heading against the gyro's is minus the bias
+    /// times the interval. Learnt over a minute, the bias comes out of the
+    /// samples and the heading stops turning.
+    #[test]
+    fn a_still_gyros_z_bias_is_learnt_from_the_scans() {
+        let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut a = Attitude::new(2.0, 0.005, id);
+        let bias = 0.2f64.to_radians();
+        let mut t = 0u64;
+        let feed = |a: &mut Attitude, t: &mut u64| {
+            for _ in 0..20 {
+                a.update(&ImuSample {
+                    t_ns: *t,
+                    gyro: [0.0, 0.0, bias],
+                    accel: [0.0, 0.0, 9.81],
+                });
+                *t += 5_000_000;
+            }
+        };
+        feed(&mut a, &mut t);
+        for _ in 0..1200 {
+            let before = a.heading();
+            feed(&mut a, &mut t);
+            a.learn_bias(-(a.heading() - before), 0.1);
+        }
+        let learnt = a.gyro_bias_z();
+        assert!((learnt - bias).abs() < 0.01 * bias, "bias {}", learnt.to_degrees());
+        let before = a.heading();
+        feed(&mut a, &mut t);
+        assert!((a.heading() - before).abs() < 1e-5, "still turning");
+    }
+
+    /// One wild match moves the bias by no more than the bound over the time
+    /// constant, and the bias never passes the bound.
+    #[test]
+    fn a_single_bad_match_barely_moves_the_bias() {
+        let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        let mut a = Attitude::new(2.0, 0.005, id);
+        a.learn_bias(0.5, 0.1);
+        let step = MAX_GYRO_BIAS_RAD_S * 0.1 / BIAS_TAU_S;
+        assert!((a.gyro_bias_z() + step).abs() < 1e-12, "{}", a.gyro_bias_z());
+        for _ in 0..100_000 {
+            a.learn_bias(-0.5, 0.1);
+        }
+        assert!((a.gyro_bias_z() - MAX_GYRO_BIAS_RAD_S).abs() < 1e-12);
+        a.learn_bias(f64::NAN, 0.1);
+        a.learn_bias(0.1, 0.0);
+        assert!((a.gyro_bias_z() - MAX_GYRO_BIAS_RAD_S).abs() < 1e-12);
     }
 }

@@ -108,7 +108,8 @@ impl Engine {
 
     /// With `atlas.lidar.imu = "fc"`, the FC's IMU stream for the pose
     /// provider (see [`crate::nav::fc_imu`]): every `RAW_IMU` sample since
-    /// the last tick, or, until the FC streams `RAW_IMU`, the newest FC
+    /// the last tick, with gravity in the FC's newest attitude as its
+    /// specific force, or, until the FC streams `RAW_IMU`, the newest FC
     /// attitude turned into a sample.
     fn feed_fc_imu(&mut self) {
         if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
@@ -117,13 +118,24 @@ impl Engine {
         let Some(fc) = self.nav_deps.fc_feed.as_ref() else {
             return;
         };
+        // The bridge works in a z-up world with an FLU body.
+        let attitude = fc.attitude().map(|(t_ns, r_ned_frd)| {
+            let r_enu_flu = se3::mat_mul(
+                &crate::geodesy::R_ENU_NED,
+                &se3::mat_mul(&r_ned_frd, &crate::geodesy::R_FRD_FLU),
+            );
+            (t_ns, r_enu_flu)
+        });
         let raw = fc.drain_imu();
         if !raw.is_empty() {
             if !self.fc_raw_imu {
                 tracing::info!("nav_imu_source_raw_imu");
                 self.fc_raw_imu = true;
             }
-            let samples = raw.iter().map(|(t, s)| fc_imu::from_raw(*t, s)).collect();
+            let samples = raw
+                .iter()
+                .map(|(t, s)| fc_imu::from_raw(*t, s, attitude))
+                .collect();
             self.pose.feed_imu(fc_imu::FC_IMU_ID, &ImuBatch { samples });
             return;
         }
@@ -132,18 +144,12 @@ impl Engine {
         }
         // The attitude alone: a GNSS-denied FC reports no EKF position (so no
         // pose estimate) until the external navigation it waits for arrives.
-        let Some((t_ns, r_ned_frd)) = fc.attitude() else {
+        let Some(cur) = attitude else {
             return;
         };
-        if self.fc_imu_prev.is_some_and(|(t, _)| t == t_ns) {
+        if self.fc_imu_prev.is_some_and(|(t, _)| t == cur.0) {
             return;
         }
-        // The bridge works in a z-up world with an FLU body.
-        let r_enu_flu = se3::mat_mul(
-            &crate::geodesy::R_ENU_NED,
-            &se3::mat_mul(&r_ned_frd, &crate::geodesy::R_FRD_FLU),
-        );
-        let cur = (t_ns, r_enu_flu);
         if let Some(s) = fc_imu::sample(self.fc_imu_prev, cur) {
             let batch = ImuBatch { samples: vec![s] };
             self.pose.feed_imu(fc_imu::FC_IMU_ID, &batch);

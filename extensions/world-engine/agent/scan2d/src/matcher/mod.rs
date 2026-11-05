@@ -363,6 +363,34 @@ pub fn translation_information(h: &Matrix3<f64>) -> Option<Matrix2<f64>> {
     s.iter().all(|v| v.is_finite()).then_some(s)
 }
 
+/// Information on rotation once translation is solved for: the Schur
+/// complement of the translation block of an information matrix over
+/// `(x, y, θ)`, translation directions that carry no information left out,
+/// so the two walls of a featureless corridor still pin the rotation. Units
+/// of `h[(2, 2)]` (m² per unit residual variance for
+/// [`constraint_information`]).
+pub fn rotation_information(h: &Matrix3<f64>) -> f64 {
+    let htt = Matrix2::new(h[(0, 0)], h[(0, 1)], h[(1, 0)], h[(1, 1)]);
+    let hth = Vector2::new(h[(0, 2)], h[(1, 2)]);
+    let eig = SymmetricEigen::new(htt);
+    let max = eig.eigenvalues.max();
+    let mut s = h[(2, 2)];
+    if max > 0.0 && max.is_finite() {
+        for i in 0..2 {
+            let l = eig.eigenvalues[i];
+            if l > 1e-12 * max {
+                let p = eig.eigenvectors.column(i).dot(&hth);
+                s -= p * p / l;
+            }
+        }
+    }
+    if s.is_finite() {
+        s.max(0.0)
+    } else {
+        0.0
+    }
+}
+
 /// `eig_min / eig_max` of the translation part of an information matrix
 /// over `(x, y, θ)` (rotation marginalised out), 0 when it carries none: near
 /// 0 along a featureless corridor, near 1 where walls run in both directions.
