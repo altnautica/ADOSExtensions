@@ -280,6 +280,15 @@ All notable changes to the World Engine extension.
 - **`map_status.memory_used_mb` is the capture process's resident memory**
   (`VmRSS`), null when `/proc` cannot be read, in place of the bytes the map
   stores held, which read 0 while the map was empty. 2.1.10.
+- **The lidar SLAM matches a scan only once the flight controller's IMU
+  covers it.** The FC's `RAW_IMU` reached the matcher only on the 100 ms
+  pose interval while each scan went to it at once, so a scan was matched
+  before the IMU across it arrived and the matcher extrapolated the heading
+  (about 7° lost in the bends of a forest flight). The FC's IMU and ground
+  velocity are now fed before each scan, and the matcher holds a scan (at
+  most one revolution) until the newest IMU sample is within 10 ms of its
+  last point. `nav_imu_feed` logs the IMU rate and the widest scan-to-IMU
+  gap every 10 s. 2.1.11.
 
 ## [2.0.0]
 

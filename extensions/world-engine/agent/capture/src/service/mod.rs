@@ -187,6 +187,10 @@ pub(crate) struct Engine {
     fc_raw_imu: bool,
     /// The FC's optical-flow ground velocity has reached the pose provider.
     fc_flow: bool,
+    /// The newest FC IMU sample time handed to the pose provider.
+    newest_fc_imu_ns: Option<u64>,
+    /// The FC IMU feed rate and scan coverage since the last `nav_imu_feed`.
+    nav_feed: nav_lane::NavFeedStats,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
     reconstruct_steps: SharedSteps,
 }
@@ -287,6 +291,8 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         fc_imu_prev: None,
         fc_raw_imu: false,
         fc_flow: false,
+        newest_fc_imu_ns: None,
+        nav_feed: Default::default(),
         reconstruct_steps,
     };
     // Frames are pulled on their own task so a source read is never

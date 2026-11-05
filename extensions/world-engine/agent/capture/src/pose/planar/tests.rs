@@ -178,6 +178,63 @@ fn a_box_room_walk_is_tracked_within_ten_centimetres_and_good() {
     assert!(p.single_floor());
 }
 
+/// Live order: each scan reaches the matcher before the IMU batch covering
+/// it, while the body yaw zigzags (+90°/s, then −90°/s, each revolution).
+/// Once an IMU stream exists, a scan waits until the IMU reaches its last
+/// point, so the matcher never extrapolates the previous revolution's rate
+/// across it; the batch releases it, and the heading stays on the truth.
+#[test]
+fn a_scan_waits_for_the_imu_that_covers_it() {
+    let walls = rect(0.0, 0.0, 6.0, 4.0);
+    let w = 90f64.to_radians();
+    let rate = |i: u64| if i.is_multiple_of(2) { w } else { -w };
+    // A triangle wave: up over even revolutions, back down over odd ones.
+    let yaw = move |t: u64| {
+        let dt = t - T0;
+        let (i, within) = (dt / PERIOD_NS, (dt % PERIOD_NS) as f64 * 1e-9);
+        let peak = w * PERIOD_NS as f64 * 1e-9;
+        if i.is_multiple_of(2) {
+            w * within
+        } else {
+            peak - w * within
+        }
+    };
+    let body = move |t: u64| [3.0, 2.0, yaw(t)];
+    let p = spawn();
+    let mut est = Vec::new();
+    let wait_for = |n: u64| {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while p.stats().scans_processed < n {
+            assert!(Instant::now() < deadline, "scan {n} not matched in 60 s");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    };
+    for i in 0..40u64 {
+        let t = T0 + i * PERIOD_NS;
+        p.feed_lidar(&scan(t, &walls, &body));
+        if i > 0 {
+            // The IMU ends a revolution before this scan's last point.
+            std::thread::sleep(Duration::from_millis(50));
+            assert_eq!(
+                p.stats().scans_processed,
+                i,
+                "scan {i} matched before its IMU arrived"
+            );
+        }
+        p.feed_imu("imu0", &imu(t, t + PERIOD_NS, rate(i)));
+        wait_for(i + 1);
+        p.drain_new(&mut est);
+    }
+    let mut trusted = 0;
+    for e in est.iter().filter(|e| e.health != VioHealth::Lost) {
+        let got = e.r[3].atan2(e.r[0]);
+        let err = (got - yaw(e.t_ns)).sin().asin().to_degrees().abs();
+        assert!(err < 1.5, "t {} yaw err {err:.2}°", e.t_ns);
+        trusted += 1;
+    }
+    assert!(trusted >= 10, "{trusted} trusted poses");
+}
+
 #[test]
 fn a_featureless_corridor_is_degraded() {
     // 2 m wide, its ends far beyond the 12 m range.

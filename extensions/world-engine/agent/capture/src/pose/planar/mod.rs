@@ -189,7 +189,20 @@ impl PlanarLidarPose {
     }
 }
 
+/// How far the newest IMU sample may trail a scan's last point before the
+/// scan waits for more: one 100 Hz `RAW_IMU` period.
+const IMU_COVER_SLACK_NS: u64 = 10_000_000;
+
+/// The time of a scan's last point.
+fn scan_end_ns(scan: &ScanInput) -> u64 {
+    scan.t_ns + u64::from(scan.t_offset_ns.iter().copied().max().unwrap_or(0))
+}
+
 /// The matcher loop: IMU and scans in arrival order until the provider drops.
+/// A scan whose span the IMU has not covered yet waits (at most one scan,
+/// so at most one revolution) until the IMU reaches its end, so the matcher
+/// never extrapolates the rotation across it. With no IMU ever fed, scans
+/// are matched at once.
 fn run(
     mut slam: LocalSlam,
     rx: Receiver<Input>,
@@ -198,30 +211,55 @@ fn run(
     t_body_lidar: [f64; 16],
 ) {
     let ratio = slam.config().degenerate_ratio;
+    let process = |slam: &mut LocalSlam, scan: ScanInput| {
+        let out = slam.feed_scan(&scan);
+        let health = health_of(&out, slam.inserted_scans(), ratio);
+        let (r, t) = se3::from_mat4(&world_from_body(&t_w_l(&out), &t_body_lidar));
+        track.set_quality(PoseQuality {
+            degeneracy_ratio: (out.score > 0.0).then_some(out.degeneracy),
+            ..PoseQuality::default()
+        });
+        track.push(PoseEstimate {
+            t_ns: out.t_ns,
+            r,
+            t,
+            cov: nominal_cov(health),
+            source: PoseSource::Lidar,
+            health,
+        });
+        counters.queued_scans.fetch_sub(1, Ordering::Release);
+        counters.scans_processed.fetch_add(1, Ordering::Release);
+    };
+    let mut newest_imu: Option<u64> = None;
+    let mut pending: Option<ScanInput> = None;
     while let Ok(input) = rx.recv() {
         match input {
-            Input::Imu(samples) => samples.iter().for_each(|s| slam.feed_imu(s)),
+            Input::Imu(samples) => {
+                for s in &samples {
+                    slam.feed_imu(s);
+                    newest_imu = Some(newest_imu.map_or(s.t_ns, |n| n.max(s.t_ns)));
+                }
+                if let (Some(n), Some(p)) = (newest_imu, pending.as_ref()) {
+                    if n + IMU_COVER_SLACK_NS >= scan_end_ns(p) {
+                        let scan = pending.take().expect("checked");
+                        process(&mut slam, scan);
+                    }
+                }
+            }
             Input::Velocity(samples) => samples.iter().for_each(|s| slam.feed_velocity(s)),
             Input::Scan(scan) => {
-                let out = slam.feed_scan(&scan);
-                let health = health_of(&out, slam.inserted_scans(), ratio);
-                let (r, t) = se3::from_mat4(&world_from_body(&t_w_l(&out), &t_body_lidar));
-                track.set_quality(PoseQuality {
-                    degeneracy_ratio: (out.score > 0.0).then_some(out.degeneracy),
-                    ..PoseQuality::default()
-                });
-                track.push(PoseEstimate {
-                    t_ns: out.t_ns,
-                    r,
-                    t,
-                    cov: nominal_cov(health),
-                    source: PoseSource::Lidar,
-                    health,
-                });
-                counters.queued_scans.fetch_sub(1, Ordering::Release);
-                counters.scans_processed.fetch_add(1, Ordering::Release);
+                if let Some(p) = pending.take() {
+                    process(&mut slam, p);
+                }
+                match newest_imu {
+                    Some(n) if n + IMU_COVER_SLACK_NS < scan_end_ns(&scan) => pending = Some(scan),
+                    _ => process(&mut slam, scan),
+                }
             }
         }
+    }
+    if let Some(p) = pending.take() {
+        process(&mut slam, p);
     }
 }
 

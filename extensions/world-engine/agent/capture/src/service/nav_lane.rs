@@ -13,6 +13,30 @@ use crate::pose::{se3, PoseEstimate, PoseProvider};
 use crate::quality::lidar_depth::LidarDepth;
 use crate::recorder::Item;
 
+/// How often `nav_imu_feed` reports the FC IMU feed.
+const NAV_FEED_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The FC IMU feed since the last `nav_imu_feed` log: samples handed to the
+/// pose provider, scans, and the widest gap between a scan's last point and
+/// the newest IMU sample fed before it.
+pub(crate) struct NavFeedStats {
+    imu_samples: u64,
+    scans: u64,
+    max_gap_ns: i64,
+    since: std::time::Instant,
+}
+
+impl Default for NavFeedStats {
+    fn default() -> Self {
+        Self {
+            imu_samples: 0,
+            scans: 0,
+            max_gap_ns: 0,
+            since: std::time::Instant::now(),
+        }
+    }
+}
+
 impl Engine {
     /// The flight controller's up height (its EKF world is ENU), metres.
     pub(super) fn fc_up(&self) -> Option<f64> {
@@ -70,6 +94,18 @@ impl Engine {
     /// keyframe depth, the live map, the session record and the node stream
     /// once its pose is known ([`Self::place_scans`]).
     pub(super) async fn on_lidar(&mut self, scan: LidarScan) {
+        // The FC's IMU up to now first, so the matcher has the rotation
+        // across this scan before it sees the scan.
+        self.feed_fc_imu();
+        self.feed_fc_velocity();
+        if self.cfg.lidar.imu == fc_imu::FC_IMU_ID {
+            let end = scan.t_ns + u64::from(scan.t_offset_ns.iter().copied().max().unwrap_or(0));
+            let f = &mut self.nav_feed;
+            f.scans += 1;
+            if let Some(n) = self.newest_fc_imu_ns {
+                f.max_gap_ns = f.max_gap_ns.max(end as i64 - n as i64);
+            }
+        }
         self.pose.feed_lidar(&scan);
         let mount = self.lidar_mount(&scan.sensor_id);
         if let Some(d) = self.nav.body_scan(&scan, &mount, self.session.is_some()) {
@@ -156,6 +192,10 @@ impl Engine {
                 tracing::info!("nav_imu_source_raw_imu");
                 self.fc_raw_imu = true;
             }
+            self.nav_feed.imu_samples += raw.len() as u64;
+            if let Some(t) = raw.iter().map(|(t, _)| *t).max() {
+                self.newest_fc_imu_ns = Some(self.newest_fc_imu_ns.map_or(t, |n| n.max(t)));
+            }
             let samples = raw
                 .iter()
                 .map(|(t, s)| fc_imu::from_raw(*t, s, attitude))
@@ -177,6 +217,8 @@ impl Engine {
         if let Some(s) = fc_imu::sample(self.fc_imu_prev, cur) {
             let batch = ImuBatch { samples: vec![s] };
             self.pose.feed_imu(fc_imu::FC_IMU_ID, &batch);
+            self.nav_feed.imu_samples += 1;
+            self.newest_fc_imu_ns = Some(cur.0);
         }
         self.fc_imu_prev = Some(cur);
     }
@@ -220,10 +262,30 @@ impl Engine {
         self.place_scans().await;
     }
 
+    /// At most every [`NAV_FEED_LOG_EVERY`], with the FC as the IMU: the IMU
+    /// rate fed to the pose provider and the widest scan-to-IMU gap.
+    fn log_nav_feed(&mut self) {
+        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+            return;
+        }
+        let elapsed_s = self.nav_feed.since.elapsed().as_secs_f64();
+        if elapsed_s < NAV_FEED_LOG_EVERY.as_secs_f64() {
+            return;
+        }
+        let f = std::mem::take(&mut self.nav_feed);
+        tracing::info!(
+            imu_hz = f.imu_samples as f64 / elapsed_s,
+            scans = f.scans,
+            max_scan_imu_gap_ms = f.max_gap_ns as f64 / 1e6,
+            "nav_imu_feed"
+        );
+    }
+
     /// The 1 Hz live-map publish: changed occupancy tiles, the sweep delta
     /// and the map status. The keyframe and scan-ring shares of the budget are
     /// applied to the open session's queues here.
     pub(super) async fn nav_slow_tick(&mut self) {
+        self.log_nav_feed();
         let budget = self.nav.settings().budget;
         let recorder = self.session.as_ref().map(|s| &s.recorder);
         if let Some(r) = recorder {
