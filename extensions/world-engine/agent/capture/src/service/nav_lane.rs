@@ -7,8 +7,8 @@ use ados_capture_contract::v1::ImuBatch;
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
-use crate::nav::{fc_imu, TickInputs};
-use crate::pose::{se3, PoseProvider};
+use crate::nav::{fc_imu, heading, TickInputs};
+use crate::pose::{se3, PoseEstimate, PoseProvider};
 use crate::quality::lidar_depth::LidarDepth;
 use crate::recorder::Item;
 
@@ -23,13 +23,36 @@ impl Engine {
     }
 
     /// The flight controller's attitude yaw (its compass heading), radians
-    /// clockwise from north: the map's north.
+    /// clockwise from north: the map's north until the GNSS heading fit.
     pub(super) fn fc_heading(&self) -> Option<f64> {
         self.nav_deps
             .fc_feed
             .as_ref()
             .and_then(|f| f.attitude())
             .map(|(_, r_ned_frd)| crate::nav::frd_yaw(&r_ned_frd))
+    }
+
+    /// Pair each new provider estimate with the flight controller's EKF
+    /// position at the same instant for the map's heading fit, while GNSS has
+    /// been steady long enough for that position to be GNSS-referenced; with
+    /// GNSS gone the fit freezes. The EKF track is the session ENU world
+    /// (north = y, east = x).
+    pub(super) fn fold_gnss_heading(&mut self, poses: &[PoseEstimate]) {
+        if !self
+            .vehicle
+            .gnss_steady(crate::clock::mono_ns(), heading::GNSS_SETTLE_NS)
+        {
+            self.nav.on_gnss_lost();
+            return;
+        }
+        let Some(fc) = self.nav_deps.fc_feed.as_ref() else {
+            return;
+        };
+        for e in poses {
+            if let Some(ekf) = fc.track().pose_at(e.t_ns) {
+                self.nav.on_gnss_ref(e, [ekf.t[1], ekf.t[0]]);
+            }
+        }
     }
 
     fn lidar_mount(&self, sensor: &str) -> [f64; 16] {

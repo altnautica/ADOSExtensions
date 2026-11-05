@@ -12,10 +12,15 @@
 //! Navigation SLAM and the live occupancy are built on board in every
 //! placement; the placement sets the live sweep-cloud resolution and whether
 //! the node reconstructs in flight or after landing.
+//!
+//! `map_ned`'s north starts as the flight controller's compass heading at the
+//! first pose and is replaced by the GNSS displacement fit ([`heading`]) once
+//! the drone has flown a baseline on GNSS; the fit freezes when GNSS goes.
 
 pub mod budget;
 pub mod fc_imu;
 pub mod frames;
+pub mod heading;
 
 #[cfg(test)]
 mod tests;
@@ -26,12 +31,16 @@ use world_engine_livemap::LiveMap;
 use world_engine_protocol::atlas::{
     ComputePlacement, LiveOccupancy, LivePointCloud, MapStatus, NavFrame, NavPoseMode,
     NavPoseSource, PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, StreamPhase,
-    StreamProgress,
+    StreamProgress, VioHealth,
 };
 
 use crate::lidar_scan::LidarScan;
 use crate::pose::{se3, PoseEstimate};
 use budget::Budget;
+use heading::HeadingAlign;
+
+/// A fitted heading is logged again once it has moved this far, radians.
+const HEADING_LOG_STEP_RAD: f64 = 0.25 * std::f64::consts::PI / 180.0;
 
 /// The session subdirectory the live map is saved under.
 pub const SESSION_MAP_DIR: &str = "map";
@@ -96,11 +105,15 @@ pub struct NavMap {
     /// The flight controller's up height at the first nav pose: `map_ned` z is
     /// measured from it.
     fc_up0: Option<f64>,
-    /// The heading of the SLAM world's x axis, radians clockwise from north:
-    /// `map_ned = Rz(yaw0) · map_frd`. Latched from the flight controller's
-    /// attitude yaw (its compass) at the first pose that has one; until then
-    /// nothing is placed in the map.
+    /// The compass heading of the SLAM world's x axis, radians clockwise from
+    /// north: `map_ned = Rz(yaw0) · map_frd` until the GNSS fit takes over.
+    /// Latched from the flight controller's attitude yaw at the first pose
+    /// that has one; until then nothing is placed in the map.
     yaw0: Option<f64>,
+    /// The GNSS displacement fit of the same heading.
+    heading: HeadingAlign,
+    /// The fitted yaw last logged.
+    logged_yaw: Option<f64>,
     /// The latest pose in `map_ned`: `(R, t)`.
     latest: Option<([f64; 9], [f64; 3])>,
 }
@@ -116,6 +129,16 @@ pub fn frd_yaw(r: &[f64; 9]) -> f64 {
     r[3].atan2(r[0])
 }
 
+/// An angle wrapped to `(-π, π]`.
+fn wrap_pi(a: f64) -> f64 {
+    let w = a.rem_euclid(std::f64::consts::TAU);
+    if w > std::f64::consts::PI {
+        w - std::f64::consts::TAU
+    } else {
+        w
+    }
+}
+
 impl NavMap {
     pub fn new(settings: NavSettings) -> Self {
         Self {
@@ -124,6 +147,8 @@ impl NavMap {
             last_pub_ms: None,
             fc_up0: None,
             yaw0: None,
+            heading: HeadingAlign::default(),
+            logged_yaw: None,
             latest: None,
         }
     }
@@ -134,7 +159,51 @@ impl NavMap {
 
     /// Whether the map is north-aligned yet (the FC heading has been seen).
     pub fn heading_known(&self) -> bool {
-        self.yaw0.is_some()
+        self.map_yaw().is_some()
+    }
+
+    /// `map_ned = Rz(map_yaw) · map_frd`: the GNSS fit when there is one, else
+    /// the compass latch.
+    pub fn map_yaw(&self) -> Option<f64> {
+        self.heading.fit().map(|f| f.yaw).or(self.yaw0)
+    }
+
+    /// Fold one provider estimate paired with the flight controller's EKF
+    /// position at the same instant (`ekf_ne`: north, east, metres), taken
+    /// while that position is GNSS-referenced. A tracking pose only.
+    pub fn on_gnss_ref(&mut self, e: &PoseEstimate, ekf_ne: [f64; 2]) {
+        if e.health != VioHealth::Good {
+            return;
+        }
+        let t_frd = frames::flu_to_frd_vec(e.t);
+        let Some(fit) = self.heading.observe([t_frd[0], t_frd[1]], ekf_ne) else {
+            return;
+        };
+        let moved = self
+            .logged_yaw
+            .is_none_or(|y| wrap_pi(fit.yaw - y).abs() >= HEADING_LOG_STEP_RAD);
+        if moved {
+            self.logged_yaw = Some(fit.yaw);
+            tracing::info!(
+                yaw_deg = fit.yaw.to_degrees(),
+                compass_offset_deg = self.yaw0.map(|y| wrap_pi(fit.yaw - y).to_degrees()),
+                baseline_m = fit.baseline_m,
+                residual_m = fit.residual_m,
+                sigma_deg = fit.sigma_rad.to_degrees(),
+                "nav_map_heading_fitted"
+            );
+        }
+    }
+
+    /// GNSS is not usable now: the heading fit freezes.
+    pub fn on_gnss_lost(&mut self) {
+        if self.heading.freeze() {
+            tracing::info!(
+                yaw_deg = self.map_yaw().map(f64::to_degrees),
+                fitted = self.heading.fit().is_some(),
+                "nav_map_heading_frozen"
+            );
+        }
     }
 
     /// Whether the lanes publish now.
@@ -161,14 +230,15 @@ impl NavMap {
     /// `map_frd` to the north-aligned `map_ned`, or `None` before the heading
     /// is known.
     fn ned_of(&self, r: &[f64; 9], t: [f64; 3]) -> Option<([f64; 9], [f64; 3])> {
-        let rot = rz(self.yaw0?);
+        let rot = rz(self.map_yaw()?);
         Some((se3::mat_mul(&rot, r), se3::mat_vec(&rot, t)))
     }
 
     /// Fold one provider estimate; the descriptor to publish when the lanes
     /// are on and the interval is due. `fc_heading` is the flight
     /// controller's attitude yaw now (radians from north); the first one seen
-    /// with a pose fixes the map's north. Nothing is published before it.
+    /// with a pose fixes the map's north until the GNSS fit replaces it.
+    /// Nothing is published before the map has a north.
     pub fn on_pose(
         &mut self,
         e: &PoseEstimate,
@@ -178,8 +248,7 @@ impl NavMap {
         session_open: bool,
     ) -> Option<PoseDescriptor> {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
-        if self.yaw0.is_none() {
-            let heading = fc_heading?;
+        if let (None, Some(heading)) = (self.yaw0, fc_heading) {
             let yaw0 = heading - frd_yaw(&r_frd);
             tracing::info!(
                 heading_rad = heading,

@@ -241,3 +241,105 @@ fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
         "{ahead:?}"
     );
 }
+
+/// A forest-trail-like flight on GNSS, then GNSS loss and 137 m more on the
+/// map. Truth is NED; the SLAM world is the body at the first pose (heading
+/// 220.8°); the compass reads 3° east of the truth at the first pose; the
+/// EKF's GNSS position carries white noise and a slow wander. At the loss
+/// ArduPilot shifts the external-navigation position onto its own (it never
+/// rotates it), so from then on the EKF's position is the published map
+/// position plus that shift.
+#[test]
+fn a_3_degree_compass_error_costs_under_a_metre_at_137_m_after_gnss_loss() {
+    let h0 = 220.8f64.to_radians();
+    let compass_err = 3f64.to_radians();
+    // (heading °, length m): 170 m on GNSS, then 160 m on the map.
+    let legs = [
+        (220.8, 40.0),
+        (235.0, 30.0),
+        (260.0, 40.0),
+        (275.0, 60.0),
+        (285.0, 80.0),
+        (300.0, 80.0),
+    ];
+    let step = 0.3;
+    let mut truth = vec![[0.0f64, 0.0f64]];
+    let mut yaws = vec![h0];
+    for (hdg, len) in legs {
+        let (s, c) = f64::to_radians(hdg).sin_cos();
+        for _ in 0..(len / step) as usize {
+            let p = *truth.last().unwrap();
+            truth.push([p[0] + c * step, p[1] + s * step]);
+            yaws.push(f64::to_radians(hdg));
+        }
+    }
+    let k_loss = (170.0 / step) as usize;
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut noise = || {
+        // xorshift, uniform in [-0.5, 0.5) m: σ ≈ 0.29 m.
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f64 / (1u64 << 53) as f64 - 0.5
+    };
+    // FLU SLAM estimate of truth sample k: map_frd = Rz(-h0) · ned.
+    let slam = |k: usize| {
+        let (s, c) = (-h0).sin_cos();
+        let [n, e] = truth[k];
+        let frd = [c * n - s * e, s * n + c * e];
+        estimate(frd[0], -frd[1], -(yaws[k] - h0))
+    };
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut published = Vec::with_capacity(truth.len());
+    for (k, p) in truth.iter().enumerate() {
+        let e = slam(k);
+        if k < k_loss {
+            let wander = 0.8 * (k as f64 / 400.0).sin();
+            let ekf = [p[0] + noise() + wander, p[1] + noise() - wander];
+            nav.on_gnss_ref(&e, ekf);
+        } else {
+            nav.on_gnss_lost();
+        }
+        let pd = nav
+            .on_pose(&e, None, Some(h0 + compass_err), k as i64 * 100, false)
+            .expect("published every 100 ms");
+        published.push([pd.pose.t[0], pd.pose.t[1]]);
+    }
+    let fit = nav.heading.fit().expect("fitted on GNSS");
+    // The EKF's position after the loss: the map's, shifted onto the
+    // truth at the loss.
+    let shift = [
+        truth[k_loss][0] - published[k_loss][0],
+        truth[k_loss][1] - published[k_loss][1],
+    ];
+    let k137 = (k_loss..truth.len())
+        .find(|&k| {
+            let d = [truth[k][0] - truth[k_loss][0], truth[k][1] - truth[k_loss][1]];
+            d[0].hypot(d[1]) >= 137.0
+        })
+        .expect("the route runs 137 m past the loss");
+    let err = |yaw_pub: &dyn Fn(usize) -> [f64; 2]| {
+        let p = yaw_pub(k137);
+        let l = yaw_pub(k_loss);
+        let est = [p[0] - l[0] + truth[k_loss][0], p[1] - l[1] + truth[k_loss][1]];
+        (est[0] - truth[k137][0]).hypot(est[1] - truth[k137][1])
+    };
+    let fitted = err(&|k| [published[k][0] + shift[0], published[k][1] + shift[1]]);
+    assert!(
+        fitted < 1.0,
+        "{fitted:.2} m at 137 m (fit {:.3}°, baseline {:.1} m)",
+        fit.yaw.to_degrees(),
+        fit.baseline_m
+    );
+    // The compass-latched map alone, for scale: the fault this guards.
+    let compass = err(&|k| {
+        let e = slam(k);
+        let frd = [e.t[0], -e.t[1]];
+        let (s, c) = (h0 + compass_err).sin_cos();
+        [c * frd[0] - s * frd[1], s * frd[0] + c * frd[1]]
+    });
+    assert!(compass > 6.0, "the compass latch alone is {compass:.2} m off");
+    // The frozen fit is the SLAM world's true heading.
+    let fit_err = wrap_pi(fit.yaw - h0).to_degrees();
+    assert!(fit_err.abs() < 0.4, "fit off by {fit_err:.3}°");
+}

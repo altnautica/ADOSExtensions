@@ -126,7 +126,7 @@ publishes shared topics other extensions and the agent's navigation API read:
 
 | Topic | Rate | Payload |
 |---|---|---|
-| `plugin.world-engine.pose` | pose interval | Body pose in `map_ned` (north-aligned: x north, y east, z down, origin at the first scan; the planar SLAM world rotated by the flight controller's compass heading latched at the first pose, so its axes match `LOCAL_POSITION_NED`; z is the FC's height above the first pose), with `health`, `frame` and `source`. Map lanes wait for that heading |
+| `plugin.world-engine.pose` | pose interval | Body pose in `map_ned` (north-aligned: x north, y east, z down, origin at the first scan; the planar SLAM world rotated so its axes match `LOCAL_POSITION_NED`, first by the flight controller's compass heading latched at the first pose, then by the heading fitted between the SLAM track and the EKF's GNSS track once 10 m RMS of track has been flown on a steady 3D fix, frozen when GNSS goes; z is the FC's height above the first pose), with `health`, `frame` and `source`. Map lanes wait for the first heading |
 | `plugin.world-engine.scan` | per scan | The scan binned to 360 one-degree bins in the body FRD frame, nearest range per bin, `0` for no return |
 | `plugin.world-engine.occupancy` | 1 Hz | Live: changed 64×64-cell tiles at 5 cm as grey PNG (0 occupied, 254 free, 205 unknown), `kind: "live"`; node products say `kind: "product"` |
 | `plugin.world-engine.pointcloud` | 1 Hz | Live: up to 20 000 new voxel centroids of the sweep cloud (every scan placed by SLAM x, y, yaw, the FC height and the IMU roll and pitch), `kind: "live"` |
