@@ -297,8 +297,8 @@ Agent:
 - `telemetry.extend`, `event.publish`
 - `event.subscribe`, `telemetry.read` (the shared pose and scan topics)
 - `mavlink.read`, `mavlink.write`
-- `estimator.pose.inject` (`ODOMETRY` reaches the flight controller's
-  state estimator)
+- `estimator.pose.inject` (`ODOMETRY` and `SET_GPS_GLOBAL_ORIGIN` reach
+  the flight controller's state estimator; the host requires it for both)
 - `mavlink.component.vio` (the host reserves components 197 and 198
   for kind `vio`)
 
