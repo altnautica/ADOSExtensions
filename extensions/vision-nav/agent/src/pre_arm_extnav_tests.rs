@@ -32,6 +32,7 @@ fn good_params() -> BTreeMap<String, f32> {
         ("EK3_SRC1_YAW", 1.0),
         ("EK3_SRC2_POSXY", 0.0),
         ("EK3_SRC2_VELXY", 5.0),
+        ("EK3_MAG_EF_LIM", 50.0),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -213,7 +214,7 @@ fn fc_params_wait_for_every_value() {
         check(&r, "fc_params"),
         (
             Severity::Pending,
-            "Reading flight controller parameters (9 of 10)."
+            "Reading flight controller parameters (10 of 11)."
         )
     );
     assert!(!r.armable);
@@ -277,6 +278,25 @@ fn viso_delay_follows_the_measured_pose_age() {
     };
     assert_eq!(check(&eval(unknown), "viso_delay"), (Severity::Ok, ""));
     assert_eq!(check(&eval(ready()), "viso_delay"), (Severity::Ok, ""));
+}
+
+/// The compass library's late declination update reaches EKF3 only when it
+/// does not use its own table field (`EK3_MAG_EF_LIM` 0).
+#[test]
+fn fc_params_autodec_without_the_ekf_table_field_blocks() {
+    let r = eval(with_param("EK3_MAG_EF_LIM", 0.0));
+    let (sev, detail) = check(&r, "fc_params");
+    assert_eq!(sev, Severity::Blocking);
+    assert!(
+        detail.starts_with("The compass declination will step when the EKF first gets a position"),
+        "{detail}"
+    );
+    // The default limit with declination learning on is fine.
+    assert_eq!(check(&eval(ready()), "fc_params"), (Severity::Ok, ""));
+    // A fixed declination with the limit at 0 is fine too.
+    let mut fixed = with_param("EK3_MAG_EF_LIM", 0.0);
+    fixed.params.insert("COMPASS_AUTODEC".into(), 0.0);
+    assert_eq!(check(&eval(fixed), "fc_params"), (Severity::Ok, ""));
 }
 
 #[test]

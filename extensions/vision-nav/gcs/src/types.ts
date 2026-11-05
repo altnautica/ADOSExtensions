@@ -30,8 +30,8 @@ export type ImuSourceId =
   | "direct-dronecan";
 
 export interface VisionNavTelemetry {
-  flowQuality?: number;
-  flowRateHz?: number;
+  flowQuality?: number | null;
+  flowRateHz?: number | null;
   flowDistanceM?: number | null;
   companionState?: "active" | "critical" | "terminating" | "inactive";
   opticalFlowSupported: boolean;
@@ -63,11 +63,11 @@ export interface VisionNavTelemetry {
   /** Which IMU source the estimator is currently consuming. */
   imuSource?: ImuSourceId | string;
   /** IMU sample rate in Hz, smoothed by the source's EMA. */
-  imuRateHz?: number;
+  imuRateHz?: number | null;
   /** Whether camera intrinsics have been loaded from calibration. */
   cameraIntrinsicsLoaded?: boolean;
   /** Rolling residual between camera frames and IMU samples in ms. */
-  cameraImuSyncOffsetMs?: number;
+  cameraImuSyncOffsetMs?: number | null;
   /** Aggregate pre-arm report from the gate. The GCS pre-arm card
    * renders each check with its severity and detail string. */
   preArmReport?: PreArmReport;

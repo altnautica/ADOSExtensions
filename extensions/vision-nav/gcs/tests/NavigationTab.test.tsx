@@ -323,6 +323,27 @@ describe("NavigationTab", () => {
     expect(screen.getByTestId("vn-nav-gps-fix").textContent).toBe("No GPS");
   });
 
+  it("renders the agent's null flow and IMU readings as dashes, not a crash", () => {
+    // The agent sends nil for a reading it has none of (external nav: no flow).
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({
+          mode: "external_nav",
+          flowQuality: null,
+          flowRateHz: null,
+          flowDistanceM: null,
+          imuRateHz: null,
+          cameraImuSyncOffsetMs: null,
+        })}
+      />,
+    );
+    expect(screen.getByTestId("vn-flow-rate").textContent).toBe("—");
+    expect(screen.getByTestId("vn-flow-distance").textContent).toBe("—");
+    expect(screen.getByTestId("vn-flow-quality-bar").getAttribute("data-band")).toBe("unknown");
+  });
+
   it("shows the pose age from navigation.poseAgeMs beside the ODOMETRY rate", () => {
     const navState = normalizeNavState({ mode: "external_nav", extnav_health: "good", odom_rate_hz: 30 });
     render(

@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.6.6"
+version: "0.6.7"
 description: "GPS-denied navigation. Optical flow from a downward camera, or an external pose (for example a lidar SLAM) sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A downward camera and the flight controller's gyro feed a 30 Hz angular-flow measurement over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -62,6 +62,8 @@ required_fc_parameters:
     - param: "COMPASS_AUTODEC"
       value: "0"
       note: "Before ArduPilot 4.7: 0, with COMPASS_DEC set to the site's declination."
+    - param: "EK3_MAG_EF_LIM"
+      note: "GNSS-denied with COMPASS_AUTODEC on: above 0 (default 50), so EKF3 takes the declination from its own table at the origin and the compass library's later update cannot step the yaw."
     - param: "ARMING_SKIPCHK"
       value: "8"
       note: "GNSS-denied: skip the GPS pre-arm check."

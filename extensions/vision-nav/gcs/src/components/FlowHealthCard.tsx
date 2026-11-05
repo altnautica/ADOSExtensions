@@ -6,8 +6,8 @@ interface Props {
   telemetry: VisionNavTelemetry;
 }
 
-function bandClassFor(quality: number | undefined): string {
-  if (quality === undefined) return "unknown";
+function bandClassFor(quality: number | null | undefined): string {
+  if (typeof quality !== "number") return "unknown";
   if (quality < 50) return "low";
   if (quality < 150) return "mid";
   return "high";
@@ -29,7 +29,7 @@ function bandFill(band: string): string {
 export function FlowHealthCard({ telemetry }: Props): JSX.Element {
   const quality = telemetry.flowQuality;
   const band = bandClassFor(quality);
-  const pct = quality === undefined ? 0 : Math.max(0, Math.min(100, (quality / 255) * 100));
+  const pct = typeof quality !== "number" ? 0 : Math.max(0, Math.min(100, (quality / 255) * 100));
   const rate = telemetry.flowRateHz;
   const distance = telemetry.flowDistanceM;
 
@@ -83,7 +83,7 @@ export function FlowHealthCard({ telemetry }: Props): JSX.Element {
         <div style={row}>
           <span style={label}>Flow quality</span>
           <span style={value}>
-            {quality === undefined ? "—" : `${quality}/255`}
+            {typeof quality === "number" ? `${quality}/255` : "—"}
           </span>
         </div>
         <div
@@ -103,15 +103,13 @@ export function FlowHealthCard({ telemetry }: Props): JSX.Element {
       <div style={row}>
         <span style={label}>Flow rate</span>
         <span style={value} data-testid="vn-flow-rate">
-          {rate === undefined ? "—" : `${rate.toFixed(1)} Hz`}
+          {typeof rate === "number" ? `${rate.toFixed(1)} Hz` : "—"}
         </span>
       </div>
       <div style={row}>
         <span style={label}>Flow distance</span>
         <span style={value} data-testid="vn-flow-distance">
-          {distance === null || distance === undefined
-            ? "—"
-            : `${distance.toFixed(2)} m`}
+          {typeof distance === "number" ? `${distance.toFixed(2)} m` : "—"}
         </span>
       </div>
     </section>

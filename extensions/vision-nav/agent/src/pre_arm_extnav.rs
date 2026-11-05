@@ -249,6 +249,18 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
             ),
         );
     }
+    // With COMPASS_AUTODEC on, the compass library sets its declination the
+    // first time the EKF has a position, after the yaw alignment. EKF3 takes
+    // the declination from its own table at the origin instead while
+    // EK3_MAG_EF_LIM > 0; at 0 that late step reaches the yaw and becomes a
+    // gyro bias.
+    if v("COMPASS_AUTODEC") != 0 && i.param("EK3_MAG_EF_LIM").is_some_and(|l| l <= 0.0) {
+        return PreArmCheck::blocking(
+            ID,
+            "The compass declination will step when the EKF first gets a position; set \
+             EK3_MAG_EF_LIM above 0 (default 50) or COMPASS_AUTODEC 0 with the site's COMPASS_DEC.",
+        );
+    }
     PreArmCheck::ok(ID, "")
 }
 

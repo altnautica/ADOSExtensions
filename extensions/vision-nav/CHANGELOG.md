@@ -4,6 +4,27 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.6.7]
+
+### Added
+
+- Pre-arm `fc_params` also reads `EK3_MAG_EF_LIM` and blocks when
+  `COMPASS_AUTODEC` is on and `EK3_MAG_EF_LIM` is 0. With declination
+  learning on, the compass library sets its declination the first time the
+  EKF has a position, after the yaw alignment. EKF3 ignores it while it
+  uses its own table field at the origin (`EK3_MAG_EF_LIM` above 0, the
+  default 50); at 0 the late step reaches the yaw. In SITL with the origin
+  set at boot and a position from external navigation, the declination
+  stepped 0 to 12.8° about 2 s after the yaw alignment: with the default
+  limit the gyro bias stayed within 0.04 °/s, with the limit at 0 it
+  reached −0.56 °/s. The manifest lists `EK3_MAG_EF_LIM` among the
+  required parameters.
+
+### Fixed
+
+- The Mission Control panel no longer goes blank when the agent reports no
+  flow reading: the flow card treated a null rate as a number.
+
 ## [0.6.6]
 
 ### Added

@@ -116,11 +116,14 @@ is a new boot), is disarmed, and GPS is not primary.
   alignment with `COMPASS_AUTODEC` on, or when a boot-time `AHRS_ORIGIN`
   is more than 1 km from `origin_lla`.
 - `fc_params`: reads `VISO_TYPE`, `VISO_DELAY_MS`, `COMPASS_AUTODEC`,
-  `AHRS_OPTIONS`, `AHRS_ORIGIN_LAT/LON` and the source-set parameters
-  (every 10 s while any is missing), then blocks on `VISO_TYPE` other
-  than 1, an external-nav set whose `POSXY` is not 6 or whose `YAW` is 6
-  (north from the SLAM map), or a fallback set that is not GPS (`POSXY 3`,
-  with `gps_primary`) or optical flow (`VELXY 5`, without).
+  `AHRS_OPTIONS`, `AHRS_ORIGIN_LAT/LON`, `EK3_MAG_EF_LIM` and the
+  source-set parameters (every 10 s while any is missing), then blocks on
+  `VISO_TYPE` other than 1, an external-nav set whose `POSXY` is not 6 or
+  whose `YAW` is 6 (north from the SLAM map), a fallback set that is not
+  GPS (`POSXY 3`, with `gps_primary`) or optical flow (`VELXY 5`,
+  without), or `COMPASS_AUTODEC` on with `EK3_MAG_EF_LIM` 0 (the compass
+  library's declination update, made when the EKF first has a position,
+  would then step the EKF yaw).
 - `viso_delay`: waits while `VISO_DELAY_MS` is more than 50 ms from the
   median age of a pose when its `ODOMETRY` is sent (telemetry
   `navigation.poseAgeMs`).

@@ -192,7 +192,7 @@ const TONE_COLOR: Record<Tone["kind"], string> = {
 };
 
 function syncOffsetTone(
-  offset: number | undefined,
+  offset: number | null | undefined,
   t: PluginContext["i18n"]["t"],
 ): Tone {
   if (typeof offset !== "number" || Number.isNaN(offset)) {
