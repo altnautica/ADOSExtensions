@@ -217,8 +217,9 @@ pub struct MapStatus {
     /// The open capture session, if any.
     pub session_id: Option<String>,
     pub placement: ComputePlacement,
-    /// Bytes held by the bounded map stores, MiB.
-    pub memory_used_mb: f32,
+    /// The capture process's resident memory (`VmRSS`), MiB; null when it
+    /// could not be read.
+    pub memory_used_mb: Option<f32>,
     /// `atlas.memory_budget_mb` as resolved.
     pub memory_budget_mb: f32,
     /// The live sweep-cloud voxel edge, metres (grows when coarsened).

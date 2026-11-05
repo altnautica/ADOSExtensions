@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.world-engine
 name: "ADOS World Engine"
-version: "2.1.9"
+version: "2.1.10"
 description: "3D world model from drone flights, reconstructed on a LAN compute node, plus perception offload for drones without an NPU."
 description_long: |
   A drone captures pose-tagged keyframes from one camera up to an all-sides rig and streams them to a compute node on the same network (a workstation or a dedicated compute box). The node reconstructs a Gaussian splat, point cloud, mesh and occupancy grid, and serves them to Mission Control as a live world model you can orbit, measure and replay.
@@ -102,52 +102,52 @@ agent:
   # workflow writes the real source, sha256 and size_bytes.
   payloads:
     - path: bin/aarch64-linux/world-engine-link
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-link-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-link-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
     - path: bin/x86_64-linux/world-engine-link
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-link-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-link-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
     - path: bin/aarch64-macos/world-engine-link
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-link-aarch64-macos"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-link-aarch64-macos"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-macos
     - path: bin/aarch64-linux/world-engine-capture
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-capture-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-capture-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
     - path: bin/x86_64-linux/world-engine-capture
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-capture-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-capture-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
     - path: bin/aarch64-linux/world-engine-node
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-node-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-node-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [workstation, compute]
     - path: bin/x86_64-linux/world-engine-node
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-node-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-node-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [workstation, compute]
     - path: bin/aarch64-macos/world-engine-node
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-node-aarch64-macos"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-node-aarch64-macos"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-macos
       profiles: [workstation, compute]
     - path: bin/x86_64-windows/world-engine-node.exe
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.9/world-engine-node-x86_64-windows.exe"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.10/world-engine-node-x86_64-windows.exe"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-windows

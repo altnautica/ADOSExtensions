@@ -30,6 +30,7 @@ pub mod budget;
 pub mod fc_flow;
 pub mod fc_imu;
 pub mod frames;
+pub mod scan_wait;
 
 #[cfg(test)]
 mod tests;
@@ -96,9 +97,24 @@ pub struct TickInputs {
     /// Where evicted occupancy tiles go (the open session's map dir, else a
     /// scratch dir).
     pub evict_dir: Option<PathBuf>,
-    /// Bytes waiting in the recorder's keyframe and scan queues.
-    pub queued_bytes: usize,
+    /// The capture process's resident memory (`VmRSS`), MiB; `None` when
+    /// `/proc` could not be read.
+    pub rss_mb: Option<f32>,
     pub keyframes_dropped: u64,
+}
+
+/// `VmRSS` of a `/proc/<pid>/status` text, MiB; `None` without that line.
+pub fn vm_rss_mb(status: &str) -> Option<f32> {
+    let line = status.lines().find(|l| l.starts_with("VmRSS:"))?;
+    let mut words = line["VmRSS:".len()..].split_whitespace();
+    let kib: f64 = words.next()?.parse().ok()?;
+    (words.next()? == "kB").then_some((kib / 1024.0) as f32)
+}
+
+/// This process's resident memory, MiB; `None` when `/proc/self/status`
+/// cannot be read.
+pub fn read_vm_rss_mb() -> Option<f32> {
+    vm_rss_mb(&std::fs::read_to_string("/proc/self/status").ok()?)
 }
 
 fn nav_source(s: PoseSource) -> NavPoseSource {
@@ -348,9 +364,8 @@ impl NavMap {
         })
     }
 
-    /// Fold one LiDAR scan. `world` is the provider's body pose at the scan
-    /// time (FLU world), when known; `t_body_sensor` the mount. The polar
-    /// record and the live map wait for the map's north.
+    /// Fold one LiDAR scan: the body-frame scan and the placed polar record
+    /// ([`Self::body_scan`], [`Self::place_scan`]) at once.
     pub fn on_scan(
         &mut self,
         scan: &LidarScan,
@@ -359,12 +374,35 @@ impl NavMap {
         fc_up: Option<f64>,
         session_open: bool,
     ) -> ScanOut {
-        let active = self.active(session_open);
-        let mut out = ScanOut {
-            scan: active.then(|| frames::body_scan(scan, t_body_sensor)),
-            polar: None,
-        };
-        let Some(e) = world else { return out };
+        ScanOut {
+            scan: self.body_scan(scan, t_body_sensor, session_open),
+            polar: self.place_scan(scan, t_body_sensor, world, fc_up, session_open),
+        }
+    }
+
+    /// The binned body-frame scan when the lanes are on; it needs no pose.
+    pub fn body_scan(
+        &self,
+        scan: &LidarScan,
+        t_body_sensor: &[f64; 16],
+        session_open: bool,
+    ) -> Option<ScanDescriptor> {
+        self.active(session_open)
+            .then(|| frames::body_scan(scan, t_body_sensor))
+    }
+
+    /// Place one LiDAR scan. `world` is the provider's body pose at the scan
+    /// time (FLU world), when known; `t_body_sensor` the mount. The polar
+    /// record and the live map wait for the map's north.
+    pub fn place_scan(
+        &mut self,
+        scan: &LidarScan,
+        t_body_sensor: &[f64; 16],
+        world: Option<&PoseEstimate>,
+        fc_up: Option<f64>,
+        session_open: bool,
+    ) -> Option<PolarScan> {
+        let e = world?;
         let (r_bs, t_bs) = se3::from_mat4(t_body_sensor);
         let r_ws = se3::mat_mul(&e.r, &r_bs);
         let off = se3::mat_vec(&e.r, t_bs);
@@ -375,15 +413,12 @@ impl NavMap {
             // under the flight controller's height.
             t_frd[2] = -(up - up0) - off[2];
         }
-        let Some((r_map, t_map)) = self.ned_of(&r_frd, t_frd) else {
-            return out;
-        };
+        let (r_map, t_map) = self.ned_of(&r_frd, t_frd)?;
         let polar = frames::polar_scan(scan, scan.t_ns, &r_map, t_map, e.health);
-        if active {
+        if self.active(session_open) {
             self.map.insert(&polar);
         }
-        out.polar = Some(polar);
-        out
+        Some(polar)
     }
 
     /// The 1 Hz tick: changed occupancy tiles, the sweep delta, evictions and
@@ -399,7 +434,6 @@ impl NavMap {
         } else {
             (None, None)
         };
-        let used = self.map.bytes() + inputs.queued_bytes;
         // The link, which sees the bearer, fills in the state and rate.
         let stream = if self.streams() {
             StreamProgress {
@@ -415,7 +449,7 @@ impl NavMap {
             status: MapStatus {
                 session_id: inputs.session_id.clone(),
                 placement: self.settings.placement,
-                memory_used_mb: used as f32 / (1024.0 * 1024.0),
+                memory_used_mb: inputs.rss_mb,
                 memory_budget_mb: self.settings.budget.total_mb(),
                 voxel_m: self.map.sweep.voxel_m(),
                 keyframes_dropped: inputs.keyframes_dropped,

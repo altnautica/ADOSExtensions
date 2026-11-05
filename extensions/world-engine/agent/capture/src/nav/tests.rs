@@ -135,7 +135,8 @@ fn scans_build_the_live_map_and_the_status_reports_it() {
     let st = tick.status;
     assert_eq!(st.placement, ComputePlacement::Onboard);
     assert!(st.area_m2 > 20.0, "about a 3 m disc: {}", st.area_m2);
-    assert!(st.memory_used_mb > 0.0 && st.memory_budget_mb == 64.0);
+    assert_eq!(st.memory_used_mb, None, "no resident memory read: null");
+    assert_eq!(st.memory_budget_mb, 64.0);
     assert_eq!(st.sweep_points, cloud.count as u64);
 
     let again = nav.tick(&TickInputs::default(), false);
@@ -143,6 +144,25 @@ fn scans_build_the_live_map_and_the_status_reports_it() {
         again.occupancy.is_none() && again.pointcloud.is_none(),
         "nothing new"
     );
+}
+
+/// `memory_used_mb` is the capture process's resident memory, read from
+/// `/proc/self/status`; a status without `VmRSS` reads null, never 0.
+#[test]
+fn the_status_reports_the_resident_memory_or_null() {
+    let status = "Name:\tworld-engine-ca\nVmPeak:\t  90000 kB\nVmRSS:\t   46080 kB\nThreads:\t9\n";
+    assert_eq!(vm_rss_mb(status), Some(45.0));
+    assert_eq!(vm_rss_mb("Name:\tx\nThreads:\t1\n"), None);
+    assert_eq!(vm_rss_mb("VmRSS:\tnot-a-number kB\n"), None);
+    let own = read_vm_rss_mb().expect("this test process has a VmRSS");
+    assert!(own > 0.0, "{own}");
+
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let inputs = TickInputs {
+        rss_mb: Some(45.0),
+        ..TickInputs::default()
+    };
+    assert_eq!(nav.tick(&inputs, false).status.memory_used_mb, Some(45.0));
 }
 
 #[test]

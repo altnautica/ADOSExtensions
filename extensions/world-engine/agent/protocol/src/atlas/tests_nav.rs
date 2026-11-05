@@ -106,6 +106,10 @@ fn scan_and_map_status_use_the_documented_keys() {
     assert!(v["session_id"].is_null());
     assert_eq!(v["upload"]["state"], "idle");
     assert_eq!(v["stream"]["state"], "off");
+    assert!(
+        v["memory_used_mb"].is_null(),
+        "unread resident memory is null, never 0"
+    );
     for key in [
         "memory_used_mb",
         "memory_budget_mb",

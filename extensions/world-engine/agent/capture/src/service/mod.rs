@@ -178,6 +178,8 @@ pub(crate) struct Engine {
     /// The live navigation and mapping lanes.
     nav: NavMap,
     nav_deps: NavDeps,
+    /// LiDAR scans waiting for their pose before they are placed.
+    scan_wait: crate::nav::scan_wait::ScanWait,
     /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
     /// "fc"`, before `RAW_IMU` arrives).
     fc_imu_prev: Option<(u64, [f64; 9])>,
@@ -281,6 +283,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         sim_unmapped: 0,
         nav,
         nav_deps,
+        scan_wait: Default::default(),
         fc_imu_prev: None,
         fc_raw_imu: false,
         fc_flow: false,

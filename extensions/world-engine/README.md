@@ -130,7 +130,7 @@ publishes shared topics other extensions and the agent's navigation API read:
 | `plugin.world-engine.scan` | per scan | The scan binned to 360 one-degree bins in the body FRD frame, nearest range per bin, `0` for no return |
 | `plugin.world-engine.occupancy` | 1 Hz | Live: changed 64×64-cell tiles at 5 cm as grey PNG (0 occupied, 254 free, 205 unknown), `kind: "live"`; node products say `kind: "product"` |
 | `plugin.world-engine.pointcloud` | 1 Hz | Live: up to 20 000 new voxel centroids of the sweep cloud (every scan placed by SLAM x, y, yaw, the FC height and the IMU roll and pitch), `kind: "live"` |
-| `plugin.world-engine.map_status` | 1 Hz | Placement, memory used against the budget, voxel size, keyframes dropped, sweep points, mapped area, upload and stream progress |
+| `plugin.world-engine.map_status` | 1 Hz | Placement, the capture process's resident memory (`VmRSS`, null when unreadable) beside the map budget, voxel size, keyframes dropped, sweep points, mapped area, upload and stream progress |
 
 Occupancy tiles farther than 200 m from the vehicle, or past the occupancy
 share of the budget (farthest first), are written to the session's

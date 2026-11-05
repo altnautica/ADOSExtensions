@@ -177,7 +177,8 @@ export interface LivePointCloud {
 export interface MapStatus {
   session_id: string | null;
   placement: ComputePlacement;
-  memory_used_mb: number;
+  /** The capture process's resident memory (VmRSS), MiB; null when unread. */
+  memory_used_mb: number | null;
   memory_budget_mb: number;
   voxel_m: number;
   keyframes_dropped: number;

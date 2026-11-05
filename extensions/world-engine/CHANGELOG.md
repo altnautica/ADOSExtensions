@@ -264,6 +264,22 @@ All notable changes to the World Engine extension.
   `OPTICAL_FLOW` sample below quality 128 (of 255), a sensor tracking too few
   features over dark or bare ground, no longer reaches the matcher's motion
   prior. 2.1.9.
+- **Every LiDAR scan reaches the live map, the session record and the node
+  stream.** A scan's pose describes its first return, and the planar matcher
+  estimates it on its worker thread after the scan is fed. The capture
+  service asked for that pose at once, found the pose track ending a
+  revolution earlier (past the 50 ms it extrapolates) and placed the scan
+  without one, so it went into neither the live occupancy and sweep cloud,
+  the session's polar record nor the raw scans the `stream` placement sends.
+  With a 10 Hz planar LiDAR about 97 % of the scans were lost: a nine-minute
+  forest flight kept 1 788 sweep voxels at 5 cm where its scans hold about
+  87 000, and a mine flight's map stayed empty. Scans now wait, in arrival
+  order, until the pose track reaches their time (at most 0.5 s, after which
+  they are recorded without a pose as before); the body-frame scan lane is
+  still published as each scan arrives. 2.1.10.
+- **`map_status.memory_used_mb` is the capture process's resident memory**
+  (`VmRSS`), null when `/proc` cannot be read, in place of the bytes the map
+  stores held, which read 0 while the map was empty. 2.1.10.
 
 ## [2.0.0]
 
