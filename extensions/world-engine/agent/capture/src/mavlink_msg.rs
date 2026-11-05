@@ -10,6 +10,9 @@
 //! and the drone stream table asks for `ATTITUDE` alone outside a capture
 //! session. Both decode to the same [`AttitudeQuaternion`].
 
+/// `RAW_IMU` (27): ArduPilot fills it with the calibrated IMU, milli-g and
+/// milli-rad/s, body FRD.
+pub const MSG_RAW_IMU: u32 = 27;
 /// `GPS_RAW_INT` (24): the receiver's fix, read for its `fix_type`.
 pub const MSG_GPS_RAW_INT: u32 = 24;
 /// `ATTITUDE` (30): body FRD → local NED as roll, pitch and yaw, radians.
@@ -42,6 +45,16 @@ pub struct GpsGlobalOrigin {
     pub alt_msl_m: f64,
 }
 
+/// One `RAW_IMU` sample in SI units, body FRD.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RawImu {
+    pub time_usec: u64,
+    /// rad/s.
+    pub gyro: [f64; 3],
+    /// Specific force, m/s² (z ≈ -9.81 level and still).
+    pub accel: [f64; 3],
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FcMessage {
     Attitude(AttitudeQuaternion),
@@ -49,6 +62,7 @@ pub enum FcMessage {
     Origin(GpsGlobalOrigin),
     /// `GPS_RAW_INT.fix_type` (`GPS_FIX_TYPE`: 3 is a 3D fix).
     GpsFix(u8),
+    Imu(RawImu),
 }
 
 /// `(msgid, payload)` of a MAVLink 1 or 2 frame, or `None` when malformed.
@@ -86,6 +100,13 @@ fn f32_at(b: &[u8], at: usize) -> f64 {
     f32::from_bits(u32_at(b, at)) as f64
 }
 
+fn i16_at(b: &[u8], at: usize) -> f64 {
+    i16::from_le_bytes([b[at], b[at + 1]]) as f64
+}
+
+/// Milli-g to m/s².
+const MG: f64 = 9.80665e-3;
+
 /// Decode one raw frame into the message it carries.
 pub fn decode(frame: &[u8]) -> Option<FcMessage> {
     let (id, payload) = split_frame(frame)?;
@@ -122,6 +143,14 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
         MSG_GPS_RAW_INT => {
             let b: [u8; 30] = padded(payload);
             FcMessage::GpsFix(b[28])
+        }
+        MSG_RAW_IMU => {
+            let b: [u8; 26] = padded(payload);
+            FcMessage::Imu(RawImu {
+                time_usec: u64::from_le_bytes(b[0..8].try_into().expect("8 bytes")),
+                accel: [i16_at(&b, 8) * MG, i16_at(&b, 10) * MG, i16_at(&b, 12) * MG],
+                gyro: [i16_at(&b, 14) * 1e-3, i16_at(&b, 16) * 1e-3, i16_at(&b, 18) * 1e-3],
+            })
         }
         _ => return None,
     })
@@ -256,5 +285,27 @@ mod tests {
             p.pop();
         }
         assert_eq!(decode(&frame_v2(MSG_GPS_RAW_INT, &p)), Some(FcMessage::GpsFix(0)));
+    }
+
+    /// A `RAW_IMU` frame, milli-g and milli-rad/s.
+    fn raw_imu(time_usec: u64, accel_mg: [i16; 3], gyro_mrad: [i16; 3]) -> Vec<u8> {
+        let mut p = time_usec.to_le_bytes().to_vec();
+        for v in accel_mg.iter().chain(gyro_mrad.iter()).chain([0i16; 3].iter()) {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        frame_v2(MSG_RAW_IMU, &p)
+    }
+
+    #[test]
+    fn raw_imu_decodes_to_si_units() {
+        let Some(FcMessage::Imu(s)) = decode(&raw_imu(5_000_123, [0, 0, -1000], [10, -20, 1047]))
+        else {
+            panic!("RAW_IMU")
+        };
+        assert_eq!(s.time_usec, 5_000_123);
+        assert!((s.accel[2] + 9.80665).abs() < 1e-9 && s.accel[0] == 0.0);
+        assert!((s.gyro[0] - 0.010).abs() < 1e-12);
+        assert!((s.gyro[1] + 0.020).abs() < 1e-12);
+        assert!((s.gyro[2] - 1.047).abs() < 1e-12);
     }
 }

@@ -1,16 +1,26 @@
-//! An IMU stream synthesised from the flight controller's attitude, for a
-//! companion with no IMU of its own (a drone whose planar LiDAR sits on the
-//! companion and whose IMU is on the FC). Set `atlas.lidar.imu = "fc"` and
-//! declare a rig IMU sensor `fc` mounted at the body origin.
+//! The IMU stream of a companion with no IMU of its own (a drone whose
+//! planar LiDAR sits on the companion and whose IMU is on the FC), taken
+//! from the flight controller. Set `atlas.lidar.imu = "fc"` and declare a rig
+//! IMU sensor `fc` mounted at the body origin.
 //!
-//! From two consecutive FC EKF attitudes (`R` world-from-body, ENU world, FLU
-//! body): the body rate is the rotation vector of `R_prevᵀ·R` over the gap,
-//! and the specific force of a vehicle not accelerating is gravity in the
-//! body, `Rᵀ·(0, 0, g)`. The planar matcher only levels scans with roll and
-//! pitch and integrates yaw for its prior, which this is enough for.
+//! The FC's `RAW_IMU` (its calibrated gyro and accelerometer, body FRD) is
+//! the stream, turned into FLU ([`from_raw`]). The planar matcher integrates
+//! the gyro for its rotation prior, so the prior turns with the airframe and
+//! nothing else: the EKF's yaw corrections never reach it. That matters with
+//! external navigation, where the EKF fuses the matcher's own pose; a prior
+//! that followed the fused yaw would feed every heading error back into the
+//! matcher.
+//!
+//! Until `RAW_IMU` arrives (an FC that has not been asked to stream it), the
+//! stream is synthesised from consecutive FC EKF attitudes ([`sample`]: `R`
+//! world-from-body, ENU world, FLU body; the body rate is the rotation vector
+//! of `R_prevᵀ·R` over the gap, and the specific force of a vehicle not
+//! accelerating is gravity in the body, `Rᵀ·(0, 0, g)`), which carries the
+//! EKF's yaw corrections with it.
 
 use ados_capture_contract::v1::ImuSample;
 
+use crate::mavlink_msg::RawImu;
 use crate::pose::se3;
 
 /// The `atlas.lidar.imu` id that selects this stream.
@@ -31,6 +41,18 @@ fn rotation_vector(r: &[f64; 9]) -> [f64; 3] {
     }
     let k = angle / (2.0 * s);
     v.map(|x| k * x)
+}
+
+/// A `RAW_IMU` sample at host `t_ns` in the FLU body: `(x, -y, -z)` of the
+/// FRD rate and specific force.
+pub fn from_raw(t_ns: u64, s: &RawImu) -> ImuSample {
+    let flu = |v: [f64; 3]| vec![v[0], -v[1], -v[2]];
+    ImuSample {
+        t_ns,
+        gyro: flu(s.gyro),
+        accel: flu(s.accel),
+        ..Default::default()
+    }
 }
 
 /// The sample at `cur` given the previous attitude, `None` for the first one
@@ -95,5 +117,20 @@ mod tests {
             sample(Some((0, a)), (2_000_000_000, b)).is_none(),
             "a gap restarts"
         );
+    }
+
+    #[test]
+    fn raw_imu_turns_into_the_flu_body() {
+        let s = from_raw(
+            7,
+            &RawImu {
+                time_usec: 1,
+                gyro: [0.1, 0.2, 0.3],
+                accel: [0.5, 0.0, -9.8],
+            },
+        );
+        assert_eq!(s.t_ns, 7);
+        assert_eq!(s.gyro, vec![0.1, -0.2, -0.3], "a right yaw (FRD +z) is FLU -z");
+        assert_eq!(s.accel, vec![0.5, -0.0, 9.8], "level and still reads +g on FLU z");
     }
 }

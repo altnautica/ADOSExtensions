@@ -202,6 +202,20 @@ All notable changes to the World Engine extension.
   earlier: about 0.2 s behind in the bench runs, which a consumer fusing it
   as current took for a heading and position that lag through every turn.
   `ts_ms` is now the unix time of the pose's own measurement. 2.1.6.
+- **The lidar SLAM's rotation prior is the flight controller's gyro, not its
+  fused attitude.** With `atlas.lidar.imu = "fc"` the IMU stream was
+  synthesised from consecutive EKF attitudes, so every yaw correction the
+  EKF made reached the matcher as a rotation, and the matcher follows its
+  prior. With external navigation the EKF fuses the matcher's own pose,
+  which closed a loop: after a 7° yaw wobble in a warehouse aisle the EKF
+  and the SLAM agreed on a heading 8° off the airframe's and the drone flew
+  into the racks. The stream is now the FC's `RAW_IMU` (its calibrated gyro
+  and accelerometer at the 100 Hz the vision-nav plugin asks for), and the
+  attitude stands in only until `RAW_IMU` arrives (`nav_imu_source_raw_imu`
+  is logged when it does). Replayed on that flight's recorded revolutions,
+  the heading error over the wobble went from 15° (end 10.4°) to 0.27°
+  (end 0.1°); the 60°/s take-off slew in the 12 m room stays within 0.4° and
+  450° of warehouse waypoint turns within 1.2°. 2.1.7.
 
 ## [2.0.0]
 

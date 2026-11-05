@@ -32,7 +32,7 @@ use world_engine_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
 
 use super::{se3, PoseEstimate, PoseProvider, PoseTrack};
 use crate::geodesy::{EnuFrame, R_ENU_NED, R_FRD_FLU};
-use crate::mavlink_msg::{decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin};
+use crate::mavlink_msg::{decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, RawImu};
 use crate::nav::align::GNSS_SETTLE_MS;
 
 /// Largest FC-clock gap between the attitude and the position paired into one
@@ -42,6 +42,8 @@ pub const MAX_PAIR_NS: u64 = 50_000_000;
 pub const OFFSET_WINDOW: usize = 64;
 /// GNSS state changes kept for [`FcEkfPose::gnss_steady_at`].
 const GNSS_CHANGES: usize = 16;
+/// `RAW_IMU` samples held for [`FcEkfPose::drain_imu`] (5 s at 100 Hz).
+const IMU_QUEUE: usize = 512;
 
 /// `GPS_FIX_TYPE_3D_FIX`.
 const FIX_3D: u8 = 3;
@@ -64,6 +66,8 @@ struct FeedInner {
     /// `(host ns, north, east)` of each estimate in the EKF's own local frame
     /// (`LOCAL_POSITION_NED`), the last [`super::TRACK_HISTORY_NS`].
     ned: VecDeque<(u64, [f64; 2])>,
+    /// `RAW_IMU` samples not yet drained, oldest first.
+    imu: VecDeque<RawImu>,
 }
 
 /// The FC EKF feed and provider. Cheap to clone; every clone shares state.
@@ -126,6 +130,19 @@ impl FcEkfPose {
         Some((t_ns, se3::matrix_from_quat(att.q)))
     }
 
+    /// The `RAW_IMU` samples received since the last call, oldest first, on
+    /// the host clock (`(host ns, sample)`). Empty until the FC streams it.
+    pub fn drain_imu(&self) -> Vec<(u64, RawImu)> {
+        let mut g = self.inner.lock();
+        let Some(offset) = g.offsets.iter().min().copied() else {
+            return Vec::new();
+        };
+        g.imu
+            .drain(..)
+            .map(|s| (((s.time_usec as i128) * 1_000 + offset).max(0) as u64, s))
+            .collect()
+    }
+
     /// Whether the EKF position at host `t_ns` was GNSS-referenced: at the
     /// newest estimate no later than `t_ns`, GNSS had held a 3D fix for
     /// [`GNSS_SETTLE_MS`] on the FC clock. `false` before any estimate.
@@ -173,6 +190,16 @@ impl FcEkfPose {
                     g.origin = Some(o);
                     g.ned.clear();
                     self.track.reset();
+                }
+            }
+            FcMessage::Imu(s) => {
+                g.offsets.push_back(arrival_ns as i128 - s.time_usec as i128 * 1_000);
+                while g.offsets.len() > OFFSET_WINDOW {
+                    g.offsets.pop_front();
+                }
+                g.imu.push_back(s);
+                while g.imu.len() > IMU_QUEUE {
+                    g.imu.pop_front();
                 }
             }
             FcMessage::GpsFix(fix) => {
@@ -422,5 +449,28 @@ mod tests {
         assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS + 500)), "the settle time restarts");
         step(2 * GNSS_SETTLE_MS + 400);
         assert!(p.gnss_steady_at(host(2 * GNSS_SETTLE_MS + 400)));
+    }
+
+    /// `RAW_IMU` samples queue on the FC clock and drain once each, placed on
+    /// the host clock by the same least-delay offset as the attitude.
+    #[test]
+    fn raw_imu_samples_drain_on_the_host_clock() {
+        let p = FcEkfPose::new();
+        let imu = |usec: u64, gz_mrad: i16| {
+            let mut b = usec.to_le_bytes().to_vec();
+            for v in [0i16, 0, -1000, 0, 0, gz_mrad, 0, 0, 0] {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            frame_v2(27, &b)
+        };
+        assert!(p.drain_imu().is_empty());
+        // The FC clock runs 4 s behind the host's, with 2 ms least delay.
+        p.on_frame(&att(1_000, [1.0, 0.0, 0.0, 0.0]), 5_002_000_000);
+        p.on_frame(&imu(1_010_000, 500), 5_015_000_000);
+        p.on_frame(&imu(1_020_000, 600), 5_022_000_000);
+        let got = p.drain_imu();
+        assert_eq!(got.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [5_012_000_000, 5_022_000_000]);
+        assert!((got[1].1.gyro[2] - 0.6).abs() < 1e-12);
+        assert!(p.drain_imu().is_empty(), "drained once");
     }
 }

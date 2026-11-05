@@ -179,8 +179,10 @@ pub(crate) struct Engine {
     nav: NavMap,
     nav_deps: NavDeps,
     /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
-    /// "fc"`).
+    /// "fc"`, before `RAW_IMU` arrives).
     fc_imu_prev: Option<(u64, [f64; 9])>,
+    /// The FC streams `RAW_IMU`, the `fc` IMU from then on.
+    fc_raw_imu: bool,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
     reconstruct_steps: SharedSteps,
 }
@@ -278,6 +280,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         nav,
         nav_deps,
         fc_imu_prev: None,
+        fc_raw_imu: false,
         reconstruct_steps,
     };
     // Frames are pulled on their own task so a source read is never

@@ -105,16 +105,33 @@ impl Engine {
         }
     }
 
-    /// With `atlas.lidar.imu = "fc"`, the newest FC attitude as an IMU sample
-    /// for the pose provider (see [`crate::nav::fc_imu`]).
+    /// With `atlas.lidar.imu = "fc"`, the FC's IMU stream for the pose
+    /// provider (see [`crate::nav::fc_imu`]): every `RAW_IMU` sample since
+    /// the last tick, or, until the FC streams `RAW_IMU`, the newest FC
+    /// attitude turned into a sample.
     fn feed_fc_imu(&mut self) {
         if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
             return;
         }
+        let Some(fc) = self.nav_deps.fc_feed.as_ref() else {
+            return;
+        };
+        let raw = fc.drain_imu();
+        if !raw.is_empty() {
+            if !self.fc_raw_imu {
+                tracing::info!("nav_imu_source_raw_imu");
+                self.fc_raw_imu = true;
+            }
+            let samples = raw.iter().map(|(t, s)| fc_imu::from_raw(*t, s)).collect();
+            self.pose.feed_imu(fc_imu::FC_IMU_ID, &ImuBatch { samples });
+            return;
+        }
+        if self.fc_raw_imu {
+            return;
+        }
         // The attitude alone: a GNSS-denied FC reports no EKF position (so no
         // pose estimate) until the external navigation it waits for arrives.
-        let Some((t_ns, r_ned_frd)) = self.nav_deps.fc_feed.as_ref().and_then(|f| f.attitude())
-        else {
+        let Some((t_ns, r_ned_frd)) = fc.attitude() else {
             return;
         };
         if self.fc_imu_prev.is_some_and(|(t, _)| t == t_ns) {
