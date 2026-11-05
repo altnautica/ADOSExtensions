@@ -14,11 +14,16 @@
 //! the node reconstructs in flight or after landing.
 //!
 //! `map_ned` starts as the SLAM world rotated to the flight controller's
-//! compass heading at the first pose, origin at the first scan. While the EKF
-//! navigates on GNSS it is moved onto the EKF's local frame
-//! (`LOCAL_POSITION_NED`): yaw and offset fitted between the two tracks
-//! ([`align`]), frozen when GNSS goes, so a switch to external navigation
-//! finds the two frames in agreement.
+//! compass heading, origin at the first scan. The heading follows the FC's
+//! while the vehicle still sits where the first pose was taken and is fixed
+//! once it leaves that spot: before ArduPilot has an EKF origin its heading
+//! is magnetic, and it turns onto true north over the following seconds once
+//! the origin brings the declination in (12.8° at the bench's location), so a
+//! heading latched at the first pose could leave the map that far off the
+//! EKF's own yaw. While the EKF navigates on GNSS the map is moved onto the
+//! EKF's local frame (`LOCAL_POSITION_NED`): yaw and offset fitted between
+//! the two tracks ([`align`]), frozen when GNSS goes, so a switch to external
+//! navigation finds the two frames in agreement.
 
 pub mod align;
 pub mod budget;
@@ -44,6 +49,10 @@ use budget::Budget;
 
 /// A fitted yaw is logged again once it has moved this far, radians.
 const YAW_LOG_STEP_RAD: f64 = 0.25 * std::f64::consts::PI / 180.0;
+/// How far the vehicle may move from where the first pose was taken,
+/// horizontally or in climb, and still count as on that spot, metres: the
+/// map's north follows the FC heading until it leaves.
+pub const ON_SPOT_M: f64 = 0.5;
 
 /// The session subdirectory the live map is saved under.
 pub const SESSION_MAP_DIR: &str = "map";
@@ -110,9 +119,15 @@ pub struct NavMap {
     fc_up0: Option<f64>,
     /// The compass heading of the SLAM world's x axis, radians clockwise from
     /// north: `map_ned = Rz(yaw0) · map_frd` until the GNSS fit takes over.
-    /// Latched from the flight controller's attitude yaw at the first pose
-    /// that has one; until then nothing is placed in the map.
+    /// Taken from the flight controller's attitude yaw at each pose while the
+    /// vehicle is on the spot of the first one, then fixed; until the first
+    /// heading nothing is placed in the map.
     yaw0: Option<f64>,
+    /// Where the first heading was taken (`map_frd`), while the vehicle is
+    /// still there; `None` before it and once the vehicle has left.
+    spot: Option<[f64; 3]>,
+    /// Whether the vehicle has left the spot of the first heading.
+    left_spot: bool,
     /// The GNSS alignment onto the EKF's local frame.
     align: MapAlign,
     /// `map_ned`'s horizontal offset from the rotated SLAM world (north,
@@ -153,6 +168,8 @@ impl NavMap {
             last_pub_ms: None,
             fc_up0: None,
             yaw0: None,
+            spot: None,
+            left_spot: false,
             align: MapAlign::default(),
             offset: [0.0; 2],
             logged_yaw: None,
@@ -250,11 +267,47 @@ impl NavMap {
         Some((se3::mat_mul(&rot, r), t))
     }
 
+    /// Take the map's north from the FC heading while the vehicle is on the
+    /// spot of the first heading; fix it once the vehicle has moved
+    /// [`ON_SPOT_M`] from there horizontally or in climb.
+    fn follow_heading(&mut self, r_frd: &[f64; 9], t_frd: [f64; 3], fc_heading: Option<f64>) {
+        if self.left_spot {
+            return;
+        }
+        if let Some(spot) = self.spot {
+            let horizontal = (t_frd[0] - spot[0]).hypot(t_frd[1] - spot[1]);
+            let climb = spot[2] - t_frd[2];
+            if horizontal > ON_SPOT_M || climb > ON_SPOT_M {
+                self.left_spot = true;
+                self.spot = None;
+                tracing::info!(
+                    yaw0_rad = self.yaw0,
+                    horizontal_m = horizontal,
+                    climb_m = climb,
+                    "nav_map_north_fixed"
+                );
+                return;
+            }
+        }
+        let Some(heading) = fc_heading else { return };
+        let yaw0 = heading - frd_yaw(r_frd);
+        if self.yaw0.is_none() {
+            tracing::info!(
+                heading_rad = heading,
+                yaw0_rad = yaw0,
+                "nav_map_north_latched"
+            );
+            self.spot = Some(t_frd);
+        }
+        self.yaw0 = Some(yaw0);
+    }
+
     /// Fold one provider estimate; the descriptor to publish when the lanes
     /// are on and the interval is due. `fc_heading` is the flight
-    /// controller's attitude yaw now (radians from north); the first one seen
-    /// with a pose fixes the map's north until the GNSS fit replaces it.
-    /// Nothing is published before the map has a north.
+    /// controller's attitude yaw now (radians from north): the map's north
+    /// follows it while the vehicle is on the spot of the first heading (see
+    /// the module docs) and is fixed once it leaves, until the GNSS fit
+    /// replaces it. Nothing is published before the map has a north.
     pub fn on_pose(
         &mut self,
         e: &PoseEstimate,
@@ -264,15 +317,7 @@ impl NavMap {
         session_open: bool,
     ) -> Option<PoseDescriptor> {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
-        if let (None, Some(heading)) = (self.yaw0, fc_heading) {
-            let yaw0 = heading - frd_yaw(&r_frd);
-            tracing::info!(
-                heading_rad = heading,
-                yaw0_rad = yaw0,
-                "nav_map_north_latched"
-            );
-            self.yaw0 = Some(yaw0);
-        }
+        self.follow_heading(&r_frd, t_frd, fc_heading);
         let (r, t) = self.ned_of(&r_frd, t_frd)?;
         self.latest = Some((r, t));
         if !self.active(session_open) {

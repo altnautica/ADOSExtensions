@@ -104,8 +104,9 @@ export function atlasTopicSubscribeCapability(topic: string): string | null {
 // --- Live navigation and mapping payloads ----------------------------------
 //
 // Frames: `map_ned` is north-aligned (x north, y east, z down, metres): the
-// planar SLAM world rotated by the FC's compass heading latched at the first
-// pose, origin at the first scan, then moved onto the FC's LOCAL_POSITION_NED
+// planar SLAM world rotated by the FC's compass heading at take-off (followed
+// while the vehicle sits where the first pose was taken), origin at the first
+// scan, then moved onto the FC's LOCAL_POSITION_NED
 // (yaw and offset fitted against the EKF's GNSS track) while the FC navigates
 // on GNSS, frozen when GNSS goes. `body_frd` is the vehicle body,
 // forward-right-down.

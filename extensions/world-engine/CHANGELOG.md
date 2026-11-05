@@ -10,7 +10,7 @@ All notable changes to the World Engine extension.
   always` (the default when an RPLIDAR device is set) the capture service
   publishes the navigation pose in the north-aligned `map_ned` (the SLAM
   world rotated so it matches `LOCAL_POSITION_NED`: to the flight
-  controller's compass heading at the first pose, then onto its GNSS track
+  controller's compass heading at take-off, then onto its GNSS track
   by a fitted yaw and offset) with its `health`, `frame` and
   `source`, the binned body-frame scan (`plugin.world-engine.scan`), live
   occupancy tiles and sweep-cloud deltas, and `plugin.world-engine.map_status`
@@ -172,6 +172,18 @@ All notable changes to the World Engine extension.
   first scan stand only until then. The fit and the freeze are logged
   (`nav_map_gnss_fitted`, `nav_map_gnss_frozen`). 2.1.3 fitted the yaw
   only, gated on the agent's telemetry; 2.1.4.
+- **A GNSS-denied map takes the flight controller's heading at take-off, not
+  its magnetic heading before the EKF has an origin.** `map_ned`'s north was
+  latched from the FC's compass heading at the first pose. Indoors the first
+  pose comes before the companion sets the EKF origin, and until then
+  ArduPilot's heading is magnetic: once the origin brings the declination
+  in, the EKF's yaw turns onto true north over a few seconds while the map
+  kept the magnetic heading. At the bench's location that left the map
+  12.8° off the EKF's own yaw; the EKF fused the inconsistent external
+  navigation into a variance failsafe and landed (warehouse and mine bench
+  runs). The north now follows the FC heading while the vehicle sits where
+  the first pose was taken and is fixed once it has moved 0.5 m from there,
+  horizontally or in climb (`nav_map_north_fixed`). 2.1.5.
 
 ## [2.0.0]
 
