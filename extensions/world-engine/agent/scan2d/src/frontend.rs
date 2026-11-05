@@ -79,6 +79,7 @@ pub struct LocalSlam {
     finished: Vec<Submap>,
     next_id: usize,
     nodes: Vec<Node>,
+    /// Time, pose and IMU heading of the last scan.
     last: Option<(u64, Pose2, f64)>,
     /// Matched poses of the last [`VELOCITY_WINDOW_NS`], oldest first.
     history: VecDeque<(u64, Pose2)>,
@@ -133,9 +134,9 @@ impl LocalSlam {
     pub fn feed_scan(&mut self, input: &ScanInput) -> PoseOut {
         let t = input.t_ns;
         let (roll, pitch) = self.att.roll_pitch();
-        let va = self.att.vertical_angle_at(t);
+        let heading = self.att.heading_at(t);
         let span_ns = input.t_offset_ns.iter().copied().max().unwrap_or(0) as u64;
-        let (prior, velocity, yaw_rate, prior_vel) = self.predict(t, va, span_ns);
+        let (prior, velocity, yaw_rate, prior_vel) = self.predict(t, heading, span_ns);
         let motion = Motion {
             roll,
             pitch,
@@ -154,7 +155,7 @@ impl LocalSlam {
             degeneracy: 0.0,
         };
         if scan.points.len() < MIN_POINTS {
-            self.advance(t, prior, va);
+            self.advance(t, prior, heading);
             return out;
         }
         if self.active.is_empty() {
@@ -225,25 +226,25 @@ impl LocalSlam {
                 scan: insert.then_some(scan),
             });
         }
-        self.advance(t, pose, va);
+        self.advance(t, pose, heading);
         out
     }
 
-    /// Prior pose, LiDAR-frame velocity, the yaw rate over the scan's
+    /// Prior pose, LiDAR-frame velocity, the heading rate over the scan's
     /// `span_ns`, and the local-frame velocity of the prediction, from the
-    /// IMU's vertical rotation and the mean velocity over the recent poses.
+    /// IMU's heading and the mean velocity over the recent poses.
     /// The velocity is kept in the LiDAR frame (the chord over the window is
     /// expressed at its middle heading) so it turns with the walker through a
     /// corner. Along directions the last match left unconstrained the chord
     /// only replays the prior, so the velocity there is the one last observed,
     /// fading over [`COAST_TAU_S`].
-    fn predict(&self, t: u64, va: f64, span_ns: u64) -> (Pose2, [f64; 2], f64, Vector2<f64>) {
+    fn predict(&self, t: u64, heading: f64, span_ns: u64) -> (Pose2, [f64; 2], f64, Vector2<f64>) {
         let imu_rate = if span_ns > 0 {
-            (self.att.vertical_angle_at(t + span_ns) - va) / (span_ns as f64 * 1e-9)
+            (self.att.heading_at(t + span_ns) - heading) / (span_ns as f64 * 1e-9)
         } else {
-            self.att.vertical_rate()
+            self.att.heading_rate()
         };
-        let Some((t1, p1, va1)) = self.last else {
+        let Some((t1, p1, heading1)) = self.last else {
             return (Pose2::IDENTITY, [0.0, 0.0], imu_rate, Vector2::zeros());
         };
         let dt = t.saturating_sub(t1) as f64 * 1e-9;
@@ -258,7 +259,7 @@ impl LocalSlam {
             _ => ([0.0, 0.0], 0.0),
         };
         let (dyaw, rate) = if self.att.has_data() {
-            (va - va1, imu_rate)
+            (heading - heading1, imu_rate)
         } else {
             (omega * dt, omega)
         };
@@ -277,8 +278,8 @@ impl LocalSlam {
         )
     }
 
-    fn advance(&mut self, t: u64, pose: Pose2, va: f64) {
-        self.last = Some((t, pose, va));
+    fn advance(&mut self, t: u64, pose: Pose2, heading: f64) {
+        self.last = Some((t, pose, heading));
         self.history.push_back((t, pose));
         while self.history.len() > 2 && t.saturating_sub(self.history[1].0) >= VELOCITY_WINDOW_NS {
             self.history.pop_front();

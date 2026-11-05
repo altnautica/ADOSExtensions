@@ -121,6 +121,7 @@ export type NavPoseMode = "always" | "capture";
 export interface NavPose {
   pose: { R: number[]; t: [number, number, number]; cov: number[] | null };
   anchor: unknown | null;
+  /** Unix ms of the instant the pose describes, not its publish time. */
   ts_ms: number;
   health: NavHealth;
   frame: NavFrame;

@@ -389,6 +389,8 @@ pub struct CaptureStatus {
 pub struct PoseDescriptor {
     pub pose: Pose,
     pub anchor: Option<GeoAnchor>,
+    /// Unix milliseconds of the instant the pose describes (a LiDAR pose:
+    /// its scan's first return), not the time it was published.
     pub ts_ms: i64,
     pub health: VioHealth,
     pub frame: super::nav::NavFrame,

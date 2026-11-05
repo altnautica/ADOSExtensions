@@ -184,6 +184,24 @@ All notable changes to the World Engine extension.
   runs). The north now follows the FC heading while the vehicle sits where
   the first pose was taken and is fixed once it has moved 0.5 m from there,
   horizontally or in climb (`nav_map_north_fixed`). 2.1.5.
+- **The planar lidar SLAM's heading follows bends and fast yaw turns.** The
+  matcher's rotation prior integrated the IMU's rate about the world
+  vertical, but a scan levelled by roll and pitch turns with the yaw of the
+  attitude, and the two differ by `∫roll̇·sin(pitch)`. On an airframe that
+  pitches and rolls as it manoeuvres that does not average out: 17° over a
+  125° forest trail, so the prior fell 13 % short of every turn and pulled
+  the match with it. Replayed on the recorded revolutions with the true
+  attitude at the flight controller's 20 Hz, the forest heading error at the
+  GNSS loss went from 0.8° to 0.01° (157 m flown), a 190° take-off yaw slew
+  in a 12 m room from 5.4° to 0.5°, and 450° of waypoint turns in a
+  warehouse aisle from 23° to 1.4°. The prior is now the heading of the
+  attitude itself. 2.1.6.
+- **The navigation pose is stamped with the time it describes.**
+  `plugin.world-engine.pose` carried its publish time in `ts_ms`, while a
+  lidar pose describes its scan's first return, at least a revolution
+  earlier: about 0.2 s behind in the bench runs, which a consumer fusing it
+  as current took for a heading and position that lag through every turn.
+  `ts_ms` is now the unix time of the pose's own measurement. 2.1.6.
 
 ## [2.0.0]
 

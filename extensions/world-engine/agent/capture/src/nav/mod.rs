@@ -308,12 +308,19 @@ impl NavMap {
     /// follows it while the vehicle is on the spot of the first heading (see
     /// the module docs) and is fixed once it leaves, until the GNSS fit
     /// replaces it. Nothing is published before the map has a north.
+    /// `now_ms` (unix) and `now_mono_ns` are the same instant; the
+    /// descriptor is stamped with the unix time of the estimate's own
+    /// `t_ns` (a LiDAR pose describes its scan's first return, at least a
+    /// revolution before it is published), so a consumer such as the
+    /// flight controller's external navigation fuses it at the time it was
+    /// measured.
     pub fn on_pose(
         &mut self,
         e: &PoseEstimate,
         fc_up: Option<f64>,
         fc_heading: Option<f64>,
         now_ms: i64,
+        now_mono_ns: u64,
         session_open: bool,
     ) -> Option<PoseDescriptor> {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
@@ -333,7 +340,7 @@ impl NavMap {
         Some(PoseDescriptor {
             pose: Pose { r, t, cov: None },
             anchor: None,
-            ts_ms: now_ms,
+            ts_ms: now_ms - (now_mono_ns.saturating_sub(e.t_ns) / 1_000_000) as i64,
             health: e.health,
             frame: NavFrame::MapNed,
             source: nav_source(e.source),

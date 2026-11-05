@@ -137,6 +137,7 @@ impl Engine {
         self.quality.recording = self.is_recording();
         self.quality
             .on_pose_quality(q.degeneracy_ratio, q.tracked_features);
+        let now_mono_ns = crate::clock::mono_ns();
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
@@ -144,7 +145,7 @@ impl Engine {
         let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
         let due = out
             .last()
-            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, open));
+            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns, open));
         if out.is_empty() || self.recorder().is_none() {
             return due;
         }

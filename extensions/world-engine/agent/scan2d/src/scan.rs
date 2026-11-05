@@ -19,7 +19,7 @@ pub struct Motion {
     /// LiDAR roll and pitch, radians.
     pub roll: f64,
     pub pitch: f64,
-    /// Rotation rate about the world vertical, rad/s.
+    /// Rate of the levelled frame's heading, rad/s.
     pub yaw_rate: f64,
     /// Velocity in the levelled LiDAR frame at `t_ns`, m/s.
     pub velocity: [f64; 2],
