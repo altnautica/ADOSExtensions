@@ -37,17 +37,21 @@ pub const COMPONENT_OF: u8 = 198;
 
 const DEFAULT_SYS_ID: u8 = 1;
 
-const OPTICAL_FLOW_ID: u32 = 100;
+pub const OPTICAL_FLOW_ID: u32 = 100;
 const OPTICAL_FLOW_CRC_EXTRA: u8 = 175;
 /// Base fields (26 bytes) plus the `flow_rate_x/y` extension (8 bytes).
 const OPTICAL_FLOW_LEN: usize = 34;
 
-/// RAW_IMU and DISTANCE_SENSOR message ids and the intervals the plugin
-/// requests for them (100 Hz and 20 Hz).
+/// RAW_IMU, DISTANCE_SENSOR and OPTICAL_FLOW message ids and the intervals
+/// the plugin requests for them (100 Hz, 20 Hz and 20 Hz).
 pub const RAW_IMU_ID: u32 = 27;
 pub const DISTANCE_SENSOR_ID: u32 = 132;
 pub const RAW_IMU_INTERVAL_US: f32 = 10_000.0;
 pub const DISTANCE_SENSOR_INTERVAL_US: f32 = 50_000.0;
+/// The FC's own `OPTICAL_FLOW` (its flow sensor, body rate removed): with the
+/// downward range it is the ground velocity the world-engine lidar SLAM
+/// follows along a corridor its scans leave unconstrained.
+pub const OPTICAL_FLOW_INTERVAL_US: f32 = 50_000.0;
 
 const EMIT_ERROR_LOG_EVERY: Duration = Duration::from_secs(5);
 
@@ -259,22 +263,14 @@ pub fn build_set_message_interval(
 }
 
 /// The stream-rate requests the plugin sends on start and every 30 s:
-/// RAW_IMU at 100 Hz and DISTANCE_SENSOR at 20 Hz.
-pub fn stream_interval_requests(target_system: u8, target_component: u8) -> [MavMessage; 2] {
+/// RAW_IMU at 100 Hz, DISTANCE_SENSOR at 20 Hz and OPTICAL_FLOW at 20 Hz.
+pub fn stream_interval_requests(target_system: u8, target_component: u8) -> [MavMessage; 3] {
     [
-        build_set_message_interval(
-            target_system,
-            target_component,
-            RAW_IMU_ID,
-            RAW_IMU_INTERVAL_US,
-        ),
-        build_set_message_interval(
-            target_system,
-            target_component,
-            DISTANCE_SENSOR_ID,
-            DISTANCE_SENSOR_INTERVAL_US,
-        ),
+        (RAW_IMU_ID, RAW_IMU_INTERVAL_US),
+        (DISTANCE_SENSOR_ID, DISTANCE_SENSOR_INTERVAL_US),
+        (OPTICAL_FLOW_ID, OPTICAL_FLOW_INTERVAL_US),
     ]
+    .map(|(id, us)| build_set_message_interval(target_system, target_component, id, us))
 }
 
 fn quality_u8(sample: &EstimatorOutput) -> u8 {

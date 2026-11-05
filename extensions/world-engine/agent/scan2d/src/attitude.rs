@@ -29,6 +29,20 @@ pub struct ImuSample {
     pub accel: [f64; 3],
 }
 
+/// A measured velocity of the IMU frame along its own x and y axes (FLU),
+/// m/s, such as a downward optical-flow sensor's angular flow, compensated
+/// for the body rate and scaled by its range to the ground. The velocity
+/// along the IMU's z axis is not measured.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VelocitySample {
+    /// Nanoseconds, the same clock as the scans.
+    pub t_ns: u64,
+    pub v: [f64; 2],
+}
+
+/// Tilts past this leave a ground-velocity measurement too steep to level.
+const MAX_LEVEL_TILT_RAD: f64 = 1.0;
+
 /// Samples further apart than this restart the integration instead of
 /// bridging the gap.
 const MAX_GAP_S: f64 = 0.5;
@@ -175,6 +189,30 @@ impl Attitude {
         let ((t0, a0), (t1, a1)) = (self.history[k - 1], self.history[k]);
         a0 + (a1 - a0) * (t_ns - t0) as f64 / (t1 - t0) as f64
     }
+
+    /// The horizontal velocity, in the levelled LiDAR frame, of a vehicle
+    /// whose velocity along the IMU's x and y axes is `v_xy` and whose height
+    /// does not change: the unmeasured IMU-z component is the one that makes
+    /// the vertical velocity zero, so a pitched airframe flying level is not
+    /// read short by the cosine of its pitch. `None` before any sample or
+    /// tilted past [`MAX_LEVEL_TILT_RAD`].
+    pub fn level_velocity(&self, v_xy: [f64; 2]) -> Option<[f64; 2]> {
+        if !self.has_data() {
+            return None;
+        }
+        let (roll, pitch, _) = self.q.euler_angles();
+        let r = UnitQuaternion::from_euler_angles(roll, pitch, 0.0)
+            .to_rotation_matrix()
+            .into_inner()
+            * self.r_lidar_imu;
+        let up = r.row(2);
+        if up[2] < MAX_LEVEL_TILT_RAD.cos() {
+            return None;
+        }
+        let vz = -(up[0] * v_xy[0] + up[1] * v_xy[1]) / up[2];
+        let v = r * Vector3::new(v_xy[0], v_xy[1], vz);
+        Some([v.x, v.y])
+    }
 }
 
 #[cfg(test)]
@@ -256,5 +294,52 @@ mod tests {
         assert!((a.heading() - 4.0).abs() < 0.01, "heading {}", a.heading());
         let mid = a.heading_at(19_502_500_000);
         assert!((mid - 0.2 * 19.5025).abs() < 0.01, "heading at 19.5 s {mid}");
+    }
+
+    /// An attitude held still at `roll`, `pitch` for one second.
+    fn still(roll: f64, pitch: f64, r_lidar_imu: [[f64; 3]; 3]) -> Attitude {
+        let mut a = Attitude::new(2.0, 0.005, r_lidar_imu);
+        let r = Matrix3::from_row_slice(&r_lidar_imu.concat());
+        let g = r.transpose()
+            * (UnitQuaternion::from_euler_angles(roll, pitch, 0.0).inverse()
+                * Vector3::new(0.0, 0.0, 9.81));
+        for k in 0..=200u64 {
+            a.update(&ImuSample {
+                t_ns: k * 5_000_000,
+                gyro: [0.0; 3],
+                accel: g.into(),
+            });
+        }
+        a
+    }
+
+    /// Flying level at 5 m/s forward and 1 m/s left, nose down 20 degrees
+    /// and rolled 3: a flow sensor reads the body-x component short by the
+    /// cosine of the pitch. Levelled, the full ground velocity comes back,
+    /// in the LiDAR's axes when the IMU is mounted turned 90 degrees.
+    #[test]
+    fn a_tilted_airframe_flying_level_reads_its_ground_velocity() {
+        let (roll, pitch) = (0.05f64, 0.35f64);
+        let ground = Vector3::new(5.0, 1.0, 0.0);
+        let body = UnitQuaternion::from_euler_angles(roll, pitch, 0.0).inverse() * ground;
+        assert!((body.x - 5.0).abs() > 0.2, "the body axis reads short: {}", body.x);
+        let a = still(roll, pitch, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        let v = a.level_velocity([body.x, body.y]).expect("levelled");
+        assert!((v[0] - 5.0).abs() < 0.01 && (v[1] - 1.0).abs() < 0.01, "{v:?}");
+
+        // IMU x along the LiDAR's y: R_lidar_imu = Rz(90°).
+        let rz = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        let a = still(roll, pitch, rz);
+        let imu = Matrix3::from_row_slice(&rz.concat()).transpose() * body;
+        let v = a.level_velocity([imu.x, imu.y]).expect("levelled");
+        assert!((v[0] - 5.0).abs() < 0.01 && (v[1] - 1.0).abs() < 0.01, "{v:?}");
+    }
+
+    #[test]
+    fn ground_velocity_needs_an_attitude_and_a_moderate_tilt() {
+        let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        assert_eq!(Attitude::new(2.0, 0.005, id).level_velocity([1.0, 0.0]), None);
+        assert_eq!(still(1.2, 0.0, id).level_velocity([1.0, 0.0]), None);
+        assert!(still(0.8, 0.0, id).level_velocity([1.0, 0.0]).is_some());
     }
 }

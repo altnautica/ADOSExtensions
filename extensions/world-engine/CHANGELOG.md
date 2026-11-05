@@ -216,6 +216,23 @@ All notable changes to the World Engine extension.
   the heading error over the wobble went from 15° (end 10.4°) to 0.27°
   (end 0.1°); the 60°/s take-off slew in the 12 m room stays within 0.4° and
   450° of warehouse waypoint turns within 1.2°. 2.1.7.
+- **Along a corridor the lidar SLAM follows the flight controller's ground
+  velocity.** In a straight drift or aisle the planar scans pin the pose
+  across the walls only; along them the matcher kept its motion prior, whose
+  velocity came from its own recent poses. Accelerating down a 5 m wide mine
+  drift with rough rock walls, that prior lagged, the matches followed it
+  and the pose covered 39 % of the 27 m flown while its health mostly read
+  good; the flight controller, fusing it, sped up to 8 m/s until its EKF
+  failed. With `atlas.lidar.imu = "fc"` the capture service now also reads
+  the FC's own `OPTICAL_FLOW` (its flow sensor's rate with the body rate
+  taken out) and its downward `DISTANCE_SENSOR`. Their product, levelled
+  with the matcher's attitude, is the motion prior's velocity while it
+  arrives (`nav_velocity_source_optical_flow` is logged when it first
+  does), so the pose follows the measured motion where the scans cannot see
+  it and reads `degraded` there. Replayed on that flight's recorded
+  revolutions, gyro and flow, the distance matched down the drift went from
+  39 % to 97 % of the distance flown. The vision-nav plugin (0.6.4) asks the
+  FC for `OPTICAL_FLOW` at 20 Hz. 2.1.8.
 
 ## [2.0.0]
 

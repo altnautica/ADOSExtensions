@@ -9,6 +9,10 @@
 //! angles): ArduPilot streams only `ATTITUDE` unless asked for the quaternion,
 //! and the drone stream table asks for `ATTITUDE` alone outside a capture
 //! session. Both decode to the same [`AttitudeQuaternion`].
+//!
+//! `OPTICAL_FLOW` and the downward `DISTANCE_SENSOR` give the ground
+//! velocity the planar matcher follows along a corridor
+//! ([`crate::nav::fc_flow`]).
 
 /// `RAW_IMU` (27): ArduPilot fills it with the calibrated IMU, milli-g and
 /// milli-rad/s, body FRD.
@@ -23,6 +27,10 @@ pub const MSG_ATTITUDE_QUATERNION: u32 = 31;
 pub const MSG_LOCAL_POSITION_NED: u32 = 32;
 /// `GPS_GLOBAL_ORIGIN` (49): the geodetic origin of that NED frame.
 pub const MSG_GPS_GLOBAL_ORIGIN: u32 = 49;
+/// `OPTICAL_FLOW` (100): the flow sensor's angular rates, body FRD axes.
+pub const MSG_OPTICAL_FLOW: u32 = 100;
+/// `DISTANCE_SENSOR` (132): one rangefinder reading.
+pub const MSG_DISTANCE_SENSOR: u32 = 132;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttitudeQuaternion {
@@ -55,6 +63,29 @@ pub struct RawImu {
     pub accel: [f64; 3],
 }
 
+/// `OPTICAL_FLOW` as ArduPilot fills it: `flow_comp_m_x/y` carry the flow
+/// rate minus the sensor's body rate, rad/s about the body FRD x and y axes
+/// (not metres, whatever the field names say), and `time_usec` carries its
+/// boot milliseconds; PX4 sends microseconds there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OpticalFlow {
+    pub time_usec: u64,
+    /// Body-rate compensated flow, rad/s, about body x and y (FRD).
+    pub comp: [f64; 2],
+    /// 0 (no flow) to 255.
+    pub quality: u8,
+}
+
+/// `DISTANCE_SENSOR`, metres, with the sensor's own valid band.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DistanceSensor {
+    pub time_boot_ms: u32,
+    pub distance_m: f64,
+    pub min_m: f64,
+    pub max_m: f64,
+    /// `MAV_SENSOR_ORIENTATION`; 25 (`PITCH_270`) faces down.
+    pub orientation: u8,
+}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum FcMessage {
     Attitude(AttitudeQuaternion),
@@ -63,6 +94,8 @@ pub enum FcMessage {
     /// `GPS_RAW_INT.fix_type` (`GPS_FIX_TYPE`: 3 is a 3D fix).
     GpsFix(u8),
     Imu(RawImu),
+    Flow(OpticalFlow),
+    Range(DistanceSensor),
 }
 
 /// `(msgid, payload)` of a MAVLink 1 or 2 frame, or `None` when malformed.
@@ -80,6 +113,18 @@ pub fn split_frame(frame: &[u8]) -> Option<(u32, &[u8])> {
         _ => None,
     }
 }
+
+/// The sender's component id of a MAVLink 1 or 2 frame.
+fn component(frame: &[u8]) -> Option<u8> {
+    match *frame.first()? {
+        0xFD => frame.get(6).copied(),
+        0xFE => frame.get(4).copied(),
+        _ => None,
+    }
+}
+
+/// `MAV_COMP_ID_AUTOPILOT1`.
+const COMP_AUTOPILOT: u8 = 1;
 
 fn padded<const N: usize>(payload: &[u8]) -> [u8; N] {
     let mut out = [0u8; N];
@@ -150,6 +195,27 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
                 time_usec: u64::from_le_bytes(b[0..8].try_into().expect("8 bytes")),
                 accel: [i16_at(&b, 8) * MG, i16_at(&b, 10) * MG, i16_at(&b, 12) * MG],
                 gyro: [i16_at(&b, 14) * 1e-3, i16_at(&b, 16) * 1e-3, i16_at(&b, 18) * 1e-3],
+            })
+        }
+        // The FC's own flow only: a companion's (the vision-nav plugin sends
+        // one to the FC) fills the fields with other units.
+        MSG_OPTICAL_FLOW if component(frame) == Some(COMP_AUTOPILOT) => {
+            let b: [u8; 26] = padded(payload);
+            FcMessage::Flow(OpticalFlow {
+                time_usec: u64::from_le_bytes(b[0..8].try_into().expect("8 bytes")),
+                comp: [f32_at(&b, 8), f32_at(&b, 12)],
+                quality: b[25],
+            })
+        }
+        MSG_DISTANCE_SENSOR => {
+            let b: [u8; 14] = padded(payload);
+            let cm = |at: usize| u16::from_le_bytes([b[at], b[at + 1]]) as f64 * 0.01;
+            FcMessage::Range(DistanceSensor {
+                time_boot_ms: u32_at(&b, 0),
+                min_m: cm(4),
+                max_m: cm(6),
+                distance_m: cm(8),
+                orientation: b[12],
             })
         }
         _ => return None,
@@ -307,5 +373,43 @@ mod tests {
         assert!((s.gyro[0] - 0.010).abs() < 1e-12);
         assert!((s.gyro[1] + 0.020).abs() < 1e-12);
         assert!((s.gyro[2] - 1.047).abs() < 1e-12);
+    }
+
+    #[test]
+    fn optical_flow_and_distance_sensor_decode() {
+        // ArduPilot's OPTICAL_FLOW: boot ms in time_usec, flow_x/y, sensor id,
+        // quality, then the flow_rate_x/y extension.
+        let mut p = 2_028u64.to_le_bytes().to_vec();
+        for v in [-1.36f32, 3.6, 2.58] {
+            p.extend_from_slice(&le32(v));
+        }
+        p.extend_from_slice(&(-2i16).to_le_bytes());
+        p.extend_from_slice(&0i16.to_le_bytes());
+        p.extend_from_slice(&[0, 255]);
+        p.extend_from_slice(&le32(-1.4));
+        p.extend_from_slice(&le32(3.7));
+        let Some(FcMessage::Flow(f)) = decode(&frame_v2(MSG_OPTICAL_FLOW, &p)) else {
+            panic!("OPTICAL_FLOW")
+        };
+        assert_eq!(f.time_usec, 2_028);
+        assert!((f.comp[0] + 1.36).abs() < 1e-6 && (f.comp[1] - 3.6).abs() < 1e-6);
+        assert_eq!(f.quality, 255);
+        // The same message from a companion component (198) is not the FC's.
+        let mut companion = frame_v2(MSG_OPTICAL_FLOW, &p);
+        companion[6] = 198;
+        assert_eq!(decode(&companion), None);
+
+        // A downward laser: 5 cm to 12 m, reading 1.14 m.
+        let mut p = 37_000u32.to_le_bytes().to_vec();
+        for v in [5u16, 1200, 114] {
+            p.extend_from_slice(&v.to_le_bytes());
+        }
+        p.extend_from_slice(&[0, 0, 25, 0]);
+        let Some(FcMessage::Range(r)) = decode(&frame_v2(MSG_DISTANCE_SENSOR, &p)) else {
+            panic!("DISTANCE_SENSOR")
+        };
+        assert_eq!((r.time_boot_ms, r.orientation), (37_000, 25));
+        assert!((r.distance_m - 1.14).abs() < 1e-9);
+        assert!((r.min_m - 0.05).abs() < 1e-9 && (r.max_m - 12.0).abs() < 1e-9);
     }
 }

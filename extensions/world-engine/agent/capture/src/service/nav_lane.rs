@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use ados_capture_contract::v1::ImuBatch;
+use ados_scan2d::VelocitySample;
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
@@ -150,10 +151,38 @@ impl Engine {
         self.fc_imu_prev = Some(cur);
     }
 
-    /// The pose interval: feed the FC attitude when it stands in for an IMU,
-    /// then publish the newest pose when due.
+    /// With `atlas.lidar.imu = "fc"`, the FC's ground velocity (its optical
+    /// flow over its downward range, see [`crate::nav::fc_flow`]) for the
+    /// pose provider, in the same body frame as the FC's IMU. After the IMU
+    /// samples of the same tick, so the matcher levels it with an attitude
+    /// that has caught up.
+    fn feed_fc_velocity(&mut self) {
+        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+            return;
+        }
+        let Some(fc) = self.nav_deps.fc_feed.as_ref() else {
+            return;
+        };
+        let samples: Vec<VelocitySample> = fc
+            .drain_velocity()
+            .into_iter()
+            .map(|(t_ns, v)| VelocitySample { t_ns, v })
+            .collect();
+        if samples.is_empty() {
+            return;
+        }
+        if !self.fc_flow {
+            tracing::info!("nav_velocity_source_optical_flow");
+            self.fc_flow = true;
+        }
+        self.pose.feed_velocity(fc_imu::FC_IMU_ID, &samples);
+    }
+
+    /// The pose interval: feed the FC's IMU (or attitude) and ground velocity
+    /// when it stands in for an IMU, then publish the newest pose when due.
     pub(super) async fn on_nav_tick(&mut self) {
         self.feed_fc_imu();
+        self.feed_fc_velocity();
         if let Some(pd) = self.drain_poses() {
             self.publisher.publish_pose(&pd).await;
         }

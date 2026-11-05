@@ -10,8 +10,10 @@ with the closest IMU sample, runs the selected estimator, and emits the
 flow message for the configured firmware (`OPTICAL_FLOW` for ArduPilot
 and iNav, `OPTICAL_FLOW_RAD` for PX4; plus `DISTANCE_SENSOR` when the
 rangefinder is companion-wired) that the flight controller fuses into
-its estimator. It asks the flight controller for `RAW_IMU` at 100 Hz
-and `DISTANCE_SENSOR` at 20 Hz. The GCS half mounts a node-detail tab with the mode
+its estimator. It asks the flight controller for `RAW_IMU` at 100 Hz,
+`DISTANCE_SENSOR` at 20 Hz and its own `OPTICAL_FLOW` at 20 Hz (the
+world-engine lidar SLAM follows that ground velocity along a corridor its
+scans leave unconstrained). The GCS half mounts a node-detail tab with the mode
 list, sensors card, estimator card, telemetry charts, pre-arm status,
 and a fallback banner that fires when the estimator goes degraded or
 fails.

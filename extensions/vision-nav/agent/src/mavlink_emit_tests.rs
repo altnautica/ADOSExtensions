@@ -135,10 +135,11 @@ fn sequence_increments() {
 
 #[test]
 fn set_message_interval_sent_at_start() {
-    let [imu, range] = stream_interval_requests(1, 1);
+    let [imu, range, flow] = stream_interval_requests(1, 1);
     for (msg, id, us) in [
         (imu, RAW_IMU_ID, RAW_IMU_INTERVAL_US),
         (range, DISTANCE_SENSOR_ID, DISTANCE_SENSOR_INTERVAL_US),
+        (flow, OPTICAL_FLOW_ID, OPTICAL_FLOW_INTERVAL_US),
     ] {
         let frame = of_frame(&msg).unwrap();
         let (_h, parsed) = parse_v2(&frame).unwrap();
@@ -154,6 +155,7 @@ fn set_message_interval_sent_at_start() {
     }
     assert_eq!(RAW_IMU_INTERVAL_US, 10_000.0);
     assert_eq!(DISTANCE_SENSOR_INTERVAL_US, 50_000.0);
+    assert_eq!(OPTICAL_FLOW_INTERVAL_US, 50_000.0);
 }
 
 #[test]

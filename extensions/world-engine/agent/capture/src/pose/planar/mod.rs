@@ -3,11 +3,14 @@
 //! thread.
 //!
 //! Input: [`PoseProvider::feed_imu`] takes the configured IMU's samples (body
-//! FLU) and [`PoseProvider::feed_lidar`] the configured LiDAR's scans. Both go
-//! onto one ordered channel with `try_send`, so the capture loop never
-//! blocks. At most [`SCAN_QUEUE_DEPTH`] scans wait at a time; a scan past that
-//! is dropped and counted in [`PlanarStats`], as is an IMU batch on a full
-//! channel.
+//! FLU), [`PoseProvider::feed_velocity`] ground velocities measured in that
+//! IMU's frame (the flight controller's optical flow over its downward range,
+//! which the matcher follows along a corridor the scans leave unconstrained)
+//! and [`PoseProvider::feed_lidar`] the configured LiDAR's scans. All go onto
+//! one ordered channel with `try_send`, so the capture loop never blocks. At
+//! most [`SCAN_QUEUE_DEPTH`] scans wait at a time; a scan past that is
+//! dropped and counted in [`PlanarStats`], as is an IMU or velocity batch on
+//! a full channel.
 //!
 //! Output: each scan's planar pose `(x, y, yaw)` plus the IMU's roll and
 //! pitch is `T_w_l`, the LiDAR pose in the levelled LiDAR frame at the first
@@ -18,7 +21,9 @@
 //! Health: `Lost` until the first submap holds [`MIN_SUBMAP_SCANS`] scans;
 //! `Degraded` while the match's `degeneracy` (translation `eig_min / eig_max`,
 //! reported as `quality().degeneracy_ratio`) is below the matcher's
-//! degenerate ratio, or the scan could not be matched; `Good` otherwise.
+//! degenerate ratio (the pose rides a motion prior along the weak direction,
+//! measured velocity or not), or the scan could not be matched; `Good`
+//! otherwise.
 
 #[cfg(test)]
 mod tests;
@@ -30,7 +35,7 @@ use std::thread::JoinHandle;
 
 use ados_capture_contract::v1::ImuBatch;
 use ados_capture_contract::{Rig, RigSensorKind};
-use ados_scan2d::{ImuSample, LocalSlam, PoseOut, Scan2dConfig, ScanInput};
+use ados_scan2d::{ImuSample, LocalSlam, PoseOut, Scan2dConfig, ScanInput, VelocitySample};
 use world_engine_protocol::atlas::{PoseSource, VioHealth};
 
 use super::lidar::supervise::{nominal_cov, world_from_body};
@@ -68,7 +73,7 @@ pub struct PlanarStats {
     pub scans_dropped: u64,
     /// Scans whose per-point vectors disagreed in length.
     pub scans_rejected: u64,
-    /// IMU batches dropped on a full channel.
+    /// IMU and velocity batches dropped on a full channel.
     pub imu_dropped: u64,
     /// Scans the matcher processed.
     pub scans_processed: u64,
@@ -85,6 +90,7 @@ struct Counters {
 
 enum Input {
     Imu(Vec<ImuSample>),
+    Velocity(Vec<VelocitySample>),
     Scan(ScanInput),
 }
 
@@ -195,6 +201,7 @@ fn run(
     while let Ok(input) = rx.recv() {
         match input {
             Input::Imu(samples) => samples.iter().for_each(|s| slam.feed_imu(s)),
+            Input::Velocity(samples) => samples.iter().for_each(|s| slam.feed_velocity(s)),
             Input::Scan(scan) => {
                 let out = slam.feed_scan(&scan);
                 let health = health_of(&out, slam.inserted_scans(), ratio);
@@ -261,6 +268,16 @@ impl PoseProvider for PlanarLidarPose {
         }
         let Some(tx) = &self.tx else { return };
         if tx.try_send(Input::Imu(samples)).is_err() {
+            self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn feed_velocity(&self, src: &str, samples: &[VelocitySample]) {
+        if src != self.imu_id || samples.is_empty() {
+            return;
+        }
+        let Some(tx) = &self.tx else { return };
+        if tx.try_send(Input::Velocity(samples.to_vec())).is_err() {
             self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
         }
     }

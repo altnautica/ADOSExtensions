@@ -23,8 +23,8 @@ use crate::mavlink_emit::{
     build_timesync, monotonic_ns, of_frame, stream_interval_requests, ComponentRouter,
 };
 
-/// How often the RAW_IMU / DISTANCE_SENSOR interval requests repeat (an
-/// FC reboot drops them).
+/// How often the RAW_IMU / DISTANCE_SENSOR / OPTICAL_FLOW interval requests
+/// repeat (an FC reboot drops them).
 pub const STREAM_INTERVAL_PERIOD: Duration = Duration::from_secs(30);
 
 /// TIMESYNC query at 1 Hz.
@@ -67,8 +67,9 @@ pub fn spawn_heartbeat(
     })
 }
 
-/// `MAV_CMD_SET_MESSAGE_INTERVAL` for RAW_IMU and DISTANCE_SENSOR, at
-/// start and every [`STREAM_INTERVAL_PERIOD`], addressed to the FC.
+/// `MAV_CMD_SET_MESSAGE_INTERVAL` for RAW_IMU, DISTANCE_SENSOR and
+/// OPTICAL_FLOW, at start and every [`STREAM_INTERVAL_PERIOD`], addressed to
+/// the FC.
 pub fn spawn_stream_intervals(
     ctx: &PluginContext,
     fc_target: Arc<FcTarget>,

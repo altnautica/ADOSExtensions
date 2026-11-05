@@ -31,6 +31,7 @@
 use std::collections::VecDeque;
 
 use ados_capture_contract::v1::ImuBatch;
+use ados_scan2d::VelocitySample;
 use parking_lot::Mutex;
 use world_engine_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
 
@@ -255,6 +256,9 @@ pub trait PoseProvider: Send + Sync {
     fn feed_frame(&self, _frame: &CapturedFrame) {}
     /// One IMU batch from the sensor bus, host monotonic times, body FLU.
     fn feed_imu(&self, _src: &str, _batch: &ImuBatch) {}
+    /// Ground velocities measured in the frame of IMU `src` (x and y, m/s;
+    /// the FC's optical flow over its downward range), host monotonic times.
+    fn feed_velocity(&self, _src: &str, _samples: &[VelocitySample]) {}
     /// One LiDAR scan.
     fn feed_lidar(&self, _scan: &LidarScan) {}
 

@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 
 use nalgebra::{Matrix2, Rotation2, Vector2};
 
-use crate::attitude::{Attitude, ImuSample};
+use crate::attitude::{Attitude, ImuSample, VelocitySample};
 use crate::config::Scan2dConfig;
 use crate::matcher::{
     constraint_information, correlative, degeneracy, keep_constrained, refine,
@@ -28,6 +28,11 @@ const VELOCITY_WINDOW_NS: u64 = 300_000_000;
 /// to rest. Without the fade the prior would carry forward whatever
 /// velocity it held, unobserved, for as long as the stretch lasts.
 const COAST_TAU_S: f64 = 1.0;
+/// Measured velocities older than this before a scan no longer stand for its
+/// motion.
+const MAX_VELOCITY_AGE_NS: u64 = 250_000_000;
+/// How long measured velocities are kept.
+const VELOCITY_KEEP_NS: u64 = 1_000_000_000;
 
 /// The translation directions the last match left unconstrained.
 #[derive(Debug, Clone, Copy)]
@@ -85,6 +90,9 @@ pub struct LocalSlam {
     history: VecDeque<(u64, Pose2)>,
     /// Set while the latest match is degenerate.
     unobserved: Option<Unobserved>,
+    /// Measured velocities ([`Self::feed_velocity`]), levelled LiDAR frame,
+    /// oldest first.
+    measured: VecDeque<(u64, Vector2<f64>)>,
     last_insert: Option<(u64, Pose2)>,
     inserted: usize,
 }
@@ -112,6 +120,7 @@ impl LocalSlam {
             last: None,
             history: VecDeque::new(),
             unobserved: None,
+            measured: VecDeque::new(),
             last_insert: None,
             inserted: 0,
         }
@@ -128,6 +137,47 @@ impl LocalSlam {
 
     pub fn feed_imu(&mut self, s: &ImuSample) {
         self.att.update(s);
+    }
+
+    /// A measured ground velocity of the IMU frame (an optical-flow sensor
+    /// over its range to the ground). While one is fresh it is the motion
+    /// prior's velocity in every direction: the scans refine the pose where
+    /// they constrain it, and along a direction they do not (a corridor's
+    /// axis) the pose follows the measured motion instead of coasting.
+    /// Levelled with the IMU's roll and pitch at arrival, so feed the IMU up
+    /// to the sample's time first. Dropped before the first IMU sample or
+    /// when tilted too far to level.
+    pub fn feed_velocity(&mut self, s: &VelocitySample) {
+        let Some(v) = self.att.level_velocity(s.v) else {
+            return;
+        };
+        if self.measured.back().is_some_and(|&(t, _)| t >= s.t_ns) {
+            return;
+        }
+        self.measured.push_back((s.t_ns, Vector2::new(v[0], v[1])));
+        let horizon = s.t_ns.saturating_sub(VELOCITY_KEEP_NS);
+        while self.measured.front().is_some_and(|&(t, _)| t < horizon) {
+            self.measured.pop_front();
+        }
+    }
+
+    /// The mean measured velocity over `(from, to]`, else the newest no more
+    /// than [`MAX_VELOCITY_AGE_NS`] before `to`.
+    fn measured_velocity(&self, from: u64, to: u64) -> Option<Vector2<f64>> {
+        let (sum, n) = self
+            .measured
+            .iter()
+            .filter(|&&(t, _)| t > from && t <= to)
+            .fold((Vector2::zeros(), 0usize), |(s, n), &(_, v)| (s + v, n + 1));
+        if n > 0 {
+            return Some(sum / n as f64);
+        }
+        self.measured
+            .iter()
+            .rev()
+            .find(|&&(t, _)| t <= to)
+            .filter(|&&(t, _)| to - t <= MAX_VELOCITY_AGE_NS)
+            .map(|&(_, v)| v)
     }
 
     /// Match one scan and return its pose.
@@ -232,12 +282,14 @@ impl LocalSlam {
 
     /// Prior pose, LiDAR-frame velocity, the heading rate over the scan's
     /// `span_ns`, and the local-frame velocity of the prediction, from the
-    /// IMU's heading and the mean velocity over the recent poses.
+    /// IMU's heading and a velocity: the measured one
+    /// ([`Self::feed_velocity`]) over the interval while it is fresh, else
+    /// the mean over the recent poses.
     /// The velocity is kept in the LiDAR frame (the chord over the window is
     /// expressed at its middle heading) so it turns with the walker through a
-    /// corner. Along directions the last match left unconstrained the chord
-    /// only replays the prior, so the velocity there is the one last observed,
-    /// fading over [`COAST_TAU_S`].
+    /// corner. Without a measured velocity, along directions the last match
+    /// left unconstrained the chord only replays the prior, so the velocity
+    /// there is the one last observed, fading over [`COAST_TAU_S`].
     fn predict(&self, t: u64, heading: f64, span_ns: u64) -> (Pose2, [f64; 2], f64, Vector2<f64>) {
         let imu_rate = if span_ns > 0 {
             (self.att.heading_at(t + span_ns) - heading) / (span_ns as f64 * 1e-9)
@@ -264,8 +316,9 @@ impl LocalSlam {
             (omega * dt, omega)
         };
         let heading = Rotation2::new(p1.th + 0.5 * dyaw);
-        let mut v = heading * Vector2::new(vel[0], vel[1]);
-        if let Some(u) = &self.unobserved {
+        let measured = self.measured_velocity(t1, t + span_ns);
+        let mut v = heading * measured.unwrap_or(Vector2::new(vel[0], vel[1]));
+        if let (None, Some(u)) = (measured, &self.unobserved) {
             let fade = (-(t.saturating_sub(u.since_ns) as f64 * 1e-9) / COAST_TAU_S).exp();
             v += u.free * (u.vel * fade - v);
         }

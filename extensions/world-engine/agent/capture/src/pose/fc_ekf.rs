@@ -6,6 +6,10 @@
 //! position message, paired with the latest attitude no more than
 //! [`MAX_PAIR_NS`] older on the FC clock.
 //!
+//! The feed also queues the FC's `RAW_IMU` ([`FcEkfPose::drain_imu`]) and the
+//! ground velocity of its `OPTICAL_FLOW` over its downward `DISTANCE_SENSOR`
+//! range ([`FcEkfPose::drain_velocity`]) for the planar matcher.
+//!
 //! GNSS: `GPS_RAW_INT` carries no boot time, so its fix is placed at its
 //! position in the stream. An estimate counts as GNSS-referenced
 //! ([`FcEkfPose::gnss_steady_at`]) once every `GPS_RAW_INT` since a time
@@ -34,6 +38,7 @@ use super::{se3, PoseEstimate, PoseProvider, PoseTrack};
 use crate::geodesy::{EnuFrame, R_ENU_NED, R_FRD_FLU};
 use crate::mavlink_msg::{decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, RawImu};
 use crate::nav::align::GNSS_SETTLE_MS;
+use crate::nav::fc_flow;
 
 /// Largest FC-clock gap between the attitude and the position paired into one
 /// estimate.
@@ -44,6 +49,8 @@ pub const OFFSET_WINDOW: usize = 64;
 const GNSS_CHANGES: usize = 16;
 /// `RAW_IMU` samples held for [`FcEkfPose::drain_imu`] (5 s at 100 Hz).
 const IMU_QUEUE: usize = 512;
+/// Flow velocities held for [`FcEkfPose::drain_velocity`] (5 s at 50 Hz).
+const FLOW_QUEUE: usize = 256;
 
 /// `GPS_FIX_TYPE_3D_FIX`.
 const FIX_3D: u8 = 3;
@@ -68,6 +75,12 @@ struct FeedInner {
     ned: VecDeque<(u64, [f64; 2])>,
     /// `RAW_IMU` samples not yet drained, oldest first.
     imu: VecDeque<RawImu>,
+    /// Newest downward ground range ([`fc_flow::ground_range`]): FC boot ms,
+    /// metres.
+    range: Option<(u32, f64)>,
+    /// Flow body velocities not yet drained, oldest first: FC boot ms, FLU
+    /// m/s ([`fc_flow::body_velocity`]).
+    flow: VecDeque<(u32, [f64; 2])>,
 }
 
 /// The FC EKF feed and provider. Cheap to clone; every clone shares state.
@@ -143,6 +156,21 @@ impl FcEkfPose {
             .collect()
     }
 
+    /// The ground velocities from `OPTICAL_FLOW` and the downward
+    /// `DISTANCE_SENSOR` ([`crate::nav::fc_flow`]) since the last call, oldest
+    /// first: `(host ns, [x, y] m/s body FLU)`. Empty until the FC streams
+    /// both.
+    pub fn drain_velocity(&self) -> Vec<(u64, [f64; 2])> {
+        let mut g = self.inner.lock();
+        let Some(offset) = g.offsets.iter().min().copied() else {
+            return Vec::new();
+        };
+        g.flow
+            .drain(..)
+            .map(|(ms, v)| ((ms as i128 * 1_000_000 + offset).max(0) as u64, v))
+            .collect()
+    }
+
     /// Whether the EKF position at host `t_ns` was GNSS-referenced: at the
     /// newest estimate no later than `t_ns`, GNSS had held a 3D fix for
     /// [`GNSS_SETTLE_MS`] on the FC clock. `false` before any estimate.
@@ -200,6 +228,28 @@ impl FcEkfPose {
                 g.imu.push_back(s);
                 while g.imu.len() > IMU_QUEUE {
                     g.imu.pop_front();
+                }
+            }
+            FcMessage::Range(r) => {
+                if let Some(m) = fc_flow::ground_range(&r) {
+                    g.range = Some((r.time_boot_ms, m));
+                }
+            }
+            FcMessage::Flow(f) => {
+                let Some(ms) = g.fc_ms.and_then(|now| fc_flow::flow_time_ms(f.time_usec, now)) else {
+                    return;
+                };
+                let Some((_, range)) = g
+                    .range
+                    .filter(|(t, _)| t.abs_diff(ms) <= fc_flow::MAX_RANGE_SKEW_MS)
+                else {
+                    return;
+                };
+                if let Some(v) = fc_flow::body_velocity(&f, range) {
+                    g.flow.push_back((ms, v));
+                    while g.flow.len() > FLOW_QUEUE {
+                        g.flow.pop_front();
+                    }
                 }
             }
             FcMessage::GpsFix(fix) => {
@@ -472,5 +522,47 @@ mod tests {
         assert_eq!(got.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [5_012_000_000, 5_022_000_000]);
         assert!((got[1].1.gyro[2] - 0.6).abs() < 1e-12);
         assert!(p.drain_imu().is_empty(), "drained once");
+    }
+
+    /// `OPTICAL_FLOW` (ArduPilot: boot ms in `time_usec`) is scaled by the
+    /// downward range read within 300 ms of it and drains as a body FLU
+    /// velocity on the host clock; a reading out of the rangefinder's band
+    /// or a stale one scales nothing.
+    #[test]
+    fn flow_over_the_downward_range_drains_as_a_body_velocity() {
+        let p = FcEkfPose::new();
+        let flow = |ms: u64, comp: [f32; 2]| {
+            let mut b = ms.to_le_bytes().to_vec();
+            for v in [comp[0], comp[1], 0.0] {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            b.extend_from_slice(&[0, 0, 0, 0, 0, 255]);
+            frame_v2(crate::mavlink_msg::MSG_OPTICAL_FLOW, &b)
+        };
+        let range = |ms: u32, cm: u16| {
+            let mut b = ms.to_le_bytes().to_vec();
+            for v in [5u16, 1200, cm] {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            b.extend_from_slice(&[0, 0, fc_flow::DOWNWARD, 0]);
+            frame_v2(crate::mavlink_msg::MSG_DISTANCE_SENSOR, &b)
+        };
+        // The FC clock runs 4 s behind the host's, with 2 ms least delay.
+        p.on_frame(&att(1_000, [1.0, 0.0, 0.0, 0.0]), 5_002_000_000);
+        p.on_frame(&flow(1_005, [0.0, 1.0]), 5_010_000_000);
+        assert!(p.drain_velocity().is_empty(), "no range yet");
+        p.on_frame(&range(1_010, 200), 5_015_000_000);
+        p.on_frame(&flow(1_020, [-0.5, 1.0]), 5_025_000_000);
+        p.on_frame(&range(1_030, 1200), 5_035_000_000);
+        p.on_frame(&flow(1_040, [0.0, 2.0]), 5_045_000_000);
+        let got = p.drain_velocity();
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!(got[0].0, 5_022_000_000);
+        assert!((got[0].1[0] - 2.0).abs() < 1e-6 && (got[0].1[1] + 1.0).abs() < 1e-6);
+        assert!((got[1].1[0] - 4.0).abs() < 1e-6, "the out-of-band reading is skipped");
+        assert!(p.drain_velocity().is_empty(), "drained once");
+        p.on_frame(&att(1_400, [1.0, 0.0, 0.0, 0.0]), 5_402_000_000);
+        p.on_frame(&flow(1_400, [0.0, 1.0]), 5_405_000_000);
+        assert!(p.drain_velocity().is_empty(), "the range is 390 ms old");
     }
 }

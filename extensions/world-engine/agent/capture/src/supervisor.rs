@@ -46,14 +46,18 @@ pub const CONFIG_POLL: Duration = Duration::from_secs(5);
 /// there because the drone stream table carries it and not the quaternion
 /// outside a capture session ([`crate::mavlink_msg`]); `GPS_RAW_INT` says when
 /// the EKF's position is GNSS-referenced ([`crate::nav::align`]); `RAW_IMU`
-/// is the gyro the planar matcher's `fc` IMU integrates ([`crate::nav::fc_imu`]).
-const FC_MESSAGES: [&str; 6] = [
+/// is the gyro the planar matcher's `fc` IMU integrates ([`crate::nav::fc_imu`]);
+/// `OPTICAL_FLOW` over the downward `DISTANCE_SENSOR` range is the ground
+/// velocity it follows along a corridor ([`crate::nav::fc_flow`]).
+const FC_MESSAGES: [&str; 8] = [
     "ATTITUDE",
     "ATTITUDE_QUATERNION",
     "LOCAL_POSITION_NED",
     "GPS_GLOBAL_ORIGIN",
     "GPS_RAW_INT",
     "RAW_IMU",
+    "OPTICAL_FLOW",
+    "DISTANCE_SENSOR",
 ];
 
 /// The sockets a capture run binds, in the extension's private IPC directory.

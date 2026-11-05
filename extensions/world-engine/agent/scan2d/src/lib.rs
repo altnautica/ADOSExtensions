@@ -15,8 +15,13 @@
 //!   the motion filter passes. Along a featureless corridor the pose keeps its
 //!   motion prior in the unconstrained direction, the prior's velocity there
 //!   fading to rest, and [`PoseOut::degeneracy`] drops below
-//!   [`Scan2dConfig::degenerate_ratio`]. Isolated posts and uprights count as
-//!   constraints in both directions, walls only across themselves.
+//!   [`Scan2dConfig::degenerate_ratio`]. A measured ground velocity
+//!   ([`LocalSlam::feed_velocity`]: a downward optical-flow sensor scaled by
+//!   its range, levelled with the IMU's roll and pitch) replaces the recent
+//!   poses' velocity in the prior while it is fresh, so along such a
+//!   direction the pose follows the measured motion. Isolated posts and
+//!   uprights count as constraints in both directions, walls only across
+//!   themselves.
 //!   [`LocalSlam::inserted_scans`] counts the scans in the map so far.
 //! - **Offline**, [`offline::run`]: the same local SLAM over a whole session,
 //!   then branch-and-bound loop search against finished submaps and a
@@ -35,10 +40,11 @@
 //! corridor's long axis gives way first.
 //!
 //! Inputs are plain values: [`ScanInput`] (first-point time, LiDAR-frame
-//! points, per-point time offsets) and [`ImuSample`] (time, gyro rad/s, accel
-//! m/s², IMU frame, FLU). [`Scan2dConfig::for_sensor`] builds the defaults from
-//! the LiDAR model's range limits and occluded sectors; `r_lidar_imu` aligns an
-//! IMU mounted at another orientation.
+//! points, per-point time offsets), [`ImuSample`] (time, gyro rad/s, accel
+//! m/s², IMU frame, FLU) and [`VelocitySample`] (time, velocity along the
+//! IMU frame's x and y, m/s). [`Scan2dConfig::for_sensor`] builds the
+//! defaults from the LiDAR model's range limits and occluded sectors;
+//! `r_lidar_imu` aligns an IMU mounted at another orientation.
 //!
 //! The methods are the published ones: correlative scan matching (Olson
 //! 2009), Gauss-Newton matching on an interpolated grid (Kohlbrecher et al.
@@ -58,7 +64,7 @@ pub mod pose;
 pub mod scan;
 pub mod submap;
 
-pub use attitude::ImuSample;
+pub use attitude::{ImuSample, VelocitySample};
 pub use backend::{LoopClosure, Trajectory};
 pub use config::Scan2dConfig;
 pub use frontend::{LocalMap, LocalSlam, PoseOut};

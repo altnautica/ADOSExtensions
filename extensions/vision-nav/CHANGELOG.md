@@ -4,6 +4,16 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.6.4]
+
+### Added
+
+- The flight controller is asked for its own `OPTICAL_FLOW` at 20 Hz, beside
+  `RAW_IMU` and `DISTANCE_SENSOR`, at start and every 30 s. Its flow sensor's
+  rate (body rate taken out) times the downward range is the ground velocity
+  the world-engine lidar SLAM (2.1.8) follows along a corridor its scans
+  leave unconstrained. An FC without a flow sensor sends none.
+
 ## [0.6.3]
 
 ### Fixed

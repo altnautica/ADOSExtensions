@@ -196,6 +196,52 @@ fn a_featureless_corridor_is_degraded() {
     assert!(p.quality().degeneracy_ratio.unwrap() < 0.05);
 }
 
+/// Down the same corridor at 1.5 m/s with the FC's ground velocity (body
+/// frame, the IMU's) arriving beside the IMU: the pose follows it along the
+/// corridor, which the scans cannot see, and stays `Degraded` while it does.
+/// A velocity named for another IMU is ignored, and the pose falls behind.
+#[test]
+fn a_corridor_walk_follows_the_measured_velocity_and_stays_degraded() {
+    let walls = vec![([-100.0, 0.0], [100.0, 0.0]), ([-100.0, 2.0], [100.0, 2.0])];
+    let v = 1.5;
+    let body = |t: u64| [v * (t - T0) as f64 * 1e-9, 1.0, 0.0];
+    let run = |src: &str| {
+        let p = spawn();
+        let mut out = Vec::new();
+        for i in 0..40u64 {
+            let t = T0 + i * PERIOD_NS;
+            p.feed_imu("imu0", &imu(t, t + PERIOD_NS, 0.0));
+            let vel: Vec<VelocitySample> = (t..t + PERIOD_NS)
+                .step_by(20_000_000)
+                .map(|t_ns| VelocitySample { t_ns, v: [v, 0.0] })
+                .collect();
+            p.feed_velocity(src, &vel);
+            p.feed_lidar(&scan(t, &walls, &body));
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while p.stats().scans_processed < i + 1 {
+                assert!(Instant::now() < deadline, "scan {i} not matched in 60 s");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            p.drain_new(&mut out);
+        }
+        out
+    };
+    let est = run("imu0");
+    let trusted: Vec<_> = est.iter().filter(|e| e.health != VioHealth::Lost).collect();
+    assert!(trusted.len() >= 20, "{} trusted poses", trusted.len());
+    assert!(trusted.iter().all(|e| e.health == VioHealth::Degraded));
+    let last = est.last().unwrap();
+    let truth = v * (last.t_ns - T0) as f64 * 1e-9;
+    assert!(
+        (last.t[0] - truth).abs() < 0.10 && last.t[1].abs() < 0.05,
+        "at {:?}, walked {truth:.2} m",
+        last.t
+    );
+    let other = run("imu1");
+    let lag = truth - other.last().unwrap().t[0];
+    assert!(lag > 1.0, "without the velocity the pose lags only {lag:.2} m");
+}
+
 #[test]
 fn only_the_configured_sensors_are_read_and_a_full_queue_drops() {
     let walls = rect(0.0, 0.0, 6.0, 4.0);

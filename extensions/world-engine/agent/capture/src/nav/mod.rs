@@ -27,6 +27,7 @@
 
 pub mod align;
 pub mod budget;
+pub mod fc_flow;
 pub mod fc_imu;
 pub mod frames;
 

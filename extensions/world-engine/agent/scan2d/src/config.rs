@@ -81,7 +81,8 @@ pub struct Scan2dConfig {
 
     /// `eig_min / eig_max` of the match's translation information below this
     /// is degenerate: the pose keeps its motion prior along the weak
-    /// directions, and the prior's velocity there fades to rest.
+    /// directions, and the prior's velocity there is the measured one while
+    /// it arrives ([`crate::LocalSlam::feed_velocity`]), else fades to rest.
     pub degenerate_ratio: f64,
 }
 
