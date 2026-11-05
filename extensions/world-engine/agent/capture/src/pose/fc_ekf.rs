@@ -1,10 +1,15 @@
 //! [`FcEkfPose`]: the flight controller's EKF as a pose provider.
 //!
 //! Inputs are the raw `ATTITUDE_QUATERNION` or `ATTITUDE`,
-//! `LOCAL_POSITION_NED` and `GPS_GLOBAL_ORIGIN` frames the plugin host
-//! delivers (`mavlink.read`). One estimate is produced per position message,
-//! paired with the latest attitude no more than [`MAX_PAIR_NS`] older on the
-//! FC clock.
+//! `LOCAL_POSITION_NED`, `GPS_GLOBAL_ORIGIN` and `GPS_RAW_INT` frames the
+//! plugin host delivers (`mavlink.read`). One estimate is produced per
+//! position message, paired with the latest attitude no more than
+//! [`MAX_PAIR_NS`] older on the FC clock.
+//!
+//! GNSS: `GPS_RAW_INT` carries no boot time, so its fix is placed at its
+//! position in the stream. An estimate counts as GNSS-referenced
+//! ([`FcEkfPose::gnss_steady_at`]) once every `GPS_RAW_INT` since a time
+//! [`GNSS_SETTLE_MS`] earlier on the FC clock carried a 3D fix.
 //!
 //! Time: the FC stamps `time_boot_ms`. The FC-to-host offset is the minimum of
 //! `arrival_mono − fc_time` over the last [`OFFSET_WINDOW`] messages (the
@@ -28,12 +33,18 @@ use world_engine_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
 use super::{se3, PoseEstimate, PoseProvider, PoseTrack};
 use crate::geodesy::{EnuFrame, R_ENU_NED, R_FRD_FLU};
 use crate::mavlink_msg::{decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin};
+use crate::nav::align::GNSS_SETTLE_MS;
 
 /// Largest FC-clock gap between the attitude and the position paired into one
 /// estimate.
 pub const MAX_PAIR_NS: u64 = 50_000_000;
 /// Messages the FC→host offset is the minimum over.
 pub const OFFSET_WINDOW: usize = 64;
+/// GNSS state changes kept for [`FcEkfPose::gnss_steady_at`].
+const GNSS_CHANGES: usize = 16;
+
+/// `GPS_FIX_TYPE_3D_FIX`.
+const FIX_3D: u8 = 3;
 
 /// The process-lifetime state the MAVLink subscriptions feed.
 #[derive(Default)]
@@ -43,6 +54,16 @@ struct FeedInner {
     offsets: VecDeque<i128>,
     anchor: Option<GeoAnchor>,
     cov: Option<[f64; POSE_COV_LEN]>,
+    /// FC boot ms of the newest attitude or position.
+    fc_ms: Option<u32>,
+    /// FC boot ms since which every `GPS_RAW_INT` has carried a 3D fix.
+    fix3d_since_ms: Option<u32>,
+    /// `(host ns, steady)` at each estimate where GNSS steadiness changed,
+    /// oldest first.
+    gnss: VecDeque<(u64, bool)>,
+    /// `(host ns, north, east)` of each estimate in the EKF's own local frame
+    /// (`LOCAL_POSITION_NED`), the last [`super::TRACK_HISTORY_NS`].
+    ned: VecDeque<(u64, [f64; 2])>,
 }
 
 /// The FC EKF feed and provider. Cheap to clone; every clone shares state.
@@ -105,6 +126,36 @@ impl FcEkfPose {
         Some((t_ns, se3::matrix_from_quat(att.q)))
     }
 
+    /// Whether the EKF position at host `t_ns` was GNSS-referenced: at the
+    /// newest estimate no later than `t_ns`, GNSS had held a 3D fix for
+    /// [`GNSS_SETTLE_MS`] on the FC clock. `false` before any estimate.
+    pub fn gnss_steady_at(&self, t_ns: u64) -> bool {
+        let g = self.inner.lock();
+        g.gnss
+            .iter()
+            .rev()
+            .find(|(t, _)| *t <= t_ns)
+            .is_some_and(|(_, steady)| *steady)
+    }
+
+    /// The EKF's horizontal position in its own local frame
+    /// (`LOCAL_POSITION_NED` north, east) at host `t_ns`, interpolated
+    /// between the estimates around it; `None` further than
+    /// [`super::MAX_EXTRAPOLATION_NS`] outside them.
+    pub fn ned_at(&self, t_ns: u64) -> Option<[f64; 2]> {
+        let g = self.inner.lock();
+        let i = g.ned.partition_point(|(t, _)| *t <= t_ns);
+        let near = |(t, p): (u64, [f64; 2])| (t.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(p);
+        match (i.checked_sub(1).map(|j| g.ned[j]), g.ned.get(i).copied()) {
+            (Some((t0, p0)), Some((t1, p1))) => {
+                let a = (t_ns - t0) as f64 / (t1 - t0) as f64;
+                Some([p0[0] + a * (p1[0] - p0[0]), p0[1] + a * (p1[1] - p0[1])])
+            }
+            (Some(e), None) | (None, Some(e)) => near(e),
+            (None, None) => None,
+        }
+    }
+
     /// Fold one delivered raw frame, read at host monotonic `arrival_ns`.
     pub fn on_frame(&self, frame: &[u8], arrival_ns: u64) {
         let Some(msg) = decode(frame) else {
@@ -114,16 +165,26 @@ impl FcEkfPose {
         match msg {
             FcMessage::Attitude(a) => {
                 note_offset(&mut g.offsets, a.time_boot_ms, arrival_ns);
+                g.fc_ms = Some(a.time_boot_ms);
                 g.attitude = Some(a);
             }
             FcMessage::Origin(o) => {
                 if g.origin != Some(o) {
                     g.origin = Some(o);
+                    g.ned.clear();
                     self.track.reset();
                 }
             }
+            FcMessage::GpsFix(fix) => {
+                g.fix3d_since_ms = if fix >= FIX_3D {
+                    g.fix3d_since_ms.or(g.fc_ms)
+                } else {
+                    None
+                };
+            }
             FcMessage::Position(p) => {
                 note_offset(&mut g.offsets, p.time_boot_ms, arrival_ns);
+                g.fc_ms = Some(p.time_boot_ms);
                 let Some(att) = g.attitude else {
                     return;
                 };
@@ -135,6 +196,22 @@ impl FcEkfPose {
                 }
                 let offset = *g.offsets.iter().min().expect("noted above");
                 let t_ns = (fc_ns(p.time_boot_ms) + offset).max(0) as u64;
+                let steady = g
+                    .fix3d_since_ms
+                    .is_some_and(|s| p.time_boot_ms.saturating_sub(s) >= GNSS_SETTLE_MS);
+                if g.gnss.back().map(|(_, s)| *s) != Some(steady) {
+                    g.gnss.push_back((t_ns, steady));
+                    while g.gnss.len() > GNSS_CHANGES {
+                        g.gnss.pop_front();
+                    }
+                }
+                if g.ned.back().is_none_or(|(t, _)| *t < t_ns) {
+                    g.ned.push_back((t_ns, [p.ned[0], p.ned[1]]));
+                    let horizon = t_ns.saturating_sub(super::TRACK_HISTORY_NS);
+                    while g.ned.front().is_some_and(|(t, _)| *t < horizon) {
+                        g.ned.pop_front();
+                    }
+                }
                 let (r, t) = world_pose(&att.q, p.ned, g.origin.as_ref(), g.anchor.as_ref());
                 let cov = g.cov.unwrap_or_else(|| super::diagonal_cov(1.0, 0.05));
                 drop(g);
@@ -288,6 +365,9 @@ mod tests {
         assert_eq!(e.t_ns, 5_020_000_000);
         assert_eq!(e.source, PoseSource::FcEkf);
         assert_eq!(e.t, [0.0, 1.0, 0.0]);
+        assert_eq!(p.ned_at(5_020_000_000), Some([1.0, 0.0]), "the EKF's own NED");
+        assert_eq!(p.ned_at(5_060_000_000), Some([1.0, 0.0]));
+        assert_eq!(p.ned_at(5_100_000_000), None, "no extrapolation past 50 ms");
         // An attitude too old to pair yields nothing.
         p.on_frame(&pos(2_000, [2.0, 0.0, 0.0]), 6_000_000_000);
         assert_eq!(p.latest().unwrap().t_ns, 5_020_000_000);
@@ -305,5 +385,42 @@ mod tests {
         assert_eq!(t_ns, 5_000_000_000);
         assert!((r[3].atan2(r[0]) - std::f64::consts::FRAC_PI_2).abs() < 1e-6);
         assert!(p.latest().is_none(), "no position, no pose estimate");
+    }
+
+    fn gps(fix: u8) -> Vec<u8> {
+        let mut p = vec![0u8; 30];
+        p[28] = fix;
+        frame_v2(crate::mavlink_msg::MSG_GPS_RAW_INT, &p)
+    }
+
+    /// The EKF position counts as GNSS-referenced only after the fix has held
+    /// for the settle time on the FC clock, and stops at the first report
+    /// without one, whenever the host happens to read it.
+    #[test]
+    fn gnss_is_steady_from_the_settle_time_until_the_fix_drops() {
+        let p = FcEkfPose::new();
+        let host = |ms: u32| 1_000_000_000 + ms as u64 * 1_000_000;
+        let step = |ms: u32| {
+            p.on_frame(&att(ms, [1.0, 0.0, 0.0, 0.0]), host(ms));
+            p.on_frame(&pos(ms, [0.0; 3]), host(ms));
+        };
+        step(0);
+        assert!(!p.gnss_steady_at(host(0)), "no fix yet");
+        p.on_frame(&gps(6), host(0));
+        step(1_000);
+        step(GNSS_SETTLE_MS - 1);
+        assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS - 1)));
+        step(GNSS_SETTLE_MS + 100);
+        assert!(p.gnss_steady_at(host(GNSS_SETTLE_MS + 100)));
+        assert!(p.gnss_steady_at(host(GNSS_SETTLE_MS + 150)), "until the next estimate");
+        assert!(!p.gnss_steady_at(host(5_000)), "earlier estimates keep their state");
+        p.on_frame(&gps(1), host(GNSS_SETTLE_MS + 200));
+        step(GNSS_SETTLE_MS + 300);
+        assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS + 300)));
+        p.on_frame(&gps(3), host(GNSS_SETTLE_MS + 400));
+        step(GNSS_SETTLE_MS + 500);
+        assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS + 500)), "the settle time restarts");
+        step(2 * GNSS_SETTLE_MS + 400);
+        assert!(p.gnss_steady_at(host(2 * GNSS_SETTLE_MS + 400)));
     }
 }

@@ -10,6 +10,8 @@
 //! and the drone stream table asks for `ATTITUDE` alone outside a capture
 //! session. Both decode to the same [`AttitudeQuaternion`].
 
+/// `GPS_RAW_INT` (24): the receiver's fix, read for its `fix_type`.
+pub const MSG_GPS_RAW_INT: u32 = 24;
 /// `ATTITUDE` (30): body FRD → local NED as roll, pitch and yaw, radians.
 pub const MSG_ATTITUDE: u32 = 30;
 /// `ATTITUDE_QUATERNION` (31): body FRD → local NED.
@@ -45,6 +47,8 @@ pub enum FcMessage {
     Attitude(AttitudeQuaternion),
     Position(LocalPositionNed),
     Origin(GpsGlobalOrigin),
+    /// `GPS_RAW_INT.fix_type` (`GPS_FIX_TYPE`: 3 is a 3D fix).
+    GpsFix(u8),
 }
 
 /// `(msgid, payload)` of a MAVLink 1 or 2 frame, or `None` when malformed.
@@ -114,6 +118,10 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
                 lon_deg: i32_at(&b, 4) as f64 * 1e-7,
                 alt_msl_m: i32_at(&b, 8) as f64 * 1e-3,
             })
+        }
+        MSG_GPS_RAW_INT => {
+            let b: [u8; 30] = padded(payload);
+            FcMessage::GpsFix(b[28])
         }
         _ => return None,
     })
@@ -232,5 +240,21 @@ mod tests {
         assert!((o.alt_msl_m - 920.4).abs() < 1e-9);
         assert!(decode(&frame_v2(0, &[0; 9])).is_none());
         assert!(decode(&[0xFD, 40, 0]).is_none());
+    }
+
+    #[test]
+    fn gps_raw_int_gives_its_fix_type() {
+        let mut p = vec![0u8; 30];
+        p[8..12].copy_from_slice(&129_716_000i32.to_le_bytes());
+        p[28] = 3;
+        p[29] = 14;
+        assert_eq!(decode(&frame_v2(MSG_GPS_RAW_INT, &p)), Some(FcMessage::GpsFix(3)));
+        // No fix: MAVLink 2 trims every zero byte from the satellite count on.
+        p[28] = 0;
+        p[29] = 0;
+        while p.last() == Some(&0) {
+            p.pop();
+        }
+        assert_eq!(decode(&frame_v2(MSG_GPS_RAW_INT, &p)), Some(FcMessage::GpsFix(0)));
     }
 }

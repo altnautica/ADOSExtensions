@@ -7,7 +7,7 @@ use ados_capture_contract::v1::ImuBatch;
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
-use crate::nav::{fc_imu, heading, TickInputs};
+use crate::nav::{fc_imu, TickInputs};
 use crate::pose::{se3, PoseEstimate, PoseProvider};
 use crate::quality::lidar_depth::LidarDepth;
 use crate::recorder::Item;
@@ -23,7 +23,7 @@ impl Engine {
     }
 
     /// The flight controller's attitude yaw (its compass heading), radians
-    /// clockwise from north: the map's north until the GNSS heading fit.
+    /// clockwise from north: the map's north until the GNSS fit.
     pub(super) fn fc_heading(&self) -> Option<f64> {
         self.nav_deps
             .fc_feed
@@ -33,24 +33,22 @@ impl Engine {
     }
 
     /// Pair each new provider estimate with the flight controller's EKF
-    /// position at the same instant for the map's heading fit, while GNSS has
-    /// been steady long enough for that position to be GNSS-referenced; with
-    /// GNSS gone the fit freezes. The EKF track is the session ENU world
-    /// (north = y, east = x).
-    pub(super) fn fold_gnss_heading(&mut self, poses: &[PoseEstimate]) {
-        if !self
-            .vehicle
-            .gnss_steady(crate::clock::mono_ns(), heading::GNSS_SETTLE_NS)
-        {
-            self.nav.on_gnss_lost();
-            return;
-        }
+    /// position (`LOCAL_POSITION_NED`) at the same instant for the map's GNSS
+    /// alignment while that position was GNSS-referenced, and freeze the
+    /// alignment at an estimate where it was not. Estimates the FC stream has
+    /// not reached yet are skipped.
+    pub(super) fn fold_gnss_alignment(&mut self, poses: &[PoseEstimate]) {
         let Some(fc) = self.nav_deps.fc_feed.as_ref() else {
             return;
         };
         for e in poses {
-            if let Some(ekf) = fc.track().pose_at(e.t_ns) {
-                self.nav.on_gnss_ref(e, [ekf.t[1], ekf.t[0]]);
+            let Some(ekf) = fc.ned_at(e.t_ns) else {
+                continue;
+            };
+            if fc.gnss_steady_at(e.t_ns) {
+                self.nav.on_gnss_ref(e, ekf);
+            } else {
+                self.nav.on_gnss_lost();
             }
         }
     }

@@ -13,14 +13,17 @@
 //! placement; the placement sets the live sweep-cloud resolution and whether
 //! the node reconstructs in flight or after landing.
 //!
-//! `map_ned`'s north starts as the flight controller's compass heading at the
-//! first pose and is replaced by the GNSS displacement fit ([`heading`]) once
-//! the drone has flown a baseline on GNSS; the fit freezes when GNSS goes.
+//! `map_ned` starts as the SLAM world rotated to the flight controller's
+//! compass heading at the first pose, origin at the first scan. While the EKF
+//! navigates on GNSS it is moved onto the EKF's local frame
+//! (`LOCAL_POSITION_NED`): yaw and offset fitted between the two tracks
+//! ([`align`]), frozen when GNSS goes, so a switch to external navigation
+//! finds the two frames in agreement.
 
+pub mod align;
 pub mod budget;
 pub mod fc_imu;
 pub mod frames;
-pub mod heading;
 
 #[cfg(test)]
 mod tests;
@@ -36,11 +39,11 @@ use world_engine_protocol::atlas::{
 
 use crate::lidar_scan::LidarScan;
 use crate::pose::{se3, PoseEstimate};
+use align::MapAlign;
 use budget::Budget;
-use heading::HeadingAlign;
 
-/// A fitted heading is logged again once it has moved this far, radians.
-const HEADING_LOG_STEP_RAD: f64 = 0.25 * std::f64::consts::PI / 180.0;
+/// A fitted yaw is logged again once it has moved this far, radians.
+const YAW_LOG_STEP_RAD: f64 = 0.25 * std::f64::consts::PI / 180.0;
 
 /// The session subdirectory the live map is saved under.
 pub const SESSION_MAP_DIR: &str = "map";
@@ -110,8 +113,11 @@ pub struct NavMap {
     /// Latched from the flight controller's attitude yaw at the first pose
     /// that has one; until then nothing is placed in the map.
     yaw0: Option<f64>,
-    /// The GNSS displacement fit of the same heading.
-    heading: HeadingAlign,
+    /// The GNSS alignment onto the EKF's local frame.
+    align: MapAlign,
+    /// `map_ned`'s horizontal offset from the rotated SLAM world (north,
+    /// east): zero until GNSS, then the EKF's, frozen when GNSS goes.
+    offset: [f64; 2],
     /// The fitted yaw last logged.
     logged_yaw: Option<f64>,
     /// The latest pose in `map_ned`: `(R, t)`.
@@ -147,7 +153,8 @@ impl NavMap {
             last_pub_ms: None,
             fc_up0: None,
             yaw0: None,
-            heading: HeadingAlign::default(),
+            align: MapAlign::default(),
+            offset: [0.0; 2],
             logged_yaw: None,
             latest: None,
         }
@@ -162,10 +169,10 @@ impl NavMap {
         self.map_yaw().is_some()
     }
 
-    /// `map_ned = Rz(map_yaw) · map_frd`: the GNSS fit when there is one, else
-    /// the compass latch.
+    /// `map_ned = Rz(map_yaw) · map_frd + offset`: the GNSS fit's yaw when
+    /// there is one, else the compass latch.
     pub fn map_yaw(&self) -> Option<f64> {
-        self.heading.fit().map(|f| f.yaw).or(self.yaw0)
+        self.align.fit().map(|f| f.yaw).or(self.yaw0)
     }
 
     /// Fold one provider estimate paired with the flight controller's EKF
@@ -176,32 +183,39 @@ impl NavMap {
             return;
         }
         let t_frd = frames::flu_to_frd_vec(e.t);
-        let Some(fit) = self.heading.observe([t_frd[0], t_frd[1]], ekf_ne) else {
-            return;
-        };
+        let fit = self.align.observe([t_frd[0], t_frd[1]], ekf_ne);
+        let Some(yaw) = self.map_yaw() else { return };
+        if let Some(c) = self.align.offset(yaw) {
+            self.offset = c;
+        }
+        let Some(fit) = fit else { return };
         let moved = self
             .logged_yaw
-            .is_none_or(|y| wrap_pi(fit.yaw - y).abs() >= HEADING_LOG_STEP_RAD);
+            .is_none_or(|y| wrap_pi(fit.yaw - y).abs() >= YAW_LOG_STEP_RAD);
         if moved {
             self.logged_yaw = Some(fit.yaw);
             tracing::info!(
                 yaw_deg = fit.yaw.to_degrees(),
                 compass_offset_deg = self.yaw0.map(|y| wrap_pi(fit.yaw - y).to_degrees()),
+                offset_n_m = self.offset[0],
+                offset_e_m = self.offset[1],
                 baseline_m = fit.baseline_m,
                 residual_m = fit.residual_m,
                 sigma_deg = fit.sigma_rad.to_degrees(),
-                "nav_map_heading_fitted"
+                "nav_map_gnss_fitted"
             );
         }
     }
 
-    /// GNSS is not usable now: the heading fit freezes.
+    /// GNSS is not usable now: the alignment freezes.
     pub fn on_gnss_lost(&mut self) {
-        if self.heading.freeze() {
+        if self.align.freeze() {
             tracing::info!(
                 yaw_deg = self.map_yaw().map(f64::to_degrees),
-                fitted = self.heading.fit().is_some(),
-                "nav_map_heading_frozen"
+                yaw_fitted = self.align.fit().is_some(),
+                offset_n_m = self.offset[0],
+                offset_e_m = self.offset[1],
+                "nav_map_gnss_frozen"
             );
         }
     }
@@ -231,7 +245,9 @@ impl NavMap {
     /// is known.
     fn ned_of(&self, r: &[f64; 9], t: [f64; 3]) -> Option<([f64; 9], [f64; 3])> {
         let rot = rz(self.map_yaw()?);
-        Some((se3::mat_mul(&rot, r), se3::mat_vec(&rot, t)))
+        let t = se3::mat_vec(&rot, t);
+        let t = [t[0] + self.offset[0], t[1] + self.offset[1], t[2]];
+        Some((se3::mat_mul(&rot, r), t))
     }
 
     /// Fold one provider estimate; the descriptor to publish when the lanes

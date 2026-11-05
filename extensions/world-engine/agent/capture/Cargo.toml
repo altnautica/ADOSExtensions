@@ -4,7 +4,7 @@
 # private atlas bus for the link to forward.
 [package]
 name = "world-engine-capture"
-version = "2.1.3"
+version = "2.1.4"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

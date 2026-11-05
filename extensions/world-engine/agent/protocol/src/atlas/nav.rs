@@ -3,14 +3,14 @@
 //! occupancy tiles, the live sweep-cloud delta and the map status.
 //!
 //! Frames:
-//! - `map_ned` is north-aligned: x north, y east, z down, metres, origin at
-//!   the first scan's position (z from the flight controller's height above
-//!   it). The planar SLAM world (body FLU at the first scan) is turned to FRD
-//!   and rotated about down so it matches the FC's `LOCAL_POSITION_NED` axes:
-//!   by the flight controller's attitude yaw (its compass heading) latched at
-//!   the first pose, then by the heading fitted between the SLAM track and the
-//!   EKF's GNSS track once the drone has flown a baseline on GNSS (frozen
-//!   when GNSS goes). Nothing in it is published before a heading is known.
+//! - `map_ned` is north-aligned: x north, y east, z down, metres (z from the
+//!   flight controller's height above the first scan). The planar SLAM world
+//!   (body FLU at the first scan) is turned to FRD and rotated about down by
+//!   the flight controller's attitude yaw (its compass heading) latched at
+//!   the first pose, origin at the first scan. While the FC navigates on
+//!   GNSS it is moved onto the FC's `LOCAL_POSITION_NED` (yaw and offset
+//!   fitted between the SLAM track and the EKF's GNSS track, frozen when GNSS
+//!   goes). Nothing in it is published before a heading is known.
 //! - `body_frd` is the vehicle body, forward-right-down.
 
 use serde::{Deserialize, Serialize};

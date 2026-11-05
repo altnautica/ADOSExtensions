@@ -10,8 +10,8 @@ All notable changes to the World Engine extension.
   always` (the default when an RPLIDAR device is set) the capture service
   publishes the navigation pose in the north-aligned `map_ned` (the SLAM
   world rotated so it matches `LOCAL_POSITION_NED`: to the flight
-  controller's compass heading at the first pose, then to the heading fitted
-  against the GNSS track) with its `health`, `frame` and
+  controller's compass heading at the first pose, then onto its GNSS track
+  by a fitted yaw and offset) with its `health`, `frame` and
   `source`, the binned body-frame scan (`plugin.world-engine.scan`), live
   occupancy tiles and sweep-cloud deltas, and `plugin.world-engine.map_status`
   whether or not a session is open. The pose is no longer published from the
@@ -156,18 +156,22 @@ All notable changes to the World Engine extension.
   last observed there and fades to rest (1 s time constant) instead of
   carrying an unobserved velocity forever. A recorded still sequence among
   uprights now holds within one grid cell. 2.1.2.
-- **The navigation map's north comes from GNSS, not the pre-flight compass.**
-  `map_ned` took its heading from the flight controller's compass at the
-  first pose, which is typically a few degrees off on the ground. ArduPilot
-  shifts external navigation onto its own position while GNSS is the source
-  but never rotates it, so after a GNSS loss the heading error grew into a
-  position error: 3° was 7 m after 137 m. While GNSS has held a 3D fix for
-  15 s, the capture service now fits the heading that maps the SLAM track
-  onto the EKF's GNSS-referenced track (a rotation over at least a 10 m RMS
-  baseline, weighted to the last 200 m flown) and freezes it when GNSS goes;
-  the compass heading stands only until the first fit. The fit and the
-  freeze are logged (`nav_map_heading_fitted`, `nav_map_heading_frozen`).
-  2.1.3.
+- **The navigation map sits on the flight controller's GNSS frame, so a GNSS
+  loss no longer makes the drone jump.** `map_ned` took its heading from the
+  flight controller's compass at the first pose, which is typically a few
+  degrees off on the ground, and its origin from the first scan. ArduPilot's
+  MAVLink visual odometry (`VISO_TYPE` 1) applies no yaw or position
+  correction, and when the EKF switches to external navigation it resets
+  its position to the external one, so at a GNSS loss the drone jumped by the
+  map's error at that point: 8 m 137 m from the take-off in the forest
+  bench run. While the flight controller's own `GPS_RAW_INT` has held a 3D
+  fix for 15 s, the capture service now fits the yaw and offset that put the
+  SLAM track on the EKF's `LOCAL_POSITION_NED` track (the yaw over at least
+  a 10 m RMS baseline, weighted to the last 200 m flown; the offset over the
+  last 5 s) and freezes both when GNSS goes; the compass heading and the
+  first scan stand only until then. The fit and the freeze are logged
+  (`nav_map_gnss_fitted`, `nav_map_gnss_frozen`). 2.1.3 fitted the yaw
+  only, gated on the agent's telemetry; 2.1.4.
 
 ## [2.0.0]
 

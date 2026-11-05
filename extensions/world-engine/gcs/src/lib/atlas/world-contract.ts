@@ -103,12 +103,12 @@ export function atlasTopicSubscribeCapability(topic: string): string | null {
 
 // --- Live navigation and mapping payloads ----------------------------------
 //
-// Frames: `map_ned` is north-aligned (x north, y east, z down, metres, origin
-// at the first scan's position): the planar SLAM world rotated so its axes
-// match the FC's LOCAL_POSITION_NED, first by the FC's compass heading latched
-// at the first pose, then by the heading fitted against the EKF's GNSS track
-// once the drone has flown a baseline on GNSS (frozen when GNSS goes).
-// `body_frd` is the vehicle body, forward-right-down.
+// Frames: `map_ned` is north-aligned (x north, y east, z down, metres): the
+// planar SLAM world rotated by the FC's compass heading latched at the first
+// pose, origin at the first scan, then moved onto the FC's LOCAL_POSITION_NED
+// (yaw and offset fitted against the EKF's GNSS track) while the FC navigates
+// on GNSS, frozen when GNSS goes. `body_frd` is the vehicle body,
+// forward-right-down.
 
 export type NavFrame = "map_ned" | "body_frd";
 export type NavHealth = "good" | "degraded" | "lost";
