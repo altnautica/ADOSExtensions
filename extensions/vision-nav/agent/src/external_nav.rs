@@ -19,6 +19,14 @@
 //! rotated into the body frame, because ArduPilot rotates
 //! `vx, vy, vz` by `q` into NED.
 //!
+//! `time_usec` is the instant the pose describes (its `ts_ms`, a LiDAR
+//! pose's first return) on the flight controller's clock, and the velocity
+//! is differenced over those instants, so the stamps no longer carry the
+//! varying delay of the scan, the matcher and the topic. ArduPilot's jitter
+//! correction maps the stamps onto its clock by the least delay seen;
+//! `VISO_DELAY_MS` must cover that least delay (for a 10 Hz LiDAR, at least
+//! the 100 ms revolution) for the EKF to fuse each pose at its own time.
+//!
 //! Covariance: ArduPilot reduces the pose covariance to one error,
 //! `sqrt(c[0] + c[6] + c[11])` for position and `sqrt(c[15] + c[18] +
 //! c[20])` for angle. z echoes the flight controller's own estimate (its
@@ -51,6 +59,8 @@ pub const RESET_JUMP_M: f64 = 0.5;
 pub const VELOCITY_WINDOW_NS: i64 = 100_000_000;
 /// Velocity needs at least this much time between the two samples.
 const MIN_VELOCITY_DT_NS: i64 = 20_000_000;
+/// A pose stamped older than this is taken as this old.
+pub const MAX_POSE_AGE_NS: i64 = 500_000_000;
 
 /// Tracker health as the pose topic reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +112,21 @@ impl PoseSample {
     pub fn yaw(&self) -> f64 {
         self.r[3].atan2(self.r[0])
     }
+}
+
+/// Monotonic time of the instant a pose describes, from its unix stamp
+/// `ts_ms`: the age the stamp gives at `now_unix_ms` (read with `now_ns`)
+/// back from `now_ns`. A LiDAR pose describes its scan's first return, a
+/// revolution or more before it arrives, and `ODOMETRY` must carry that
+/// time for the flight controller to fuse it where it belongs. A pose is
+/// never later than its receipt `recv_ns` nor older than [`MAX_POSE_AGE_NS`]
+/// before it; an unstamped pose (`ts_ms` 0) is taken at its receipt.
+pub fn measured_at_ns(ts_ms: i64, now_unix_ms: i64, now_ns: i64, recv_ns: i64) -> i64 {
+    if ts_ms <= 0 {
+        return recv_ns;
+    }
+    let t = now_ns - (now_unix_ms - ts_ms).saturating_mul(1_000_000);
+    t.clamp(recv_ns - MAX_POSE_AGE_NS, recv_ns)
 }
 
 /// Why a pose payload was not used.
@@ -322,13 +347,15 @@ impl OdometryBuilder {
         self.reset_counter
     }
 
-    /// Build the message for a pose received at `recv_ns`. `None` while
-    /// the tracker is lost, and for the first sample after a gap or a
-    /// reset (no velocity yet).
+    /// Build the message for a pose measured at `t_ns` (monotonic, see
+    /// [`measured_at_ns`]; `time_usec` is the same instant on the flight
+    /// controller's clock), its velocity differenced over measurement
+    /// times. `None` while the tracker is lost, and for the first sample
+    /// after a gap or a reset (no velocity yet).
     pub fn build(
         &mut self,
         time_usec: u64,
-        recv_ns: i64,
+        t_ns: i64,
         pose: &PoseSample,
         fc: &FcNavSnapshot,
     ) -> Option<Odometry> {
@@ -344,14 +371,14 @@ impl OdometryBuilder {
             }
         }
         self.last_xy = Some((x, y));
-        let cutoff = recv_ns - VELOCITY_WINDOW_NS;
+        let cutoff = t_ns - VELOCITY_WINDOW_NS;
         while self.history.len() > 1 && self.history[1].0 <= cutoff {
             self.history.pop_front();
         }
         let oldest = self.history.front().copied();
-        self.history.push_back((recv_ns, x, y));
+        self.history.push_back((t_ns, x, y));
         let (t0, x0, y0) = oldest?;
-        let dt_ns = recv_ns - t0;
+        let dt_ns = t_ns - t0;
         if dt_ns < MIN_VELOCITY_DT_NS {
             return None;
         }

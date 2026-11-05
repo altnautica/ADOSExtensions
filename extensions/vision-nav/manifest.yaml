@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.6.2"
+version: "0.6.3"
 description: "GPS-denied navigation. Optical flow from a downward camera, or an external pose (for example a lidar SLAM) sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A downward camera and the flight controller's gyro feed a 30 Hz angular-flow measurement over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -48,6 +48,8 @@ required_fc_parameters:
     - param: "EK3_SRC1_POSXY"
       value: "6"
       note: "External navigation: the external-nav source set (with EK3_SRC1_VELXY 6 and EK3_SRC1_YAW 6)"
+    - param: "VISO_DELAY_MS"
+      note: "External navigation: the least age of a pose when its ODOMETRY reaches the flight controller (ODOMETRY carries the time the pose describes; a 10 Hz planar lidar pose is at least one 100 ms revolution old)"
     - param: "PRX1_TYPE"
       value: "2"
       note: "Obstacle feed: accept OBSTACLE_DISTANCE over MAVLink"

@@ -65,6 +65,12 @@ controller as `ODOMETRY` (#331) on component 197, at up to
   extrapolated between poses, so every fused message is a real
   measurement. `rate_hz` only caps the rate. Nothing is sent while
   tracking is lost or the pose is older than 0.5 s.
+- `time_usec` is the instant the pose describes (its `ts_ms`, a lidar
+  pose's first return) on the flight controller's clock, and the velocity
+  is differenced over those instants. Set `VISO_DELAY_MS` to the pose's
+  minimum age when it reaches the flight controller, because ArduPilot's
+  jitter correction absorbs a constant stamp offset and fuses each pose
+  `VISO_DELAY_MS` before its corrected arrival.
 
 EKF source sets (`MAV_CMD_SET_EKF_SOURCE_SET`, resent up to three times
 until accepted):

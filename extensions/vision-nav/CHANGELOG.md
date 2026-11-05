@@ -4,6 +4,23 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.6.3]
+
+### Fixed
+
+- `ODOMETRY` carries the time the pose describes, not the time it arrived.
+  `time_usec` was the pose's receipt on the flight controller's clock and
+  the velocity was differenced over receipt times, while a planar lidar
+  pose describes its scan's first return, about 0.2 s before it arrives.
+  The EKF fused a position, velocity and yaw that lagged the vehicle through
+  every turn. Both now come from the pose's own stamp (`ts_ms`), taken at
+  receipt when the pose has none and never more than 0.5 s back. ArduPilot
+  maps `time_usec` onto its clock by the least delay it has seen, so
+  `VISO_DELAY_MS` (now listed with the required parameters) should cover
+  that least delay.
+
+## [0.6.2]
+
 ### Fixed
 
 - The flight controller is found from its HEARTBEAT as well as its RAW_IMU.
@@ -11,16 +28,43 @@ All notable changes to the Vision Navigation extension.
   another system id) the plugin kept the 1/1 default: it asked the wrong
   system to stream RAW_IMU, so the address was never learned, and it dropped
   every COMMAND_ACK, resending the EKF source-set switch without end.
-- A MAVLink send the host reports as not sent (`sent: false`, or no router)
-  now counts in health `emitErrors` instead of passing as delivered.
-- The Vision Nav tab keeps `emitErrors`, `rangefinderError`,
-  `degradedReasons` and `fcParams` from the health block; the PX4 parameter
-  card read `fcParams` and never received it.
+
+## [0.6.1]
+
+### Fixed
+
 - Optical flow reads frames from one camera, `camera.camera_id`, instead of
   every camera on the vision bus; with two cameras captured the frames of
   both reached the flow estimator. Empty keeps the old any-camera behaviour.
   `recommendedCameraId`, the Sensors card's camera row, reports that camera
   when it is set, and the device path otherwise.
+
+## [0.6.0]
+
+### Added
+
+- **External navigation mode** (`external_nav`, ArduPilot): the pose another
+  plugin publishes (by default the World Engine extension's planar lidar
+  SLAM) goes to the flight controller as `ODOMETRY`, exactly one message per
+  SLAM pose, with nothing interpolated between poses.
+- **EKF source-set switching** (`MAV_CMD_SET_EKF_SOURCE_SET`): the external
+  navigation set while the pose tracks and the fallback set when it is lost,
+  or GPS first with external navigation taking over when the 3D fix is lost.
+- **The EKF origin** through `SET_GPS_GLOBAL_ORIGIN` from
+  `external_nav.origin_lla`, sent when the flight controller reports none.
+- **`OBSTACLE_DISTANCE`** from the shared planar scan: 72 sectors of 5° at
+  up to 10 Hz, for ArduPilot's proximity and avoidance.
+- **The `nav.state` feed and its GCS card**: active source set, external
+  navigation health, odometry and obstacle rates, nearest obstacle and GPS
+  fix.
+
+### Fixed
+
+- A MAVLink send the host reports as not sent (`sent: false`, or no router)
+  now counts in health `emitErrors` instead of passing as delivered.
+- The Vision Nav tab keeps `emitErrors`, `rangefinderError`,
+  `degradedReasons` and `fcParams` from the health block; the PX4 parameter
+  card read `fcParams` and never received it.
 
 ## [0.5.0]
 
@@ -337,8 +381,6 @@ to runtime-complete on the OF modes and runtime-ready on the VIO modes
 pending the vendor-binary upstream integration. The plugin auto-detects
 its hardware on start, ships a guided in-app calibration wizard, and
 publishes an enriched heartbeat the cloud relay now accepts.
-
-## [Unreleased]
 
 ### Added
 

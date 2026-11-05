@@ -148,6 +148,22 @@ fn builder_needs_two_samples_then_reports_velocity() {
     assert_eq!(o.yawspeed, 0.1);
 }
 
+/// A pose received at 10.15 s whose stamp, read against the wall clock at
+/// 10.2 s, is 180 ms old is placed at 10.02 s; one stamped
+/// after its receipt is taken at the receipt, one stamped too far back is
+/// held at the age limit, an unstamped one at the receipt.
+#[test]
+fn the_measurement_time_comes_from_the_pose_stamp() {
+    let (now_unix, now, recv) = (1_700_000_000_200, 10_200_000_000, 10_150_000_000);
+    assert_eq!(measured_at_ns(1_700_000_000_020, now_unix, now, recv), 10_020_000_000);
+    assert_eq!(measured_at_ns(1_700_000_000_190, now_unix, now, recv), recv);
+    assert_eq!(
+        measured_at_ns(1_699_999_990_000, now_unix, now, recv),
+        recv - MAX_POSE_AGE_NS
+    );
+    assert_eq!(measured_at_ns(0, now_unix, now, recv), recv);
+}
+
 #[test]
 fn degraded_inflates_noise_and_halves_quality() {
     let mut b = OdometryBuilder::default();

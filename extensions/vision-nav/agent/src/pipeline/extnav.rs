@@ -23,7 +23,7 @@ use super::nav_shared::{companion_for, estimator_state_for, NavShared};
 use super::subscriptions::Sinks;
 use super::ticks::companion_state_from_i64;
 use crate::config::Mode;
-use crate::external_nav::{ExtnavHealth, OdometryBuilder, COMPONENT_EXTNAV};
+use crate::external_nav::{measured_at_ns, ExtnavHealth, OdometryBuilder, COMPONENT_EXTNAV};
 use crate::health::HealthSnapshot;
 use crate::mavlink_emit::{frame_for, monotonic_ns, next_sequence, ComponentRouter};
 use crate::nav_commands::{
@@ -48,6 +48,13 @@ struct PendingSet {
     set: u8,
     sent_at: Option<i64>,
     tries: u8,
+}
+
+/// Unix milliseconds now.
+fn unix_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// Everything the external-nav tick needs.
@@ -96,13 +103,15 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
             let fc = task.sinks.fc_nav.snapshot(now);
 
             // One ODOMETRY per new pose (the tracker's scan rate, ~10 Hz);
-            // nothing between poses, nothing while lost or stale.
+            // nothing between poses, nothing while lost or stale. It carries
+            // the time the pose describes, not the time it arrived.
             let view = task.shared.pose_view(now);
             let health = view.fresh.map(|(p, _)| p.health);
             let mut odom = None;
             if let Some((pose, recv)) = view.fresh.filter(|_| view.seq != last_seq) {
                 last_seq = view.seq;
-                odom = builder.build(task.sinks.clock.fc_time_us(recv), recv, &pose, &fc);
+                let t = measured_at_ns(pose.ts_ms, unix_ms(), now, recv);
+                odom = builder.build(task.sinks.clock.fc_time_us(t), t, &pose, &fc);
             }
             if let Some(odom) = odom {
                 let frame = odom.encode(next_sequence(COMPONENT_EXTNAV));
