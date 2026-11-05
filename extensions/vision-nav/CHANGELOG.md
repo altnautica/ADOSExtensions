@@ -4,6 +4,15 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.6.6]
+
+### Added
+
+- The navigation feed card shows the pose age (`navigation.poseAgeMs`, the
+  median age of a pose when its `ODOMETRY` is sent) beside the `ODOMETRY`
+  rate, so the operator can compare it with `VISO_DELAY_MS` without waiting
+  for the `viso_delay` pre-arm row.
+
 ## [0.6.5]
 
 ### Fixed

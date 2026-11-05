@@ -110,7 +110,7 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
       />
       <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
       <ModeCard ctx={props.ctx} telemetry={telemetry} />
-      <NavStateCard ctx={props.ctx} state={navState} />
+      <NavStateCard ctx={props.ctx} state={navState} poseAgeMs={telemetry.poseAgeMs} />
       <SensorsCard ctx={props.ctx} telemetry={telemetry} />
       <EstimatorCard ctx={props.ctx} telemetry={telemetry} />
       <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />

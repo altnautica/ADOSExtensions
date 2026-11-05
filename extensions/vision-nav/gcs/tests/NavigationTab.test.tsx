@@ -323,6 +323,29 @@ describe("NavigationTab", () => {
     expect(screen.getByTestId("vn-nav-gps-fix").textContent).toBe("No GPS");
   });
 
+  it("shows the pose age from navigation.poseAgeMs beside the ODOMETRY rate", () => {
+    const navState = normalizeNavState({ mode: "external_nav", extnav_health: "good", odom_rate_hz: 30 });
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({ mode: "external_nav", poseAgeMs: 42.6 })}
+        navStateOverride={navState}
+      />,
+    );
+    expect(screen.getByTestId("vn-nav-pose-age").textContent).toBe("43 ms");
+    cleanup();
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({ mode: "external_nav", poseAgeMs: null })}
+        navStateOverride={navState}
+      />,
+    );
+    expect(screen.getByTestId("vn-nav-pose-age").textContent).toBe("—");
+  });
+
   it("shows a waiting line before the first nav.state and drops junk fields", () => {
     render(
       <NavigationTab

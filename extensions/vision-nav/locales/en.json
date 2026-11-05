@@ -21,6 +21,7 @@
     "activeSet": "EKF source set",
     "extnavHealth": "External nav",
     "odomRate": "ODOMETRY rate",
+    "poseAge": "Pose age",
     "resetCounter": "Pose resets",
     "obstacleRate": "Obstacle feed",
     "minObstacle": "Nearest obstacle",

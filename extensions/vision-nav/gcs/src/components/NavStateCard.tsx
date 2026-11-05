@@ -13,6 +13,9 @@ function tr(t: TFn, key: string, fallback: string): string {
 interface Props {
   ctx: PluginContext;
   state: NavState;
+  /** `navigation.poseAgeMs`: median age of a pose when its ODOMETRY is
+   * sent, or null before the first one. */
+  poseAgeMs?: number | null;
 }
 
 /** Symbol plus word for each tracking health, so colour is never the only cue. */
@@ -57,10 +60,11 @@ const DASH = "—";
 
 /**
  * The live navigation feed: which EKF source set is active, how the
- * external pose is tracking, the ODOMETRY and obstacle rates, the nearest
- * obstacle and the GPS fix. Reads the agent's `nav.state` event.
+ * external pose is tracking, the ODOMETRY rate and pose age, the obstacle
+ * rate, the nearest obstacle and the GPS fix. Reads the agent's `nav.state`
+ * event and the `navigation.poseAgeMs` telemetry field.
  */
-export function NavStateCard({ ctx, state }: Props): JSX.Element {
+export function NavStateCard({ ctx, state, poseAgeMs = null }: Props): JSX.Element {
   const t = ctx.i18n.t;
   const health = state.extnavHealth ? HEALTH[state.extnavHealth] : null;
   const rows: Array<{ id: string; key: string; fallback: string; text: string; color?: string }> = [
@@ -84,6 +88,13 @@ export function NavStateCard({ ctx, state }: Props): JSX.Element {
       key: "odomRate",
       fallback: "ODOMETRY rate",
       text: state.odomRateHz === null ? DASH : `${state.odomRateHz.toFixed(1)} Hz`,
+    },
+    {
+      id: "pose-age",
+      key: "poseAge",
+      fallback: "Pose age",
+      text:
+        poseAgeMs === null || !Number.isFinite(poseAgeMs) ? DASH : `${Math.round(poseAgeMs)} ms`,
     },
     {
       id: "reset-counter",
