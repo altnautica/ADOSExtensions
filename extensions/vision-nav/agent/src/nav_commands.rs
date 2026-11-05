@@ -1,15 +1,18 @@
 //! Commands the `external_nav` mode sends the flight controller: the EKF
-//! source-set switch, the EKF origin and the origin request. The inputs it
-//! reads (`LOCAL_POSITION_NED`, `ATTITUDE`, `GPS_RAW_INT`) are streamed by
-//! the agent's MAVLink router on the drone profile; the plugin does not
-//! request their rates, so no two schedules fight.
+//! source-set switch, the EKF origin, the origin request and the reads of
+//! the parameters its pre-arm checks need. The inputs it reads
+//! (`LOCAL_POSITION_NED`, `ATTITUDE`, `GPS_RAW_INT`) are streamed by the
+//! agent's MAVLink router on the drone profile; the plugin does not request
+//! their rates, so no two schedules fight.
 
 // `SET_GPS_GLOBAL_ORIGIN` is marked superseded (2025-04) by a command the
 // agent's dialect lacks; see `build_set_global_origin`.
 #[allow(deprecated)]
 use ados_protocol::mavlink::ardupilotmega::SET_GPS_GLOBAL_ORIGIN_DATA;
-use ados_protocol::mavlink::ardupilotmega::{MavCmd, COMMAND_LONG_DATA};
+use ados_protocol::mavlink::ardupilotmega::{MavCmd, COMMAND_LONG_DATA, PARAM_REQUEST_READ_DATA};
 use ados_protocol::mavlink::MavMessage;
+
+use crate::nav_config::ExternalNavConfig;
 
 /// `GPS_GLOBAL_ORIGIN` message id (for `MAV_CMD_REQUEST_MESSAGE`).
 pub const GPS_GLOBAL_ORIGIN_ID: u32 = 49;
@@ -63,6 +66,69 @@ pub fn build_set_global_origin(target_system: u8, lla: [f64; 3]) -> MavMessage {
         altitude: (lla[2] * 1000.0).round() as i32,
         target_system,
     })
+}
+
+/// `PARAM_REQUEST_READ` (#20) for one parameter by name
+/// (`param_index = -1`); the flight controller answers with `PARAM_VALUE`.
+pub fn build_param_request_read(target: (u8, u8), id: &str) -> MavMessage {
+    MavMessage::PARAM_REQUEST_READ(PARAM_REQUEST_READ_DATA {
+        param_index: -1,
+        target_system: target.0,
+        target_component: target.1,
+        param_id: id.into(),
+    })
+}
+
+/// Parameters read whatever the source sets are.
+const EXTNAV_FIXED_PARAMS: &[&str] = &[
+    "VISO_TYPE",
+    "VISO_DELAY_MS",
+    "COMPASS_AUTODEC",
+    "AHRS_OPTIONS",
+    "AHRS_ORIGIN_LAT",
+    "AHRS_ORIGIN_LON",
+];
+
+/// The flight-controller parameters the external-nav pre-arm checks read:
+/// the fixed set plus `EK3_SRC{e}_POSXY`/`_YAW` of the external-nav set and
+/// `EK3_SRC{f}_POSXY`/`_VELXY` of the fallback set.
+pub fn extnav_fc_params(cfg: &ExternalNavConfig) -> Vec<String> {
+    let (e, f) = (cfg.extnav_set, cfg.fallback_set);
+    let mut ids: Vec<String> = EXTNAV_FIXED_PARAMS.iter().map(|s| s.to_string()).collect();
+    for id in [
+        format!("EK3_SRC{e}_POSXY"),
+        format!("EK3_SRC{e}_YAW"),
+        format!("EK3_SRC{f}_POSXY"),
+        format!("EK3_SRC{f}_VELXY"),
+    ] {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Whether `id` can be in [`extnav_fc_params`] for some configuration, so
+/// the `PARAM_VALUE` handler records it.
+pub fn is_extnav_fc_param(id: &str) -> bool {
+    if EXTNAV_FIXED_PARAMS.contains(&id) {
+        return true;
+    }
+    let Some(rest) = id.strip_prefix("EK3_SRC") else {
+        return false;
+    };
+    matches!(
+        rest,
+        "1_POSXY"
+            | "2_POSXY"
+            | "3_POSXY"
+            | "1_YAW"
+            | "2_YAW"
+            | "3_YAW"
+            | "1_VELXY"
+            | "2_VELXY"
+            | "3_VELXY"
+    )
 }
 
 #[cfg(test)]
@@ -121,5 +187,40 @@ mod tests {
         };
         assert_eq!(d.command as u16, 512);
         assert_eq!(d.param1, 49.0);
+    }
+
+    #[test]
+    fn param_request_read_is_by_name() {
+        let MavMessage::PARAM_REQUEST_READ(d) =
+            roundtrip(&build_param_request_read((2, 1), "EK3_SRC1_YAW"))
+        else {
+            panic!("expected PARAM_REQUEST_READ");
+        };
+        assert_eq!(d.param_index, -1);
+        assert_eq!((d.target_system, d.target_component), (2, 1));
+        assert_eq!(d.param_id.to_str().unwrap(), "EK3_SRC1_YAW");
+    }
+
+    #[test]
+    fn extnav_fc_params_follow_the_source_sets() {
+        let cfg = ExternalNavConfig {
+            extnav_set: 1,
+            fallback_set: 2,
+            ..ExternalNavConfig::default()
+        };
+        let ids = extnav_fc_params(&cfg);
+        assert_eq!(ids.len(), 10);
+        for id in [
+            "VISO_TYPE",
+            "EK3_SRC1_POSXY",
+            "EK3_SRC1_YAW",
+            "EK3_SRC2_POSXY",
+            "EK3_SRC2_VELXY",
+        ] {
+            assert!(ids.iter().any(|i| i == id), "{id}");
+        }
+        assert!(ids.iter().all(|i| is_extnav_fc_param(i)));
+        assert!(!is_extnav_fc_param("EK3_SRC4_YAW"));
+        assert!(!is_extnav_fc_param("SERIAL1_BAUD"));
     }
 }

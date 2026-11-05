@@ -90,6 +90,40 @@ impl RateMeter {
     }
 }
 
+/// How many recent pose ages [`AgeWindow`] keeps.
+pub const AGE_WINDOW: usize = 50;
+
+/// The median of the last [`AGE_WINDOW`] pose ages (ms): how old a pose
+/// is when its `ODOMETRY` goes out.
+#[derive(Default)]
+pub struct AgeWindow {
+    ages: std::collections::VecDeque<f32>,
+}
+
+impl AgeWindow {
+    pub fn record(&mut self, age_ms: f32) {
+        if self.ages.len() == AGE_WINDOW {
+            self.ages.pop_front();
+        }
+        self.ages.push_back(age_ms);
+    }
+
+    /// `None` before the first age.
+    pub fn median_ms(&self) -> Option<f32> {
+        if self.ages.is_empty() {
+            return None;
+        }
+        let mut v: Vec<f32> = self.ages.iter().copied().collect();
+        v.sort_by(f32::total_cmp);
+        let n = v.len();
+        Some(if n % 2 == 1 {
+            v[n / 2]
+        } else {
+            (v[n / 2 - 1] + v[n / 2]) / 2.0
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +184,23 @@ mod tests {
         let r = m.rate_hz(1_000_000_000);
         assert!((29.0..=31.0).contains(&r), "{r}");
         assert_eq!(m.rate_hz(5_000_000_000), 0.0);
+    }
+
+    #[test]
+    fn age_window_is_the_median_of_the_last_fifty() {
+        let mut w = AgeWindow::default();
+        assert_eq!(w.median_ms(), None);
+        // 60 old outliers, then 50 ages around 120 ms with a few spikes.
+        for _ in 0..60 {
+            w.record(900.0);
+        }
+        for i in 0..50 {
+            w.record(if i % 10 == 0 { 400.0 } else { 120.0 });
+        }
+        assert_eq!(w.median_ms(), Some(120.0));
+        let mut two = AgeWindow::default();
+        two.record(100.0);
+        two.record(140.0);
+        assert_eq!(two.median_ms(), Some(120.0));
     }
 }

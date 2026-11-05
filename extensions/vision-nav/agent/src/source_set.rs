@@ -11,14 +11,18 @@
 //!   ODOMETRY carries the degraded covariance and quality, so the EKF
 //!   weighs it; waiting for `good` left the flow set active for the whole
 //!   corridor.
-//! * GPS primary (`true`): the fallback (GPS) set is active while
-//!   `GPS_RAW_INT.fix_type >= 3`. No 3D fix for 2 s with a good pose
-//!   switches to the external-nav set; a 3D fix for 10 s switches back.
+//! * GPS primary (`true`): the fallback (GPS) set is active while the GPS
+//!   is usable: a 3D fix (`GPS_RAW_INT.fix_type >= 3`) whose reported
+//!   horizontal accuracy (`h_acc`, when the receiver sends it) is within
+//!   [`GPS_MAX_H_ACC_MM`]. A jammed or spoofed receiver often keeps its 3D
+//!   fix while its accuracy collapses, so the fix type alone is not enough.
+//!   No usable GPS for 2 s with a good pose switches to the external-nav
+//!   set; usable GPS for 10 s switches back.
 //!
-//! Pure: the caller feeds time, health and fix each tick and sends the
-//! command the machine returns. Nothing is commanded before the first
-//! decision, so the flight controller keeps its boot source set until
-//! the inputs say otherwise.
+//! Pure: the caller feeds time, health and whether the GPS is usable
+//! ([`gps_usable`]) each tick and sends the command the machine returns.
+//! Nothing is commanded before the first decision, so the flight controller
+//! keeps its boot source set until the inputs say otherwise.
 
 use crate::external_nav::ExtnavHealth;
 use crate::nav_config::ExternalNavConfig;
@@ -29,6 +33,14 @@ const GPS_LOST_NS: i64 = 2_000_000_000;
 const GPS_BACK_NS: i64 = 10_000_000_000;
 /// `GPS_FIX_TYPE_3D_FIX`.
 const FIX_3D: u8 = 3;
+/// A GPS reporting a horizontal accuracy worse than this (mm) is degraded.
+pub const GPS_MAX_H_ACC_MM: u32 = 5_000;
+
+/// Whether the GPS is usable as the primary source: a 3D fix whose
+/// `h_acc` (when known) is within [`GPS_MAX_H_ACC_MM`].
+pub fn gps_usable(fix_type: u8, h_acc_mm: Option<u32>) -> bool {
+    fix_type >= FIX_3D && h_acc_mm.is_none_or(|a| a <= GPS_MAX_H_ACC_MM)
+}
 
 /// The state machine.
 pub struct SourceSwitch {
@@ -64,8 +76,14 @@ impl SourceSwitch {
     }
 
     /// Advance one tick. `health` is `None` when no fresh pose exists
-    /// (treated as lost). Returns the set to command on a change.
-    pub fn update(&mut self, now_ns: i64, health: Option<ExtnavHealth>, gps_fix: u8) -> Option<u8> {
+    /// (treated as lost); `gps_ok` is [`gps_usable`] for this tick. Returns
+    /// the set to command on a change.
+    pub fn update(
+        &mut self,
+        now_ns: i64,
+        health: Option<ExtnavHealth>,
+        gps_ok: bool,
+    ) -> Option<u8> {
         let health = health.unwrap_or(ExtnavHealth::Lost);
         since(&mut self.good_since, health == ExtnavHealth::Good, now_ns);
         since(
@@ -74,8 +92,8 @@ impl SourceSwitch {
             now_ns,
         );
         since(&mut self.lost_since, health == ExtnavHealth::Lost, now_ns);
-        since(&mut self.fix_since, gps_fix >= FIX_3D, now_ns);
-        since(&mut self.no_fix_since, gps_fix < FIX_3D, now_ns);
+        since(&mut self.fix_since, gps_ok, now_ns);
+        since(&mut self.no_fix_since, !gps_ok, now_ns);
         let held = |s: Option<i64>, d: i64| s.is_some_and(|t| now_ns - t >= d);
 
         let want = if self.gps_primary {
@@ -84,7 +102,7 @@ impl SourceSwitch {
                 held(self.fix_since, GPS_BACK_NS).then_some(self.fallback_set)
             } else if health == ExtnavHealth::Good && held(self.no_fix_since, GPS_LOST_NS) {
                 Some(self.extnav_set)
-            } else if self.active.is_none() && gps_fix >= FIX_3D {
+            } else if self.active.is_none() && gps_ok {
                 Some(self.fallback_set)
             } else {
                 None
@@ -141,10 +159,21 @@ mod tests {
         h: Option<ExtnavHealth>,
         fix: u8,
     ) -> Vec<(i64, u8)> {
+        run_gps(s, from, to, h, fix, None)
+    }
+
+    fn run_gps(
+        s: &mut SourceSwitch,
+        from: i64,
+        to: i64,
+        h: Option<ExtnavHealth>,
+        fix: u8,
+        h_acc_mm: Option<u32>,
+    ) -> Vec<(i64, u8)> {
         let mut out = Vec::new();
         let mut t = from;
         while t < to {
-            if let Some(set) = s.update(t, h, fix) {
+            if let Some(set) = s.update(t, h, gps_usable(fix, h_acc_mm)) {
                 out.push((t, set));
             }
             t += S / 10;
@@ -215,5 +244,27 @@ mod tests {
         run(&mut s, 0, S, Some(ExtnavHealth::Good), 3);
         assert!(run(&mut s, S, 6 * S, Some(ExtnavHealth::Degraded), 0).is_empty());
         assert_eq!(s.active(), Some(2));
+    }
+
+    /// A receiver that keeps its 3D fix while its accuracy collapses (8 m)
+    /// is degraded: after 2 s the external-nav set takes over.
+    #[test]
+    fn gps_primary_takes_over_when_a_3d_fix_loses_its_accuracy() {
+        let mut s = switch(true);
+        let good = Some(ExtnavHealth::Good);
+        assert_eq!(run_gps(&mut s, 0, S, good, 3, Some(1500)), vec![(0, 2)]);
+        let take = run_gps(&mut s, S, 4 * S, good, 3, Some(8000));
+        assert_eq!(take, vec![(3 * S, 1)]);
+        // Accuracy back within 5 m for 10 s: back to GPS.
+        let back = run_gps(&mut s, 4 * S, 15 * S, good, 3, Some(5000));
+        assert_eq!(back, vec![(14 * S, 2)]);
+    }
+
+    #[test]
+    fn gps_usable_needs_a_3d_fix_and_a_known_accuracy_within_5_m() {
+        assert!(gps_usable(3, None));
+        assert!(gps_usable(6, Some(GPS_MAX_H_ACC_MM)));
+        assert!(!gps_usable(3, Some(GPS_MAX_H_ACC_MM + 1)));
+        assert!(!gps_usable(2, Some(100)));
     }
 }

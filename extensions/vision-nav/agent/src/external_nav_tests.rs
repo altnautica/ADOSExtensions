@@ -155,7 +155,10 @@ fn builder_needs_two_samples_then_reports_velocity() {
 #[test]
 fn the_measurement_time_comes_from_the_pose_stamp() {
     let (now_unix, now, recv) = (1_700_000_000_200, 10_200_000_000, 10_150_000_000);
-    assert_eq!(measured_at_ns(1_700_000_000_020, now_unix, now, recv), 10_020_000_000);
+    assert_eq!(
+        measured_at_ns(1_700_000_000_020, now_unix, now, recv),
+        10_020_000_000
+    );
     assert_eq!(measured_at_ns(1_700_000_000_190, now_unix, now, recv), recv);
     assert_eq!(
         measured_at_ns(1_699_999_990_000, now_unix, now, recv),
@@ -314,4 +317,56 @@ fn the_retired_slam_heading_frame_is_refused() {
     // yaw on the compass it would fly rotated, so it is not accepted.
     let e = parse_pose_payload(&payload("map_frd", "good", IDENTITY, [0.0; 3])).unwrap_err();
     assert!(matches!(e, PoseError::UnknownFrame(f) if f == "map_frd"));
+}
+
+/// 10 Hz poses at a steady 8 m/s step 0.8 m each, more than the reset
+/// threshold: they are motion, every pose after the first is a message, and
+/// the counter never moves.
+#[test]
+fn steady_flight_at_8_m_s_is_motion_not_a_reset() {
+    let mut b = OdometryBuilder::default();
+    let fc = fc();
+    let mut sent = 0;
+    for i in 0..30i64 {
+        let x = i as f64 * 0.8;
+        if let Some(o) = b.build(
+            0,
+            i * 100_000_000,
+            &pose(x, 0.0, 0.0, ExtnavHealth::Good),
+            &fc,
+        ) {
+            sent += 1;
+            assert!((o.vx - 8.0).abs() < 1e-3, "vx {}", o.vx);
+        }
+    }
+    assert_eq!(b.reset_counter(), 0);
+    assert_eq!(sent, 29);
+}
+
+/// A 1 m relocalisation on top of 8 m/s motion bumps the counter once, and
+/// the stream recovers instead of resetting on every following pose.
+#[test]
+fn a_one_metre_step_at_speed_bumps_reset_counter_once() {
+    let mut b = OdometryBuilder::default();
+    let fc = fc();
+    let mut sent_after = 0;
+    for i in 0..30i64 {
+        let step = if i >= 15 { 1.0 } else { 0.0 };
+        let x = i as f64 * 0.8 + step;
+        let o = b.build(
+            0,
+            i * 100_000_000,
+            &pose(x, 0.0, 0.0, ExtnavHealth::Good),
+            &fc,
+        );
+        if i == 15 {
+            assert!(o.is_none(), "the reset pose restarts the velocity window");
+            assert_eq!(b.reset_counter(), 1);
+        }
+        if i > 15 && o.is_some() {
+            sent_after += 1;
+        }
+    }
+    assert_eq!(b.reset_counter(), 1);
+    assert_eq!(sent_after, 14);
 }

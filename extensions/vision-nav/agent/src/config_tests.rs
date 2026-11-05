@@ -179,6 +179,17 @@ fn external_nav_without_origin_is_refused() {
 }
 
 #[test]
+fn external_nav_with_gps_primary_needs_no_origin() {
+    let v = map(&[
+        ("mode", Value::from("external_nav")),
+        ("external_nav", map(&[("gps_primary", Value::from(true))])),
+    ]);
+    let cfg = VisionNavConfig::from_value(&v).unwrap();
+    assert!(cfg.external_nav.gps_primary);
+    assert_eq!(cfg.external_nav.origin_lla, None);
+}
+
+#[test]
 fn external_nav_with_origin_parses_and_ignores_the_camera() {
     let v = map(&[
         ("mode", Value::from("external_nav")),

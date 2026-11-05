@@ -62,6 +62,7 @@ export function useVisionNavTelemetry(
           rangefinderError: next.rangefinderError,
           degradedReasons: next.degradedReasons,
           fcParams: next.fcParams,
+          poseAgeMs: next.poseAgeMs,
         }));
       })
       .then((unsubscribe) => {

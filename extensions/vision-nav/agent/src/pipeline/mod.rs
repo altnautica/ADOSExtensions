@@ -128,6 +128,7 @@ impl Plugin for VisionNavPlugin {
             ladder: Arc::new(ScaleLadder::new(cfg.outdoor)),
             fc_target: Arc::new(FcTarget::default()),
             fc_params: Arc::new(Mutex::new(BTreeSet::new())),
+            fc_param_values: Arc::new(Mutex::new(BTreeMap::new())),
             fc_nav: Arc::new(FcNavSink::default()),
         };
         let emit_errors = Arc::new(AtomicU64::new(0));

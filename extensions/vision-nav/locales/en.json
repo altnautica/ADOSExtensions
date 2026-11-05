@@ -11,7 +11,9 @@
   },
   "preArm": {
     "ready": "Ready",
-    "originBlocker": "EKF origin not set"
+    "originBlocker": "EKF origin not set",
+    "fcParams": "Flight controller parameters",
+    "visoDelay": "Pose delay"
   },
   "navState": {
     "title": "Navigation feed",

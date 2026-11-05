@@ -4,11 +4,29 @@
 //!   A refused subscription (the publishing plugin is not installed, or
 //!   the grant is missing) blocks as "External nav source missing".
 //! * `extnav_health`: good passes, degraded is pending, lost blocks.
-//! * `ekf_origin`: the flight controller reports an EKF origin.
+//! * `ekf_origin`: the flight controller reports an EKF origin, and it is
+//!   not one that arrived after the yaw alignment with the declination
+//!   learning on (that origin steps the earth field into a gyro bias and
+//!   spins the vehicle), nor a boot-time origin far from `origin_lla`.
+//! * `fc_params`: the flight controller's external-nav parameters
+//!   ([`extnav_fc_params`]) are read and consistent with this mode.
+//! * `viso_delay`: `VISO_DELAY_MS` matches how old poses are when sent.
 //! * `obstacle_feed` (when the obstacle feed is enabled): scans arrive.
 
+use std::collections::BTreeMap;
+
 use crate::external_nav::ExtnavHealth;
+use crate::nav_commands::extnav_fc_params;
+use crate::nav_config::ExternalNavConfig;
 use crate::pre_arm::PreArmCheck;
+
+/// A boot-time origin (`AHRS_ORIGIN_*`) further than this from
+/// `external_nav.origin_lla` blocks.
+pub const ORIGIN_MISMATCH_M: f64 = 1000.0;
+/// `VISO_DELAY_MS` further than this from the measured pose age is pending.
+pub const VISO_DELAY_TOLERANCE_MS: f32 = 50.0;
+/// `AHRS_OPTIONS` bit 4: set the EKF origin at boot from `AHRS_ORIGIN_*`.
+const AHRS_OPTION_RECORDED_ORIGIN: i64 = 16;
 
 /// The obstacle feed's state for its pre-arm row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +37,7 @@ pub enum ObstacleFeed {
 }
 
 /// What the external-nav runtime knows this tick.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ExtnavPreArmInputs {
     /// The pose-topic subscription was refused.
     pub source_denied: bool,
@@ -27,9 +45,35 @@ pub struct ExtnavPreArmInputs {
     pub pose_error: Option<String>,
     /// Health of the fresh pose; `None` when there is none.
     pub health: Option<ExtnavHealth>,
+    /// The flight controller has reported an EKF origin this boot.
     pub origin_seen: bool,
+    /// That origin followed a `SET_GPS_GLOBAL_ORIGIN` the plugin sent.
+    pub origin_by_plugin: bool,
+    /// `external_nav.gps_primary`.
+    pub gps_primary: bool,
+    /// `external_nav.extnav_set`.
+    pub extnav_set: u8,
+    /// `external_nav.fallback_set`.
+    pub fallback_set: u8,
+    /// `external_nav.origin_lla`.
+    pub origin_lla: Option<[f64; 3]>,
+    /// The flight-controller parameter values read so far, by id.
+    pub params: BTreeMap<String, f32>,
+    /// Median age (ms) of a pose when its `ODOMETRY` is sent.
+    pub pose_age_ms: Option<f32>,
     /// `None` when the obstacle feed is disabled.
     pub obstacle: Option<ObstacleFeed>,
+}
+
+impl ExtnavPreArmInputs {
+    fn param(&self, id: &str) -> Option<f32> {
+        self.params.get(id).copied()
+    }
+
+    /// A parameter as the integer the flight controller stores.
+    fn int(&self, id: &str) -> Option<i64> {
+        self.param(id).map(|v| v.round() as i64)
+    }
 }
 
 pub(crate) fn extnav_checks(inputs: Option<&ExtnavPreArmInputs>) -> Vec<PreArmCheck> {
@@ -60,12 +104,13 @@ pub(crate) fn extnav_checks(inputs: Option<&ExtnavPreArmInputs>) -> Vec<PreArmCh
         Some(ExtnavHealth::Lost) => PreArmCheck::blocking("extnav_health", "Tracking lost."),
         None => PreArmCheck::pending("extnav_health", "No fresh pose."),
     };
-    let origin = if i.origin_seen {
-        PreArmCheck::ok("ekf_origin", "")
-    } else {
-        PreArmCheck::pending("ekf_origin", "EKF origin not set yet.")
-    };
-    let mut checks = vec![source, health, origin];
+    let mut checks = vec![
+        source,
+        health,
+        origin_check(i),
+        fc_params_check(i),
+        viso_delay_check(i),
+    ];
     match i.obstacle {
         None => {}
         Some(ObstacleFeed::Live) => checks.push(PreArmCheck::ok("obstacle_feed", "")),
@@ -80,81 +125,160 @@ pub(crate) fn extnav_checks(inputs: Option<&ExtnavPreArmInputs>) -> Vec<PreArmCh
     checks
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::Mode;
-    use crate::pre_arm::{CompanionState, PreArmGate, PreArmInputs, Severity};
-
-    fn inputs(extnav: Option<ExtnavPreArmInputs>) -> PreArmInputs {
-        PreArmInputs {
-            mode: Mode::ExternalNav,
-            companion_state: CompanionState::Inactive,
-            flow_quality: None,
-            flow_scale_source: None,
-            rangefinder_topology: None,
-            rangefinder_reading_m: None,
-            rangefinder_min_m: 0.0,
-            rangefinder_max_m: 0.0,
-            extnav,
+fn origin_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
+    const ID: &str = "ekf_origin";
+    if !i.origin_seen {
+        return if i.gps_primary {
+            PreArmCheck::pending(ID, "Waiting for the GPS to set the EKF origin.")
+        } else {
+            PreArmCheck::pending(
+                ID,
+                "EKF origin not set yet. Set AHRS_OPTIONS bit 4 and AHRS_ORIGIN_LAT/LON/ALT \
+                 so the flight controller sets it at boot.",
+            )
+        };
+    }
+    if i.origin_by_plugin {
+        let yaw = i.int(&format!("EK3_SRC{}_YAW", i.extnav_set));
+        let autodec = i.int("COMPASS_AUTODEC");
+        let (Some(yaw), Some(autodec)) = (yaw, autodec) else {
+            return PreArmCheck::pending(ID, "Reading flight controller parameters.");
+        };
+        // Compass yaw (1) or compass with GSF fallback (3) aligned at boot on
+        // the boot declination; the origin the plugin sent later stepped it.
+        if matches!(yaw, 1 | 3) && autodec != 0 {
+            return PreArmCheck::blocking(
+                ID,
+                "The EKF origin arrived after the yaw alignment: the declination step can \
+                 become a gyro bias and spin the vehicle. Set AHRS_OPTIONS bit 4 and \
+                 AHRS_ORIGIN_LAT/LON/ALT to the take-off site (or COMPASS_AUTODEC 0 with the \
+                 site's COMPASS_DEC), then reboot the flight controller.",
+            );
+        }
+        return PreArmCheck::ok(ID, "");
+    }
+    if !i.gps_primary
+        && i.int("AHRS_OPTIONS")
+            .is_some_and(|o| o & AHRS_OPTION_RECORDED_ORIGIN != 0)
+    {
+        if let (Some(lat), Some(lon), Some(lla)) = (
+            i.param("AHRS_ORIGIN_LAT"),
+            i.param("AHRS_ORIGIN_LON"),
+            i.origin_lla,
+        ) {
+            let d = haversine_m(f64::from(lat), f64::from(lon), lla[0], lla[1]);
+            if d > ORIGIN_MISMATCH_M {
+                return PreArmCheck::blocking(
+                    ID,
+                    format!(
+                        "AHRS_ORIGIN is {:.1} km from external_nav.origin_lla; set both to the \
+                         take-off site.",
+                        d / 1000.0
+                    ),
+                );
+            }
         }
     }
-
-    fn ready() -> ExtnavPreArmInputs {
-        ExtnavPreArmInputs {
-            source_denied: false,
-            pose_error: None,
-            health: Some(ExtnavHealth::Good),
-            origin_seen: true,
-            obstacle: Some(ObstacleFeed::Live),
-        }
-    }
-
-    fn severity(r: &crate::pre_arm::PreArmReport, id: &str) -> Severity {
-        r.checks.iter().find(|c| c.id == id).unwrap().severity
-    }
-
-    #[test]
-    fn ready_external_nav_is_armable() {
-        let r = PreArmGate::default().evaluate(&inputs(Some(ready())));
-        assert!(r.armable, "{:?}", r.checks);
-        assert_eq!(r.checks.len(), 4);
-    }
-
-    #[test]
-    fn a_missing_source_blocks() {
-        let r = PreArmGate::default().evaluate(&inputs(Some(ExtnavPreArmInputs {
-            source_denied: true,
-            health: None,
-            ..ready()
-        })));
-        assert!(!r.armable);
-        assert_eq!(severity(&r, "extnav_source"), Severity::Blocking);
-        let detail = &r.checks[0].detail;
-        assert!(
-            detail.starts_with("External nav source missing"),
-            "{detail}"
-        );
-        let none = PreArmGate::default().evaluate(&inputs(None));
-        assert_eq!(severity(&none, "extnav_source"), Severity::Blocking);
-    }
-
-    #[test]
-    fn lost_blocks_degraded_and_origin_wait() {
-        let lost = PreArmGate::default().evaluate(&inputs(Some(ExtnavPreArmInputs {
-            health: Some(ExtnavHealth::Lost),
-            ..ready()
-        })));
-        assert_eq!(severity(&lost, "extnav_health"), Severity::Blocking);
-        let degraded = PreArmGate::default().evaluate(&inputs(Some(ExtnavPreArmInputs {
-            health: Some(ExtnavHealth::Degraded),
-            origin_seen: false,
-            obstacle: None,
-            ..ready()
-        })));
-        assert_eq!(severity(&degraded, "extnav_health"), Severity::Pending);
-        assert_eq!(severity(&degraded, "ekf_origin"), Severity::Pending);
-        assert_eq!(degraded.checks.len(), 3);
-        assert!(!degraded.armable);
-    }
+    PreArmCheck::ok(ID, "")
 }
+
+fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
+    const ID: &str = "fc_params";
+    let wanted = extnav_fc_params(&ExternalNavConfig {
+        extnav_set: i.extnav_set,
+        fallback_set: i.fallback_set,
+        ..ExternalNavConfig::default()
+    });
+    let have = wanted
+        .iter()
+        .filter(|id| i.params.contains_key(*id))
+        .count();
+    if have < wanted.len() {
+        return PreArmCheck::pending(
+            ID,
+            format!(
+                "Reading flight controller parameters ({have} of {}).",
+                wanted.len()
+            ),
+        );
+    }
+    let (e, f) = (i.extnav_set, i.fallback_set);
+    let v = |id: &str| i.int(id).unwrap_or_default();
+    let viso = v("VISO_TYPE");
+    if viso != 1 {
+        return PreArmCheck::blocking(
+            ID,
+            format!("VISO_TYPE is {viso}; external navigation needs 1 (MAVLink)."),
+        );
+    }
+    let posxy = v(&format!("EK3_SRC{e}_POSXY"));
+    if posxy != 6 {
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{e}_POSXY is {posxy}; the external-nav source set needs 6 (ExternalNav)."
+            ),
+        );
+    }
+    // The map's north is the yaw it was built with, and that yaw follows the
+    // EKF's: taking the EKF yaw back from the map closes a loop with nothing
+    // holding north, so the external-nav set keeps the compass.
+    if v(&format!("EK3_SRC{e}_YAW")) == 6 {
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{e}_YAW is 6: the EKF would take north from the SLAM map; use 1 (compass)."
+            ),
+        );
+    }
+    let fallback_posxy = v(&format!("EK3_SRC{f}_POSXY"));
+    if i.gps_primary && fallback_posxy != 3 {
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{f}_POSXY is {fallback_posxy}; with GPS primary the fallback set needs 3 (GPS)."
+            ),
+        );
+    }
+    let fallback_velxy = v(&format!("EK3_SRC{f}_VELXY"));
+    if !i.gps_primary && fallback_velxy != 5 {
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{f}_VELXY is {fallback_velxy}; the fallback set needs 5 (optical flow)."
+            ),
+        );
+    }
+    PreArmCheck::ok(ID, "")
+}
+
+fn viso_delay_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
+    const ID: &str = "viso_delay";
+    if let (Some(p), Some(m)) = (i.param("VISO_DELAY_MS"), i.pose_age_ms) {
+        if (p - m).abs() > VISO_DELAY_TOLERANCE_MS {
+            let (p, m) = (p.round() as i64, m.round() as i64);
+            return PreArmCheck::pending(
+                ID,
+                format!(
+                    "VISO_DELAY_MS is {p} ms but poses are {m} ms old when sent; set \
+                     VISO_DELAY_MS to {m}."
+                ),
+            );
+        }
+    }
+    PreArmCheck::ok(ID, "")
+}
+
+/// Great-circle distance in metres between two latitude/longitude points.
+pub fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    const EARTH_RADIUS_M: f64 = 6_371_000.0;
+    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
+    let dp = p2 - p1;
+    let dl = (lon2 - lon1).to_radians();
+    let a = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_M * a.sqrt().min(1.0).asin()
+}
+
+#[cfg(test)]
+#[path = "pre_arm_extnav_tests.rs"]
+mod tests;

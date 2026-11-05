@@ -52,7 +52,9 @@ controller as `ODOMETRY` (#331) on component 197, at up to
 - `frame_id` `MAV_FRAME_LOCAL_FRD`, `child_frame_id` `MAV_FRAME_BODY_FRD`.
   The pose arrives in `map_ned` (north-aligned, the axes of the flight
   controller's `LOCAL_POSITION_NED`; a `map_flu` pose is converted with
-  `y = -y`, `z = -z`, `yaw = -yaw`).
+  `y = -y`, `z = -z`, `yaw = -yaw`). The EKF yaw stays on the compass
+  (`EK3_SRC1_YAW 1`): `VISO_TYPE 1` aligns only the external position to
+  the EKF's, not its yaw.
 - x, y and yaw come from the pose; z and vertical speed from the
   flight controller's `LOCAL_POSITION_NED`, roll and pitch from its
   `ATTITUDE`. Velocity is the pose difference over the last 100 ms, in
@@ -61,7 +63,9 @@ controller as `ODOMETRY` (#331) on component 197, at up to
   good, 0.30 m and 0.1 rad while degraded; z carries the horizontal
   variance because ArduPilot folds the three position variances into
   one error. `quality` is 100 (good) or 50 (degraded).
-- `reset_counter` steps on a pose jump over 0.5 m between samples.
+- `reset_counter` steps when a pose lands more than 0.5 m from where the
+  last velocity predicts it (from the last pose after a gap over 0.5 s or
+  a loss), so steady flight at any speed is motion, not a reset.
 - Exactly one `ODOMETRY` per measured pose: the tracker publishes
   about once per scan (~10 Hz), and nothing is interpolated or
   extrapolated between poses, so every fused message is a real
@@ -80,15 +84,46 @@ until accepted):
 - `gps_primary: false`: `extnav_set` while the pose tracks; lost for
   1 s switches to `fallback_set` (the flight controller's optical-flow
   set); tracked (good or degraded) for 3 s switches back.
-- `gps_primary: true`: `fallback_set` (GPS) while the fix is 3D; no 3D
-  fix for 2 s with a good pose switches to `extnav_set`; 3D for 10 s
-  switches back.
+- `gps_primary: true`: `fallback_set` (GPS) while the GPS is usable (a 3D
+  fix whose reported horizontal accuracy, when sent, is within 5 m); no
+  usable GPS for 2 s with a good pose switches to `extnav_set`; usable
+  for 10 s switches back.
 
-When the flight controller reports no EKF origin within 5 s the plugin
-sends `SET_GPS_GLOBAL_ORIGIN` from `external_nav.origin_lla`, which the
-mode requires. The pre-arm card blocks with "External nav source
-missing" when the pose topic is not published by an installed plugin
-or reading it is not granted.
+### EKF origin
+
+ArduPilot aligns the EKF yaw at boot with the declination it has then. An
+origin that arrives later loads the site's declination and steps the
+earth field; with `COMPASS_AUTODEC` on, the step becomes a gyro bias and
+the vehicle spins. So without GPS the flight controller should set the
+origin itself at boot: `AHRS_OPTIONS` bit 4 with `AHRS_ORIGIN_LAT/LON/ALT`
+at the take-off site (ArduPilot 4.7 and later), or before 4.7
+`COMPASS_AUTODEC 0` with the site's `COMPASS_DEC`.
+
+The plugin asks for the origin every 5 s until the flight controller
+reports one. It sends `SET_GPS_GLOBAL_ORIGIN` from
+`external_nav.origin_lla` only as a last resort: when the flight
+controller has none 5 s after it boots (a heartbeat after 3 s of silence
+is a new boot), is disarmed, and GPS is not primary.
+
+### Pre-arm checks
+
+- `extnav_source`: blocks with "External nav source missing" when the
+  pose topic is not published by an installed plugin or reading it is
+  not granted.
+- `extnav_health`: good passes, degraded waits, lost blocks.
+- `ekf_origin`: waits until the flight controller reports an origin;
+  blocks when the origin the plugin sent arrived after a compass-yaw
+  alignment with `COMPASS_AUTODEC` on, or when a boot-time `AHRS_ORIGIN`
+  is more than 1 km from `origin_lla`.
+- `fc_params`: reads `VISO_TYPE`, `VISO_DELAY_MS`, `COMPASS_AUTODEC`,
+  `AHRS_OPTIONS`, `AHRS_ORIGIN_LAT/LON` and the source-set parameters
+  (every 10 s while any is missing), then blocks on `VISO_TYPE` other
+  than 1, an external-nav set whose `POSXY` is not 6 or whose `YAW` is 6
+  (north from the SLAM map), or a fallback set that is not GPS (`POSXY 3`,
+  with `gps_primary`) or optical flow (`VELXY 5`, without).
+- `viso_delay`: waits while `VISO_DELAY_MS` is more than 50 ms from the
+  median age of a pose when its `ODOMETRY` is sent (telemetry
+  `navigation.poseAgeMs`).
 
 ## Obstacle feed
 
@@ -295,8 +330,8 @@ fields:
   baud.
 - `firmware.type`: `ardupilot`, `px4`, or `inav`.
 - `external_nav`: `pose_topic`, `origin_lla` (`[lat, lon, alt_m]`,
-  required in `external_nav`), `rate_hz`, `extnav_set`, `fallback_set`,
-  `gps_primary`.
+  required in `external_nav` unless `gps_primary`), `rate_hz`,
+  `extnav_set`, `fallback_set`, `gps_primary`.
 - `obstacle`: `enabled` (default `false`), `scan_topic`, `sectors`,
   `rate_hz`.
 

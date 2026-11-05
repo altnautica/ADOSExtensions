@@ -330,10 +330,16 @@ impl VisionNavConfig {
             )));
         }
         // The pose is local to the map; the flight controller needs a
-        // global origin to fly on it with no GPS.
-        if self.mode == Mode::ExternalNav && self.external_nav.origin_lla.is_none() {
+        // global origin to fly on it with no GPS. With GPS primary the GPS
+        // sets the origin and the plugin never sends one.
+        if self.mode == Mode::ExternalNav
+            && !self.external_nav.gps_primary
+            && self.external_nav.origin_lla.is_none()
+        {
             return Err(ConfigError(
-                "Mode \"external_nav\" needs external_nav.origin_lla.".to_string(),
+                "Mode \"external_nav\" without external_nav.gps_primary needs \
+                 external_nav.origin_lla."
+                    .to_string(),
             ));
         }
         Ok(())

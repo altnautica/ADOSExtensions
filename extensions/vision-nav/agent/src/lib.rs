@@ -57,6 +57,7 @@ pub mod nav_commands;
 pub mod nav_config;
 pub mod nav_state;
 pub mod obstacle;
+pub mod origin;
 pub mod pipeline;
 pub mod pre_arm;
 pub mod pre_arm_extnav;

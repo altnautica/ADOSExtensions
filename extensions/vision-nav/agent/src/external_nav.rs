@@ -6,9 +6,10 @@
 //! controller's compass heading, so its axes are those of the FC's
 //! `LOCAL_POSITION_NED`) is used as is; `map_flu` (the planar SLAM world: body
 //! FLU at the first scan) is converted with `x = x, y = -y, z = -z,
-//! yaw = -yaw`. Sent as `MAV_FRAME_LOCAL_FRD`: with the EKF yaw from the
-//! compass, ArduPilot aligns the external-navigation yaw to its own heading,
-//! which `map_ned` already matches.
+//! yaw = -yaw`. Sent as `MAV_FRAME_LOCAL_FRD` with the EKF yaw from the
+//! compass: `VISO_TYPE` 1 (MAVLink) aligns only the external-navigation
+//! position to the EKF's, not its yaw, so the pose frame must already be
+//! north-aligned, which `map_ned` is.
 //!
 //! `ODOMETRY` goes out on component 197 with `frame_id = MAV_FRAME_LOCAL_FRD`
 //! and `child_frame_id = MAV_FRAME_BODY_FRD`, the only pair ArduPilot
@@ -52,9 +53,12 @@ pub const MAV_FRAME_LOCAL_FRD: u8 = 20;
 pub const MAV_FRAME_BODY_FRD: u8 = 12;
 pub const MAV_ESTIMATOR_TYPE_LIDAR: u8 = 7;
 
-/// A pose step larger than this between consecutive samples bumps
-/// `reset_counter` (a relocalisation, not motion).
+/// A pose this far from where the last velocity predicts it (or, with no
+/// velocity to predict from after a gap, from the last pose) bumps
+/// `reset_counter`: a relocalisation, not motion.
 pub const RESET_JUMP_M: f64 = 0.5;
+/// The longest gap over which the last velocity predicts the next pose.
+pub const RESET_PREDICT_NS: i64 = 500_000_000;
 /// Velocity is the pose difference over this window.
 pub const VELOCITY_WINDOW_NS: i64 = 100_000_000;
 /// Velocity needs at least this much time between the two samples.
@@ -339,6 +343,12 @@ struct Fix {
 pub struct OdometryBuilder {
     history: VecDeque<(i64, f64, f64)>,
     last_xy: Option<(f64, f64)>,
+    last_t_ns: Option<i64>,
+    /// `(vn, ve)` of the last built fix; cleared on a reset and on lost.
+    last_v: Option<(f64, f64)>,
+    /// The last pose started a segment (the first pose, or a reset): the
+    /// next one has no velocity to be predicted from and sets it.
+    segment_start: bool,
     reset_counter: u8,
 }
 
@@ -361,16 +371,22 @@ impl OdometryBuilder {
     ) -> Option<Odometry> {
         if pose.health == ExtnavHealth::Lost {
             self.history.clear();
+            self.last_v = None;
+            // After a loss the next pose is compared with the last one held.
+            self.segment_start = false;
             return None;
         }
         let (x, y) = (pose.t[0], pose.t[1]);
-        if let Some((lx, ly)) = self.last_xy {
-            if (x - lx).hypot(y - ly) > RESET_JUMP_M {
-                self.reset_counter = self.reset_counter.wrapping_add(1);
-                self.history.clear();
-            }
+        if self.is_jump(x, y, t_ns) {
+            self.reset_counter = self.reset_counter.wrapping_add(1);
+            self.history.clear();
+            self.last_v = None;
+            self.segment_start = true;
+        } else {
+            self.segment_start = self.last_xy.is_none();
         }
         self.last_xy = Some((x, y));
+        self.last_t_ns = Some(t_ns);
         let cutoff = t_ns - VELOCITY_WINDOW_NS;
         while self.history.len() > 1 && self.history[1].0 <= cutoff {
             self.history.pop_front();
@@ -394,7 +410,31 @@ impl OdometryBuilder {
             vel_var: (2.0 * f64::from(sxy * sxy) / (dt * dt)) as f32,
             health: pose.health,
         };
+        self.last_v = Some((fix.vn, fix.ve));
         Some(self.compose(time_usec, &fix, fc))
+    }
+
+    /// Whether the pose at `(x, y, t_ns)` is a relocalisation. Within
+    /// [`RESET_PREDICT_NS`] of the last pose it is measured from where the
+    /// last velocity predicts, so steady flight at any speed is motion; the
+    /// pose right after a segment start has no velocity yet and is taken as
+    /// motion; after a longer gap or a loss it is measured from the last
+    /// pose.
+    fn is_jump(&self, x: f64, y: f64, t_ns: i64) -> bool {
+        let (Some((lx, ly)), Some(lt)) = (self.last_xy, self.last_t_ns) else {
+            return false;
+        };
+        let dt_ns = t_ns - lt;
+        let within = dt_ns > 0 && dt_ns <= RESET_PREDICT_NS;
+        let (px, py) = match self.last_v {
+            Some((vn, ve)) if within => {
+                let dt = dt_ns as f64 / 1e9;
+                (lx + vn * dt, ly + ve * dt)
+            }
+            None if within && self.segment_start => return false,
+            _ => (lx, ly),
+        };
+        (x - px).hypot(y - py) > RESET_JUMP_M
     }
 
     fn compose(&self, time_usec: u64, fix: &Fix, fc: &FcNavSnapshot) -> Odometry {

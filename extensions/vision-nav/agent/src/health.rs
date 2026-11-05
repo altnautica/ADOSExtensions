@@ -63,6 +63,9 @@ pub struct HealthSnapshot {
     pub degraded_reasons: Vec<String>,
     /// Watched flight-controller parameters the FC has reported.
     pub fc_params: Vec<String>,
+    /// External nav: the median age (ms) of a pose when its `ODOMETRY` is
+    /// sent, over the last 50 poses.
+    pub pose_age_ms: Option<f32>,
 }
 
 impl HealthSnapshot {
@@ -115,6 +118,7 @@ impl HealthSnapshot {
             (k("rangefinderError"), opt_str(&self.rangefinder_error)),
             (k("degradedReasons"), str_array(&self.degraded_reasons)),
             (k("fcParams"), str_array(&self.fc_params)),
+            (k("poseAgeMs"), opt_f32(self.pose_age_ms)),
         ];
         // Keep insertion order stable for tests.
         entries.shrink_to_fit();
@@ -197,6 +201,7 @@ mod tests {
         assert!(matches!(field(&v, "imuSource"), Some(Value::Nil)));
         assert!(matches!(field(&v, "flowQuality"), Some(Value::Nil)));
         assert!(matches!(field(&v, "rangefinderError"), Some(Value::Nil)));
+        assert!(matches!(field(&v, "poseAgeMs"), Some(Value::Nil)));
         assert_eq!(field(&v, "emitErrors").unwrap().as_u64(), Some(0));
         assert!(field(&v, "suggestedMode").is_none());
     }

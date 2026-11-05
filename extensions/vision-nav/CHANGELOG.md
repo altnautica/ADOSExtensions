@@ -4,6 +4,49 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.6.5]
+
+### Fixed
+
+- The EKF origin is no longer sent late. ArduPilot aligns its yaw at boot
+  with the declination it has then; an origin that arrives afterwards loads
+  the site's declination and steps the earth field, which with
+  `COMPASS_AUTODEC` on becomes a z-gyro bias that spins the vehicle, and
+  ArduPilot accepts an origin while armed. `SET_GPS_GLOBAL_ORIGIN` now goes
+  out only when the flight controller has reported none 5 s after its boot
+  (a heartbeat after 3 s of silence is a new boot, which also forgets the
+  old origin), the vehicle is disarmed, and GPS is not primary. The wait
+  counts from the flight controller's boot, not the plugin's start.
+- A pose step is judged against where the last velocity predicts the pose,
+  not against the last pose. At more than 5 m/s every 10 Hz pose moved
+  over the 0.5 m reset threshold, so each one bumped `reset_counter`,
+  restarted the velocity window and no `ODOMETRY` went out.
+- With `gps_primary`, a GPS that keeps its 3D fix but reports a horizontal
+  accuracy (`GPS_RAW_INT.h_acc`) worse than 5 m counts as lost, so a jammed
+  or degraded receiver hands over to the external-nav source set.
+- `external_nav.origin_lla` is required only without `gps_primary`.
+
+### Added
+
+- Pre-arm `ekf_origin` names how to get an origin (`AHRS_OPTIONS` bit 4
+  with `AHRS_ORIGIN_LAT/LON/ALT`, or waiting for the GPS), blocks when the
+  origin the plugin sent arrived after a compass-yaw alignment with
+  `COMPASS_AUTODEC` on, and blocks when a boot-time `AHRS_ORIGIN` is more
+  than 1 km from `origin_lla`.
+- Pre-arm `fc_params`: the plugin reads `VISO_TYPE`, `VISO_DELAY_MS`,
+  `COMPASS_AUTODEC`, `AHRS_OPTIONS`, `AHRS_ORIGIN_LAT/LON` and the source-set
+  parameters (`PARAM_REQUEST_READ` every 10 s while any is missing, again
+  after a flight-controller reboot) and blocks on a `VISO_TYPE` other than
+  1, an external-nav set whose `POSXY` is not 6 or whose `YAW` is 6 (north
+  from the SLAM map), or a fallback set that is not GPS or optical flow.
+- Pre-arm `viso_delay` and telemetry `navigation.poseAgeMs`: the median age
+  of a pose when its `ODOMETRY` is sent, and a pending row while
+  `VISO_DELAY_MS` is more than 50 ms from it.
+- Required flight-controller parameters `AHRS_OPTIONS`, `AHRS_ORIGIN_*`,
+  `COMPASS_AUTODEC` (before ArduPilot 4.7) and `ARMING_SKIPCHK`; the
+  external-nav set's yaw is the compass (`EK3_SRC1_YAW 1`).
+- GCS labels for the two new pre-arm rows.
+
 ## [0.6.4]
 
 ### Added

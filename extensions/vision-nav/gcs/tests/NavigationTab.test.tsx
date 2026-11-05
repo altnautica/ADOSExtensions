@@ -341,4 +341,43 @@ describe("NavigationTab", () => {
     expect(n.odomRateHz).toBeNull();
     expect(n.mode).toBe("optical_flow");
   });
+
+  it("labels the flight-controller parameter and pose delay pre-arm rows", () => {
+    render(
+      <NavigationTab
+        ctx={fakeCtx()}
+        firmware="ardupilot"
+        telemetryOverride={mkTelemetry({
+          preArmReport: {
+            mode: "external_nav",
+            armable: false,
+            checks: [
+              {
+                id: "fc_params",
+                severity: "blocking",
+                detail:
+                  "EK3_SRC1_YAW is 6: the EKF would take north from the SLAM map; use 1 (compass).",
+              },
+              {
+                id: "viso_delay",
+                severity: "pending",
+                detail:
+                  "VISO_DELAY_MS is 50 ms but poses are 140 ms old when sent; set VISO_DELAY_MS to 140.",
+              },
+            ],
+          },
+        })}
+      />,
+    );
+    const card = screen.getByTestId("vn-pre-arm");
+    const params = card.querySelector('[data-check-id="fc_params"]') as HTMLElement;
+    const delay = card.querySelector('[data-check-id="viso_delay"]') as HTMLElement;
+    expect(params.dataset.state).toBe("blocking");
+    expect(params.textContent).toContain("Flight controller parameters");
+    expect(params.textContent).toContain("EK3_SRC1_YAW is 6");
+    expect(delay.dataset.state).toBe("pending");
+    expect(delay.textContent).toContain("Pose delay");
+    expect(delay.textContent).toContain("set VISO_DELAY_MS to 140");
+    expect(screen.getByTestId("vn-pre-arm-blocked")).toBeTruthy();
+  });
 });

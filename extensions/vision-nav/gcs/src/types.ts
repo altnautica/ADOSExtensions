@@ -81,6 +81,9 @@ export interface VisionNavTelemetry {
   /** Watched flight-controller parameters the FC has reported
    * (``EKF2_OF_CTRL``, ``EKF2_AID_MASK``). */
   fcParams?: string[];
+  /** External nav: median age (ms) of a pose when its ODOMETRY is sent,
+   * or ``null`` before the first one. */
+  poseAgeMs?: number | null;
 }
 
 export type PreArmCheckSeverity = "ok" | "pending" | "blocking";

@@ -49,7 +49,7 @@
         "origin_lla": {
           "type": "array",
           "title": "EKF origin",
-          "description": "[latitude deg, longitude deg, altitude m AMSL]. Sent as MAV_CMD_DO_SET_GLOBAL_ORIGIN when the flight controller reports no origin within 5 s. Required in external_nav mode.",
+          "description": "[latitude deg, longitude deg, altitude m AMSL] of the take-off site. Sent as SET_GPS_GLOBAL_ORIGIN when the flight controller has none, is disarmed, and GPS is not primary, 5 s after the flight controller boots. Prefer the flight controller setting it at boot (AHRS_OPTIONS bit 4 with AHRS_ORIGIN_LAT/LON/ALT set to the same place). Required in external_nav mode unless GPS is primary.",
           "items": { "type": "number" },
           "minItems": 3,
           "maxItems": 3
@@ -80,7 +80,7 @@
         "gps_primary": {
           "type": "boolean",
           "title": "GPS primary",
-          "description": "Fly on GPS and switch to the external pose only while the GPS fix is lost.",
+          "description": "Fly on GPS and switch to the external pose only while the GPS has no 3D fix or reports a horizontal accuracy worse than 5 m.",
           "default": false
         }
       }

@@ -6,7 +6,7 @@
 //! returned as an error so the caller can record it in health
 //! `degradedReasons` instead of running silently without that input.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -16,9 +16,10 @@ use ados_sdk::context::PluginContext;
 use rmpv::Value;
 
 use crate::clock_align::ClockAlign;
-use crate::fc_nav::{Attitude, FcNavSink};
+use crate::fc_nav::{Attitude, FcNavSink, MODE_FLAG_ARMED};
 use crate::imu::ImuBuffer;
 use crate::mavlink_emit::monotonic_ns;
+use crate::nav_commands::is_extnav_fc_param;
 use crate::rangefinder::RelayDistanceSensor;
 use crate::scale::ScaleLadder;
 
@@ -61,20 +62,55 @@ pub struct Sinks {
     pub ladder: Arc<ScaleLadder>,
     pub fc_target: Arc<FcTarget>,
     pub fc_params: Arc<Mutex<BTreeSet<String>>>,
+    /// Values of the flight-controller parameters the external-nav pre-arm
+    /// checks read ([`crate::nav_commands::extnav_fc_params`]), by id.
+    pub fc_param_values: Arc<Mutex<BTreeMap<String, f32>>>,
     pub fc_nav: Arc<FcNavSink>,
+}
+
+/// The raw frame of a `mavlink.deliver` args map.
+fn frame_of(args: &Value) -> Option<&[u8]> {
+    let Value::Map(entries) = args else {
+        return None;
+    };
+    entries.iter().find_map(|(k, v)| match (k.as_str(), v) {
+        (Some("frame"), Value::Binary(b)) => Some(b.as_slice()),
+        _ => None,
+    })
 }
 
 /// Parse a `mavlink.deliver` args map into `(system, component,
 /// message)`. `None` when it carries no parseable frame.
 pub fn decode_delivery(args: &Value) -> Option<(u8, u8, MavMessage)> {
-    let Value::Map(entries) = args else {
-        return None;
+    decode_frame(frame_of(args)?)
+}
+
+/// Decode one `mavlink.deliver` args map and route it into the sinks.
+pub fn deliver(sinks: &Sinks, args: &Value, now_ns: i64) {
+    let Some(frame) = frame_of(args) else {
+        return;
     };
-    let frame = entries.iter().find_map(|(k, v)| match (k.as_str(), v) {
-        (Some("frame"), Value::Binary(b)) => Some(b.as_slice()),
-        _ => None,
-    })?;
-    decode_frame(frame)
+    if let Some((system, component, msg)) = decode_frame(frame) {
+        apply(sinks, system, component, &msg, frame, now_ns);
+    }
+}
+
+/// `GPS_RAW_INT.h_acc` (mm) from the raw frame: an extension field
+/// (payload bytes 34..38) the shared dialect does not decode. MAVLink 2
+/// drops trailing zero bytes, so a short payload reads as 0 (unknown); a
+/// MAVLink 1 frame never carries it.
+pub fn gps_raw_h_acc_mm(frame: &[u8]) -> u32 {
+    const H_ACC_AT: usize = 34;
+    if frame.first() != Some(&0xFD) || frame.len() < 10 {
+        return 0;
+    }
+    let len = usize::from(frame[1]);
+    let payload = &frame[10..frame.len().min(10 + len)];
+    let mut b = [0u8; 4];
+    for (i, slot) in b.iter_mut().enumerate() {
+        *slot = payload.get(H_ACC_AT + i).copied().unwrap_or(0);
+    }
+    u32::from_le_bytes(b)
 }
 
 /// Parse one raw MAVLink 1 or 2 frame.
@@ -90,9 +126,17 @@ pub fn decode_frame(frame: &[u8]) -> Option<(u8, u8, MavMessage)> {
     }
 }
 
-/// Route one decoded message into the sinks. Pure apart from the sinks,
-/// so tests drive it without a host.
-pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns: i64) {
+/// Route one decoded message (and its raw `frame`, for extension fields the
+/// dialect drops) into the sinks. Pure apart from the sinks, so tests drive
+/// it without a host.
+pub fn apply(
+    sinks: &Sinks,
+    system: u8,
+    component: u8,
+    msg: &MavMessage,
+    frame: &[u8],
+    now_ns: i64,
+) {
     match msg {
         // An autopilot's heartbeat names the FC. Our own and the agent's
         // heartbeats carry MAV_AUTOPILOT_INVALID; a GCS has MAV_TYPE_GCS.
@@ -100,7 +144,9 @@ pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns:
             if h.autopilot != MavAutopilot::MAV_AUTOPILOT_INVALID
                 && h.mavtype != MavType::MAV_TYPE_GCS =>
         {
-            sinks.fc_target.set(system, component)
+            sinks.fc_target.set(system, component);
+            let armed = h.base_mode.bits() & MODE_FLAG_ARMED != 0;
+            sinks.fc_nav.on_heartbeat(armed, now_ns);
         }
         MavMessage::RAW_IMU(d) => {
             sinks.fc_target.set(system, component);
@@ -134,7 +180,9 @@ pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns:
                 now_ns,
             );
             if is_fc(sinks, system, component) {
-                sinks.fc_nav.on_gps_fix(d.fix_type as u8, now_ns);
+                sinks
+                    .fc_nav
+                    .on_gps_fix(d.fix_type as u8, gps_raw_h_acc_mm(frame), now_ns);
             }
         }
         // The external-nav inputs come from the flight controller only, so
@@ -166,6 +214,13 @@ pub fn apply(sinks: &Sinks, system: u8, component: u8, msg: &MavMessage, now_ns:
                         .lock()
                         .expect("fc params lock")
                         .insert(id.to_string());
+                }
+                if is_extnav_fc_param(id) && is_fc(sinks, system, component) {
+                    sinks
+                        .fc_param_values
+                        .lock()
+                        .expect("fc param values lock")
+                        .insert(id.to_string(), d.param_value);
                 }
             }
         }
@@ -205,11 +260,7 @@ pub async fn subscribe_all(ctx: &PluginContext, sinks: &Sinks, extra: &[&str]) -
     let mut denied = Vec::new();
     for name in SUBSCRIBED.iter().chain(extra) {
         let s = sinks.clone();
-        let cb = Arc::new(move |args: Value| {
-            if let Some((system, component, msg)) = decode_delivery(&args) {
-                apply(&s, system, component, &msg, monotonic_ns());
-            }
-        });
+        let cb = Arc::new(move |args: Value| deliver(&s, &args, monotonic_ns()));
         if let Err(e) = ctx.mavlink.subscribe(name, cb).await {
             eprintln!("vision-nav: subscribe {name} failed: {e}");
             denied.push(format!("mavlink_subscribe_denied:{name}"));
@@ -234,6 +285,7 @@ mod tests {
             ladder: Arc::new(ScaleLadder::new(false)),
             fc_target: Arc::new(FcTarget::default()),
             fc_params: Arc::new(Mutex::new(BTreeSet::new())),
+            fc_param_values: Arc::new(Mutex::new(BTreeMap::new())),
             fc_nav: Arc::new(FcNavSink::default()),
         }
     }
@@ -245,6 +297,10 @@ mod tests {
             sequence: 0,
         };
         let frame = serialize_v2(header, msg).unwrap();
+        frame_delivery(frame)
+    }
+
+    fn frame_delivery(frame: Vec<u8>) -> Value {
         Value::Map(vec![
             (Value::from("msg_name"), Value::from("X")),
             (Value::from("frame"), Value::Binary(frame)),
@@ -259,8 +315,7 @@ mod tests {
             xgyro: 1000,
             ..RAW_IMU_DATA::DEFAULT
         });
-        let (sys, comp, m) = decode_delivery(&delivery(7, 1, &msg)).unwrap();
-        apply(&s, sys, comp, &m, 0);
+        deliver(&s, &delivery(7, 1, &msg), 0);
         assert!((s.imu.latest().unwrap().xgyro - 1.0).abs() < 1e-6);
         assert_eq!(s.fc_target.get(), (7, 1));
     }
@@ -278,8 +333,7 @@ mod tests {
             orientation: MavSensorOrientation::MAV_SENSOR_ROTATION_PITCH_270,
             covariance: 0,
         });
-        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &msg)).unwrap();
-        apply(&s, sys, comp, &m, monotonic_ns());
+        deliver(&s, &delivery(1, 1, &msg), monotonic_ns());
         let r = s.relay.read_shared().unwrap();
         assert!((r.distance_m - 1.5).abs() < 1e-4);
     }
@@ -305,19 +359,16 @@ mod tests {
             ..ATTITUDE_DATA::DEFAULT
         });
         // A gimbal's ATTITUDE (component 154) is ignored.
-        let (sys, comp, m) = decode_delivery(&delivery(1, 154, &att)).unwrap();
-        apply(&s, sys, comp, &m, 0);
+        deliver(&s, &delivery(1, 154, &att), 0);
         assert!(s.fc_nav.snapshot(0).attitude.is_none());
-        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &att)).unwrap();
-        apply(&s, sys, comp, &m, 0);
+        deliver(&s, &delivery(1, 1, &att), 0);
         assert_eq!(s.fc_nav.snapshot(0).attitude.unwrap().pitch, -0.2);
         let pos = MavMessage::LOCAL_POSITION_NED(LOCAL_POSITION_NED_DATA {
             z: -4.0,
             vz: 0.5,
             ..LOCAL_POSITION_NED_DATA::DEFAULT
         });
-        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &pos)).unwrap();
-        apply(&s, sys, comp, &m, 0);
+        deliver(&s, &delivery(1, 1, &pos), 0);
         assert_eq!(s.fc_nav.snapshot(0).local.unwrap().z, -4.0);
     }
 
@@ -368,8 +419,7 @@ mod tests {
                 ),
             ),
         ] {
-            let (sys, comp, m) = decode_delivery(&delivery(sys, comp, &hb)).unwrap();
-            apply(&s, sys, comp, &m, 0);
+            deliver(&s, &delivery(sys, comp, &hb), 0);
         }
         assert_eq!(s.fc_target.get(), (2, 1));
 
@@ -379,11 +429,106 @@ mod tests {
             result: MavResult::MAV_RESULT_ACCEPTED,
         });
         // From the old default address the ack is someone else's.
-        let (sys, comp, m) = decode_delivery(&delivery(1, 1, &ack)).unwrap();
-        apply(&s, sys, comp, &m, 0);
+        deliver(&s, &delivery(1, 1, &ack), 0);
         assert_eq!(s.fc_nav.snapshot(0).source_set_ack, None);
-        let (sys, comp, m) = decode_delivery(&delivery(2, 1, &ack)).unwrap();
-        apply(&s, sys, comp, &m, 0);
+        deliver(&s, &delivery(2, 1, &ack), 0);
         assert_eq!(s.fc_nav.snapshot(0).source_set_ack, Some(0));
+    }
+
+    /// The FC heartbeat carries the armed bit; a 3 s gap is a reboot that
+    /// forgets the origin.
+    #[test]
+    fn the_fc_heartbeat_reports_arming_and_reboots() {
+        use ados_protocol::mavlink::ardupilotmega::{MavModeFlag, HEARTBEAT_DATA};
+        const S: i64 = 1_000_000_000;
+        let hb = |base_mode: MavModeFlag| {
+            MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+                autopilot: MavAutopilot::MAV_AUTOPILOT_ARDUPILOTMEGA,
+                mavtype: MavType::MAV_TYPE_QUADROTOR,
+                base_mode,
+                ..HEARTBEAT_DATA::DEFAULT
+            })
+        };
+        let s = sinks();
+        deliver(&s, &delivery(1, 1, &hb(MavModeFlag::empty())), S);
+        let origin = MavMessage::GPS_GLOBAL_ORIGIN(
+            ados_protocol::mavlink::ardupilotmega::GPS_GLOBAL_ORIGIN_DATA::DEFAULT,
+        );
+        deliver(&s, &delivery(1, 1, &origin), S);
+        let a = s.fc_nav.snapshot(S);
+        assert!(!a.armed && a.origin_seen);
+        assert_eq!((a.boot_ns, a.boot_epoch), (Some(S), 1));
+        let armed = MavModeFlag::MAV_MODE_FLAG_SAFETY_ARMED;
+        deliver(&s, &delivery(1, 1, &hb(armed)), 2 * S);
+        assert!(s.fc_nav.snapshot(2 * S).armed);
+        // The GCS's heartbeat never counts.
+        let gcs = MavMessage::HEARTBEAT(HEARTBEAT_DATA {
+            autopilot: MavAutopilot::MAV_AUTOPILOT_INVALID,
+            mavtype: MavType::MAV_TYPE_GCS,
+            ..HEARTBEAT_DATA::DEFAULT
+        });
+        deliver(&s, &delivery(255, 190, &gcs), 6 * S);
+        assert_eq!(s.fc_nav.snapshot(6 * S).boot_epoch, 1);
+        deliver(&s, &delivery(1, 1, &hb(MavModeFlag::empty())), 6 * S);
+        let b = s.fc_nav.snapshot(6 * S);
+        assert!(!b.armed && !b.origin_seen);
+        assert_eq!((b.boot_ns, b.boot_epoch), (Some(6 * S), 2));
+    }
+
+    /// `GPS_RAW_INT.h_acc` is an extension field: read from the raw frame.
+    #[test]
+    fn gps_h_acc_comes_from_the_extension_bytes() {
+        use crate::mavlink_emit::encode_v2;
+        use ados_protocol::mavlink::ardupilotmega::{GpsFixType, GPS_RAW_INT_DATA};
+        let base = MavMessage::GPS_RAW_INT(GPS_RAW_INT_DATA {
+            fix_type: GpsFixType::GPS_FIX_TYPE_3D_FIX,
+            satellites_visible: 10,
+            ..GPS_RAW_INT_DATA::DEFAULT
+        });
+        let header = MavHeader {
+            system_id: 1,
+            component_id: 1,
+            sequence: 0,
+        };
+        let plain = serialize_v2(header, &base).unwrap();
+        // No extension bytes: unknown accuracy.
+        assert_eq!(gps_raw_h_acc_mm(&plain), 0);
+        let mut payload = plain[10..10 + usize::from(plain[1])].to_vec();
+        payload.resize(30, 0);
+        payload.extend_from_slice(&0i32.to_le_bytes()); // alt_ellipsoid
+        payload.extend_from_slice(&8000u32.to_le_bytes()); // h_acc
+        payload.extend_from_slice(&3000u32.to_le_bytes()); // v_acc
+        let frame = encode_v2(1, 0, 24, 24, payload);
+        assert_eq!(gps_raw_h_acc_mm(&frame), 8000);
+        let s = sinks();
+        deliver(&s, &frame_delivery(frame), 0);
+        let snap = s.fc_nav.snapshot(0);
+        assert_eq!(snap.gps_fix, 3);
+        assert_eq!(snap.gps_h_acc_mm, Some(8000));
+    }
+
+    /// The external-nav parameter values are recorded from the flight
+    /// controller only.
+    #[test]
+    fn extnav_param_values_are_recorded_from_the_fc() {
+        use ados_protocol::mavlink::ardupilotmega::{MavParamType, PARAM_VALUE_DATA};
+        let pv = |id: &str, v: f32| {
+            MavMessage::PARAM_VALUE(PARAM_VALUE_DATA {
+                param_value: v,
+                param_count: 1,
+                param_index: 0,
+                param_id: id.into(),
+                param_type: MavParamType::MAV_PARAM_TYPE_REAL32,
+            })
+        };
+        let s = sinks();
+        deliver(&s, &delivery(1, 1, &pv("VISO_TYPE", 1.0)), 0);
+        deliver(&s, &delivery(1, 1, &pv("SERIAL1_BAUD", 57.0)), 0);
+        deliver(&s, &delivery(1, 154, &pv("COMPASS_AUTODEC", 1.0)), 0);
+        let values = s.fc_param_values.lock().unwrap().clone();
+        assert_eq!(
+            values.into_iter().collect::<Vec<_>>(),
+            vec![("VISO_TYPE".to_string(), 1.0)]
+        );
     }
 }
