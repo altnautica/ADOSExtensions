@@ -81,7 +81,7 @@ const MIN_LOOP_INFORMATION_SHARE: f64 = 1e-3;
 
 /// Translation information of a loop edge: `1/sigma²` along the direction
 /// the match constrains best, scaled down along weaker directions by the
-/// match geometry (`h`, point-to-line information), so a match that can
+/// match geometry (`h`, point-to-feature information), so a match that can
 /// slide along a corridor binds the graph only across it.
 fn loop_information(h: &Matrix3<f64>, sigma_m: f64) -> Matrix2<f64> {
     let iso = Matrix2::identity() / (sigma_m * sigma_m);

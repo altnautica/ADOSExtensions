@@ -79,8 +79,9 @@ pub struct Scan2dConfig {
     /// `R_lidar_imu`. Identity when the IMU and the LiDAR share axes.
     pub r_lidar_imu: [[f64; 3]; 3],
 
-    /// `eig_min / eig_max` of the match Hessian below this is degenerate:
-    /// the pose keeps its motion prior along the weak directions.
+    /// `eig_min / eig_max` of the match's translation information below this
+    /// is degenerate: the pose keeps its motion prior along the weak
+    /// directions, and the prior's velocity there fades to rest.
     pub degenerate_ratio: f64,
 }
 

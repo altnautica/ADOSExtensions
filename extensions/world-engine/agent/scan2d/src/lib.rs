@@ -13,8 +13,10 @@
 //!   prediction by `translation_weight` / `rotation_weight`) into the older
 //!   of two overlapping probability-grid submaps, and inserted into both when
 //!   the motion filter passes. Along a featureless corridor the pose keeps its
-//!   motion prior in the unconstrained direction and [`PoseOut::degeneracy`]
-//!   drops below [`Scan2dConfig::degenerate_ratio`].
+//!   motion prior in the unconstrained direction, the prior's velocity there
+//!   fading to rest, and [`PoseOut::degeneracy`] drops below
+//!   [`Scan2dConfig::degenerate_ratio`]. Isolated posts and uprights count as
+//!   constraints in both directions, walls only across themselves.
 //!   [`LocalSlam::inserted_scans`] counts the scans in the map so far.
 //! - **Offline**, [`offline::run`]: the same local SLAM over a whole session,
 //!   then branch-and-bound loop search against finished submaps and a

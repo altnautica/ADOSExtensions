@@ -124,6 +124,31 @@ fn corridor_is_reported_degenerate() {
     assert!(d_corner > 0.2, "corner {d_corner}");
 }
 
+/// Rows of 8 cm posts either side of an aisle, each hit by a beam or two:
+/// alone, and in front of long walls behind the rows. No surface runs
+/// across the aisle, yet the posts pin it.
+#[test]
+fn isolated_posts_constrain_the_aisle_axis() {
+    let mut posts = Vec::new();
+    for k in -4..=4 {
+        let x = k as f64 * 2.7 + 0.4;
+        for y in [-3.0, 3.0] {
+            posts.extend(rect(x - 0.04, y - 0.04, x + 0.04, y + 0.04));
+        }
+    }
+    let mut walled = posts.clone();
+    walled.extend([([-60.0, -5.0], [60.0, -5.0]), ([-60.0, 5.0], [60.0, 5.0])]);
+    let at = Pose2::new(0.0, 0.3, 0.05);
+    let d_posts = degeneracy_at(&posts, at, [0.5, 0.0]);
+    let d_walled = degeneracy_at(&walled, at, [0.5, 0.0]);
+    eprintln!("degeneracy posts {d_posts:.4}, posts before walls {d_walled:.4}");
+    assert!(d_posts > 0.2, "posts {d_posts}");
+    assert!(
+        d_walled > cfg().degenerate_ratio,
+        "posts before walls {d_walled}"
+    );
+}
+
 #[test]
 fn blocked_sector_points_are_dropped() {
     let c = Scan2dConfig::for_sensor(0.05, 12.0, &[[130.0, 230.0], [350.0, 10.0]]);

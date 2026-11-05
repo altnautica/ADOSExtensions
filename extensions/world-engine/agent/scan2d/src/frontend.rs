@@ -4,10 +4,13 @@
 
 use std::collections::VecDeque;
 
+use nalgebra::{Matrix2, Rotation2, Vector2};
+
 use crate::attitude::{Attitude, ImuSample};
 use crate::config::Scan2dConfig;
 use crate::matcher::{
-    constraint_information, correlative, degeneracy, keep_constrained, refine, Prior, Window,
+    constraint_information, correlative, degeneracy, keep_constrained, refine,
+    unconstrained_directions, Prior, Window,
 };
 use crate::pose::{wrap, Pose2};
 use crate::scan::{Motion, Scan2d, ScanInput};
@@ -19,6 +22,22 @@ const MIN_POINTS: usize = 20;
 /// over single scans would feed each match's noise straight into the next
 /// prediction.
 const VELOCITY_WINDOW_NS: u64 = 300_000_000;
+/// Along a direction the matches stopped constraining, the motion prior
+/// coasts on the velocity last observed there, fading with this time
+/// constant: a short featureless stretch keeps its motion, a long one comes
+/// to rest. Without the fade the prior would carry forward whatever
+/// velocity it held, unobserved, for as long as the stretch lasts.
+const COAST_TAU_S: f64 = 1.0;
+
+/// The translation directions the last match left unconstrained.
+#[derive(Debug, Clone, Copy)]
+struct Unobserved {
+    /// Projector onto them, local frame.
+    free: Matrix2<f64>,
+    /// Local-frame prior velocity when they were last observed, and when.
+    vel: Vector2<f64>,
+    since_ns: u64,
+}
 
 /// One pose of the LiDAR frame in the local frame (the LiDAR frame at the
 /// first scan, levelled): planar `x`, `y` and `yaw`, plus the IMU's `roll` and
@@ -35,7 +54,7 @@ pub struct PoseOut {
     /// Mean interpolated submap probability of the matched scan (0 when the
     /// scan was not matched).
     pub score: f64,
-    /// Translation `eig_min / eig_max` of the scan's point-to-line
+    /// Translation `eig_min / eig_max` of the scan's point-to-feature
     /// constraints ([`crate::matcher::degeneracy`]); small in corridors.
     pub degeneracy: f64,
 }
@@ -63,6 +82,8 @@ pub struct LocalSlam {
     last: Option<(u64, Pose2, f64)>,
     /// Matched poses of the last [`VELOCITY_WINDOW_NS`], oldest first.
     history: VecDeque<(u64, Pose2)>,
+    /// Set while the latest match is degenerate.
+    unobserved: Option<Unobserved>,
     last_insert: Option<(u64, Pose2)>,
     inserted: usize,
 }
@@ -89,6 +110,7 @@ impl LocalSlam {
             nodes: Vec::new(),
             last: None,
             history: VecDeque::new(),
+            unobserved: None,
             last_insert: None,
             inserted: 0,
         }
@@ -113,7 +135,7 @@ impl LocalSlam {
         let (roll, pitch) = self.att.roll_pitch();
         let va = self.att.vertical_angle_at(t);
         let span_ns = input.t_offset_ns.iter().copied().max().unwrap_or(0) as u64;
-        let (prior, velocity, yaw_rate) = self.predict(t, va, span_ns);
+        let (prior, velocity, yaw_rate, prior_vel) = self.predict(t, va, span_ns);
         let motion = Motion {
             roll,
             pitch,
@@ -162,11 +184,25 @@ impl LocalSlam {
             );
             let info = constraint_information(&scan, r.pose);
             let deg = degeneracy(&info);
-            in_submap = if deg < self.cfg.degenerate_ratio {
-                keep_constrained(in_submap, r.pose, &info, self.cfg.degenerate_ratio)
+            if deg < self.cfg.degenerate_ratio {
+                in_submap = keep_constrained(in_submap, r.pose, &info, self.cfg.degenerate_ratio);
+                // The information is in the submap frame.
+                let rot = Rotation2::new(sm.pose.th);
+                let free = rot.matrix()
+                    * unconstrained_directions(&info, self.cfg.degenerate_ratio)
+                    * rot.matrix().transpose();
+                let (vel, since_ns) = self
+                    .unobserved
+                    .map_or((prior_vel, t), |u| (u.vel, u.since_ns));
+                self.unobserved = Some(Unobserved {
+                    free,
+                    vel,
+                    since_ns,
+                });
             } else {
-                r.pose
-            };
+                in_submap = r.pose;
+                self.unobserved = None;
+            }
             pose = sm.pose * in_submap;
             out.score = r.score;
             out.degeneracy = deg;
@@ -193,19 +229,22 @@ impl LocalSlam {
         out
     }
 
-    /// Prior pose, LiDAR-frame velocity, and the yaw rate over the scan's
-    /// `span_ns`, from the IMU's vertical rotation and the mean velocity over
-    /// the recent poses. The velocity is kept in the LiDAR frame (the chord
-    /// over the window is expressed at its middle heading) so it turns with
-    /// the walker through a corner.
-    fn predict(&self, t: u64, va: f64, span_ns: u64) -> (Pose2, [f64; 2], f64) {
+    /// Prior pose, LiDAR-frame velocity, the yaw rate over the scan's
+    /// `span_ns`, and the local-frame velocity of the prediction, from the
+    /// IMU's vertical rotation and the mean velocity over the recent poses.
+    /// The velocity is kept in the LiDAR frame (the chord over the window is
+    /// expressed at its middle heading) so it turns with the walker through a
+    /// corner. Along directions the last match left unconstrained the chord
+    /// only replays the prior, so the velocity there is the one last observed,
+    /// fading over [`COAST_TAU_S`].
+    fn predict(&self, t: u64, va: f64, span_ns: u64) -> (Pose2, [f64; 2], f64, Vector2<f64>) {
         let imu_rate = if span_ns > 0 {
             (self.att.vertical_angle_at(t + span_ns) - va) / (span_ns as f64 * 1e-9)
         } else {
             self.att.vertical_rate()
         };
         let Some((t1, p1, va1)) = self.last else {
-            return (Pose2::IDENTITY, [0.0, 0.0], imu_rate);
+            return (Pose2::IDENTITY, [0.0, 0.0], imu_rate, Vector2::zeros());
         };
         let dt = t.saturating_sub(t1) as f64 * 1e-9;
         let (vel, omega) = match self.history.front() {
@@ -223,15 +262,18 @@ impl LocalSlam {
         } else {
             (omega * dt, omega)
         };
-        let (s, c) = (p1.th + 0.5 * dyaw).sin_cos();
-        let step = [
-            (c * vel[0] - s * vel[1]) * dt,
-            (s * vel[0] + c * vel[1]) * dt,
-        ];
+        let heading = Rotation2::new(p1.th + 0.5 * dyaw);
+        let mut v = heading * Vector2::new(vel[0], vel[1]);
+        if let Some(u) = &self.unobserved {
+            let fade = (-(t.saturating_sub(u.since_ns) as f64 * 1e-9) / COAST_TAU_S).exp();
+            v += u.free * (u.vel * fade - v);
+        }
+        let vel = heading.inverse() * v;
         (
-            Pose2::new(p1.x + step[0], p1.y + step[1], p1.th + dyaw),
-            vel,
+            Pose2::new(p1.x + v[0] * dt, p1.y + v[1] * dt, p1.th + dyaw),
+            [vel[0], vel[1]],
             rate,
+            v,
         )
     }
 

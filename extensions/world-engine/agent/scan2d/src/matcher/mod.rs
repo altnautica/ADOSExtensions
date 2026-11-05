@@ -231,12 +231,22 @@ const NORMAL_RADIUS_M: f64 = 0.5;
 /// Fits whose spread across the line exceeds this fraction of the spread
 /// along it are not lines and carry no constraint.
 const LINE_RATIO: f64 = 0.25;
+/// Beam-order runs whose points all lie within this of their centroid are
+/// compact objects (posts, rack uprights, pillars, legs, trunks) when
+/// nothing nearer the sensor flanks them.
+const OBJECT_RADIUS_M: f64 = 0.3;
 
-/// Point-to-line information `Σ JJᵀ` of `scan` at `pose` over `(x, y, θ)`:
-/// each point whose beam-order neighbours fit a line constrains motion along
-/// that line's normal. This is the geometry of the scan itself, free of the
-/// grid's sampling: a far wall that a few beams hit sparsely still only
-/// constrains across the wall.
+/// Point-to-feature information `Σ JJᵀ` of `scan` at `pose` over
+/// `(x, y, θ)`, from the geometry of the scan itself, free of the grid's
+/// sampling:
+///
+/// - a point on a compact object ([`compact_objects`]) constrains motion in
+///   both directions, as a point-to-point match does: an isolated post is a
+///   landmark along the aisle it stands in;
+/// - any other point whose beam-order neighbours fit a line constrains
+///   motion along that line's normal only, so a far wall that a few beams
+///   hit sparsely still only constrains across the wall;
+/// - the rest (clutter, scattered returns) carry none.
 pub fn constraint_information(scan: &Scan2d, pose: Pose2) -> Matrix3<f64> {
     let (s, c) = pose.th.sin_cos();
     let pts: Vec<Vector2<f64>> = scan
@@ -249,8 +259,15 @@ pub fn constraint_information(scan: &Scan2d, pose: Pose2) -> Matrix3<f64> {
             )
         })
         .collect();
+    let on_object = compact_objects(&pts);
     let mut h = Matrix3::zeros();
     for (i, q) in pts.iter().enumerate() {
+        if on_object[i] {
+            for j in [Vector3::new(1.0, 0.0, -q[1]), Vector3::new(0.0, 1.0, q[0])] {
+                h += j * j.transpose();
+            }
+            continue;
+        }
         let lo = i.saturating_sub(NORMAL_NEIGHBOURS);
         let hi = (i + NORMAL_NEIGHBOURS + 1).min(pts.len());
         let near: Vec<&Vector2<f64>> = pts[lo..hi]
@@ -279,6 +296,58 @@ pub fn constraint_information(scan: &Scan2d, pose: Pose2) -> Matrix3<f64> {
         h += j * j.transpose();
     }
     h
+}
+
+/// Which points of a scan (beam order, sensor at the origin) lie on compact
+/// objects: runs of consecutive points no farther than `NORMAL_RADIUS_M`
+/// apart, all within `OBJECT_RADIUS_M` of their centroid, whose flanking
+/// returns on both sides are not nearer the sensor and laterally adjacent.
+/// Such a run is seen in silhouette against open space or a farther
+/// background, so its position along every direction is observed. The flank
+/// test is what keeps a wall seen at a grazing angle out: its returns lie far
+/// apart, but each is flanked by a nearer return of the same wall one beam
+/// over.
+fn compact_objects(pts: &[Vector2<f64>]) -> Vec<bool> {
+    let n = pts.len();
+    let mut out = vec![false; n];
+    if n < 2 {
+        return out;
+    }
+    let breaks_after = |i: usize| (pts[(i + 1) % n] - pts[i]).norm() > NORMAL_RADIUS_M;
+    // A scan with no break is one closed surface.
+    let Some(last) = (0..n).find(|&i| breaks_after(i)) else {
+        return out;
+    };
+    // Nearer than `edge` and beside it: `edge` is not a silhouette there.
+    let flanked = |edge: &Vector2<f64>, other: &Vector2<f64>| {
+        let gap = (edge[0] * other[1] - edge[1] * other[0])
+            .atan2(edge.dot(other))
+            .abs();
+        other.norm() < edge.norm() && other.norm() * gap <= NORMAL_RADIUS_M
+    };
+    let mut a = (last + 1) % n;
+    loop {
+        let mut b = a;
+        while !breaks_after(b) {
+            b = (b + 1) % n;
+        }
+        let len = (b + n - a) % n + 1;
+        if len < n {
+            let run = || (0..len).map(|k| (a + k) % n);
+            let centroid = run().fold(Vector2::zeros(), |acc, k| acc + pts[k]) / len as f64;
+            let compact = run().all(|k| (pts[k] - centroid).norm() <= OBJECT_RADIUS_M);
+            if compact
+                && !flanked(&pts[a], &pts[(a + n - 1) % n])
+                && !flanked(&pts[b], &pts[(b + 1) % n])
+            {
+                run().for_each(|k| out[k] = true);
+            }
+        }
+        if b == last {
+            return out;
+        }
+        a = (b + 1) % n;
+    }
 }
 
 /// Information on translation once rotation is solved for: the Schur
@@ -312,27 +381,35 @@ pub fn degeneracy(h: &Matrix3<f64>) -> f64 {
     e.min().max(0.0) / max
 }
 
-/// `matched`, with its translation offset from `prior` kept only along the
-/// directions the match constrains (translation-information eigenvalue at
-/// least `ratio` of the largest): along a featureless corridor the pose keeps
-/// its motion prior on the corridor axis instead of sliding (solution
-/// remapping, Zhang, Kaess and Singh 2016). The rotation is kept as matched.
-pub fn keep_constrained(prior: Pose2, matched: Pose2, h: &Matrix3<f64>, ratio: f64) -> Pose2 {
+/// Projector onto the translation directions `h` leaves unconstrained
+/// (translation-information eigenvalue below `ratio` of the largest); the
+/// identity when it carries no translation information.
+pub fn unconstrained_directions(h: &Matrix3<f64>, ratio: f64) -> Matrix2<f64> {
     let Some(s) = translation_information(h) else {
-        return prior;
+        return Matrix2::identity();
     };
     let eig = SymmetricEigen::new(s);
     let max = eig.eigenvalues.max();
     if max <= 0.0 || !max.is_finite() {
-        return Pose2::new(prior.x, prior.y, matched.th);
+        return Matrix2::identity();
     }
-    let d = Vector2::new(matched.x - prior.x, matched.y - prior.y);
-    let mut kept = Vector2::zeros();
+    let mut p = Matrix2::zeros();
     for i in 0..2 {
-        if eig.eigenvalues[i] >= ratio * max {
+        if eig.eigenvalues[i] < ratio * max {
             let v = eig.eigenvectors.column(i);
-            kept += v * v.dot(&d);
+            p += v * v.transpose();
         }
     }
+    p
+}
+
+/// `matched`, with its translation offset from `prior` kept only along the
+/// directions the match constrains ([`unconstrained_directions`] removed):
+/// along a featureless corridor the pose keeps its motion prior on the
+/// corridor axis instead of sliding (solution remapping, Zhang, Kaess and
+/// Singh 2016). The rotation is kept as matched.
+pub fn keep_constrained(prior: Pose2, matched: Pose2, h: &Matrix3<f64>, ratio: f64) -> Pose2 {
+    let d = Vector2::new(matched.x - prior.x, matched.y - prior.y);
+    let kept = d - unconstrained_directions(h, ratio) * d;
     Pose2::new(prior.x + kept[0], prior.y + kept[1], matched.th)
 }

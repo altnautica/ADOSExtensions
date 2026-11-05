@@ -141,6 +141,20 @@ All notable changes to the World Engine extension.
   north-aligned and never published, so external navigation sent no
   `ODOMETRY` and a GNSS-denied drone could not arm. The capture service now
   also reads `ATTITUDE` (Euler angles) for the same attitude. 2.1.1.
+- **The planar lidar SLAM no longer slides down an aisle of rack uprights.**
+  The matcher rated a scan's constraints from points whose neighbours fit a
+  line, so isolated posts and uprights (one or two returns each) counted for
+  nothing. A still drone that saw only uprights along a racked aisle was
+  rated degenerate along it, kept its constant-velocity prior there, and the
+  prior's velocity never decayed: the pose drifted 2-3 m in 20 s on the
+  ground and tens of metres in flight. Points on compact objects seen in
+  silhouette (free space or a farther background on both sides) now
+  constrain both directions, as point-to-point matches; a wall seen at a
+  grazing angle still constrains only across itself. Along a direction a
+  match leaves unconstrained, the motion prior now coasts on the velocity
+  last observed there and fades to rest (1 s time constant) instead of
+  carrying an unobserved velocity forever. A recorded still sequence among
+  uprights now holds within one grid cell. 2.1.2.
 
 ## [2.0.0]
 
