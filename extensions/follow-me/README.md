@@ -133,7 +133,7 @@ Per-drone configuration (see `config-schema.json`):
 | `follow_distance_m`        | `8`           | `3`–`30`    | Standoff distance behind the subject.           |
 | `follow_height_m`          | `4`           | `0`–`20`    | Follow height above the ground.                 |
 | `gimbal_point`             | `true`        | —           | Point a gimbal at the subject if present.       |
-| `designate_camera`         | `auto`        | —           | Camera the follow loop consumes.                |
+| `designate_camera`         | `auto`        | —           | Camera the follow loop consumes; `auto` reads the designated subject's camera (any camera until one is designated). |
 | `camera_hfov_deg`          | `70`          | `30`–`160`  | Camera horizontal field of view.                |
 | `mount_pitch_deg`          | `30`          | `0`–`90`    | Camera downward tilt below the horizon.         |
 | `reacquire_mode`           | `smart`       | `strict`, `smart` | What a lost lock does.                    |
@@ -147,7 +147,10 @@ Per-drone configuration (see `config-schema.json`):
 - A flight controller in a guided position-hold mode (ArduPilot Guided, or
   PX4 Offboard/position). The plugin sends guided setpoints; it does not change
   the flight mode itself.
-- A camera bound to the vision pipeline producing the detection stream.
+- A camera bound to the vision pipeline producing the detection stream. While
+  the behaviour is active the plugin holds a detection lease on that camera
+  (renewed every 2 s, 6 s hold, released when it goes inactive), so the engine
+  runs detection there only while follow-me needs it.
 - Recommended: a downward rangefinder on the flight controller for
   terrain-following height.
 - Optional: the world-engine extension's planar scan, for the lidar range cue.

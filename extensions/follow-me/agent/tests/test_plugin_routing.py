@@ -158,6 +158,84 @@ def test_batch_from_a_different_camera_is_filtered_out() -> None:
     assert plugin._tracker.track_id == 7
 
 
+def test_auto_reads_only_the_subject_camera_once_designated() -> None:
+    # On auto any camera may carry the operator's designation, but once a
+    # subject is locked on one camera another camera's batches (a belly
+    # camera's whole-frame box, its own tracked box) never reach the lock
+    # gate, the latest batch a re-acquire designates from, or the sighting.
+    ctx = _Ctx(config={"designate_camera": "auto"})
+    plugin = _make_plugin(ctx)
+    assert plugin._active_camera is None
+
+    def batch(camera: str, frame_id: int, det: Detection) -> DetectionBatch:
+        return DetectionBatch(
+            model_id="coco-person",
+            camera_id=camera,
+            frame_id=frame_id,
+            ts_ms=frame_id,
+            detections=[det],
+        )
+
+    main = batch(
+        "main",
+        1,
+        Detection(
+            bbox=BoundingBox(300, 200, 40, 90),
+            class_label="person",
+            confidence=0.8,
+            track_id=7,
+            lock_state=LOCK_LOCKED,
+        ),
+    )
+    plugin._on_batch(main)
+    assert plugin._tracker.track_id == 7
+    assert plugin._follow_camera() == "main"
+
+    whole_frame = Detection(
+        bbox=BoundingBox(0, 0, 640, 480),
+        class_label="person",
+        confidence=0.5,
+        track_id=None,
+        lock_state=None,
+    )
+    belly_tracked = Detection(
+        bbox=BoundingBox(10, 10, 600, 460),
+        class_label="person",
+        confidence=0.6,
+        track_id=3,
+        lock_state=LOCK_LOCKED,
+    )
+    plugin._on_batch(batch("belly", 2, whole_frame))
+    plugin._on_batch(batch("belly", 3, belly_tracked))
+    assert plugin._latest_batch is main
+    assert plugin._sighting is not None and plugin._sighting.camera_id == "main"
+    assert plugin._tracker.track_id == 7
+
+
+def test_auto_with_no_subject_accepts_any_camera() -> None:
+    ctx = _Ctx(config={"designate_camera": "auto"})
+    plugin = _make_plugin(ctx)
+    belly = DetectionBatch(
+        model_id="coco-person",
+        camera_id="belly",
+        frame_id=1,
+        ts_ms=0,
+        detections=[
+            Detection(
+                bbox=BoundingBox(100, 100, 20, 20),
+                class_label="person",
+                confidence=0.9,
+                track_id=4,
+                lock_state=LOCK_LOCKED,
+            )
+        ],
+    )
+    plugin._on_batch(belly)
+    assert plugin._tracker.track_id == 4
+    assert plugin._follow_camera() == "belly"
+
+
+
 def test_follow_state_topic_constant_matches_manifest() -> None:
     # The agent publishes its read-back on FOLLOW_STATE_TOPIC; it must be the
     # literal the manifest skill state.topic declares. Designation is engine-

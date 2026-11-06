@@ -21,6 +21,10 @@ appearance appears where the subject should be, designates it through the
 engine and announces it on ``follow.reacquired``; the engine itself never
 re-locks silently.
 
+The vision engine runs detection on a camera only while a consumer holds a
+lease on it; while the behaviour is active this plugin holds one on its follow
+camera (see ``follow_me.demand``).
+
 The behavior is gated by a per-drone ``active`` config flag the GCS skill
 toggles; the loop reads it live each cycle so arming/disarming the skill
 takes effect without a restart. The plugin publishes a ``follow.state``
@@ -41,6 +45,7 @@ from ados.sdk.vision import DetectionBatch
 
 from follow_me import fc_state
 from follow_me.coast import CoastMixin
+from follow_me.demand import DetectionLease
 from follow_me.fc_state import FcState, FcStateMixin, GimbalState, Pose, Rangefinder
 from follow_me.loop import FollowLoopMixin, Sighting
 from follow_me.ranging import Scan
@@ -159,6 +164,8 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         # config read yet) accepts any camera; once set, _on_batch filters to
         # it, so a runtime designate_camera change takes effect immediately.
         self._active_camera: str | None = None
+        # The detection lease on the follow camera, held while active.
+        self._lease = DetectionLease()
 
     # -- lifecycle ----------------------------------------------------
 
@@ -203,11 +210,35 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         )
 
     async def _housekeeping(self, now: float) -> None:
+        await self._lease.update(self._ctx, self._lease_camera(), now)
         if (
             not self._scan_subscribed
             and (now - self._scan_subscribe_tried_s) >= _SCAN_SUBSCRIBE_RETRY_S
         ):
             await self._subscribe_scan(now)
+
+    def _lease_camera(self) -> str | None:
+        """The camera to hold a detection lease on: none while inactive,
+        else the follow camera. On auto with no subject the engine's own
+        designate lease covers the camera the operator designates on."""
+        if self._cfg is None or not self._cfg.active:
+            return None
+        return self._follow_camera()
+
+    def _follow_camera(self) -> str | None:
+        """The one camera follow-me reads: the pinned designate camera, or on
+        auto the camera of the designated subject while it is locked or being
+        re-acquired. None (any camera) only on auto with no subject, so the
+        operator can designate on any camera; once a subject exists another
+        camera's batches (a belly camera's whole-frame box) never feed the
+        lock gate or a re-acquire."""
+        if self._active_camera is not None:
+            return self._active_camera
+        if self._sighting is not None and (
+            self._tracker.has_lock or self._coast is not None
+        ):
+            return self._sighting.camera_id
+        return None
 
     async def _subscribe_scan(self, now: float) -> None:
         self._scan_subscribe_tried_s = now
@@ -280,6 +311,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._filter.reset()
         self._filter_track_id = None
         if self._ctx is not None:
+            await self._lease.release(self._ctx)
             await self._publish_state(
                 self._cfg, phase=PHASE_IDLE, hold_reason=HOLD_INACTIVE, force=True
             )
@@ -314,13 +346,11 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
     # -- detections --------------------------------------------------
 
     def _on_batch(self, batch: DetectionBatch) -> None:
-        # Subscribed to every camera, so filter to the configured designate
-        # camera here; a None active camera (before the first config read)
-        # accepts any camera.
-        if (
-            self._active_camera is not None
-            and batch.camera_id != self._active_camera
-        ):
+        # Subscribed to every camera, so filter to the follow camera here:
+        # the pinned designate camera, or on auto the designated subject's
+        # camera once there is one (any camera before).
+        camera = self._follow_camera()
+        if camera is not None and str(batch.camera_id) != camera:
             return
         now = fc_state.monotonic()
         fw = getattr(batch, "frame_width", None)

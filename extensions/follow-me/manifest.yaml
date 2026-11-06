@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.3.0"
+version: "0.3.1"
 description: "Lock onto an operator-designated subject and fly a standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a set
@@ -54,7 +54,8 @@ risk: high
 
 compatibility:
   # The agent's drone stream table (LOCAL_POSITION_NED and DISTANCE_SENSOR)
-  # and the detection-embedding subscription arrive in 0.108.0.
+  # and the detection-embedding subscription arrive in 0.108.0. The
+  # follow-camera detection lease is used when the agent offers it.
   ados_version: ">=0.108.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
@@ -66,7 +67,8 @@ agent:
   per_drone_config: true
   permissions:
     - id: vision.detection.subscribe
-    # Smart re-acquire designates the matching track with the engine.
+    # Smart re-acquire designates the matching track with the engine, and the
+    # follow-camera detection lease is requested under the same capability.
     - id: vision.track.designate
     - id: mavlink.read
     - id: mavlink.write

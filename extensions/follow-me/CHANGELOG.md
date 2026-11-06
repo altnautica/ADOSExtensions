@@ -4,6 +4,29 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.3.1] - 2026-11-06
+
+### Changed
+
+- While the behaviour is active the plugin holds a detection lease on its
+  follow camera, so the vision engine runs detection there only while
+  follow-me needs it. The lease is renewed every 2 s with a 6 s hold, moves
+  when the follow camera changes, and is released (hold 0) when the
+  behaviour goes inactive or the plugin stops. The follow camera is the
+  pinned `designate_camera`; on `auto` it is the camera of the designated
+  subject while it is locked or being re-acquired (a designation itself
+  keeps detection running on the camera it was made on).
+- On an agent without the detection lease call the plugin logs it once and
+  carries on; detection then runs wherever the agent runs it.
+
+### Fixed
+
+- On `auto` the plugin read every camera's batches even with a subject
+  designated, so a second camera (a belly camera's whole-frame box) could
+  feed the lock gate and the batch a re-acquire designates from. Once a
+  subject is locked or being re-acquired, only its camera is read; with no
+  subject any camera still carries a designation.
+
 ## [0.3.0] - 2026-11-03
 
 ### Changed
