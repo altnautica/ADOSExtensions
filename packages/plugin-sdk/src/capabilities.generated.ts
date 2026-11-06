@@ -14,6 +14,7 @@ export const CAPABILITY_IDS = [
   "event.subscribe",
   "filesystem.host",
   "flight.guided_setpoint",
+  "flight.motion",
   "flight.rate_setpoint",
   "hardware.camera.csi",
   "hardware.gpio",
