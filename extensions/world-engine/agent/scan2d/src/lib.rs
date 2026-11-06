@@ -21,7 +21,12 @@
 //!   poses' velocity in the prior while it is fresh, so along such a
 //!   direction the pose follows the measured motion. Isolated posts and
 //!   uprights count as constraints in both directions, walls only across
-//!   themselves.
+//!   themselves. A planar scan cuts the scene at its own height, so with the
+//!   height fed ([`LocalSlam::feed_height`]) a scan taken while the height
+//!   changes faster than [`Scan2dConfig::max_climb_rate_mps`] rides the
+//!   motion prior, unmatched and unmapped, and a submap only takes scans
+//!   from within [`Scan2dConfig::submap_height_band_m`] of the height it
+//!   started at.
 //!   [`LocalSlam::inserted_scans`] counts the scans in the map so far.
 //! - **Offline**, [`offline::run`]: the same local SLAM over a whole session,
 //!   then branch-and-bound loop search against finished submaps and a
@@ -67,6 +72,6 @@ pub mod submap;
 pub use attitude::{ImuSample, VelocitySample};
 pub use backend::{LoopClosure, Trajectory};
 pub use config::Scan2dConfig;
-pub use frontend::{LocalMap, LocalSlam, PoseOut};
+pub use frontend::{HeightSample, LocalMap, LocalSlam, PoseOut};
 pub use pose::Pose2;
 pub use scan::{Scan2d, ScanInput};

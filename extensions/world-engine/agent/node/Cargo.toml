@@ -4,7 +4,7 @@
 # job-API mDNS advert (published through the host).
 [package]
 name = "world-engine-node"
-version = "2.1.12"
+version = "2.1.13"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

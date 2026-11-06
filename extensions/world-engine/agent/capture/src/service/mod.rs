@@ -183,13 +183,9 @@ pub(crate) struct Engine {
     /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
     /// "fc"`, before `RAW_IMU` arrives).
     fc_imu_prev: Option<(u64, [f64; 9])>,
-    /// The FC streams `RAW_IMU`, the `fc` IMU from then on.
-    fc_raw_imu: bool,
-    /// The FC's optical-flow ground velocity has reached the pose provider.
-    fc_flow: bool,
-    /// The newest FC IMU sample time handed to the pose provider.
-    newest_fc_imu_ns: Option<u64>,
-    /// The FC IMU feed rate and scan coverage since the last `nav_imu_feed`.
+    /// What the FC feed has handed the pose provider ([`nav_lane`]'s sink).
+    fc_nav: Arc<crate::nav::fc_imu::FeedState>,
+    /// The scan coverage since the last `nav_imu_feed`.
     nav_feed: nav_lane::NavFeedStats,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
     reconstruct_steps: SharedSteps,
@@ -289,12 +285,11 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         nav_deps,
         scan_wait: Default::default(),
         fc_imu_prev: None,
-        fc_raw_imu: false,
-        fc_flow: false,
-        newest_fc_imu_ns: None,
+        fc_nav: Default::default(),
         nav_feed: Default::default(),
         reconstruct_steps,
     };
+    engine.attach_fc_nav();
     // Frames are pulled on their own task so a source read is never
     // cancelled mid-frame by the select below.
     let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(8);

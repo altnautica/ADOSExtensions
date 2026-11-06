@@ -380,3 +380,72 @@ fn a_rig_without_the_planar_lidar_is_refused() {
     .expect("refused");
     assert!(matches!(&err, PlanarPoseError::NoLidar(id) if id == "imu0"));
 }
+
+/// The FC as the matcher's IMU (`atlas.lidar.imu = "fc"`): its `RAW_IMU`
+/// frames go from the MAVLink delivery straight to the matcher through the
+/// FC feed's sink, so a scan the IMU has not covered yet is matched by the
+/// frame that covers it, with nothing else fed: no pose tick, no next scan.
+#[test]
+fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
+    use crate::mavlink_msg::{frame_v2, MSG_RAW_IMU};
+    use crate::nav::fc_imu::{self, FeedState};
+    use crate::pose::fc_ekf::FcEkfPose;
+
+    /// `RAW_IMU` at 100 Hz.
+    const STEP_NS: u64 = 10_000_000;
+    /// The FC's clock runs this far ahead of the host's.
+    const FC_AHEAD_NS: u64 = 4_000_000_000;
+    let walls = rect(0.0, 0.0, 6.0, 4.0);
+    let body = |_t: u64| [3.0, 2.0, 0.0];
+    let p = Arc::new(
+        PlanarLidarPose::spawn(PlanarLidarConfig {
+            rig: rig(),
+            lidar_id: "lidar0".into(),
+            imu_id: fc_imu::FC_IMU_ID.into(),
+        })
+        .expect("spawn"),
+    );
+    let fc = FcEkfPose::new();
+    let state = Arc::new(FeedState::default());
+    fc.set_nav_sink(Some(fc_imu::sink(p.clone(), true, state.clone())));
+    // A level, still FC; each frame is read the instant it is sampled.
+    let raw_imu = |t: u64| {
+        let mut b = ((t + FC_AHEAD_NS) / 1_000).to_le_bytes().to_vec();
+        for v in [0i16, 0, -1000, 0, 0, 0, 0, 0, 0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        fc.on_frame(&frame_v2(MSG_RAW_IMU, &b), t);
+    };
+    let mut t_imu = T0 - 20 * STEP_NS;
+    while t_imu <= T0 {
+        raw_imu(t_imu);
+        t_imu += STEP_NS;
+    }
+    for i in 0..5u64 {
+        let s = scan(T0 + i * PERIOD_NS, &walls, &body);
+        let end = s.t_ns + u64::from(*s.t_offset_ns.iter().max().expect("points"));
+        p.feed_lidar(&s);
+        while t_imu + IMU_COVER_SLACK_NS < end {
+            raw_imu(t_imu);
+            t_imu += STEP_NS;
+            std::thread::sleep(Duration::from_millis(2));
+            assert_eq!(
+                p.stats().scans_processed,
+                i,
+                "scan {i} matched before the IMU covered it"
+            );
+        }
+        raw_imu(t_imu);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while p.stats().scans_processed < i + 1 {
+            assert!(Instant::now() < deadline, "the covering frame left scan {i} waiting");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        t_imu += STEP_NS;
+    }
+    assert!(state.raw_imu());
+    assert_eq!(state.newest_imu_ns(), Some(t_imu - STEP_NS));
+    // 21 up to the first scan, then one every 10 ms to T0 + 490 ms.
+    assert_eq!(state.take_imu_samples(), 21 + 49);
+    assert_eq!(p.stats().imu_dropped, 0);
+}

@@ -6,9 +6,11 @@
 //! position message, paired with the latest attitude no more than
 //! [`MAX_PAIR_NS`] older on the FC clock.
 //!
-//! The feed also queues the FC's `RAW_IMU` ([`FcEkfPose::drain_imu`]) and the
-//! ground velocity of its `OPTICAL_FLOW` over its downward `DISTANCE_SENSOR`
-//! range ([`FcEkfPose::drain_velocity`]) for the planar matcher.
+//! The feed also hands the planar matcher, through the sink a run sets
+//! ([`FcEkfPose::set_nav_sink`]), each `RAW_IMU` sample, each ground velocity
+//! of its `OPTICAL_FLOW` over its downward `DISTANCE_SENSOR` range and each
+//! EKF height the moment the frame arrives ([`NavSample`]), so a scan waiting
+//! for the IMU to cover it is matched as soon as the covering sample lands.
 //!
 //! GNSS: `GPS_RAW_INT` carries no boot time, so its fix is placed at its
 //! position in the stream. An estimate counts as GNSS-referenced
@@ -36,7 +38,9 @@ use world_engine_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
 
 use super::{se3, PoseEstimate, PoseProvider, PoseTrack};
 use crate::geodesy::{EnuFrame, R_ENU_NED, R_FRD_FLU};
-use crate::mavlink_msg::{decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, RawImu};
+use crate::mavlink_msg::{
+    decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, LocalPositionNed, RawImu,
+};
 use crate::nav::align::GNSS_SETTLE_MS;
 use crate::nav::fc_flow;
 
@@ -47,10 +51,33 @@ pub const MAX_PAIR_NS: u64 = 50_000_000;
 pub const OFFSET_WINDOW: usize = 64;
 /// GNSS state changes kept for [`FcEkfPose::gnss_steady_at`].
 const GNSS_CHANGES: usize = 16;
-/// `RAW_IMU` samples held for [`FcEkfPose::drain_imu`] (5 s at 100 Hz).
-const IMU_QUEUE: usize = 512;
-/// Flow velocities held for [`FcEkfPose::drain_velocity`] (5 s at 50 Hz).
-const FLOW_QUEUE: usize = 256;
+
+/// A sample the planar matcher takes from the FC, handed on as its frame
+/// arrives ([`FcEkfPose::set_nav_sink`]). Times are host monotonic ns.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum NavSample {
+    /// One `RAW_IMU` sample, with the FC's newest attitude
+    /// `(host ns, R_ned_frd)` for its gravity ([`crate::nav::fc_imu`]).
+    Imu {
+        t_ns: u64,
+        imu: RawImu,
+        attitude: Option<(u64, [f64; 9])>,
+    },
+    /// The optical-flow ground velocity, body FLU m/s
+    /// ([`fc_flow::body_velocity`]).
+    Velocity { t_ns: u64, v: [f64; 2] },
+    /// The EKF's height and climb rate (`LOCAL_POSITION_NED`), up, m and
+    /// m/s.
+    Height {
+        t_ns: u64,
+        up_m: f64,
+        up_rate_mps: f64,
+    },
+}
+
+/// Where [`NavSample`]s go: called on the MAVLink delivery thread, in
+/// arrival order, with no lock held. It must not block.
+pub type NavSink = Arc<dyn Fn(NavSample) + Send + Sync>;
 
 /// `GPS_FIX_TYPE_3D_FIX`.
 const FIX_3D: u8 = 3;
@@ -73,14 +100,26 @@ struct FeedInner {
     /// `(host ns, north, east)` of each estimate in the EKF's own local frame
     /// (`LOCAL_POSITION_NED`), the last [`super::TRACK_HISTORY_NS`].
     ned: VecDeque<(u64, [f64; 2])>,
-    /// `RAW_IMU` samples not yet drained, oldest first.
-    imu: VecDeque<RawImu>,
     /// Newest downward ground range ([`fc_flow::ground_range`]): FC boot ms,
     /// metres.
     range: Option<(u32, f64)>,
-    /// Flow body velocities not yet drained, oldest first: FC boot ms, FLU
-    /// m/s ([`fc_flow::body_velocity`]).
-    flow: VecDeque<(u32, [f64; 2])>,
+    /// The run's matcher input ([`FcEkfPose::set_nav_sink`]).
+    sink: Option<NavSink>,
+}
+
+impl FeedInner {
+    /// The FC time `fc_ns` on the host clock, by the least-delay offset.
+    fn host_ns(&self, fc_ns: i128) -> Option<u64> {
+        let offset = self.offsets.iter().min()?;
+        Some((fc_ns + offset).max(0) as u64)
+    }
+
+    /// The newest attitude on the host clock: `(host ns, R_ned_frd)`.
+    fn host_attitude(&self) -> Option<(u64, [f64; 9])> {
+        let att = self.attitude?;
+        let t_ns = self.host_ns(att.time_boot_ms as i128 * 1_000_000)?;
+        Some((t_ns, se3::matrix_from_quat(att.q)))
+    }
 }
 
 /// The FC EKF feed and provider. Cheap to clone; every clone shares state.
@@ -136,39 +175,14 @@ impl FcEkfPose {
     /// external navigation it waits for is fused). Its yaw is the FC's own
     /// heading source (the compass).
     pub fn attitude(&self) -> Option<(u64, [f64; 9])> {
-        let g = self.inner.lock();
-        let att = g.attitude?;
-        let offset = *g.offsets.iter().min()?;
-        let t_ns = (att.time_boot_ms as i128 * 1_000_000 + offset).max(0) as u64;
-        Some((t_ns, se3::matrix_from_quat(att.q)))
+        self.inner.lock().host_attitude()
     }
 
-    /// The `RAW_IMU` samples received since the last call, oldest first, on
-    /// the host clock (`(host ns, sample)`). Empty until the FC streams it.
-    pub fn drain_imu(&self) -> Vec<(u64, RawImu)> {
-        let mut g = self.inner.lock();
-        let Some(offset) = g.offsets.iter().min().copied() else {
-            return Vec::new();
-        };
-        g.imu
-            .drain(..)
-            .map(|s| (((s.time_usec as i128) * 1_000 + offset).max(0) as u64, s))
-            .collect()
-    }
-
-    /// The ground velocities from `OPTICAL_FLOW` and the downward
-    /// `DISTANCE_SENSOR` ([`crate::nav::fc_flow`]) since the last call, oldest
-    /// first: `(host ns, [x, y] m/s body FLU)`. Empty until the FC streams
-    /// both.
-    pub fn drain_velocity(&self) -> Vec<(u64, [f64; 2])> {
-        let mut g = self.inner.lock();
-        let Some(offset) = g.offsets.iter().min().copied() else {
-            return Vec::new();
-        };
-        g.flow
-            .drain(..)
-            .map(|(ms, v)| ((ms as i128 * 1_000_000 + offset).max(0) as u64, v))
-            .collect()
+    /// Hand every `RAW_IMU` sample, flow velocity and EKF height to `sink`
+    /// as its frame arrives ([`NavSample`]); `None` stops it. A run sets it
+    /// while it runs: nothing is queued for a run that is not there.
+    pub fn set_nav_sink(&self, sink: Option<NavSink>) {
+        self.inner.lock().sink = sink;
     }
 
     /// Whether the EKF position at host `t_ns` was GNSS-referenced: at the
@@ -207,11 +221,13 @@ impl FcEkfPose {
             return;
         };
         let mut g = self.inner.lock();
-        match msg {
+        let mut estimate = None;
+        let nav = match msg {
             FcMessage::Attitude(a) => {
                 note_offset(&mut g.offsets, a.time_boot_ms, arrival_ns);
                 g.fc_ms = Some(a.time_boot_ms);
                 g.attitude = Some(a);
+                None
             }
             FcMessage::Origin(o) => {
                 if g.origin != Some(o) {
@@ -219,90 +235,104 @@ impl FcEkfPose {
                     g.ned.clear();
                     self.track.reset();
                 }
+                None
             }
             FcMessage::Imu(s) => {
                 g.offsets.push_back(arrival_ns as i128 - s.time_usec as i128 * 1_000);
                 while g.offsets.len() > OFFSET_WINDOW {
                     g.offsets.pop_front();
                 }
-                g.imu.push_back(s);
-                while g.imu.len() > IMU_QUEUE {
-                    g.imu.pop_front();
-                }
+                g.host_ns(s.time_usec as i128 * 1_000).map(|t_ns| NavSample::Imu {
+                    t_ns,
+                    imu: s,
+                    attitude: g.host_attitude(),
+                })
             }
             FcMessage::Range(r) => {
                 if let Some(m) = fc_flow::ground_range(&r) {
                     g.range = Some((r.time_boot_ms, m));
                 }
+                None
             }
-            FcMessage::Flow(f) => {
-                let Some(ms) = g.fc_ms.and_then(|now| fc_flow::flow_time_ms(f.time_usec, now)) else {
-                    return;
-                };
-                let Some((_, range)) = g
-                    .range
-                    .filter(|(t, _)| t.abs_diff(ms) <= fc_flow::MAX_RANGE_SKEW_MS)
-                else {
-                    return;
-                };
-                if let Some(v) = fc_flow::body_velocity(&f, range) {
-                    g.flow.push_back((ms, v));
-                    while g.flow.len() > FLOW_QUEUE {
-                        g.flow.pop_front();
-                    }
-                }
-            }
+            FcMessage::Flow(f) => g
+                .fc_ms
+                .and_then(|now| fc_flow::flow_time_ms(f.time_usec, now))
+                .and_then(|ms| {
+                    let (_, range) = g
+                        .range
+                        .filter(|(t, _)| t.abs_diff(ms) <= fc_flow::MAX_RANGE_SKEW_MS)?;
+                    let v = fc_flow::body_velocity(&f, range)?;
+                    let t_ns = g.host_ns(ms as i128 * 1_000_000)?;
+                    Some(NavSample::Velocity { t_ns, v })
+                }),
             FcMessage::GpsFix(fix) => {
                 g.fix3d_since_ms = if fix >= FIX_3D {
                     g.fix3d_since_ms.or(g.fc_ms)
                 } else {
                     None
                 };
+                None
             }
             FcMessage::Position(p) => {
                 note_offset(&mut g.offsets, p.time_boot_ms, arrival_ns);
                 g.fc_ms = Some(p.time_boot_ms);
-                let Some(att) = g.attitude else {
-                    return;
-                };
-                let fc_ns = |ms: u32| ms as i128 * 1_000_000;
-                if (fc_ns(p.time_boot_ms) - fc_ns(att.time_boot_ms)).unsigned_abs()
-                    > MAX_PAIR_NS as u128
-                {
-                    return;
-                }
-                let offset = *g.offsets.iter().min().expect("noted above");
-                let t_ns = (fc_ns(p.time_boot_ms) + offset).max(0) as u64;
-                let steady = g
-                    .fix3d_since_ms
-                    .is_some_and(|s| p.time_boot_ms.saturating_sub(s) >= GNSS_SETTLE_MS);
-                if g.gnss.back().map(|(_, s)| *s) != Some(steady) {
-                    g.gnss.push_back((t_ns, steady));
-                    while g.gnss.len() > GNSS_CHANGES {
-                        g.gnss.pop_front();
-                    }
-                }
-                if g.ned.back().is_none_or(|(t, _)| *t < t_ns) {
-                    g.ned.push_back((t_ns, [p.ned[0], p.ned[1]]));
-                    let horizon = t_ns.saturating_sub(super::TRACK_HISTORY_NS);
-                    while g.ned.front().is_some_and(|(t, _)| *t < horizon) {
-                        g.ned.pop_front();
-                    }
-                }
-                let (r, t) = world_pose(&att.q, p.ned, g.origin.as_ref(), g.anchor.as_ref());
-                let cov = g.cov.unwrap_or_else(|| super::diagonal_cov(1.0, 0.05));
-                drop(g);
-                self.track.push(PoseEstimate {
-                    t_ns,
-                    r,
-                    t,
-                    cov,
-                    source: PoseSource::FcEkf,
-                    health: VioHealth::Good,
-                });
+                let height = g
+                    .host_ns(p.time_boot_ms as i128 * 1_000_000)
+                    .map(|t_ns| NavSample::Height {
+                        t_ns,
+                        up_m: -p.ned[2],
+                        up_rate_mps: -p.vel[2],
+                    });
+                estimate = pair_estimate(&mut g, &p);
+                height
             }
+        };
+        let sink = g.sink.clone();
+        drop(g);
+        if let Some(e) = estimate {
+            self.track.push(e);
+        }
+        if let (Some(sink), Some(s)) = (sink, nav) {
+            sink(s);
         }
     }
+}
+
+/// The estimate of EKF position `p` paired with the newest attitude, `None`
+/// before an attitude or with one more than [`MAX_PAIR_NS`] away on the FC
+/// clock. Notes the GNSS state and the EKF's own NED at it.
+fn pair_estimate(g: &mut FeedInner, p: &LocalPositionNed) -> Option<PoseEstimate> {
+    let att = g.attitude?;
+    let fc_ns = |ms: u32| ms as i128 * 1_000_000;
+    if (fc_ns(p.time_boot_ms) - fc_ns(att.time_boot_ms)).unsigned_abs() > MAX_PAIR_NS as u128 {
+        return None;
+    }
+    let t_ns = g.host_ns(fc_ns(p.time_boot_ms)).expect("offset noted before pairing");
+    let steady = g
+        .fix3d_since_ms
+        .is_some_and(|s| p.time_boot_ms.saturating_sub(s) >= GNSS_SETTLE_MS);
+    if g.gnss.back().map(|(_, s)| *s) != Some(steady) {
+        g.gnss.push_back((t_ns, steady));
+        while g.gnss.len() > GNSS_CHANGES {
+            g.gnss.pop_front();
+        }
+    }
+    if g.ned.back().is_none_or(|(t, _)| *t < t_ns) {
+        g.ned.push_back((t_ns, [p.ned[0], p.ned[1]]));
+        let horizon = t_ns.saturating_sub(super::TRACK_HISTORY_NS);
+        while g.ned.front().is_some_and(|(t, _)| *t < horizon) {
+            g.ned.pop_front();
+        }
+    }
+    let (r, t) = world_pose(&att.q, p.ned, g.origin.as_ref(), g.anchor.as_ref());
+    Some(PoseEstimate {
+        t_ns,
+        r,
+        t,
+        cov: g.cov.unwrap_or_else(|| super::diagonal_cov(1.0, 0.05)),
+        source: PoseSource::FcEkf,
+        health: VioHealth::Good,
+    })
 }
 
 fn note_offset(offsets: &mut VecDeque<i128>, time_boot_ms: u32, arrival_ns: u64) {
@@ -501,10 +531,19 @@ mod tests {
         assert!(p.gnss_steady_at(host(2 * GNSS_SETTLE_MS + 400)));
     }
 
-    /// `RAW_IMU` samples queue on the FC clock and drain once each, placed on
-    /// the host clock by the same least-delay offset as the attitude.
+    /// The samples a sink receives, in order.
+    fn collect(p: &FcEkfPose) -> Arc<Mutex<Vec<NavSample>>> {
+        let got = Arc::new(Mutex::new(Vec::new()));
+        let sink = got.clone();
+        p.set_nav_sink(Some(Arc::new(move |s| sink.lock().push(s))));
+        got
+    }
+
+    /// Each `RAW_IMU` sample reaches the sink as its frame arrives, placed
+    /// on the host clock by the same least-delay offset as the attitude and
+    /// carrying that attitude; with no sink nothing is kept for later.
     #[test]
-    fn raw_imu_samples_drain_on_the_host_clock() {
+    fn raw_imu_samples_reach_the_sink_on_arrival() {
         let p = FcEkfPose::new();
         let imu = |usec: u64, gz_mrad: i16| {
             let mut b = usec.to_le_bytes().to_vec();
@@ -513,24 +552,43 @@ mod tests {
             }
             frame_v2(27, &b)
         };
-        assert!(p.drain_imu().is_empty());
         // The FC clock runs 4 s behind the host's, with 2 ms least delay.
         p.on_frame(&att(1_000, [1.0, 0.0, 0.0, 0.0]), 5_002_000_000);
+        p.on_frame(&imu(1_005_000, 400), 5_008_000_000);
+        let fed = collect(&p);
         p.on_frame(&imu(1_010_000, 500), 5_015_000_000);
+        assert_eq!(fed.lock().len(), 1, "handed on at arrival, the earlier one never");
         p.on_frame(&imu(1_020_000, 600), 5_022_000_000);
-        let got = p.drain_imu();
-        assert_eq!(got.iter().map(|(t, _)| *t).collect::<Vec<_>>(), [5_012_000_000, 5_022_000_000]);
-        assert!((got[1].1.gyro[2] - 0.6).abs() < 1e-12);
-        assert!(p.drain_imu().is_empty(), "drained once");
+        let got = fed.lock().clone();
+        let times: Vec<u64> = got
+            .iter()
+            .map(|s| match s {
+                NavSample::Imu { t_ns, .. } => *t_ns,
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        assert_eq!(times, [5_012_000_000, 5_022_000_000]);
+        let NavSample::Imu {
+            imu: raw, attitude, ..
+        } = got[1]
+        else {
+            unreachable!()
+        };
+        assert!((raw.gyro[2] - 0.6).abs() < 1e-12);
+        assert_eq!(attitude.map(|(t, _)| t), Some(5_002_000_000));
+        p.set_nav_sink(None);
+        p.on_frame(&imu(1_030_000, 700), 5_032_000_000);
+        assert_eq!(fed.lock().len(), 2, "no sink, nothing handed on");
     }
 
     /// `OPTICAL_FLOW` (ArduPilot: boot ms in `time_usec`) is scaled by the
-    /// downward range read within 300 ms of it and drains as a body FLU
-    /// velocity on the host clock; a reading out of the rangefinder's band
-    /// or a stale one scales nothing.
+    /// downward range read within 300 ms of it and reaches the sink as a body
+    /// FLU velocity on the host clock; a reading out of the rangefinder's
+    /// band or a stale one scales nothing.
     #[test]
-    fn flow_over_the_downward_range_drains_as_a_body_velocity() {
+    fn flow_over_the_downward_range_reaches_the_sink_as_a_body_velocity() {
         let p = FcEkfPose::new();
+        let got = collect(&p);
         let flow = |ms: u64, comp: [f32; 2]| {
             let mut b = ms.to_le_bytes().to_vec();
             for v in [comp[0], comp[1], 0.0] {
@@ -547,22 +605,66 @@ mod tests {
             b.extend_from_slice(&[0, 0, fc_flow::DOWNWARD, 0]);
             frame_v2(crate::mavlink_msg::MSG_DISTANCE_SENSOR, &b)
         };
+        let velocities = || -> Vec<(u64, [f64; 2])> {
+            got.lock()
+                .iter()
+                .map(|s| match s {
+                    NavSample::Velocity { t_ns, v } => (*t_ns, *v),
+                    other => panic!("{other:?}"),
+                })
+                .collect()
+        };
         // The FC clock runs 4 s behind the host's, with 2 ms least delay.
         p.on_frame(&att(1_000, [1.0, 0.0, 0.0, 0.0]), 5_002_000_000);
         p.on_frame(&flow(1_005, [0.0, 1.0]), 5_010_000_000);
-        assert!(p.drain_velocity().is_empty(), "no range yet");
+        assert!(velocities().is_empty(), "no range yet");
         p.on_frame(&range(1_010, 200), 5_015_000_000);
         p.on_frame(&flow(1_020, [-0.5, 1.0]), 5_025_000_000);
         p.on_frame(&range(1_030, 1200), 5_035_000_000);
         p.on_frame(&flow(1_040, [0.0, 2.0]), 5_045_000_000);
-        let got = p.drain_velocity();
-        assert_eq!(got.len(), 2, "{got:?}");
-        assert_eq!(got[0].0, 5_022_000_000);
-        assert!((got[0].1[0] - 2.0).abs() < 1e-6 && (got[0].1[1] + 1.0).abs() < 1e-6);
-        assert!((got[1].1[0] - 4.0).abs() < 1e-6, "the out-of-band reading is skipped");
-        assert!(p.drain_velocity().is_empty(), "drained once");
+        let v = velocities();
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert_eq!(v[0].0, 5_022_000_000);
+        assert!((v[0].1[0] - 2.0).abs() < 1e-6 && (v[0].1[1] + 1.0).abs() < 1e-6);
+        assert!((v[1].1[0] - 4.0).abs() < 1e-6, "the out-of-band reading is skipped");
         p.on_frame(&att(1_400, [1.0, 0.0, 0.0, 0.0]), 5_402_000_000);
         p.on_frame(&flow(1_400, [0.0, 1.0]), 5_405_000_000);
-        assert!(p.drain_velocity().is_empty(), "the range is 390 ms old");
+        assert_eq!(velocities().len(), 2, "the range is 390 ms old");
+    }
+
+    /// Every `LOCAL_POSITION_NED` reaches the sink as the EKF's height and
+    /// climb rate, up, whether or not it pairs into an estimate.
+    #[test]
+    fn positions_reach_the_sink_as_heights() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        let pos_vel = |ms: u32, ned: [f32; 3], vel: [f32; 3]| {
+            let mut b = ms.to_le_bytes().to_vec();
+            for v in ned.iter().chain(vel.iter()) {
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            frame_v2(32, &b)
+        };
+        p.on_frame(&pos_vel(1_000, [0.0, 0.0, -2.5], [0.0, 0.0, -0.75]), 5_002_000_000);
+        assert!(p.latest().is_none(), "no attitude: no estimate");
+        p.on_frame(&att(1_010, [1.0, 0.0, 0.0, 0.0]), 5_012_000_000);
+        p.on_frame(&pos_vel(1_020, [1.0, 0.0, -2.0], [0.0, 0.0, 0.5]), 5_022_000_000);
+        assert!(p.latest().is_some());
+        let got = got.lock().clone();
+        assert_eq!(
+            got,
+            [
+                NavSample::Height {
+                    t_ns: 5_002_000_000,
+                    up_m: 2.5,
+                    up_rate_mps: 0.75
+                },
+                NavSample::Height {
+                    t_ns: 5_022_000_000,
+                    up_m: 2.0,
+                    up_rate_mps: -0.5
+                },
+            ]
+        );
     }
 }

@@ -84,6 +84,22 @@ pub struct Scan2dConfig {
     /// directions, and the prior's velocity there is the measured one while
     /// it arrives ([`crate::LocalSlam::feed_velocity`]), else fades to rest.
     pub degenerate_ratio: f64,
+
+    /// A submap only takes scans from within this height, metres, of the
+    /// height it was started at ([`crate::LocalSlam::feed_height`]). The
+    /// scan plane of a planar LiDAR cuts the scene at its own height, and a
+    /// room whose walls are not vertical (rock, a sloped or cluttered wall)
+    /// draws a different outline a metre higher: matched against the outline
+    /// of another height the pose slides by the difference. Leaving the band
+    /// finishes the active submaps and starts a new one at the pose.
+    pub submap_height_band_m: f64,
+    /// While the scan plane climbs or descends faster than this, m/s, scans
+    /// are not matched or inserted: the pose rides its motion prior (the
+    /// IMU's heading, the measured or recent velocity). Every revolution of
+    /// a take-off cuts the walls at another height, and sparse scans matched
+    /// into submaps a few scans deep add up their noise faster than the
+    /// prior drifts over the climb.
+    pub max_climb_rate_mps: f64,
 }
 
 impl Scan2dConfig {
@@ -131,6 +147,8 @@ impl Scan2dConfig {
             mahony_ki: 0.005,
             r_lidar_imu: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             degenerate_ratio: 0.05,
+            submap_height_band_m: 0.3,
+            max_climb_rate_mps: 0.15,
         }
     }
 }

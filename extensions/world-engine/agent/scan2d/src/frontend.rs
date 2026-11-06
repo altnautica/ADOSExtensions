@@ -33,6 +33,8 @@ const COAST_TAU_S: f64 = 1.0;
 const MAX_VELOCITY_AGE_NS: u64 = 250_000_000;
 /// How long measured velocities are kept.
 const VELOCITY_KEEP_NS: u64 = 1_000_000_000;
+/// A height older than this at a scan says nothing about the scan's climb.
+const MAX_HEIGHT_AGE_NS: u64 = 500_000_000;
 /// A match teaches the gyro its z bias ([`Attitude::learn_bias`]) only when
 /// its points pin the rotation to this, one sigma, each point good to the
 /// grid resolution: where the scene leaves the rotation loose the matched
@@ -53,6 +55,18 @@ struct Unobserved {
     /// Local-frame prior velocity when they were last observed, and when.
     vel: Vector2<f64>,
     since_ns: u64,
+}
+
+/// The height of the scan plane, up, in any fixed vertical datum (the
+/// flight controller's EKF height), and its rate: only changes count.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeightSample {
+    /// Nanoseconds, the same clock as the scans.
+    pub t_ns: u64,
+    /// Metres.
+    pub up_m: f64,
+    /// Metres per second, positive climbing.
+    pub up_rate_mps: f64,
 }
 
 /// One pose of the LiDAR frame in the local frame (the LiDAR frame at the
@@ -106,6 +120,8 @@ pub struct LocalSlam {
     measured: VecDeque<(u64, Vector2<f64>)>,
     last_insert: Option<(u64, Pose2)>,
     inserted: usize,
+    /// The newest height ([`Self::feed_height`]).
+    height: Option<HeightSample>,
 }
 
 impl LocalSlam {
@@ -134,6 +150,7 @@ impl LocalSlam {
             measured: VecDeque::new(),
             last_insert: None,
             inserted: 0,
+            height: None,
         }
     }
 
@@ -154,6 +171,57 @@ impl LocalSlam {
 
     pub fn feed_imu(&mut self, s: &ImuSample) {
         self.att.update(s);
+    }
+
+    /// The scan plane's height and climb rate. While it climbs or descends
+    /// faster than [`Scan2dConfig::max_climb_rate_mps`] a scan is neither
+    /// matched nor mapped: its pose is the motion prior. A submap takes scans
+    /// only from within [`Scan2dConfig::submap_height_band_m`] of the height
+    /// it started at: once the height leaves that band, the active submaps
+    /// are finished and a new one starts at the next scan's pose, which that
+    /// scan's motion prior places. Feed it in time order with the IMU;
+    /// without heights neither applies. A submap started before the first
+    /// height takes that height as its own (the height source, such as an
+    /// EKF that waits for this pose, often comes up after the matcher).
+    pub fn feed_height(&mut self, s: &HeightSample) {
+        let finite = s.up_m.is_finite() && s.up_rate_mps.is_finite();
+        if !finite || self.height.is_some_and(|h| h.t_ns > s.t_ns) {
+            return;
+        }
+        self.height = Some(*s);
+        for (_, sm) in &mut self.active {
+            sm.height_m.get_or_insert(s.up_m);
+        }
+    }
+
+    /// Finish the active submaps when the height has left the band of the
+    /// one scans are matched against. All of them, oldest first, so finished
+    /// submaps stay in creation order.
+    fn leave_other_height(&mut self) {
+        let (Some(h), Some((_, sm))) = (self.height, self.active.first()) else {
+            return;
+        };
+        if sm
+            .height_m
+            .is_none_or(|h0| (h.up_m - h0).abs() <= self.cfg.submap_height_band_m)
+        {
+            return;
+        }
+        for (_, done) in self.active.drain(..) {
+            if self.record {
+                self.finished.push(done);
+            }
+        }
+    }
+
+    /// Whether the scan plane is climbing or descending faster than
+    /// [`Scan2dConfig::max_climb_rate_mps`] at scan time `t`, by a height no
+    /// older than [`MAX_HEIGHT_AGE_NS`].
+    fn climbing(&self, t: u64) -> bool {
+        self.height.is_some_and(|h| {
+            t.abs_diff(h.t_ns) <= MAX_HEIGHT_AGE_NS
+                && h.up_rate_mps.abs() > self.cfg.max_climb_rate_mps
+        })
     }
 
     /// A measured ground velocity of the IMU frame (an optical-flow sensor
@@ -221,10 +289,11 @@ impl LocalSlam {
             score: 0.0,
             degeneracy: 0.0,
         };
-        if scan.points.len() < MIN_POINTS {
+        if scan.points.len() < MIN_POINTS || self.climbing(t) {
             self.advance(t, prior, heading);
             return out;
         }
+        self.leave_other_height();
         if self.active.is_empty() {
             self.start_submap(prior);
         }
@@ -289,7 +358,9 @@ impl LocalSlam {
         }
         let home = *id;
         (out.x, out.y, out.yaw) = (pose.x, pose.y, pose.th);
-        let insert = self.should_insert(t, pose);
+        // A new submap takes its first scan whatever the motion filter says,
+        // so the next scan has something to match against.
+        let insert = self.should_insert(t, pose) || self.active[0].1.scans() == 0;
         if insert {
             self.insert(&scan, t, pose);
         }
@@ -401,8 +472,9 @@ impl LocalSlam {
     }
 
     fn start_submap(&mut self, pose: Pose2) {
+        let height = self.height.map(|h| h.up_m);
         self.active
-            .push((self.next_id, Submap::new(pose, &self.cfg)));
+            .push((self.next_id, Submap::new(pose, height, &self.cfg)));
         self.next_id += 1;
     }
 

@@ -226,6 +226,7 @@ impl Engine {
     }
 
     pub(super) async fn shutdown(&mut self) {
+        self.detach_fc_nav();
         if self.session.is_some() {
             self.begin_close();
         }

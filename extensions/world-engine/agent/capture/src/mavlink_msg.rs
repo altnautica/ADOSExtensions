@@ -43,6 +43,8 @@ pub struct AttitudeQuaternion {
 pub struct LocalPositionNed {
     pub time_boot_ms: u32,
     pub ned: [f64; 3],
+    /// m/s, NED.
+    pub vel: [f64; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -175,6 +177,7 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
             FcMessage::Position(LocalPositionNed {
                 time_boot_ms: u32_at(&b, 0),
                 ned: [f32_at(&b, 4), f32_at(&b, 8), f32_at(&b, 12)],
+                vel: [f32_at(&b, 16), f32_at(&b, 20), f32_at(&b, 24)],
             })
         }
         MSG_GPS_GLOBAL_ORIGIN => {
