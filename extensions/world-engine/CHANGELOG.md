@@ -120,6 +120,38 @@ All notable changes to the World Engine extension.
 
 ### Fixed
 
+- **The exported splat's floater filter finishes on a large outdoor site.**
+  The filter voxelised the scene at a fixed 5 cm, and its run time grows with
+  the cube of the scene extent over the voxel: a preview of a 270 x 240 m
+  forest walk sat in the products stage for over an hour. The voxel is now
+  5 cm, coarsened over a large site to a thousandth of the walked box's
+  diagonal (36 cm for that walk, under a minute); a room keeps 5 cm.
+- **Linux reconstruction nodes are documented.** `fetch-tools.sh` installs
+  Brush, splat-transform and the Spark LoD builder on Linux with the pinned
+  entries as they are; COLMAP (no upstream Linux binary) and, without a CUDA
+  toolkit, the gsplat project run through `ADOS_TOOL_COLMAP` and
+  `ADOS_TOOL_GSPLAT_TRAIN`, for instance as scripts that run CUDA containers
+  with the node's data dir mounted at the same path.
+- **A planar LiDAR's take-off no longer slides the pose.** A planar scan cuts
+  the scene at its own height; in a chamber whose rock walls lean, each
+  revolution of a climb drew a different outline, the matcher followed it
+  against the floor-level submap, and the pose kept the slide: 0.7 to 0.9 m
+  across the drift of a mine survey, enough to leave the first waypoint
+  1.1 to 1.3 m short. The matcher now takes the flight controller's EKF
+  height and climb rate (`LOCAL_POSITION_NED`): while the scan plane climbs
+  or descends faster than `max_climb_rate_mps` (0.15 m/s) the pose rides its
+  motion prior (IMU heading, flow velocity) and nothing is mapped, and a
+  submap takes scans only within `submap_height_band_m` (0.3 m) of the height
+  it started at. Replayed on the recorded mine survey, the error after the
+  climb falls from 0.98 m to 0.03 m.
+- **The FC's `RAW_IMU` reaches the planar matcher as it arrives.** It was
+  queued and handed over on the pose tick (100 ms) or the next scan, so a
+  scan waiting for the IMU to cover its last point could wait up to a tick.
+  Each `RAW_IMU` sample, flow velocity and EKF height now goes from the
+  MAVLink delivery straight to the matcher, which matches the scan as soon
+  as the covering sample lands. `nav_imu_feed` logs the median scan-to-IMU
+  gap (`p50_scan_imu_gap_ms`) beside the widest.
+
 - **The drone's detail level reaches the compute node's own reconstructions.**
   `atlas.reconstruct_steps` was read only by the Atlas API, so the reconstruct
   jobs the node submits itself (the final bag, a session finalized after going

@@ -108,10 +108,10 @@ fn world_cloud(job_dir: &Path) -> Result<PointCloud, StageError> {
     Ok(cloud)
 }
 
-/// The splat box kept by the export filter: the keyframe camera centres'
-/// bounds widened by 3 m across and from 1 m below to 3 m above, as
-/// splat-transform's `min,max` corner list. `None` without keyframes.
-pub fn splat_box(keyframes: &[Keyframe]) -> Option<String> {
+/// The keyframe camera centres' bounds widened by 3 m across and from 1 m
+/// below to 3 m above: the splat box kept by the export filter. `None`
+/// without keyframes.
+fn walked_box(keyframes: &[Keyframe]) -> Option<([f64; 3], [f64; 3])> {
     let first = keyframes.first()?.centre;
     let (lo, hi) = keyframes.iter().fold((first, first), |(lo, hi), k| {
         (
@@ -119,16 +119,43 @@ pub fn splat_box(keyframes: &[Keyframe]) -> Option<String> {
             [0, 1, 2].map(|i| hi[i].max(k.centre[i])),
         )
     });
+    Some((
+        [lo[0] - 3.0, lo[1] - 3.0, lo[2] - 1.0],
+        [hi[0] + 3.0, hi[1] + 3.0, hi[2] + 3.0],
+    ))
+}
+
+/// [`walked_box`] as splat-transform's `min,max` corner list.
+pub fn splat_box(keyframes: &[Keyframe]) -> Option<String> {
+    let (lo, hi) = walked_box(keyframes)?;
     let r = |v: f64| (v * 1000.0).round() / 1000.0 + 0.0;
     Some(format!(
         "{},{},{},{},{},{}",
-        r(lo[0] - 3.0),
-        r(lo[1] - 3.0),
-        r(lo[2] - 1.0),
-        r(hi[0] + 3.0),
-        r(hi[1] + 3.0),
-        r(hi[2] + 3.0)
+        r(lo[0]),
+        r(lo[1]),
+        r(lo[2]),
+        r(hi[0]),
+        r(hi[1]),
+        r(hi[2])
     ))
+}
+
+/// The floater filter's finest voxel, metres.
+const FLOATER_VOXEL_M: f64 = 0.05;
+/// Voxels across the walked box's diagonal at most.
+const FLOATER_VOXELS_PER_DIAGONAL: f64 = 1000.0;
+
+/// The floater filter's voxel: 5 cm, coarsened over a large site to a
+/// thousandth of the walked box's diagonal. The filter's run time grows with
+/// the cube of the scene extent over the voxel: a 5 cm grid over a
+/// 270 x 240 m forest walk took over an hour where a room takes seconds.
+pub fn floater_voxel_m(keyframes: &[Keyframe]) -> f64 {
+    let Some((lo, hi)) = walked_box(keyframes) else {
+        return FLOATER_VOXEL_M;
+    };
+    let diag = (0..3).map(|i| (hi[i] - lo[i]).powi(2)).sum::<f64>().sqrt();
+    let v = (diag / FLOATER_VOXELS_PER_DIAGONAL).max(FLOATER_VOXEL_M);
+    (v * 1000.0).round() / 1000.0
 }
 
 /// Run the stage.
@@ -153,7 +180,8 @@ pub fn run(
 
     // Splat: the trained PLY filtered, its SPZ, and the LoD tree when asked
     // for. The filter drops non-finite splats, everything outside the walked
-    // box, and floaters that add to no solid 5 cm voxel at 0.1 opacity.
+    // box, and floaters that add to no solid voxel (5 cm, coarser over a large
+    // site: `floater_voxel_m`) at 0.1 opacity.
     let splat_ply = job.join("train").join("splat.ply");
     let mut filter = ToolInvocation::new("splat-transform", &out)
         .args(["-w", "--no-tty"])
@@ -163,7 +191,10 @@ pub fn run(
         filter = filter.arg("-B").arg(b);
     }
     runner.run(
-        &filter.args(["-F", "0.05,0.1"]).arg(out.join("scene.ply")),
+        &filter
+            .arg("-F")
+            .arg(format!("{},0.1", floater_voxel_m(&keyframes)))
+            .arg(out.join("scene.ply")),
         &mut |_| {},
     )?;
     let sidecar = place("scene.ply", Kind::Splat, Fmt::Ply)?;
@@ -395,6 +426,23 @@ mod tests {
         assert_eq!(
             splat_box(&[k(0.0, 0.0, 1.5), k(10.0, -4.0, 1.7)]).unwrap(),
             "-3,-7,0.5,13,3,4.7"
+        );
+    }
+
+    #[test]
+    fn the_floater_voxel_coarsens_only_over_a_large_site() {
+        let k = |x: f64, y: f64, z: f64| Keyframe {
+            centre: [x, y, z],
+            yaw_deg: 0.0,
+        };
+        assert_eq!(floater_voxel_m(&[]), 0.05);
+        // A room walk: 5 cm.
+        assert_eq!(floater_voxel_m(&[k(0.0, 0.0, 1.5), k(8.0, 6.0, 1.5)]), 0.05);
+        // A 230 x 260 m forest walk (box 236 x 266 x 4 m): a thousandth of
+        // its 355.6 m diagonal.
+        assert_eq!(
+            floater_voxel_m(&[k(0.0, 0.0, 2.0), k(230.0, 260.0, 2.0)]),
+            0.356
         );
     }
 }

@@ -6,7 +6,7 @@
       "license": "BSD-3-Clause",
       "kind": "archive",
       "probe": ["-h"],
-      "note": "upstream publishes Windows (CUDA, no-CUDA) and arm64 macOS binaries only; Linux nodes build from source or use a distribution package via ADOS_TOOL_COLMAP",
+      "note": "upstream publishes Windows (CUDA, no-CUDA) and arm64 macOS binaries only, so a Linux node sets ADOS_TOOL_COLMAP to a COLMAP executable: a CUDA build from source, a distribution package, or a script that runs a CUDA COLMAP container with the node's data dir mounted at the same path (job paths pass unchanged)",
       "platforms": {
         "x86_64-windows": {
           "url": "https://github.com/colmap/colmap/releases/download/4.2.1/colmap-x64-windows-cuda.zip",

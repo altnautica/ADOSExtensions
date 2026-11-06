@@ -5,7 +5,7 @@
 # one vocabulary.
 [package]
 name = "world-engine-protocol"
-version = "2.1.11"
+version = "2.1.12"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
