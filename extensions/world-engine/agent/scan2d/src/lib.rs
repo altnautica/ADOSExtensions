@@ -23,10 +23,12 @@
 //!   uprights count as constraints in both directions, walls only across
 //!   themselves. A planar scan cuts the scene at its own height, so with the
 //!   height fed ([`LocalSlam::feed_height`]) a scan taken while the height
-//!   changes faster than [`Scan2dConfig::max_climb_rate_mps`] rides the
-//!   motion prior, unmatched and unmapped, and a submap only takes scans
-//!   from within [`Scan2dConfig::submap_height_band_m`] of the height it
-//!   started at.
+//!   changes faster than [`Scan2dConfig::max_climb_rate_mps`], and faster
+//!   than the rig moves sideways, rides the motion prior, unmatched and
+//!   unmapped, for the first [`Scan2dConfig::max_unmatched_climb_m`] of the
+//!   climb (a take-off); a longer one (a shaft) is matched. A submap only
+//!   takes scans from within [`Scan2dConfig::submap_height_band_m`] of the
+//!   height it started at, except along such a transit.
 //!   [`LocalSlam::inserted_scans`] counts the scans in the map so far.
 //! - **Offline**, [`offline::run`]: the same local SLAM over a whole session,
 //!   then branch-and-bound loop search against finished submaps and a

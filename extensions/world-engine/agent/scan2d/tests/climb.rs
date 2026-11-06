@@ -4,7 +4,10 @@
 //! outline the submap holds from the floor, the pose slides by the
 //! difference and keeps the offset for the rest of the flight. Fed the
 //! height and climb rate, the matcher rides the motion prior through the
-//! climb and maps the new height in a submap of its own.
+//! climb and maps the new height in a submap of its own. A long climb or
+//! descent (a shaft) is matched again once it has gone past
+//! `max_unmatched_climb_m`: the prior alone would carry the pose into the
+//! shaft's walls.
 
 mod common;
 
@@ -187,4 +190,99 @@ fn submaps_carry_their_height() {
             .all(|(t, _)| height_of(*t).is_none()),
         "a scan of the climb was mapped"
     );
+}
+
+/// A 5 x 4 m shaft with vertical walls: the same outline at every height.
+fn shaft() -> Vec<Seg> {
+    vec![
+        ([0.0, 0.0], [5.0, 0.0]),
+        ([5.0, 0.0], [5.0, 4.0]),
+        ([5.0, 4.0], [0.0, 4.0]),
+        ([0.0, 4.0], [0.0, 0.0]),
+    ]
+}
+
+/// The shaft descent: a hover, then 12 m down at 1 m/s, then a hover, the
+/// rig at (2.5, 2) facing +x. The measured ground velocity reads 0.1 m/s
+/// along x that is not there (a flow sensor over a floor 40 m below), so a
+/// pose that rides it through the whole descent drifts 1.2 m.
+fn descend(slam: &mut LocalSlam) -> Vec<(f64, PoseOut)> {
+    const HOLD_S: f64 = 3.0;
+    const DOWN_S: f64 = 12.0;
+    let height = |t: f64| {
+        let down = (t - HOLD_S).clamp(0.0, DOWN_S);
+        let rate = if (HOLD_S..HOLD_S + DOWN_S).contains(&t) { -1.0 } else { 0.0 };
+        (40.0 - down, rate)
+    };
+    let mut rng = Rng::new(7);
+    let pose_at = |_t: f64| Pose2::new(2.5, 2.0, 0.0);
+    let period_s = PERIOD_NS as f64 * 1e-9;
+    let n = ((2.0 * HOLD_S + DOWN_S) / period_s) as u64;
+    let mut out = Vec::with_capacity(n as usize);
+    let mut k = 0u64;
+    for i in 0..n {
+        let t = i as f64 * period_s;
+        let scan: ScanInput = revolution(&shaft(), &pose_at, t, C1, &mut rng);
+        let end_ms = ((t + (BEAMS - 1) as f64 / BEAMS as f64 * period_s) * 1000.0) as u64;
+        while k <= end_ms {
+            let (t_ns, t_s) = (k * 1_000_000, k as f64 * 1e-3);
+            if k.is_multiple_of(5) {
+                slam.feed_imu(&ImuSample {
+                    t_ns,
+                    gyro: [0.0, 0.0, 0.0],
+                    accel: [0.0, 0.0, 9.81],
+                });
+            }
+            if k.is_multiple_of(20) {
+                slam.feed_velocity(&VelocitySample {
+                    t_ns,
+                    v: [0.1 + 0.03 * rng.gauss(), 0.03 * rng.gauss()],
+                });
+            }
+            if k.is_multiple_of(50) {
+                let (up_m, up_rate_mps) = height(t_s);
+                slam.feed_height(&HeightSample {
+                    t_ns,
+                    up_m,
+                    up_rate_mps,
+                });
+            }
+            k += 1;
+        }
+        out.push((t, slam.feed_scan(&scan)));
+    }
+    out
+}
+
+/// The pose's worst distance from the rig over a run.
+fn max_error(poses: &[(f64, PoseOut)], rig: [f64; 2]) -> f64 {
+    poses
+        .iter()
+        .map(|(_, p)| (p.x - rig[0]).hypot(p.y - rig[1]))
+        .fold(0.0, f64::max)
+}
+
+/// Past `max_unmatched_climb_m` a descent is a transit: its scans are
+/// matched against the shaft's walls and the pose stays on the rig.
+#[test]
+fn a_shaft_descent_is_matched_past_the_unmatched_climb() {
+    let poses = descend(&mut LocalSlam::new(cfg()));
+    // The local frame starts at the rig.
+    let err = max_error(&poses, [0.0, 0.0]);
+    assert!(err < 0.5, "the pose drifted {err:.3} m");
+    let late = poses.iter().filter(|(t, _)| (8.0..14.0).contains(t));
+    assert!(
+        late.clone().count() > 0 && late.clone().all(|(_, p)| p.score > 0.0),
+        "a scan of the transit was not matched"
+    );
+}
+
+/// The failure it fixes: riding the prior down the whole shaft, the pose
+/// follows the flow's bias into the wall.
+#[test]
+fn a_shaft_descent_on_the_prior_alone_drifts() {
+    let mut unmatched = cfg();
+    unmatched.max_unmatched_climb_m = f64::INFINITY;
+    let err = max_error(&descend(&mut LocalSlam::new(unmatched)), [0.0, 0.0]);
+    assert!(err > 0.8, "the pose stayed within {err:.3} m");
 }

@@ -100,6 +100,11 @@ pub struct Scan2dConfig {
     /// into submaps a few scans deep add up their noise faster than the
     /// prior drifts over the climb.
     pub max_climb_rate_mps: f64,
+    /// How far, metres, a climb or descent rides the motion prior before its
+    /// scans are matched again (band by band, until it ends). A take-off or
+    /// a step in height stays inside it; a transit along a shaft does not,
+    /// and the prior alone drifts into the shaft's walls over its length.
+    pub max_unmatched_climb_m: f64,
 }
 
 impl Scan2dConfig {
@@ -149,6 +154,7 @@ impl Scan2dConfig {
             degenerate_ratio: 0.05,
             submap_height_band_m: 0.3,
             max_climb_rate_mps: 0.15,
+            max_unmatched_climb_m: 3.0,
         }
     }
 }

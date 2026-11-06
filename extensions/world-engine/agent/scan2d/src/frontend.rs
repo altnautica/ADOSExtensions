@@ -35,6 +35,8 @@ const MAX_VELOCITY_AGE_NS: u64 = 250_000_000;
 const VELOCITY_KEEP_NS: u64 = 1_000_000_000;
 /// A height older than this at a scan says nothing about the scan's climb.
 const MAX_HEIGHT_AGE_NS: u64 = 500_000_000;
+/// A climb that has paused this long is over: the next one starts afresh.
+const CLIMB_END_NS: u64 = 2_000_000_000;
 /// A match teaches the gyro its z bias ([`Attitude::learn_bias`]) only when
 /// its points pin the rotation to this, one sigma, each point good to the
 /// grid resolution: where the scene leaves the rotation loose the matched
@@ -55,6 +57,17 @@ struct Unobserved {
     /// Local-frame prior velocity when they were last observed, and when.
     vel: Vector2<f64>,
     since_ns: u64,
+}
+
+/// A climb or descent in progress ([`LocalSlam::skip_climbing`]).
+#[derive(Debug, Clone, Copy)]
+struct Climb {
+    /// The height it began at, metres.
+    from_m: f64,
+    /// It has gone past [`Scan2dConfig::max_unmatched_climb_m`]: a transit.
+    transit: bool,
+    /// The last scan time it was climbing at.
+    last_ns: u64,
 }
 
 /// The height of the scan plane, up, in any fixed vertical datum (the
@@ -122,6 +135,8 @@ pub struct LocalSlam {
     inserted: usize,
     /// The newest height ([`Self::feed_height`]).
     height: Option<HeightSample>,
+    /// The climb in progress ([`Self::skip_climbing`]).
+    climb: Option<Climb>,
 }
 
 impl LocalSlam {
@@ -151,6 +166,7 @@ impl LocalSlam {
             last_insert: None,
             inserted: 0,
             height: None,
+            climb: None,
         }
     }
 
@@ -196,8 +212,14 @@ impl LocalSlam {
 
     /// Finish the active submaps when the height has left the band of the
     /// one scans are matched against. All of them, oldest first, so finished
-    /// submaps stay in creation order.
+    /// submaps stay in creation order. Not inside a transit past
+    /// [`Scan2dConfig::max_unmatched_climb_m`]: a shaft's walls draw the same
+    /// outline at every height, and a submap a band deep holds too few scans
+    /// to match against at a transit's speed.
     fn leave_other_height(&mut self) {
+        if self.climb.is_some_and(|c| c.transit) {
+            return;
+        }
         let (Some(h), Some((_, sm))) = (self.height, self.active.first()) else {
             return;
         };
@@ -222,6 +244,33 @@ impl LocalSlam {
             t.abs_diff(h.t_ns) <= MAX_HEIGHT_AGE_NS
                 && h.up_rate_mps.abs() > self.cfg.max_climb_rate_mps
         })
+    }
+
+    /// Whether a scan at `t` rides the motion prior because the scan plane
+    /// is climbing, mostly straight up or down (faster than the horizontal
+    /// `speed_mps` it moves at): a take-off or a step in height, up to
+    /// [`Scan2dConfig::max_unmatched_climb_m`] from where the climb began.
+    /// Past that the climb is a transit (a shaft) whose walls the motion
+    /// prior cannot hold the pose against, and its scans are matched until
+    /// the climb has paused for [`CLIMB_END_NS`]. A leg that climbs as it
+    /// travels (terrain following) is matched throughout: over its length
+    /// the prior drifts further than its slope shifts the outline.
+    fn skip_climbing(&mut self, t: u64, speed_mps: f64) -> bool {
+        let vertical = |h: &HeightSample| h.up_rate_mps.abs() >= speed_mps;
+        let Some(h) = self.height.filter(|h| self.climbing(t) && vertical(h)) else {
+            if self.climb.is_some_and(|c| t.saturating_sub(c.last_ns) > CLIMB_END_NS) {
+                self.climb = None;
+            }
+            return false;
+        };
+        let c = self.climb.get_or_insert(Climb {
+            from_m: h.up_m,
+            transit: false,
+            last_ns: t,
+        });
+        c.last_ns = t;
+        c.transit |= (h.up_m - c.from_m).abs() > self.cfg.max_unmatched_climb_m;
+        !c.transit
     }
 
     /// A measured ground velocity of the IMU frame (an optical-flow sensor
@@ -289,7 +338,7 @@ impl LocalSlam {
             score: 0.0,
             degeneracy: 0.0,
         };
-        if scan.points.len() < MIN_POINTS || self.climbing(t) {
+        if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm()) {
             self.advance(t, prior, heading);
             return out;
         }

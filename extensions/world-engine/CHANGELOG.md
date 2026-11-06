@@ -320,6 +320,15 @@ All notable changes to the World Engine extension.
   MAVLink delivery straight to the matcher, which matches the scan as soon
   as the covering sample lands. `nav_imu_feed` logs the median scan-to-IMU
   gap (`p50_scan_imu_gap_ms`) beside the widest. 2.1.13.
+- **A shaft descent and a terrain-following leg are matched again.** 2.1.13
+  rode the motion prior through every climb faster than 0.15 m/s: down a
+  mine shaft the pose drifted 2.4 m into the walls over 12 m of descent,
+  and a forest leg that climbs as it travels went unmatched. Only a climb
+  that is mostly vertical (faster than the horizontal speed) rides the
+  prior now, and only for its first `max_unmatched_climb_m` (3 m), which
+  covers a take-off; past that the climb is a transit and is matched against
+  the shaft's walls, without the height band, until it has paused for 2 s.
+  Replayed on the recorded shaft descent the error stays under 0.55 m. 2.1.14.
 
 ## [2.0.0]
 
