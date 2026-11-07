@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.mavlink-gimbal-v2
 name: "ADOS MAVLink Gimbal v2 Controller"
-version: "1.4.1"
+version: "1.4.2"
 description: "MAVLink Gimbal v2 control: manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection."
 description_long: |
   Drives a MAVLink gimbal-manager (component 154). Beyond manual pitch/yaw
@@ -150,7 +150,7 @@ gcs:
         toggle: false
         confirm: false
         arm_requirement: any
-        default_binding: { key: "shift+c" }
+        default_binding: { key: "shift+e" }
         activation: { via: config, config_key: recenter }
         state: { via: event, topic: "sensor.gimbal.recenter" }
       - id: nadir

@@ -2,6 +2,11 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.4.2
+
+- The Recenter Skill's default key is `shift+e` (was `shift+c`, now the
+  cockpit's Take control chord).
+
 ## 1.4.1
 
 - Default Skill keys no longer collide with other cockpit bindings: Recenter
