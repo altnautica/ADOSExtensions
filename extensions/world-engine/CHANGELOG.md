@@ -347,6 +347,13 @@ All notable changes to the World Engine extension.
   splat-transform's frame (it still bounds the filter's voxel grid), and the
   Gaussians outside it are kept unfiltered: 18.0 dB, the filter finishing in
   2.5 min on that walk. 2.1.15.
+- **A late subscriber to the live occupancy gets the map around the vehicle.**
+  `plugin.world-engine.occupancy` carried only the tiles that changed since
+  the last payload, so a consumer that started after take-off (or missed a
+  payload) never received a wall the LiDAR had already mapped. Every fifth
+  payload tick (5 s) the payload now also carries every tile within 20 m of
+  the vehicle, changed or not; consumers overwrite tiles, so a repeat is
+  harmless. 2.1.16.
 
 ## [2.0.0]
 

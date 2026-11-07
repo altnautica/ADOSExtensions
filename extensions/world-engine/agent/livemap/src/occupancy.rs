@@ -157,6 +157,17 @@ impl OccupancyGrid {
             .collect()
     }
 
+    /// Queue every tile in RAM within `radius_m` of `(n, e)` (map_ned x, y,
+    /// metres; the nearest point of the tile counts) for the next
+    /// [`Self::take_changed`], changed or not.
+    pub fn resend_near(&mut self, n: f32, e: f32, radius_m: f32) {
+        let tile_m = CELLS as f32 * RES_M;
+        let gap = |lo: f32, v: f32| (lo - v).max(v - (lo + tile_m)).max(0.0);
+        self.changed.extend(self.tiles.keys().copied().filter(|k| {
+            gap(k.0 as f32 * tile_m, n).hypot(gap(k.1 as f32 * tile_m, e)) <= radius_m
+        }));
+    }
+
     /// Drop tiles farther than [`EVICT_RADIUS_M`] from `vehicle`, then the
     /// farthest until the tiles fit `cap_bytes`, writing each to
     /// `dir/<ix>_<iy>.png` first when `dir` is given. Returns how many went.
@@ -269,6 +280,20 @@ mod tests {
         // x = 3.16 m is cell 63, the top row; y = 0 is column 0.
         assert_eq!(img.get_pixel(0, 0).0[0], OCCUPANCY_OCCUPIED);
         assert_eq!(img.get_pixel(0, 63).0[0], OCCUPANCY_FREE);
+    }
+
+    #[test]
+    fn resend_near_queues_the_unchanged_tiles_around_a_point_only() {
+        let mut g = OccupancyGrid::new();
+        g.insert_ray([0.01, 0.01], [1.0, 0.01]);
+        g.insert_ray([100.0, 0.0], [100.5, 0.0]);
+        g.insert_ray([-10.0, 0.0], [-10.2, 0.0]);
+        g.take_changed();
+        g.resend_near(5.0, 0.0, 20.0);
+        let keys: Vec<_> = g.take_changed().iter().map(|t| (t.ix, t.iy)).collect();
+        // Tile (-4, 0) spans x -12.8..-9.6: its nearest point is 14.6 m away.
+        assert_eq!(keys, vec![(-4, 0), (0, 0)]);
+        assert!(g.take_changed().is_empty(), "queued once");
     }
 
     #[test]
