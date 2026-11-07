@@ -78,7 +78,7 @@ class _Flight:
     def __init__(self) -> None:
         self.setpoints: list[dict[str, Any]] = []
         self.goal_leases: list[str] = []
-        self.acquire_reply: dict[str, Any] = {"ok": True, "lease_id": "L1"}
+        self.acquire_reply: dict[str, Any] = {"ok": True, "lease_id": 7}
         self.acquires: list[dict[str, Any]] = []
         self.releases: list[str] = []
         self.sticks_subscribed = False
@@ -87,11 +87,11 @@ class _Flight:
         self.acquires.append({"kind": kind, "skill_id": skill_id})
         return dict(self.acquire_reply)
 
-    async def lease_release(self, lease_id: str) -> dict:
+    async def lease_release(self, lease_id: int) -> dict:
         self.releases.append(lease_id)
         return {"ok": True}
 
-    async def goal_send(self, lease_id: str, goal: dict[str, Any]) -> dict:
+    async def goal_send(self, lease_id: int, goal: dict[str, Any]) -> dict:
         self.goal_leases.append(lease_id)
         self.setpoints.append(dict(goal))
         return {"ok": True}

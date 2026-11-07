@@ -223,7 +223,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         # held; both arrive only to the holder.
         await ctx.events.subscribe(LEASE_REVOKED_TOPIC, self._on_lease_revoked)
         await ctx.events.subscribe(STICKS_TOPIC, self._on_sticks)
-        await ctx.flight.sticks_subscribe()
+        await self._subscribe_sticks(ctx)
 
         # MCP tools (guarded: the host injects ctx.tools only when the
         # mcp.expose capability is granted). Read-only + stop; there is no
@@ -266,6 +266,19 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         ):
             return self._sighting.camera_id
         return None
+
+    async def _subscribe_sticks(self, ctx: Any) -> None:
+        """Ask the pilot for the operator's sticks while the lease is held.
+        An agent without the method (or one that refuses it) leaves follow
+        flying without nudges rather than failing the plugin start."""
+        subscribe = getattr(ctx.flight, "sticks_subscribe", None)
+        if subscribe is None:
+            ctx.log.warning("follow_me_sticks_unavailable", reason="host has no sticks_subscribe")
+            return
+        try:
+            await subscribe()
+        except Exception as exc:  # noqa: BLE001
+            ctx.log.warning("follow_me_sticks_unavailable", reason=str(exc))
 
     async def _subscribe_scan(self, now: float) -> None:
         self._scan_subscribe_tried_s = now
@@ -369,6 +382,8 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
             active = await self._ctx.config_kv.get("active", None)
             if active is not None:
                 self._cfg = replace(self._cfg, active=bool(active))
+            # A stick nudge reaches the next goal, not the next config read.
+            self._cfg = self._nudges.apply_to(self._cfg)
         self._active_camera = self._resolve_designate_camera(
             self._cfg.designate_camera
         )

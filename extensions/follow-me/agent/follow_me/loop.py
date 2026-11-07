@@ -110,7 +110,9 @@ class FollowLoopMixin:
     _last_fix: TargetFix | None
     _coast: Coast | None
     _phase: str
-    _lease_id: str | None
+    # The pilot's lease id as it sent it (pilot.v1: an unsigned integer),
+    # passed back unchanged to goal_send and lease_release.
+    _lease_id: int | str | None
     _lease_tried_s: float
     _lease_refusal: str | None
     _revoked_reason: str | None
@@ -268,7 +270,7 @@ class FollowLoopMixin:
             self._ctx.log.warning("follow_me_lease_error", error=str(exc))
             reply = None
         if isinstance(reply, dict) and reply.get("ok") and reply.get("lease_id"):
-            self._lease_id = str(reply["lease_id"])
+            self._lease_id = reply["lease_id"]
             self._lease_refusal = None
             self._ctx.log.info("follow_me_lease_acquired", lease_id=self._lease_id)
             return None
@@ -289,13 +291,13 @@ class FollowLoopMixin:
             self._ctx.log.warning("follow_me_lease_release_error", error=str(exc))
 
     def _on_lease_revoked(self, payload: dict[str, Any]) -> None:
-        if self._lease_id is None or str(payload.get("lease_id")) != self._lease_id:
+        if self._lease_id is None or str(payload.get("lease_id")) != str(self._lease_id):
             return
         self._lease_id = None
         self._revoked_reason = str(payload.get("reason") or "revoked")
 
     def _on_sticks(self, payload: dict[str, Any]) -> None:
-        if self._lease_id is None or str(payload.get("lease_id")) != self._lease_id:
+        if self._lease_id is None or str(payload.get("lease_id")) != str(self._lease_id):
             return
         if self._cfg is None:
             return

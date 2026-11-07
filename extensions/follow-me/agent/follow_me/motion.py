@@ -59,6 +59,7 @@ DISTANCE_RATE_MPS = 2.0
 HEIGHT_RATE_MPS = 1.0
 ORBIT_RATE_ACCEL_DPS2 = 10.0
 RADIUS_RATE_MPS = 2.0
+ANGLE_STEP_DEG = 5
 
 
 def _clamp(v: float, lo_hi: tuple[float, float]) -> float:
@@ -143,8 +144,11 @@ class Nudges:
                     cfg.orbit_radius_m - pitch * RADIUS_RATE_MPS * dt, ORBIT_RADIUS_RANGE
                 )
             if abs(roll) > _NUDGE_DEADBAND:
+                # Roll + is right. Facing the subject, a clockwise orbit
+                # carries the drone to its left, so right stick turns the
+                # orbit counter-clockwise.
                 rate, direction = nudge_orbit_rate(
-                    cfg.orbit_rate_dps, cfg.orbit_direction, roll * ORBIT_RATE_ACCEL_DPS2 * dt
+                    cfg.orbit_rate_dps, cfg.orbit_direction, -roll * ORBIT_RATE_ACCEL_DPS2 * dt
                 )
                 changes["orbit_rate_dps"] = rate
                 changes["orbit_direction"] = direction
@@ -155,8 +159,11 @@ class Nudges:
                     FOLLOW_DISTANCE_RANGE,
                 )
             if abs(roll) > _NUDGE_DEADBAND:
+                # Roll + is right. The angle grows clockwise around the
+                # subject, which moves a drone facing the subject to its
+                # left, so right stick lowers the angle.
                 changes["follow_angle_deg"] = (
-                    cfg.follow_angle_deg + roll * ANGLE_RATE_DPS * dt
+                    cfg.follow_angle_deg - roll * ANGLE_RATE_DPS * dt
                 ) % 360.0
         changed = {k: v for k, v in changes.items() if getattr(cfg, k) != v}
         if changed:
@@ -174,11 +181,19 @@ class Nudges:
             return
         self.last_write_s = now
         self.dirty = False
-        for key, value in self.values.items():
-            await setter(key, round(value, 2) if isinstance(value, float) else value)
         for key, value in list(self.values.items()):
-            if isinstance(value, float):
-                self.values[key] = round(value, 2)
+            if key == "follow_angle_deg" and isinstance(value, (int, float)):
+                value = wire_angle(float(value))
+            elif isinstance(value, float):
+                value = round(value, 2)
+            self.values[key] = value
+            await setter(key, value)
+
+
+def wire_angle(deg: float) -> float:
+    """A follow angle as the config holds it: a multiple of 5 in 0–355
+    (360 wraps to 0)."""
+    return float(int(round((deg % 360.0) / ANGLE_STEP_DEG)) * ANGLE_STEP_DEG % 360)
 
 
 def nudge_orbit_rate(rate_dps: float, direction: str, delta_dps: float) -> tuple[float, str]:

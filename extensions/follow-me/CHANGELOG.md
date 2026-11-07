@@ -4,6 +4,21 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.1] - 2026-11-07
+
+### Fixed
+
+- Stick nudges follow the pilot's signs: right stick moves the drone to its
+  right around the subject. In `follow` the angle falls with right stick;
+  in `orbit` right stick turns the orbit counter-clockwise.
+- A nudge reaches the next goal at once instead of waiting up to a second
+  for the config refresh.
+- The follow angle is written back on the config's 5° grid in 0–355.
+- The motion lease id is kept as the pilot sends it (an integer) and passed
+  back unchanged to goals and the release.
+- Start no longer fails on an agent without the stick subscription: follow
+  flies without nudges and logs `follow_me_sticks_unavailable`.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

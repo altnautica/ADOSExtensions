@@ -123,7 +123,7 @@ async def test_follow_sends_a_goal_under_the_lease_and_publishes_state(
     sp = ctx.flight.setpoints[-1]
     assert sp["kind"] == "follow"
     assert ctx.flight.acquires == [{"kind": "motion", "skill_id": "follow-me"}]
-    assert ctx.flight.goal_leases[-1] == "L1"
+    assert ctx.flight.goal_leases[-1] == 7
     assert sp["subject_ne"] is not None and sp["candidates"]["angle_span_deg"] == 90.0
     assert sp["margin_m"] == 1.5
     state = _state_events(ctx)[-1]
@@ -135,7 +135,7 @@ async def test_follow_sends_a_goal_under_the_lease_and_publishes_state(
     assert state["target_ned"] is not None
     assert 80 <= state["pipeline_latency_ms"] <= 81
     assert state["setpoint_rate_hz"] == 0.5
-    assert state["lease_id"] == "L1"
+    assert state["lease_id"] == 7
 
 
 def test_loop_runs_at_20_hz() -> None:
@@ -195,7 +195,7 @@ async def test_switching_off_releases_the_lease_and_sends_nothing_more(
         await plugin._tick()
     # The pilot brakes to its own hold once the lease is released.
     assert ctx.flight.setpoints[sent:] == []
-    assert ctx.flight.releases == ["L1"]
+    assert ctx.flight.releases == [7]
     assert _state_events(ctx)[-1]["phase"] == "idle"
 
 
