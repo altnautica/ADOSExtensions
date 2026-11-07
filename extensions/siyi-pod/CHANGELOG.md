@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3
+
+- The Cycle palette Skill's default key is `b` (was `o`) and the Nadir
+  Skill's is `n` (was `v`). The cockpit now keeps `o` for the data-layer
+  level and `v` for cycling the cockpit view, so both Skills were left
+  unbound on a fresh install.
+
 ## 0.5.2
 
 - The video HUD reads the host's overlay props through the SDK's
