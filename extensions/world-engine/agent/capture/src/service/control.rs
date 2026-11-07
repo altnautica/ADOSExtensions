@@ -172,19 +172,27 @@ impl Engine {
         if self.session.is_some() || self.closing.is_some() {
             return Err(CtlReply::err(codes::ALREADY_RECORDING, "a session is open"));
         }
-        let rig = crate::rig_source::load_rig(&self.paths.rig).unwrap_or_else(|| {
-            let cams = self.cams.clone();
-            let imus = self.sensors.lock().imu_sources();
-            crate::rig_source::derive_rig(
-                &self.cfg,
-                |id| {
-                    cams.get(id)
-                        .filter(|c| c.width > 0)
-                        .map(|c| (c.width, c.height))
-                },
-                &imus,
-            )
-        });
+        let cams = &self.cams;
+        let frame_size = |id: &str| {
+            cams.get(id)
+                .filter(|c| c.width > 0)
+                .map(|c| (c.width, c.height))
+        };
+        let rig = match crate::rig_source::load_rig(&self.paths.rig) {
+            // A stored rig gains any enabled camera it lacks: the session
+            // records every enabled camera, and only rig cameras reconstruct.
+            Some(stored) => {
+                let (rig, added) = crate::rig_source::complete_rig(stored, &self.cfg, frame_size);
+                for id in &added {
+                    tracing::warn!(camera = %id, "rig_camera_derived");
+                }
+                rig
+            }
+            None => {
+                let imus = self.sensors.lock().imu_sources();
+                crate::rig_source::derive_rig(&self.cfg, frame_size, &imus)
+            }
+        };
         let clock = ClockSidecar::read(&self.paths.clock_sidecar);
         let (timebase, sigma) = match &clock {
             Some(c) => (c.timebase(), c.sigma_ns),

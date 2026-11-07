@@ -6,6 +6,11 @@
 //! config: every enabled camera at the body origin with the configured or
 //! derived intrinsics (`calibrated: false` unless overridden), plus every IMU
 //! stream the sensor bus delivers. Its `calib_version` says it is derived.
+//!
+//! A stored rig that lacks an enabled camera gets that camera added the same
+//! way ([`complete_rig`]): the session records `/cam/<id>/image` for every
+//! enabled camera, and a reconstruction reads only the rig's cameras, so a
+//! camera missing from the rig would be recorded and never used.
 
 use std::path::{Path, PathBuf};
 
@@ -14,6 +19,7 @@ use ados_capture_contract::{
 };
 use world_engine_protocol::atlas::CameraRole;
 
+use crate::config::CameraConfig;
 use crate::runtime::AtlasRuntimeConfig;
 
 /// Env override of the rig document path.
@@ -64,6 +70,29 @@ fn role(r: CameraRole) -> RigSensorRole {
     }
 }
 
+/// A camera of the capture config as a rig sensor: the configured or derived
+/// intrinsics at `w` x `h`, a primary camera looking along body +x, any
+/// other at the body frame.
+fn camera_sensor(cfg: &AtlasRuntimeConfig, cam: &CameraConfig, w: u32, h: u32) -> RigSensor {
+    let model: CameraModel = cfg.intrinsics_for(&cam.id, w, h);
+    let t = if cam.role == CameraRole::Primary {
+        T_BODY_FORWARD_CAM
+    } else {
+        I4
+    };
+    RigSensor {
+        id: cam.id.clone(),
+        kind: RigSensorKind::Camera,
+        role: role(cam.role),
+        t_body_sensor: t.into(),
+        camera: Some(model),
+        lidar: None,
+        imu_noise: None,
+        time_offset_ns: 0,
+        lever_arm_m: None,
+    }
+}
+
 /// A rig derived from the capture config. `frame_size` gives each camera's
 /// frame size seen so far (cameras not yet seen are left out: their model
 /// needs a size); `imus` are the sensor-bus IMU stream ids.
@@ -77,23 +106,7 @@ pub fn derive_rig(
         let Some((w, h)) = frame_size(&cam.id) else {
             continue;
         };
-        let model: CameraModel = cfg.intrinsics_for(&cam.id, w, h);
-        let t = if cam.role == CameraRole::Primary {
-            T_BODY_FORWARD_CAM
-        } else {
-            I4
-        };
-        sensors.push(RigSensor {
-            id: cam.id.clone(),
-            kind: RigSensorKind::Camera,
-            role: role(cam.role),
-            t_body_sensor: t.into(),
-            camera: Some(model),
-            lidar: None,
-            imu_noise: None,
-            time_offset_ns: 0,
-            lever_arm_m: None,
-        });
+        sensors.push(camera_sensor(cfg, cam, w, h));
     }
     for id in imus {
         sensors.push(RigSensor {
@@ -114,6 +127,28 @@ pub fn derive_rig(
         calib_version: "derived".into(),
         sensors,
     }
+}
+
+/// The stored rig plus every enabled, already-seen camera it has no sensor
+/// for, built as [`derive_rig`] builds it; returns the rig and the added
+/// camera ids. The stored sensors are kept as they are.
+pub fn complete_rig(
+    mut rig: Rig,
+    cfg: &AtlasRuntimeConfig,
+    frame_size: impl Fn(&str) -> Option<(u32, u32)>,
+) -> (Rig, Vec<String>) {
+    let mut added = Vec::new();
+    for cam in cfg.capture.enabled_cameras() {
+        if rig.sensors.iter().any(|s| s.id == cam.id) {
+            continue;
+        }
+        let Some((w, h)) = frame_size(&cam.id) else {
+            continue;
+        };
+        rig.sensors.push(camera_sensor(cfg, cam, w, h));
+        added.push(cam.id.clone());
+    }
+    (rig, added)
 }
 
 fn sanitize(s: &str) -> String {
@@ -207,5 +242,57 @@ mod tests {
         assert!(load_rig(&dir.path().join("rig.json")).is_none());
         std::fs::write(dir.path().join("rig.json"), b"{").unwrap();
         assert!(load_rig(&dir.path().join("rig.json")).is_none());
+    }
+
+    #[test]
+    fn a_stored_rig_gains_the_enabled_cameras_it_lacks() {
+        let stored: Rig = serde_json::from_value(serde_json::json!({
+            "contract": "ados.capture/1", "rig_id": "x500", "calib_version": "1",
+            "sensors": [
+                {"id": "fc", "kind": "imu", "role": "nav", "time_offset_ns": 0,
+                 "T_body_sensor": I4},
+                {"id": "belly", "kind": "camera", "role": "down", "time_offset_ns": 0,
+                 "T_body_sensor": I4,
+                 "camera": {"model": "pinhole", "width": 640, "height": 480, "fx": 400.0,
+                            "fy": 400.0, "cx": 320.0, "cy": 240.0, "dist": [],
+                            "calibrated": true, "readout_ns": 0}}
+            ]
+        }))
+        .unwrap();
+        let values: BTreeMap<String, serde_json::Value> = [
+            (
+                "atlas.cameras".to_string(),
+                serde_json::json!([
+                    {"id": "main"}, {"id": "belly", "role": "down"}, {"id": "aux", "role": "aux"}
+                ]),
+            ),
+            ("atlas.hfov_deg".to_string(), serde_json::json!(87.0)),
+        ]
+        .into_iter()
+        .collect();
+        let cfg = AtlasRuntimeConfig::from_values("drone 1", &values).unwrap();
+        // `aux` has delivered no frame yet: no size, no model, left out.
+        let (rig, added) = complete_rig(stored.clone(), &cfg, |id| {
+            (id != "aux").then_some((1280, 720))
+        });
+        assert_eq!(added, ["main"]);
+        assert_eq!(rig.rig_id, "x500");
+        assert_eq!(rig.calib_version, "1");
+        let json = |s: &[RigSensor]| serde_json::to_value(s).unwrap();
+        assert_eq!(json(&rig.sensors[..2]), json(&stored.sensors));
+        let main = &rig.sensors[2];
+        assert_eq!((main.kind, main.role), (RigSensorKind::Camera, RigSensorRole::Primary));
+        let cam = main.camera.as_ref().unwrap();
+        assert_eq!((cam.width, cam.height), (1280, 720));
+        assert!((cam.fx - 640.0 / 43.5_f64.to_radians().tan()).abs() < 1e-9);
+        assert!(!cam.calibrated);
+        assert!(rig.check().is_ok());
+        // `aux` joins once it has a frame size; then the rig is complete and
+        // comes back unchanged.
+        let (rig, added) = complete_rig(rig, &cfg, |_| Some((1280, 720)));
+        assert_eq!(added, ["aux"]);
+        let (again, none) = complete_rig(rig.clone(), &cfg, |_| Some((1280, 720)));
+        assert!(none.is_empty());
+        assert_eq!(json(&again.sensors), json(&rig.sensors));
     }
 }

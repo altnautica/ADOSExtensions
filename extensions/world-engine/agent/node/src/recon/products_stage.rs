@@ -4,6 +4,7 @@
 //! tour (`products_tour`), a placement sidecar per georeferenced artifact,
 //! and `outputs.json` listing them.
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::Path;
 
@@ -109,8 +110,7 @@ fn world_cloud(job_dir: &Path) -> Result<PointCloud, StageError> {
 }
 
 /// The keyframe camera centres' bounds widened by 3 m across and from 1 m
-/// below to 3 m above: the splat box kept by the export filter. `None`
-/// without keyframes.
+/// below to 3 m above. `None` without keyframes.
 fn walked_box(keyframes: &[Keyframe]) -> Option<([f64; 3], [f64; 3])> {
     let first = keyframes.first()?.centre;
     let (lo, hi) = keyframes.iter().fold((first, first), |(lo, hi), k| {
@@ -125,19 +125,95 @@ fn walked_box(keyframes: &[Keyframe]) -> Option<([f64; 3], [f64; 3])> {
     ))
 }
 
-/// [`walked_box`] as splat-transform's `min,max` corner list.
-pub fn splat_box(keyframes: &[Keyframe]) -> Option<String> {
-    let (lo, hi) = walked_box(keyframes)?;
+/// The share of the reconstructed cloud left outside the floater box at each
+/// end of each axis.
+const SPLAT_BOX_CLOUD_TAIL: f64 = 0.01;
+
+/// The box the floater filter runs in, in the model frame: the walked box
+/// grown to the reconstructed cloud's 1st to 99th percentile on each axis, so
+/// the ground below a drone and the scenery its cameras saw are filtered. The
+/// far tail (Gaussians where no point was triangulated: distant scenery and
+/// sky) stays out of it, or it would stretch the filter's voxel grid past what
+/// it can finish. `None` without keyframes.
+fn splat_bounds(keyframes: &[Keyframe], cloud: &[[f64; 3]]) -> Option<([f64; 3], [f64; 3])> {
+    let (mut lo, mut hi) = walked_box(keyframes)?;
+    let mut axis = Vec::with_capacity(cloud.len());
+    for i in 0..3 {
+        axis.clear();
+        axis.extend(cloud.iter().map(|p| p[i]).filter(|v| v.is_finite()));
+        let Some(last) = axis.len().checked_sub(1) else {
+            continue;
+        };
+        let k = |q: f64| (last as f64 * q).round() as usize;
+        let (k_lo, k_hi) = (k(SPLAT_BOX_CLOUD_TAIL), k(1.0 - SPLAT_BOX_CLOUD_TAIL));
+        lo[i] = lo[i].min(*axis.select_nth_unstable_by(k_lo, f64::total_cmp).1);
+        hi[i] = hi[i].max(*axis.select_nth_unstable_by(k_hi, f64::total_cmp).1);
+    }
+    Some((lo, hi))
+}
+
+/// [`splat_bounds`] in splat-transform 3.10.1's engine frame, where both
+/// `-B` and `-V` read a PLY's (x, y, z) as (-x, -y, z): the x and y bounds
+/// are negated and swapped (or the filter works on the mirror image of the
+/// site), rounded to the millimetre.
+fn engine_box(keyframes: &[Keyframe], cloud: &[[f64; 3]]) -> Option<([f64; 3], [f64; 3])> {
+    let (lo, hi) = splat_bounds(keyframes, cloud)?;
     let r = |v: f64| (v * 1000.0).round() / 1000.0 + 0.0;
-    Some(format!(
-        "{},{},{},{},{},{}",
-        r(lo[0]),
-        r(lo[1]),
-        r(lo[2]),
-        r(hi[0]),
-        r(hi[1]),
-        r(hi[2])
+    Some((
+        [r(-hi[0]), r(-hi[1]), r(lo[2])],
+        [r(-lo[0]), r(-lo[1]), r(hi[2])],
     ))
+}
+
+/// splat-transform's inputs for the exported splat (everything before the
+/// output path). Non-finite splats go everywhere. With a floater box the
+/// trained PLY is read seven times: once cut to the box and floater-filtered
+/// (`-F` at `voxel_m`, 0.1 opacity), and once per slab of the space outside
+/// it, unfiltered. The six slabs are disjoint and cover all the box leaves:
+/// x below and above it; within its x, y below and above; within its x and
+/// y, z below and above. Cutting the scene to the box instead cost 4.4 dB of
+/// held-out PSNR on a 270 m outdoor walk (18.0 to 13.6 dB): the distant
+/// scenery and sky the views see lie outside it. Without keyframes the whole
+/// PLY is filtered.
+fn splat_filter_args(
+    splat_ply: &Path,
+    keyframes: &[Keyframe],
+    cloud: &[[f64; 3]],
+    voxel_m: f64,
+) -> Vec<OsString> {
+    let ply = || OsString::from(splat_ply);
+    let floater = OsString::from(format!("{voxel_m},0.1"));
+    let Some((lo, hi)) = engine_box(keyframes, cloud) else {
+        return vec![ply(), "-N".into(), "-F".into(), floater];
+    };
+    let corners = format!(
+        "{},{},{},{},{},{}",
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]
+    );
+    let mut a: Vec<OsString> = vec![
+        ply(),
+        "-N".into(),
+        "-B".into(),
+        corners.into(),
+        "-F".into(),
+        floater,
+    ];
+    const AXES: [&str; 3] = ["x", "y", "z"];
+    for (i, axis) in AXES.iter().enumerate() {
+        for (cmp, v) in [("lt", lo[i]), ("gt", hi[i])] {
+            a.extend([ply(), "-N".into()]);
+            for (j, within) in AXES[..i].iter().enumerate() {
+                a.extend([
+                    "-V".into(),
+                    format!("{within},gte,{}", lo[j]).into(),
+                    "-V".into(),
+                    format!("{within},lte,{}", hi[j]).into(),
+                ]);
+            }
+            a.extend(["-V".into(), format!("{axis},{cmp},{v}").into()]);
+        }
+    }
+    a
 }
 
 /// The floater filter's finest voxel, metres.
@@ -177,23 +253,22 @@ pub fn run(
         write_sidecar(&out, file, kind, fmt, &placement, generation, sid)
     };
     let keyframes = products_tour::keyframes(job);
+    let cloud = world_cloud(job)?;
 
     // Splat: the trained PLY filtered, its SPZ, and the LoD tree when asked
-    // for. The filter drops non-finite splats, everything outside the walked
-    // box, and floaters that add to no solid voxel (5 cm, coarser over a large
-    // site: `floater_voxel_m`) at 0.1 opacity.
+    // for. The filter drops non-finite splats, and inside the floater box
+    // (`splat_filter_args`) the floaters that add to no solid voxel (5 cm,
+    // coarser over a large site: `floater_voxel_m`) at 0.1 opacity.
     let splat_ply = job.join("train").join("splat.ply");
-    let mut filter = ToolInvocation::new("splat-transform", &out)
-        .args(["-w", "--no-tty"])
-        .arg(&splat_ply)
-        .arg("-N");
-    if let Some(b) = splat_box(&keyframes) {
-        filter = filter.arg("-B").arg(b);
-    }
     runner.run(
-        &filter
-            .arg("-F")
-            .arg(format!("{},0.1", floater_voxel_m(&keyframes)))
+        &ToolInvocation::new("splat-transform", &out)
+            .args(["-w", "--no-tty"])
+            .args(splat_filter_args(
+                &splat_ply,
+                &keyframes,
+                &cloud.points,
+                floater_voxel_m(&keyframes),
+            ))
             .arg(out.join("scene.ply")),
         &mut |_| {},
     )?;
@@ -235,7 +310,6 @@ pub fn run(
     progress(0.35);
 
     // Point cloud + ESDF.
-    let cloud = world_cloud(job)?;
     if !cloud.points.is_empty() {
         write_laz(&out.join("cloud.laz"), &cloud).map_err(StageError::io)?;
         let sidecar = place("cloud.laz", Kind::Pointcloud, Fmt::Laz)?;
@@ -416,17 +490,155 @@ fn read_lidar_origins(dataset_dir: &Path) -> Result<Vec<[f64; 3]>, StageError> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn splat_box_widens_the_walked_bounds() {
-        let k = |x: f64, y: f64, z: f64| Keyframe {
+    /// The Gaussian at `p` (PLY frame) as splat-transform 3.10.1 tests it.
+    fn engine(p: [f64; 3]) -> [f64; 3] {
+        [-p[0], -p[1], p[2]]
+    }
+
+    /// The inputs of a splat-transform argument list (split at each read of
+    /// `ply`), and whether one keeps the Gaussian at `p`: `-B` keeps it inside
+    /// the box, `-V name,cmp,value` where the comparison holds, both in the
+    /// engine frame. `-N` and `-F` drop no well-formed Gaussian here.
+    fn inputs(args: &[OsString], ply: &str) -> Vec<Vec<String>> {
+        let mut out: Vec<Vec<String>> = Vec::new();
+        for a in args.iter().map(|a| a.to_str().unwrap().to_string()) {
+            if a == ply {
+                out.push(Vec::new());
+            } else {
+                out.last_mut().unwrap().push(a);
+            }
+        }
+        out
+    }
+
+    fn keeps(input: &[String], p: [f64; 3]) -> bool {
+        let q = engine(p);
+        let mut it = input.iter();
+        while let Some(flag) = it.next() {
+            match flag.as_str() {
+                "-B" => {
+                    let v: Vec<f64> = it
+                        .next()
+                        .unwrap()
+                        .split(',')
+                        .map(|s| s.parse().unwrap())
+                        .collect();
+                    if !(0..3).all(|i| v[i] <= q[i] && q[i] <= v[i + 3]) {
+                        return false;
+                    }
+                }
+                "-V" => {
+                    let f: Vec<&str> = it.next().unwrap().split(',').collect();
+                    let x = q[["x", "y", "z"].iter().position(|n| *n == f[0]).unwrap()];
+                    let v: f64 = f[2].parse().unwrap();
+                    let ok = match f[1] {
+                        "lt" => x < v,
+                        "lte" => x <= v,
+                        "gt" => x > v,
+                        "gte" => x >= v,
+                        other => panic!("unexpected comparison {other}"),
+                    };
+                    if !ok {
+                        return false;
+                    }
+                }
+                "-F" => {
+                    it.next();
+                }
+                "-N" => {}
+                other => panic!("unexpected flag {other}"),
+            }
+        }
+        true
+    }
+
+    fn k(x: f64, y: f64, z: f64) -> Keyframe {
+        Keyframe {
             centre: [x, y, z],
             yaw_deg: 0.0,
-        };
-        assert_eq!(splat_box(&[]), None);
+        }
+    }
+
+    #[test]
+    fn the_floater_box_is_the_walked_bounds_in_splat_transforms_frame() {
+        let ply = Path::new("/j/train/splat.ply");
+        let plain = splat_filter_args(ply, &[], &[], 0.05);
+        assert_eq!(plain, ["/j/train/splat.ply", "-N", "-F", "0.05,0.1"]);
+        // Walked bounds -3,-7,0.5 .. 13,3,4.7 with x and y mirrored.
+        let a = splat_filter_args(ply, &[k(0.0, 0.0, 1.5), k(10.0, -4.0, 1.7)], &[], 0.05);
+        let filtered = &inputs(&a, "/j/train/splat.ply")[0];
         assert_eq!(
-            splat_box(&[k(0.0, 0.0, 1.5), k(10.0, -4.0, 1.7)]).unwrap(),
-            "-3,-7,0.5,13,3,4.7"
+            filtered,
+            &["-N", "-B", "-13,-3,0.5,3,7,4.7", "-F", "0.05,0.1"]
         );
+        assert!(keeps(filtered, [12.0, -6.0, 1.0]));
+        assert!(!keeps(filtered, [-12.0, 6.0, 1.0]));
+    }
+
+    #[test]
+    fn every_gaussian_is_read_once_and_only_those_in_the_box_are_floater_filtered() {
+        // A drone flying 4 to 14 m over ground at z -0.5 to 0 that the
+        // cameras saw out to 99 m by 54 m, plus 0.5 % of points triangulated
+        // far off (under the 1 % tail).
+        let walk = [k(10.0, 10.0, 4.0), k(50.0, 30.0, 14.0)];
+        let mut cloud: Vec<[f64; 3]> = (0..995)
+            .map(|i| {
+                let (x, y) = ((i % 100) as f64, (i / 100) as f64 * 6.0);
+                [x, y, -0.5 + (i % 7) as f64 / 14.0]
+            })
+            .collect();
+        cloud.extend([[2000.0, 0.0, 500.0]; 5]);
+        let (lo, hi) = splat_bounds(&walk, &cloud).unwrap();
+        assert!(
+            lo[2] <= -0.4,
+            "the ground under the walk is in the box: {lo:?}"
+        );
+        assert_eq!((hi[0], hi[1], hi[2]), (99.0, 54.0, 17.0));
+        let a = splat_filter_args(Path::new("s.ply"), &walk, &cloud, 0.356);
+        let ins = inputs(&a, "s.ply");
+        assert_eq!(ins.len(), 7);
+        assert!(ins[0].contains(&"-F".to_string()));
+        assert!(ins[1..].iter().all(|i| !i.contains(&"-F".to_string())));
+        // Points inside, on each face of, and beyond the box on every side.
+        let (lo, hi) = engine_box(&walk, &cloud).unwrap();
+        let mut probes = vec![[95.0, 50.0, -0.3], [50.0, 30.0, 14.0], [2000.0, 0.0, 500.0]];
+        for x in [
+            lo[0] - 5.0,
+            lo[0],
+            (lo[0] + hi[0]) / 2.0,
+            hi[0],
+            hi[0] + 5.0,
+        ] {
+            for y in [
+                lo[1] - 5.0,
+                lo[1],
+                (lo[1] + hi[1]) / 2.0,
+                hi[1],
+                hi[1] + 5.0,
+            ] {
+                for z in [
+                    lo[2] - 5.0,
+                    lo[2],
+                    (lo[2] + hi[2]) / 2.0,
+                    hi[2],
+                    hi[2] + 5.0,
+                ] {
+                    probes.push(engine([x, y, z]));
+                }
+            }
+        }
+        for p in probes {
+            let readers: Vec<usize> = (0..ins.len()).filter(|&i| keeps(&ins[i], p)).collect();
+            assert_eq!(readers.len(), 1, "{p:?} is read by inputs {readers:?}");
+            let q = engine(p);
+            let inside = (0..3).all(|i| lo[i] <= q[i] && q[i] <= hi[i]);
+            assert_eq!(readers[0] == 0, inside, "{p:?}");
+        }
+        assert!(
+            keeps(&ins[0], [95.0, 50.0, -0.3]),
+            "the seen ground is filtered"
+        );
+        assert!(!keeps(&ins[0], [2000.0, 0.0, 500.0]), "the far tail is not");
     }
 
     #[test]

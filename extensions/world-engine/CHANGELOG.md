@@ -329,6 +329,24 @@ All notable changes to the World Engine extension.
   covers a take-off; past that the climb is a transit and is matched against
   the shaft's walls, without the height band, until it has paused for 2 s.
   Replayed on the recorded shaft descent the error stays under 0.55 m. 2.1.14.
+- **A camera the stored rig lacks is added to the session's rig.** The
+  session records `/cam/<id>/image` for every enabled camera, but a stored
+  rig (`PUT /api/v1/sensors/rig`) was taken as it was, and the node indexes
+  only the rig's cameras: a drone whose rig listed its LiDAR and IMU recorded
+  5.2 GB of frames that reconstructed nothing ("the session has no camera
+  frames"). An enabled camera with frames and no rig sensor of its id now
+  joins the rig as a derived camera would (configured or `atlas.hfov_deg`
+  intrinsics, `calibrated: false`), logged as `rig_camera_derived`. 2.1.15.
+- **The exported splat keeps the whole scene, and its floater filter works on
+  the site rather than its mirror image.** splat-transform reads a PLY's x and
+  y negated, so the box handed to it kept the mirror image of the walked site;
+  and cutting the splat to any box dropped the distant scenery and sky the
+  views see (held-out PSNR on a 270 m outdoor walk: 18.0 dB uncut, 13.6 dB
+  cut to the box). The floater filter now runs only inside a box, the walked
+  bounds grown to the reconstructed cloud's 1st to 99th percentile in
+  splat-transform's frame (it still bounds the filter's voxel grid), and the
+  Gaussians outside it are kept unfiltered: 18.0 dB, the filter finishing in
+  2.5 min on that walk. 2.1.15.
 
 ## [2.0.0]
 
