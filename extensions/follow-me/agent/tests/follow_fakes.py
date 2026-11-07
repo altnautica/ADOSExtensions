@@ -69,11 +69,35 @@ class _MAVLink:
 
 
 class _Flight:
+    """The pilot's motion surface: a lease, goals under it, the stick feed.
+
+    ``setpoints`` records every goal sent (the follow's only motion output);
+    ``acquire_reply`` is what the next ``lease_acquire`` returns.
+    """
+
     def __init__(self) -> None:
         self.setpoints: list[dict[str, Any]] = []
+        self.goal_leases: list[str] = []
+        self.acquire_reply: dict[str, Any] = {"ok": True, "lease_id": "L1"}
+        self.acquires: list[dict[str, Any]] = []
+        self.releases: list[str] = []
+        self.sticks_subscribed = False
 
-    async def guided_setpoint(self, **kwargs: Any) -> dict:
-        self.setpoints.append(dict(kwargs))
+    async def lease_acquire(self, *, kind: str, skill_id: str) -> dict:
+        self.acquires.append({"kind": kind, "skill_id": skill_id})
+        return dict(self.acquire_reply)
+
+    async def lease_release(self, lease_id: str) -> dict:
+        self.releases.append(lease_id)
+        return {"ok": True}
+
+    async def goal_send(self, lease_id: str, goal: dict[str, Any]) -> dict:
+        self.goal_leases.append(lease_id)
+        self.setpoints.append(dict(goal))
+        return {"ok": True}
+
+    async def sticks_subscribe(self) -> dict:
+        self.sticks_subscribed = True
         return {"ok": True}
 
 

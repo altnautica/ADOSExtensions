@@ -63,8 +63,9 @@ export type HoldReason =
   | "pose-stale"
   | "fc-stale"
   | "fc-disarmed"
-  | "fc-not-guided"
-  | "no-range";
+  | "no-range"
+  | "lease-busy"
+  | "lease-refused";
 
 const HOLD_REASONS: readonly HoldReason[] = [
   "inactive",
@@ -74,9 +75,14 @@ const HOLD_REASONS: readonly HoldReason[] = [
   "pose-stale",
   "fc-stale",
   "fc-disarmed",
-  "fc-not-guided",
   "no-range",
+  "lease-busy",
+  "lease-refused",
 ];
+
+/** Follow at a distance and an angle, or orbit the subject. */
+export type FollowMode = "follow" | "orbit";
+export type OrbitDirection = "cw" | "ccw";
 
 /** Hold reasons that mean an input the follow depends on stopped arriving,
  * rather than a normal not-flying-yet state. */
@@ -119,9 +125,9 @@ export interface FollowState {
   reacquireMode: ReacquireMode;
   /** Seconds left in a smart re-acquire window; 0 outside one. */
   coastRemainingS: number;
-  /** Detection frame to setpoint send, milliseconds. */
+  /** Detection frame to goal send, milliseconds. */
   pipelineLatencyMs: number | null;
-  /** Guided setpoints sent per second over the last 2 s. */
+  /** Pilot goals sent per second over the last 2 s. */
   setpointRateHz: number;
   commanding: boolean;
   /** Flight-controller armed state, as of the last HEARTBEAT. False once
@@ -131,6 +137,17 @@ export interface FollowState {
   fcGuided: boolean;
   /** Which gate is holding, when not commanding. Null while commanding. */
   holdReason: HoldReason | null;
+  followMode: FollowMode;
+  followAngleDeg: number;
+  orbitRadiusM: number;
+  orbitRateDps: number;
+  orbitDirection: OrbitDirection;
+  /** Bearing of the vehicle's ring point from the subject; null outside an orbit. */
+  orbitPhaseDeg: number | null;
+  /** The pilot motion lease the follow holds, or null. */
+  leaseId: string | null;
+  /** The operator nudged the parameters with the sticks this session. */
+  nudged: boolean;
 }
 
 /** The agent emits snake_case keys; normalize to the camelCase shape. */
@@ -156,6 +173,14 @@ export interface RawFollowState {
   fc_armed?: boolean;
   fc_guided?: boolean;
   hold_reason?: HoldReason | string | null;
+  follow_mode?: string;
+  follow_angle_deg?: number;
+  orbit_radius_m?: number;
+  orbit_rate_dps?: number;
+  orbit_direction?: string;
+  orbit_phase_deg?: number | null;
+  lease_id?: string | null;
+  nudged?: boolean;
 }
 
 /** The per-drone config the tab reads through ctx.config. */
@@ -171,6 +196,12 @@ export interface FollowConfig {
   reacquire_window_s: number;
   reacquire_min_similarity: number;
   max_speed_mps: number;
+  follow_mode: FollowMode;
+  follow_angle_deg: number;
+  orbit_radius_m: number;
+  orbit_rate_dps: number;
+  orbit_direction: OrbitDirection;
+  obstacle_margin_m: number;
 }
 
 export const DEFAULT_CONFIG: FollowConfig = {
@@ -185,6 +216,12 @@ export const DEFAULT_CONFIG: FollowConfig = {
   reacquire_window_s: 4,
   reacquire_min_similarity: 0.75,
   max_speed_mps: 6,
+  follow_mode: "follow",
+  follow_angle_deg: 180,
+  orbit_radius_m: 8,
+  orbit_rate_dps: 10,
+  orbit_direction: "cw",
+  obstacle_margin_m: 1.5,
 };
 
 /** Empty follow state baseline before the first read-back arrives. */
@@ -210,6 +247,14 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   fcArmed: false,
   fcGuided: false,
   holdReason: null,
+  followMode: "follow",
+  followAngleDeg: 180,
+  orbitRadiusM: 8,
+  orbitRateDps: 10,
+  orbitDirection: "cw",
+  orbitPhaseDeg: null,
+  leaseId: null,
+  nudged: false,
 };
 
 /** Map the agent's snake_case read-back onto the camelCase FollowState. */
@@ -242,7 +287,34 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     fcArmed: raw.fc_armed === true,
     fcGuided: raw.fc_guided === true,
     holdReason: normalizeHoldReason(raw.hold_reason),
+    followMode: normalizeFollowMode(raw.follow_mode),
+    followAngleDeg: num(raw.follow_angle_deg) ?? 180,
+    orbitRadiusM: num(raw.orbit_radius_m) ?? 8,
+    orbitRateDps: num(raw.orbit_rate_dps) ?? 10,
+    orbitDirection: normalizeOrbitDirection(raw.orbit_direction),
+    orbitPhaseDeg: num(raw.orbit_phase_deg),
+    leaseId: typeof raw.lease_id === "string" && raw.lease_id ? raw.lease_id : null,
+    nudged: raw.nudged === true,
   };
+}
+
+/** Anything but exactly "orbit" is the follow mode (the agent's rule). */
+export function normalizeFollowMode(v: unknown): FollowMode {
+  return v === "orbit" ? "orbit" : "follow";
+}
+
+/** Anything but exactly "ccw" is clockwise (the agent's rule). */
+export function normalizeOrbitDirection(v: unknown): OrbitDirection {
+  return v === "ccw" ? "ccw" : "cw";
+}
+
+/** "Follow 180° · 8 m" or "Orbit 8 m · 10°/s · CW". */
+export function modeSummary(f: FollowState, distanceM: number | null): string {
+  if (f.followMode === "orbit") {
+    return `Orbit ${f.orbitRadiusM} m · ${f.orbitRateDps}°/s · ${f.orbitDirection.toUpperCase()}`;
+  }
+  const d = distanceM == null ? "" : ` · ${distanceM} m`;
+  return `Follow ${Math.round(f.followAngleDeg)}°${d}`;
 }
 
 /** Strict unless the value is exactly "smart": an unknown mode must never

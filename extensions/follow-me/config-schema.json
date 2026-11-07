@@ -80,10 +80,56 @@
     "max_speed_mps": {
       "type": "number",
       "title": "Maximum speed (m/s)",
-      "description": "Cap on the velocity feed-forward sent to the flight controller.",
+      "description": "Cap on the velocity feed-forward sent to the pilot with each goal.",
       "default": 6,
       "minimum": 0.5,
       "maximum": 15
+    },
+    "follow_mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "follow: hold a distance and an angle from the subject's travel heading. orbit: circle the subject at a radius and an angular rate.",
+      "enum": ["follow", "orbit"],
+      "default": "follow"
+    },
+    "follow_angle_deg": {
+      "type": "number",
+      "title": "Follow angle (deg)",
+      "description": "Angle from the subject's travel heading the drone holds: 180 behind, 90 on its right, 270 on its left, 0 leading.",
+      "default": 180,
+      "minimum": 0,
+      "maximum": 355
+    },
+    "orbit_radius_m": {
+      "type": "number",
+      "title": "Orbit radius (m)",
+      "description": "Radius of the circle flown around the subject in orbit mode.",
+      "default": 8,
+      "minimum": 3,
+      "maximum": 30
+    },
+    "orbit_rate_dps": {
+      "type": "number",
+      "title": "Orbit rate (deg/s)",
+      "description": "Angular rate around the subject in orbit mode.",
+      "default": 10,
+      "minimum": 2,
+      "maximum": 30
+    },
+    "orbit_direction": {
+      "type": "string",
+      "title": "Orbit direction",
+      "description": "cw: clockwise seen from above. ccw: counter-clockwise.",
+      "enum": ["cw", "ccw"],
+      "default": "cw"
+    },
+    "obstacle_margin_m": {
+      "type": "number",
+      "title": "Obstacle margin (m)",
+      "description": "Clearance the pilot's planner keeps from obstacles while this skill flies.",
+      "default": 1.5,
+      "minimum": 0.8,
+      "maximum": 5
     },
     "detector": {
       "type": "string",

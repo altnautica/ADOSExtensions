@@ -17,6 +17,26 @@ FOLLOW_STATE_TOPIC = "follow.state"
 # gave the subject up.
 FOLLOW_REACQUIRED_TOPIC = "follow.reacquired"
 FOLLOW_LOST_TOPIC = "follow.lost"
+# The follow stopped because the pilot revoked its motion lease (operator
+# pause or stick takeover, a land/RTH, an FC mode change, ...).
+FOLLOW_STOPPED_TOPIC = "follow.stopped"
+
+# Follow modes. ``follow``: hold a distance and an angle from the subject's
+# travel heading (180 behind, 90 right side, 0 lead). ``orbit``: circle the
+# subject at a radius and an angular rate.
+FOLLOW_MODE_FOLLOW = "follow"
+FOLLOW_MODE_ORBIT = "orbit"
+_FOLLOW_MODES = (FOLLOW_MODE_FOLLOW, FOLLOW_MODE_ORBIT)
+ORBIT_CW = "cw"
+ORBIT_CCW = "ccw"
+_ORBIT_DIRECTIONS = (ORBIT_CW, ORBIT_CCW)
+
+# Config ranges, shared by the resolver, the stick nudges and the schema.
+FOLLOW_DISTANCE_RANGE = (3.0, 30.0)
+FOLLOW_HEIGHT_RANGE = (0.0, 20.0)
+ORBIT_RADIUS_RANGE = (3.0, 30.0)
+ORBIT_RATE_RANGE = (2.0, 30.0)
+OBSTACLE_MARGIN_RANGE = (0.8, 5.0)
 
 # Lock-state words on the wire (lowercase, matching the vision contract).
 LOCK_LOCKED = "locked"
@@ -58,8 +78,12 @@ HOLD_LOCK_LOST = "lock-lost"
 HOLD_POSE_STALE = "pose-stale"
 HOLD_FC_STALE = "fc-stale"
 HOLD_FC_DISARMED = "fc-disarmed"
-HOLD_FC_NOT_GUIDED = "fc-not-guided"
 HOLD_NO_RANGE = "no-range"
+# The pilot refused the motion lease: another skill holds it
+# (``lease-busy``) or the vehicle cannot be flown by a skill right now
+# (``lease-refused``: disarmed, wrong vehicle class, no guided mode).
+HOLD_LEASE_BUSY = "lease-busy"
+HOLD_LEASE_REFUSED = "lease-refused"
 
 
 @dataclass(frozen=True)
@@ -85,6 +109,13 @@ class FollowConfig:
     reacquire_window_s: float = 4.0
     reacquire_min_similarity: float = 0.75
     max_speed_mps: float = 6.0
+    follow_mode: str = FOLLOW_MODE_FOLLOW
+    follow_angle_deg: float = 180.0
+    orbit_radius_m: float = 8.0
+    orbit_rate_dps: float = 10.0
+    orbit_direction: str = ORBIT_CW
+    # The skill's obstacle margin, passed to the pilot's planner in each goal.
+    obstacle_margin_m: float = 1.5
 
     @classmethod
     def resolve(
@@ -102,15 +133,19 @@ class FollowConfig:
             return default
 
         mode = str(pick("reacquire_mode", cls.reacquire_mode)).strip().lower()
+        follow_mode = str(pick("follow_mode", cls.follow_mode)).strip().lower()
+        direction = str(pick("orbit_direction", cls.orbit_direction)).strip().lower()
         return cls(
             active=bool(pick("active", cls.active)),
-            follow_distance_m=_as_float(
+            follow_distance_m=_clamped(
                 pick("follow_distance_m", cls.follow_distance_m),
                 cls.follow_distance_m,
+                *FOLLOW_DISTANCE_RANGE,
             ),
-            follow_height_m=_as_float(
+            follow_height_m=_clamped(
                 pick("follow_height_m", cls.follow_height_m),
                 cls.follow_height_m,
+                *FOLLOW_HEIGHT_RANGE,
             ),
             gimbal_point=bool(pick("gimbal_point", cls.gimbal_point)),
             designate_camera=str(
@@ -145,14 +180,36 @@ class FollowConfig:
                 0.5,
                 15.0,
             ),
+            follow_mode=follow_mode if follow_mode in _FOLLOW_MODES else FOLLOW_MODE_FOLLOW,
+            follow_angle_deg=_as_float(
+                pick("follow_angle_deg", cls.follow_angle_deg), cls.follow_angle_deg
+            )
+            % 360.0,
+            orbit_radius_m=_clamped(
+                pick("orbit_radius_m", cls.orbit_radius_m),
+                cls.orbit_radius_m,
+                *ORBIT_RADIUS_RANGE,
+            ),
+            orbit_rate_dps=_clamped(
+                pick("orbit_rate_dps", cls.orbit_rate_dps),
+                cls.orbit_rate_dps,
+                *ORBIT_RATE_RANGE,
+            ),
+            orbit_direction=direction if direction in _ORBIT_DIRECTIONS else ORBIT_CW,
+            obstacle_margin_m=_clamped(
+                pick("obstacle_margin_m", cls.obstacle_margin_m),
+                cls.obstacle_margin_m,
+                *OBSTACLE_MARGIN_RANGE,
+            ),
         )
 
 
 def _as_float(value: object, default: float) -> float:
     try:
-        return float(value)  # type: ignore[arg-type]
+        v = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return default
+    return v if v == v and abs(v) != float("inf") else default
 
 
 def _clamped(value: object, default: float, lo: float, hi: float) -> float:
@@ -198,6 +255,16 @@ class FollowState:
     pipeline_latency_ms: int | None = None
     track_id: int | None = None
     confidence: float | None = None
+    follow_mode: str = FOLLOW_MODE_FOLLOW
+    follow_angle_deg: float = 180.0
+    orbit_radius_m: float = 8.0
+    orbit_rate_dps: float = 10.0
+    orbit_direction: str = ORBIT_CW
+    orbit_phase_deg: float | None = None
+    # The pilot motion lease this follow holds, or None.
+    lease_id: str | None = None
+    # The operator nudged the follow parameters with the sticks this session.
+    nudged: bool = False
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -210,6 +277,16 @@ __all__ = [
     "FOLLOW_STATE_TOPIC",
     "FOLLOW_REACQUIRED_TOPIC",
     "FOLLOW_LOST_TOPIC",
+    "FOLLOW_STOPPED_TOPIC",
+    "FOLLOW_MODE_FOLLOW",
+    "FOLLOW_MODE_ORBIT",
+    "ORBIT_CW",
+    "ORBIT_CCW",
+    "FOLLOW_DISTANCE_RANGE",
+    "FOLLOW_HEIGHT_RANGE",
+    "ORBIT_RADIUS_RANGE",
+    "ORBIT_RATE_RANGE",
+    "OBSTACLE_MARGIN_RANGE",
     "LOCK_LOCKED",
     "LOCK_UNCERTAIN",
     "LOCK_LOST",
@@ -229,8 +306,9 @@ __all__ = [
     "HOLD_POSE_STALE",
     "HOLD_FC_STALE",
     "HOLD_FC_DISARMED",
-    "HOLD_FC_NOT_GUIDED",
     "HOLD_NO_RANGE",
+    "HOLD_LEASE_BUSY",
+    "HOLD_LEASE_REFUSED",
     "FollowConfig",
     "FollowState",
 ]

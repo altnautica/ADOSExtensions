@@ -4,8 +4,10 @@ The companion-side half of the Follow-Me behavior. It subscribes to the
 vision engine's detection stream and the flight controller's local pose,
 height-above-ground rangefinder and arm/mode state, locks onto an
 operator-designated subject, estimates where the subject stands and how it
-moves, and flies a standoff follow by streaming local-frame guided setpoints
-(position, velocity feed-forward and yaw) to the autopilot at 20 Hz.
+moves, and flies a follow (a distance and an angle from the subject's travel
+heading) or an orbit by sending goals to the agent's pilot at 20 Hz under a
+motion lease. The pilot owns obstacle avoidance and the speed limits; the
+operator's sticks nudge the follow parameters while the lease is held.
 
 Designation is operator-driven and owned by the vision engine: the operator
 designates a subject through the engine (the GCS overlay calls the engine's
@@ -48,6 +50,7 @@ from follow_me.coast import CoastMixin
 from follow_me.demand import DetectionLease
 from follow_me.fc_state import FcState, FcStateMixin, GimbalState, Pose, Rangefinder
 from follow_me.loop import FollowLoopMixin, Sighting
+from follow_me.motion import LEASE_REVOKED_TOPIC, STICKS_TOPIC, Nudges
 from follow_me.ranging import Scan
 from follow_me.readback import ReadbackMixin
 from follow_me.reacquire import Coast, Embedding, embedding_of
@@ -88,6 +91,12 @@ _CONFIG_KEYS = (
     "reacquire_window_s",
     "reacquire_min_similarity",
     "max_speed_mps",
+    "follow_mode",
+    "follow_angle_deg",
+    "orbit_radius_m",
+    "orbit_rate_dps",
+    "orbit_direction",
+    "obstacle_margin_m",
 )
 
 
@@ -122,7 +131,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         # real gimbal attitude.
         self._commanded_gimbal: tuple[float, float] | None = None
         self._last_gimbal_s: float = -math.inf
-        # Send times of the guided setpoints, for the published send rate
+        # Send times of the pilot goals, for the published send rate
         # (bounded: 20 Hz over a 2 s window is 40 entries).
         self._setpoint_times: deque[float] = deque(maxlen=256)
         # The real source-frame size from the most recent detection batch that
@@ -141,7 +150,18 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._last_fix: Any = None
         self._coast: Coast | None = None
         self._phase = PHASE_IDLE
-        self._hold_sends_remaining = 0
+        # The pilot's motion lease, the last refusal and when it was asked.
+        self._lease_id: str | None = None
+        self._lease_tried_s: float = -math.inf
+        self._lease_refusal: str | None = None
+        self._revoked_reason: str | None = None
+        self._nudges = Nudges()
+        # Follow reference heading and orbit phase, reset on a new track or a
+        # mode change.
+        self._ref_heading: float | None = None
+        self._orbit_phase: float | None = None
+        self._geom_mode: str | None = None
+        self._geom_tick_s: float | None = None
         self._pending_latency_ts_ms: int | None = None
         self._latency_ms: int | None = None
         self._last_lost_track_id: int | None = None
@@ -197,6 +217,13 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
             self._on_batch, camera_id=None, embeddings=True
         )
         await self._subscribe_scan(fc_state.monotonic())
+
+        # The pilot revokes the motion lease (pause, stick takeover, land,
+        # RTH, FC mode change) and forwards the operator's sticks while it is
+        # held; both arrive only to the holder.
+        await ctx.events.subscribe(LEASE_REVOKED_TOPIC, self._on_lease_revoked)
+        await ctx.events.subscribe(STICKS_TOPIC, self._on_sticks)
+        await ctx.flight.sticks_subscribe()
 
         # MCP tools (guarded: the host injects ctx.tools only when the
         # mcp.expose capability is granted). Read-only + stop; there is no
@@ -311,6 +338,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._filter.reset()
         self._filter_track_id = None
         if self._ctx is not None:
+            await self._release_lease()
             await self._lease.release(self._ctx)
             await self._publish_state(
                 self._cfg, phase=PHASE_IDLE, hold_reason=HOLD_INACTIVE, force=True
@@ -325,7 +353,10 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
             if value is not None:
                 live[key] = value
         static = dict(getattr(self._ctx, "config", {}) or {})
-        return FollowConfig.resolve(live, static)
+        cfg = FollowConfig.resolve(live, static)
+        # Stick nudges fly at once; the config catches up on the write-back.
+        self._nudges.settle(cfg)
+        return self._nudges.apply_to(cfg)
 
     async def _config_for_tick(self) -> FollowConfig:
         """The per-drone config for one loop iteration: the full key set every

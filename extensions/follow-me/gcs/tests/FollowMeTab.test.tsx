@@ -96,7 +96,7 @@ describe("FollowMeTab", () => {
     expect(screen.getByTestId("fm-range").textContent).toBe("12.3 m");
   });
 
-  it("shows the honest FC state when locked but the FC is not guided", () => {
+  it("shows the honest FC state when the pilot refuses the lease", () => {
     const h = harnessCtx();
     render(
       <FollowMeTab
@@ -106,9 +106,12 @@ describe("FollowMeTab", () => {
           commanding: false,
           fcArmed: true,
           fcGuided: false,
-          holdReason: "fc-not-guided",
+          holdReason: "lease-refused",
         }}
       />,
+    );
+    expect(screen.getByTestId("fm-hold-reason").textContent).toBe(
+      "The pilot cannot hand over the vehicle",
     );
     // Locked but not commanding, and the FC rows explain why.
     expect(screen.getByTestId("fm-commanding").textContent).toBe("No");

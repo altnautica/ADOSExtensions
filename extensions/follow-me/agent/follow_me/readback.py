@@ -43,6 +43,10 @@ _DISCRETE_KEYS = (
     "target_id",
     "reacquire_mode",
     "agl_source",
+    "follow_mode",
+    "orbit_direction",
+    "lease_id",
+    "nudged",
 )
 
 
@@ -73,6 +77,9 @@ class ReadbackMixin:
     _latency_ms: int | None
     _active_camera: str | None
     _setpoint_times: Any
+    _lease_id: str | None
+    _nudges: Any
+    _orbit_phase: float | None
 
     def _setpoint_rate_hz(self, now: float) -> float:
         """Setpoints sent per second over the last SETPOINT_RATE_WINDOW_S."""
@@ -265,8 +272,17 @@ class ReadbackMixin:
             pipeline_latency_ms=self._latency_ms,
             setpoint_rate_hz=self._setpoint_rate_hz(now),
         )
+        state.lease_id = self._lease_id
+        state.nudged = self._nudges.nudged
+        if self._orbit_phase is not None:
+            state.orbit_phase_deg = _r(math.degrees(self._orbit_phase) % 360.0, 1)
         if cfg is not None:
             state.reacquire_mode = cfg.reacquire_mode
+            state.follow_mode = cfg.follow_mode
+            state.follow_angle_deg = _r(cfg.follow_angle_deg, 1)
+            state.orbit_radius_m = _r(cfg.orbit_radius_m)
+            state.orbit_rate_dps = _r(cfg.orbit_rate_dps, 1)
+            state.orbit_direction = cfg.orbit_direction
             if commanding:
                 state.distance_setpoint_m = cfg.follow_distance_m
                 state.height_setpoint_m = cfg.follow_height_m

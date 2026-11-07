@@ -20,42 +20,6 @@ def _decode(frame: bytes):
     return msgs[-1] if msgs else None
 
 
-def _local(**overrides: float) -> dict:
-    args = dict(
-        north_m=12.5,
-        east_m=-3.25,
-        down_m=-4.0,
-        vn_mps=1.4,
-        ve_mps=-0.2,
-        vd_mps=0.0,
-        yaw_rad=1.2,
-    )
-    args.update(overrides)
-    return mavlink_frames.build_local_setpoint(**args)
-
-
-def test_local_setpoint_carries_position_velocity_and_yaw() -> None:
-    # The setpoint is built as ctx.flight.guided_setpoint kwargs; the agent's
-    # scoped flight sender encodes it as SET_POSITION_TARGET_LOCAL_NED (84).
-    sp = _local()
-    assert sp["kind"] == "local_ned"
-    assert sp["coordinate_frame"] == mavlink2.MAV_FRAME_LOCAL_NED == 1
-    assert (sp["x"], sp["y"], sp["z"]) == (12.5, -3.25, -4.0)
-    assert (sp["vx"], sp["vy"], sp["vz"]) == (1.4, -0.2, 0.0)
-    assert sp["yaw"] == 1.2
-
-
-def test_local_setpoint_mask_is_2496() -> None:
-    mask = _local()["type_mask"]
-    assert mask == 2496
-    # Acceleration (6,7,8) and yaw-rate (11) ignored.
-    for bit in (6, 7, 8, 11):
-        assert mask & (1 << bit), f"bit {bit} should be set (ignored)"
-    # Position (0-2), velocity (3-5) and yaw (10) used.
-    for bit in (0, 1, 2, 3, 4, 5, 10):
-        assert not (mask & (1 << bit)), f"bit {bit} should be clear (used)"
-
-
 def test_gimbal_pitchyaw_is_valid_command_long() -> None:
     frame = mavlink_frames.build_gimbal_pitchyaw(pitch_deg=-30.0, yaw_deg=15.0)
     assert frame[0] == 0xFD

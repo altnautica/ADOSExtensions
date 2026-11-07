@@ -4,6 +4,45 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.0] - 2026-11-06
+
+### Added
+
+- Follow modes: `follow` holds `follow_angle_deg` from the subject's travel
+  heading (180 behind, 90 right side, 0 lead) at `follow_distance_m`;
+  `orbit` circles the subject at `orbit_radius_m` and `orbit_rate_dps`,
+  `orbit_direction` cw or ccw. The follow reference heading starts where the
+  drone is (no swing on engage) and slews at up to 45 °/s; the orbit phase
+  advances only once the drone is within 2 m of the ring.
+- The vehicle is flown by the agent's pilot: the plugin holds the pilot's
+  motion lease (`flight.motion`) and sends goals carrying the subject and
+  the detour ring, so obstacle avoidance comes from the pilot's planner with
+  the skill's `obstacle_margin_m`. A refused lease holds with `lease-busy` or
+  `lease-refused` and is retried once a second.
+- A revoked lease (pause, stick takeover, land, RTH, FC mode change) writes
+  `active=false` and publishes `follow.stopped {reason}`.
+- Stick nudges while the lease is held: angle or orbit rate, distance or
+  radius, and height, clamped to their ranges and written back to the
+  per-drone config at most once a second.
+- `follow.state` gains `follow_mode`, `follow_angle_deg`, `orbit_radius_m`,
+  `orbit_rate_dps`, `orbit_direction`, `orbit_phase_deg`, `lease_id` and
+  `nudged`; the settings tab shows the mode, the lease and whether the
+  sticks nudged it.
+- The skill declares `motion`, `nudge`, `params` and `vehicle_classes`
+  (multirotor, vtol).
+
+### Changed
+
+- Requires agent 0.109.0. The `flight.guided_setpoint` permission and the
+  local SET_POSITION_TARGET builder are gone; holds no longer send a burst
+  of zero-velocity setpoints (the pilot holds).
+- The `fc-not-guided` hold reason is retired: the pilot owns the flight mode.
+
+### Fixed
+
+- `follow_distance_m` is clamped to 3–30 m and `follow_height_m` to 0–20 m;
+  they were unclamped.
+
 ## [0.3.1] - 2026-11-06
 
 ### Changed

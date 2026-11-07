@@ -4,6 +4,7 @@ import {
   EMPTY_FOLLOW_STATE,
   holdReasonLabelKey,
   isStaleHold,
+  modeSummary,
   normalizeFollowState,
 } from "../src/types";
 import { normalizeConfig } from "../src/config";
@@ -106,8 +107,9 @@ describe("hold reasons", () => {
     "pose-stale",
     "fc-stale",
     "fc-disarmed",
-    "fc-not-guided",
     "no-range",
+    "lease-busy",
+    "lease-refused",
   ] as const;
 
   it("has a locale label for every reason the agent can publish", () => {
@@ -173,5 +175,37 @@ describe("normalizeConfig", () => {
 
   it("coerces a numeric string", () => {
     expect(normalizeConfig({ camera_hfov_deg: "90" }).camera_hfov_deg).toBe(90);
+  });
+});
+
+describe("follow modes", () => {
+  it("normalizes the mode, orbit and lease fields", () => {
+    const s = normalizeFollowState({
+      follow_mode: "orbit",
+      orbit_radius_m: 12,
+      orbit_rate_dps: 15,
+      orbit_direction: "ccw",
+      orbit_phase_deg: 90,
+      lease_id: "L1",
+      nudged: true,
+    });
+    expect(s.followMode).toBe("orbit");
+    expect(s.orbitDirection).toBe("ccw");
+    expect(s.orbitPhaseDeg).toBe(90);
+    expect(s.leaseId).toBe("L1");
+    expect(s.nudged).toBe(true);
+    expect(modeSummary(s, null)).toBe("Orbit 12 m · 15°/s · CCW");
+  });
+
+  it("defaults unknown words to follow and clockwise", () => {
+    const s = normalizeFollowState({ follow_mode: "x", orbit_direction: "y" });
+    expect(s.followMode).toBe("follow");
+    expect(s.orbitDirection).toBe("cw");
+    expect(s.leaseId).toBeNull();
+    expect(modeSummary({ ...s, followAngleDeg: 90 }, 8)).toBe("Follow 90° · 8 m");
+  });
+
+  it("drops the retired fc-not-guided reason", () => {
+    expect(normalizeFollowState({ hold_reason: "fc-not-guided" }).holdReason).toBeNull();
   });
 });

@@ -6,16 +6,10 @@ enabled) signing on the outbound link. We build the frames with
 pymavlink so the message layout and CRC-extra are exactly right, then
 hand the packed bytes to the router.
 
-Two messages are produced:
-
-* ``SET_POSITION_TARGET_LOCAL_NED`` (id 84, frame ``MAV_FRAME_LOCAL_NED``)
-  for the guided follow setpoint: position, velocity feed-forward and yaw,
-  with acceleration and yaw-rate ignored.
-* ``COMMAND_LONG`` with ``MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW`` (1000) to
-  point a gimbal at the subject when one is present.
-
-The companion sends with the onboard-computer component id so the autopilot
-accepts the guided setpoint as an onboard command.
+One message is produced: ``COMMAND_LONG`` with
+``MAV_CMD_DO_GIMBAL_MANAGER_PITCHYAW`` (1000) to point a gimbal at the
+subject when one is present, sent with the onboard-computer component id.
+The vehicle itself is flown by the agent's pilot (see ``follow_me.motion``).
 
 Inbound, ``ctx.mavlink.subscribe`` delivers ``{msg_name, frame,
 timestamp_ms}`` with ``frame`` the raw wire bytes; :func:`decode_fields`
@@ -31,26 +25,14 @@ from typing import Any
 from pymavlink.dialects.v20 import common as mavlink2
 
 # Component id the companion sends as. MAV_COMP_ID_ONBOARD_COMPUTER (191):
-# the autopilot treats a guided setpoint from the onboard computer as an
-# authorized command on the same vehicle system id.
+# the autopilot treats a command from the onboard computer as an authorized
+# command on the same vehicle system id.
 ONBOARD_COMPUTER_COMP_ID = 191
 
 # Gimbal-manager flags: retain the gimbal lock so a pitch/yaw command holds
 # the boresight rather than following the body. 0 leaves the flags at the
 # manager default, which is sufficient for point-at-target.
 _GIMBAL_FLAGS_DEFAULT = 0
-
-# Type mask for SET_POSITION_TARGET_LOCAL_NED. Bits set = field IGNORED.
-# Position (bits 0-2), velocity (3-5) and yaw (10) are used; the three
-# acceleration bits (6-8) and yaw-rate (11) are ignored: 2496.
-_IGNORE_AFX = 1 << 6
-_IGNORE_AFY = 1 << 7
-_IGNORE_AFZ = 1 << 8
-_IGNORE_YAW_RATE = 1 << 11
-POSITION_VELOCITY_YAW_TYPE_MASK = (
-    _IGNORE_AFX | _IGNORE_AFY | _IGNORE_AFZ | _IGNORE_YAW_RATE
-)
-
 
 def _mav(system_id: int, component_id: int) -> mavlink2.MAVLink:
     """A stateless MAVLink encoder bound to a (system, component) source.
@@ -85,37 +67,6 @@ def decode_fields(delivery: Mapping[str, Any]) -> dict[str, Any] | None:
     if msg is None or (isinstance(name, str) and msg.get_type() != name):
         return None
     return msg.to_dict()
-
-
-def build_local_setpoint(
-    *,
-    north_m: float,
-    east_m: float,
-    down_m: float,
-    vn_mps: float,
-    ve_mps: float,
-    vd_mps: float,
-    yaw_rad: float,
-) -> dict[str, float | int | str]:
-    """Build the ``ctx.flight.guided_setpoint`` kwargs for a local follow.
-
-    Describes a SET_POSITION_TARGET_LOCAL_NED in ``MAV_FRAME_LOCAL_NED``
-    (metres from the EKF origin, down positive) carrying position, velocity
-    feed-forward and yaw. The scoped flight sender in the agent encodes and
-    stamps the frame on the outbound link.
-    """
-    return {
-        "kind": "local_ned",
-        "coordinate_frame": int(mavlink2.MAV_FRAME_LOCAL_NED),
-        "type_mask": int(POSITION_VELOCITY_YAW_TYPE_MASK),
-        "x": float(north_m),
-        "y": float(east_m),
-        "z": float(down_m),
-        "vx": float(vn_mps),
-        "vy": float(ve_mps),
-        "vz": float(vd_mps),
-        "yaw": float(yaw_rad),
-    }
 
 
 def build_gimbal_pitchyaw(
@@ -183,8 +134,6 @@ def gimbal_angles_for_target(
 
 __all__ = [
     "ONBOARD_COMPUTER_COMP_ID",
-    "POSITION_VELOCITY_YAW_TYPE_MASK",
-    "build_local_setpoint",
     "build_gimbal_pitchyaw",
     "decode_fields",
     "gimbal_angles_for_target",

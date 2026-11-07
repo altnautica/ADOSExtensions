@@ -35,21 +35,52 @@ then on the agent runs a 20 Hz loop:
      25 % of the other cues.
 4. A constant-velocity Kalman filter tracks the subject's north/east position
    and velocity in the flight controller's local frame (`LOCAL_POSITION_NED`).
-5. It sends `SET_POSITION_TARGET_LOCAL_NED` (msg 84, type mask 2496) through
-   the agent's scoped flight sender. Each setpoint carries:
-   - the standoff point, `follow_distance_m` behind the subject. While the
-     subject moves faster than 0.5 m/s this is along its direction of travel;
-     otherwise it is along the line of sight;
-   - the subject's velocity as feed-forward, clamped to `max_speed_mps`;
-   - yaw toward the subject;
-   - a terrain-following height of `follow_height_m` above the ground.
+5. It holds the agent pilot's motion lease and sends it a goal every tick
+   (20 Hz). The pilot flies the goal through its obstacle planner, speed
+   limits and geofence. Each goal carries:
+   - **follow** mode: the point `follow_distance_m` from the subject at
+     `follow_angle_deg` from its travel heading (180 behind, 90 on its right,
+     270 on its left, 0 leading). The reference heading starts where the
+     drone already is, so engaging causes no swing, and slews toward the
+     travel heading at up to 45 °/s while the subject moves faster than
+     0.5 m/s;
+   - **orbit** mode: the point on a circle of `orbit_radius_m` around the
+     subject, advancing at `orbit_rate_dps` in `orbit_direction` once the
+     drone is within 2 m of it;
+   - the subject's velocity (plus the orbit's tangential velocity) as
+     feed-forward, clamped to `max_speed_mps`;
+   - yaw toward the subject, and a terrain-following height of
+     `follow_height_m` above the ground;
+   - the subject's position and the ring the pilot's planner searches for a
+     detour that keeps the subject in view (±90° of the follow angle, ±60°
+     of the orbit phase), with `obstacle_margin_m`.
 6. Optionally, it points a gimbal at the subject.
 
 A lock-state safety gate stops commanding when the tracker reports the
-subject uncertain, or when the pose, the heartbeat or the guided mode is
-missing. A hold that follows commanding sends a short burst of zero-velocity
-setpoints at the current position, then nothing more, so the operator's own
-guided commands are never fought.
+subject uncertain, or when the pose or the heartbeat is missing; while the
+lease is held a hold sends a position goal at the drone's current position.
+Switching the skill off releases the lease and the pilot brakes to its own
+hold.
+
+### Pilot lease, sticks and stopping
+
+- The lease is asked for on the first goal. If another skill holds it the
+  follow holds with `lease-busy`; any other refusal (disarmed, no guided
+  mode, a fixed-wing in forward flight) holds with `lease-refused`. Either is
+  retried once a second.
+- The pilot revokes the lease on a pause, a full stick takeover, land, RTH,
+  an FC mode change or a control-mode change. The follow then writes
+  `active=false` (every surface's skill toggle follows) and publishes
+  `follow.stopped {reason}`.
+- While the lease is held the operator's sticks nudge the parameters:
+
+  | Mode   | Right stick sideways                 | Right stick forward/back  | Left stick up/down |
+  |--------|--------------------------------------|---------------------------|--------------------|
+  | follow | `follow_angle_deg` ±60 °/s           | `follow_distance_m` ±2 m/s (forward = closer) | `follow_height_m` ±1 m/s |
+  | orbit  | `orbit_rate_dps` ±10 °/s² (below the minimum flips the direction) | `orbit_radius_m` ±2 m/s (forward = closer) | `follow_height_m` ±1 m/s |
+
+  Values stay inside their config ranges and are written back to the
+  per-drone config at most once a second, so the surfaces' sliders follow.
 
 ### Re-acquire after occlusion
 
@@ -100,7 +131,7 @@ and then gives up like Strict.
   - height and its source;
   - subject speed;
   - re-acquire mode and window;
-  - detection-to-setpoint latency and setpoint rate.
+  - detection-to-goal latency and goal rate.
 
 ## Events
 
@@ -122,6 +153,9 @@ The other `follow.state` fields:
 - **Commanding:** `commanding`, `hold_reason`.
 - **Flight controller:** `fc_armed`, `fc_guided`.
 - **Setpoints:** `distance_setpoint_m`, `height_setpoint_m`.
+- **Mode:** `follow_mode`, `follow_angle_deg`, `orbit_radius_m`, `orbit_rate_dps`,
+  `orbit_direction`, `orbit_phase_deg`.
+- **Pilot:** `lease_id`, `nudged`.
 
 ## Configuration
 
@@ -140,13 +174,19 @@ Per-drone configuration (see `config-schema.json`):
 | `reacquire_window_s`       | `4`           | `0.5`–`15`  | How long a smart re-acquire coasts.             |
 | `reacquire_min_similarity` | `0.75`        | `0.5`–`0.99`| Appearance similarity needed to re-acquire.     |
 | `max_speed_mps`            | `6`           | `0.5`–`15`  | Cap on the velocity feed-forward.               |
+| `follow_mode`              | `follow`      | follow, orbit | Follow at an angle, or orbit the subject.     |
+| `follow_angle_deg`         | `180`         | `0`–`355`   | Angle from the travel heading (follow mode).    |
+| `orbit_radius_m`           | `8`           | `3`–`30`    | Orbit radius.                                   |
+| `orbit_rate_dps`           | `10`          | `2`–`30`    | Orbit angular rate.                             |
+| `orbit_direction`          | `cw`          | cw, ccw     | Orbit direction seen from above.                |
+| `obstacle_margin_m`        | `1.5`         | `0.8`–`5`   | Clearance the pilot's planner keeps.            |
 | `detector`                 | `coco-person` | —           | Detection model the follow loop consumes.       |
 
 ## Requirements
 
-- A flight controller in a guided position-hold mode (ArduPilot Guided, or
-  PX4 Offboard/position). The plugin sends guided setpoints; it does not change
-  the flight mode itself.
+- ADOS agent 0.109.0 or later: the pilot flies the vehicle; the plugin only
+  sends goals under the pilot's motion lease (capability `flight.motion`).
+  A multirotor, or a VTOL in hover.
 - A camera bound to the vision pipeline producing the detection stream. While
   the behaviour is active the plugin holds a detection lease on that camera
   (renewed every 2 s, 6 s hold, released when it goes inactive), so the engine

@@ -12,7 +12,7 @@ from ados.sdk.vision import BoundingBox, Detection, DetectionBatch
 
 from follow_me.state import (
     HOLD_FC_DISARMED,
-    HOLD_FC_NOT_GUIDED,
+    HOLD_LEASE_REFUSED,
     HOLD_FC_STALE,
     HOLD_POSE_STALE,
     LOCK_LOCKED,
@@ -391,18 +391,22 @@ async def test_a_stale_heartbeat_is_reported_apart_from_a_disarmed_one(
 
 
 @pytest.mark.asyncio
-async def test_a_non_guided_mode_is_named_distinctly(monkeypatch: Any) -> None:
+async def test_a_refused_lease_is_named_distinctly(monkeypatch: Any) -> None:
+    # The pilot owns the mode; when it cannot hand the vehicle to a skill the
+    # refusal is the hold reason, not a silent stall.
     ctx = _Ctx(config=_telemetry_config())
+    ctx.flight.acquire_reply = {"ok": False, "err": "not_guided_capable"}
     plugin = _make_plugin(ctx)
     clock = _install_clock(monkeypatch)
     _level_pose(plugin)
     _arm_guided(plugin, custom_mode=5)  # ArduCopter LOITER
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED, at=clock.now)
+    plugin._filter.update(clock.now, 10.0, 0.0, [[0.25, 0.0], [0.0, 0.25]])
 
     await plugin._tick()
 
     states = _state_events(ctx)
-    assert states[-1]["hold_reason"] == HOLD_FC_NOT_GUIDED
+    assert states[-1]["hold_reason"] == HOLD_LEASE_REFUSED
 
 
 @pytest.mark.asyncio

@@ -111,7 +111,7 @@ def _events(ctx: _Ctx, topic: str) -> list[dict[str, Any]]:
 
 
 @pytest.mark.asyncio
-async def test_follow_sends_local_ned_with_feed_forward_and_publishes_state(
+async def test_follow_sends_a_goal_under_the_lease_and_publishes_state(
     monkeypatch: Any,
 ) -> None:
     ctx = _Ctx(config=_follow_config())
@@ -121,9 +121,11 @@ async def test_follow_sends_local_ned_with_feed_forward_and_publishes_state(
     await _follow_one(plugin, clock)
 
     sp = ctx.flight.setpoints[-1]
-    assert sp["kind"] == "local_ned"
-    assert sp["coordinate_frame"] == 1
-    assert sp["type_mask"] == 2496
+    assert sp["kind"] == "follow"
+    assert ctx.flight.acquires == [{"kind": "motion", "skill_id": "follow-me"}]
+    assert ctx.flight.goal_leases[-1] == "L1"
+    assert sp["subject_ne"] is not None and sp["candidates"]["angle_span_deg"] == 90.0
+    assert sp["margin_m"] == 1.5
     state = _state_events(ctx)[-1]
     assert state["phase"] == PHASE_FOLLOWING
     assert state["commanding"] is True
@@ -133,6 +135,7 @@ async def test_follow_sends_local_ned_with_feed_forward_and_publishes_state(
     assert state["target_ned"] is not None
     assert 80 <= state["pipeline_latency_ms"] <= 81
     assert state["setpoint_rate_hz"] == 0.5
+    assert state["lease_id"] == "L1"
 
 
 def test_loop_runs_at_20_hz() -> None:
@@ -171,11 +174,11 @@ async def test_rangefinder_height_is_used_and_only_downward(monkeypatch: Any) ->
     assert state["agl_source"] == "rng"
     assert state["agl_m"] == pytest.approx(6.0)
     # Terrain-follow: 6 m above ground, want 4 m: the setpoint is 2 m lower.
-    assert ctx.flight.setpoints[-1]["z"] == pytest.approx(-20.0 + 2.0)
+    assert ctx.flight.setpoints[-1]["d"] == pytest.approx(-20.0 + 2.0)
 
 
 @pytest.mark.asyncio
-async def test_a_hold_after_commanding_sends_zero_velocity_then_stops(
+async def test_switching_off_releases_the_lease_and_sends_nothing_more(
     monkeypatch: Any,
 ) -> None:
     ctx = _Ctx(config=_follow_config())
@@ -190,12 +193,9 @@ async def test_a_hold_after_commanding_sends_zero_velocity_then_stops(
         clock.advance(0.05)
         _fresh(plugin)
         await plugin._tick()
-    holds = ctx.flight.setpoints[sent:]
-    # A bounded burst of holds, so the operator's own commands are not fought.
-    assert len(holds) == 5
-    for h in holds:
-        assert (h["vx"], h["vy"], h["vz"]) == (0.0, 0.0, 0.0)
-        assert (h["x"], h["y"], h["z"]) == (0.0, 0.0, -20.0)
+    # The pilot brakes to its own hold once the lease is released.
+    assert ctx.flight.setpoints[sent:] == []
+    assert ctx.flight.releases == ["L1"]
     assert _state_events(ctx)[-1]["phase"] == "idle"
 
 
@@ -220,7 +220,9 @@ async def test_strict_loss_gives_up_announces_and_holds(monkeypatch: Any) -> Non
     assert state["phase"] == PHASE_LOST
     assert state["hold_reason"] == HOLD_LOCK_LOST
     hold = ctx.flight.setpoints[sent]
-    assert (hold["vx"], hold["vy"]) == (0.0, 0.0)
+    assert hold["kind"] == "position"
+    assert (hold["vn"], hold["ve"]) == (0.0, 0.0)
+    assert (hold["n"], hold["e"], hold["d"]) == (0.0, 0.0, -20.0)
 
     # The engine keeps reporting the lost track: no repeat announcement.
     clock.advance(0.05)

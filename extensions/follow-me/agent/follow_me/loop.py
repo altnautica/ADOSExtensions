@@ -1,19 +1,23 @@
 """The follow loop: the command gate, lock loss and re-acquire, and the
-setpoints. A mixin of :class:`follow_me.FollowMePlugin`.
+goals sent to the pilot. A mixin of :class:`follow_me.FollowMePlugin`.
 
 Every tick (20 Hz) decides one of three things:
 
-* **follow**: a live engine lock, a current pose, a live armed+guided flight
-  controller and a recent range fix. The subject filter is updated from each
-  new box and the standoff setpoint (position, velocity feed-forward, yaw) is
-  sent as SET_POSITION_TARGET_LOCAL_NED.
-* **coast** (``smart`` re-acquire only): the lock was lost; fly toward the
-  predicted standoff at half feed-forward for ``reacquire_window_s`` while
-  looking for the subject in each new batch.
-* **hold**: anything else. If the loop was commanding, a few zero-velocity
-  setpoints at the current position are sent so the vehicle stops where it is
-  instead of flying on along the last feed-forward; then nothing more is sent,
-  so the operator's own guided commands are not fought.
+* **follow**: a live engine lock, a current pose, a live armed flight
+  controller, a recent range fix and the pilot's motion lease. The subject
+  filter is updated from each new box and a ``follow`` or ``orbit`` goal
+  (position, velocity feed-forward, yaw, the subject and the detour ring the
+  pilot's planner searches) is sent to the pilot.
+* **coast** (``smart`` re-acquire only): the lock was lost; the goal is the
+  predicted one at half feed-forward for ``reacquire_window_s`` while looking
+  for the subject in each new batch.
+* **hold**: anything else. While the lease is held a ``position`` goal at the
+  vehicle's current position keeps the pilot holding there; when the skill
+  goes inactive the lease is released and the pilot brakes to its own hold.
+
+The pilot revokes the lease on a pause, a stick takeover, land, RTH, an FC
+mode change or a dead plugin; the follow then switches itself off
+(``active=false``) and announces ``follow.stopped``.
 """
 
 from __future__ import annotations
@@ -21,19 +25,23 @@ from __future__ import annotations
 import asyncio
 import math
 from collections import deque
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 
 from follow_me import fc_state, mavlink_frames, setpoint
+from follow_me.motion import LEASE_RETRY_S, SKILL_ID, Nudges, lease_error_reason
 from follow_me.projection import TargetFix
 from follow_me.reacquire import Coast, Embedding, blend_template
 from follow_me.state import (
+    FOLLOW_MODE_ORBIT,
+    FOLLOW_STOPPED_TOPIC,
     HOLD_FC_DISARMED,
-    HOLD_FC_NOT_GUIDED,
     HOLD_FC_STALE,
     HOLD_INACTIVE,
+    HOLD_LEASE_BUSY,
+    HOLD_LEASE_REFUSED,
     HOLD_LOCK_UNCERTAIN,
     HOLD_NO_LOCK,
     HOLD_NO_RANGE,
@@ -57,15 +65,17 @@ _LOOP_PERIOD = 1.0 / _LOOP_HZ
 # With no new range fix for this long the prediction is no longer trusted
 # enough to command on a live lock.
 _MEASUREMENT_STALE_S = 1.0
-# Zero-velocity hold setpoints sent after the loop stops commanding (0.25 s
-# at 20 Hz), so one dropped frame cannot leave the last feed-forward active.
-_HOLD_REPEATS = 5
+# The follow ring the pilot's planner searches for detour goals that keep
+# the subject in view: ±90° around the follow angle, ±60° around the orbit
+# phase.
+_FOLLOW_SPAN_DEG = 90.0
+_ORBIT_SPAN_DEG = 60.0
 # Gimbal pointing is re-sent at most this often.
 _GIMBAL_PERIOD_S = 0.2
 # Detection-to-setpoint latencies outside this are clock mismatches, not
 # measurements, and are not reported.
 _MAX_LATENCY_MS = 10_000.0
-# Window the published setpoint send rate is measured over.
+# Window the published goal send rate is measured over.
 SETPOINT_RATE_WINDOW_S = 2.0
 
 
@@ -100,7 +110,15 @@ class FollowLoopMixin:
     _last_fix: TargetFix | None
     _coast: Coast | None
     _phase: str
-    _hold_sends_remaining: int
+    _lease_id: str | None
+    _lease_tried_s: float
+    _lease_refusal: str | None
+    _revoked_reason: str | None
+    _nudges: Nudges
+    _ref_heading: float | None
+    _orbit_phase: float | None
+    _geom_mode: str | None
+    _geom_tick_s: float | None
     _pending_latency_ts_ms: int | None
     _latency_ms: int | None
     _last_gimbal_s: float
@@ -126,13 +144,18 @@ class FollowLoopMixin:
         # about the same instant and the read-back cannot disagree with the
         # gate that produced it.
         now = fc_state.monotonic()
+        if self._revoked_reason is not None:
+            await self._on_revoked_stop(now)
         cfg = await self._config_for_tick()
         if not cfg.active:
             self._coast = None
+            await self._release_lease()
+            self._nudges.reset_session()
             await self._hold(
                 cfg, now, phase=PHASE_IDLE, hold_reason=HOLD_INACTIVE, active=False
             )
             return
+        await self._nudges.write_back(self._ctx, now)
         if self._coast is not None:
             await self._tick_coast(cfg, now)
             return
@@ -148,8 +171,6 @@ class FollowLoopMixin:
             return HOLD_FC_STALE
         if not self._fc.armed:
             return HOLD_FC_DISARMED
-        if not self._fc.guided:
-            return HOLD_FC_NOT_GUIDED
         return None
 
     async def _tick_follow(self, cfg: FollowConfig, now: float) -> None:
@@ -209,6 +230,8 @@ class FollowLoopMixin:
         self._last_lost_track_id = None
         self._latency_ms = None
         self._pending_latency_ts_ms = None
+        self._ref_heading = None
+        self._orbit_phase = None
 
     def _measure_sighting(self, cfg: FollowConfig, now: float, bbox: Any) -> None:
         self._measured_bbox = bbox
@@ -230,7 +253,168 @@ class FollowLoopMixin:
             if s.embedding is not None:
                 self._template = blend_template(self._template, s.embedding)
 
+    # -- the pilot motion lease -----------------------------------------
+
+    async def _ensure_lease(self, now: float) -> str | None:
+        """Hold the pilot's motion lease; the hold reason when it is refused."""
+        if self._lease_id is not None:
+            return None
+        if self._lease_refusal is not None and (now - self._lease_tried_s) < LEASE_RETRY_S:
+            return self._lease_refusal
+        self._lease_tried_s = now
+        try:
+            reply = await self._ctx.flight.lease_acquire(kind="motion", skill_id=SKILL_ID)
+        except Exception as exc:  # noqa: BLE001
+            self._ctx.log.warning("follow_me_lease_error", error=str(exc))
+            reply = None
+        if isinstance(reply, dict) and reply.get("ok") and reply.get("lease_id"):
+            self._lease_id = str(reply["lease_id"])
+            self._lease_refusal = None
+            self._ctx.log.info("follow_me_lease_acquired", lease_id=self._lease_id)
+            return None
+        err = lease_error_reason(reply)
+        self._lease_refusal = HOLD_LEASE_BUSY if err == "busy" else HOLD_LEASE_REFUSED
+        self._ctx.log.info("follow_me_lease_refused", err=err)
+        return self._lease_refusal
+
+    async def _release_lease(self) -> None:
+        lease_id = self._lease_id
+        self._lease_refusal = None
+        if lease_id is None:
+            return
+        self._lease_id = None
+        try:
+            await self._ctx.flight.lease_release(lease_id)
+        except Exception as exc:  # noqa: BLE001
+            self._ctx.log.warning("follow_me_lease_release_error", error=str(exc))
+
+    def _on_lease_revoked(self, payload: dict[str, Any]) -> None:
+        if self._lease_id is None or str(payload.get("lease_id")) != self._lease_id:
+            return
+        self._lease_id = None
+        self._revoked_reason = str(payload.get("reason") or "revoked")
+
+    def _on_sticks(self, payload: dict[str, Any]) -> None:
+        if self._lease_id is None or str(payload.get("lease_id")) != self._lease_id:
+            return
+        if self._cfg is None:
+            return
+        self._nudges.on_sticks(
+            self._nudges.apply_to(self._cfg), payload.get("axes"), fc_state.monotonic()
+        )
+
+    async def _on_revoked_stop(self, now: float) -> None:
+        """The pilot took the vehicle back: switch the skill off so every
+        surface's toggle follows, and say why."""
+        reason = self._revoked_reason
+        self._revoked_reason = None
+        self._ctx.log.info("follow_me_lease_revoked", reason=reason)
+        setter = getattr(self._ctx.config_kv, "set", None)
+        if setter is not None:
+            await setter("active", False)
+        if self._cfg is not None:
+            self._cfg = replace(self._cfg, active=False)
+        self._coast = None
+        await self._ctx.events.publish(FOLLOW_STOPPED_TOPIC, {"reason": reason})
+
     # -- commanding and holding ----------------------------------------
+
+    def _geometry_dt(self, cfg: FollowConfig, now: float) -> float:
+        """Seconds since the previous goal, resetting the follow reference
+        and orbit phase on a mode change."""
+        if self._geom_mode != cfg.follow_mode:
+            self._geom_mode = cfg.follow_mode
+            self._ref_heading = None
+            self._orbit_phase = None
+            self._geom_tick_s = None
+        dt = 0.0 if self._geom_tick_s is None else now - self._geom_tick_s
+        self._geom_tick_s = now
+        return max(0.0, min(dt, 0.5))
+
+    def _goal(self, cfg: FollowConfig, now: float, x: list[float], ff_scale: float) -> dict[str, Any]:
+        agl, _src = self._agl(now)
+        dt = self._geometry_dt(cfg, now)
+        tn, te, tvn, tve = x[0], x[1], x[2], x[3]
+        dn, de = self._pose.north_m, self._pose.east_m
+        here = setpoint.bearing(tn, te, dn, de)
+        if cfg.follow_mode == FOLLOW_MODE_ORBIT:
+            if self._orbit_phase is None:
+                self._orbit_phase = here if here is not None else self._pose.yaw + math.pi
+            else:
+                self._orbit_phase = setpoint.advance_orbit_phase(
+                    self._orbit_phase,
+                    center_n=tn,
+                    center_e=te,
+                    radius_m=cfg.orbit_radius_m,
+                    rate_dps=cfg.orbit_rate_dps,
+                    direction=cfg.orbit_direction,
+                    drone_n=dn,
+                    drone_e=de,
+                    dt_s=dt,
+                )
+            g = setpoint.orbit_goal(
+                center_n=tn,
+                center_e=te,
+                center_vn=tvn,
+                center_ve=tve,
+                phase_rad=self._orbit_phase,
+                radius_m=cfg.orbit_radius_m,
+                rate_dps=cfg.orbit_rate_dps,
+                direction=cfg.orbit_direction,
+                max_speed_mps=cfg.max_speed_mps,
+                ff_scale=ff_scale,
+            )
+            kind = "orbit"
+            ring = {
+                "ring_center_ne": [tn, te],
+                "radius_m": cfg.orbit_radius_m,
+                "angle_deg": math.degrees(self._orbit_phase) % 360.0,
+                "angle_span_deg": _ORBIT_SPAN_DEG,
+            }
+        else:
+            if self._ref_heading is None:
+                # Engaging causes no swing: the reference starts where the
+                # vehicle already is relative to the subject.
+                base = here if here is not None else self._pose.yaw + math.pi
+                self._ref_heading = setpoint.wrap_pi(base - math.radians(cfg.follow_angle_deg))
+            else:
+                self._ref_heading = setpoint.slew_ref_heading(self._ref_heading, tvn, tve, dt)
+            g = setpoint.follow_goal(
+                target_n=tn,
+                target_e=te,
+                target_vn=tvn,
+                target_ve=tve,
+                ref_heading_rad=self._ref_heading,
+                follow_distance_m=cfg.follow_distance_m,
+                follow_angle_deg=cfg.follow_angle_deg,
+                max_speed_mps=cfg.max_speed_mps,
+                ff_scale=ff_scale,
+                drone_n=dn,
+                drone_e=de,
+                drone_yaw_rad=self._pose.yaw,
+            )
+            kind = "follow"
+            ring = {
+                "ring_center_ne": [tn, te],
+                "radius_m": cfg.follow_distance_m,
+                "angle_deg": math.degrees(self._ref_heading + math.radians(cfg.follow_angle_deg)) % 360.0,
+                "angle_span_deg": _FOLLOW_SPAN_DEG,
+            }
+        return {
+            "kind": kind,
+            "n": g.north_m,
+            "e": g.east_m,
+            "d": setpoint.height_down(self._pose.down_m, agl, cfg.follow_height_m),
+            "vn": g.vn_mps,
+            "ve": g.ve_mps,
+            "vd": 0.0,
+            "yaw": g.yaw_rad,
+            "yaw_rate": None,
+            "subject_ne": [tn, te],
+            "max_speed_mps": cfg.max_speed_mps,
+            "candidates": ring,
+            "margin_m": cfg.obstacle_margin_m,
+        }
 
     async def _command(
         self,
@@ -249,24 +433,15 @@ class FollowLoopMixin:
                 cfg, now, phase=PHASE_HOLDING, hold_reason=HOLD_NO_RANGE, lock_state=lock_state
             )
             return
+        refusal = await self._ensure_lease(now)
+        if refusal is not None:
+            await self._hold(
+                cfg, now, phase=PHASE_HOLDING, hold_reason=refusal, lock_state=lock_state
+            )
+            return
         x = pred[0]
         agl, _src = self._agl(now)
-        sp = setpoint.compute_setpoint(
-            drone_north_m=self._pose.north_m,
-            drone_east_m=self._pose.east_m,
-            drone_down_m=self._pose.down_m,
-            drone_yaw_rad=self._pose.yaw,
-            agl_m=agl,
-            target_north_m=x[0],
-            target_east_m=x[1],
-            target_vn_mps=x[2],
-            target_ve_mps=x[3],
-            follow_distance_m=cfg.follow_distance_m,
-            follow_height_m=cfg.follow_height_m,
-            max_speed_mps=cfg.max_speed_mps,
-            ff_scale=ff_scale,
-        )
-        await self._send_setpoint(sp, now)
+        await self._send_goal(self._goal(cfg, now, x, ff_scale), now)
         if self._pending_latency_ts_ms is not None:
             # Both clocks are the host's monotonic clock (the engine stamps
             # frames with CLOCK_MONOTONIC).
@@ -275,7 +450,6 @@ class FollowLoopMixin:
                 int(round(latency)) if 0.0 <= latency <= _MAX_LATENCY_MS else None
             )
             self._pending_latency_ts_ms = None
-        self._hold_sends_remaining = _HOLD_REPEATS
         await self._point_gimbal(cfg, now, x[0], x[1], agl)
         await self._publish_state(
             cfg,
@@ -300,20 +474,27 @@ class FollowLoopMixin:
         coast_remaining_s: float = 0.0,
         force: bool = False,
     ) -> None:
-        if (
-            self._hold_sends_remaining > 0
-            and self._pose.ready(now)
-            and self._fc.armed_at(now)
-            and self._fc.guided_at(now)
-        ):
-            hold = setpoint.hold_setpoint(
-                north_m=self._pose.north_m,
-                east_m=self._pose.east_m,
-                down_m=self._pose.down_m,
-                yaw_rad=self._pose.yaw,
+        if self._lease_id is not None and active and self._pose.ready(now):
+            # Keep the lease alive and the vehicle where it is: the pilot
+            # holds a position goal at the current position.
+            await self._send_goal(
+                {
+                    "kind": "position",
+                    "n": self._pose.north_m,
+                    "e": self._pose.east_m,
+                    "d": self._pose.down_m,
+                    "vn": 0.0,
+                    "ve": 0.0,
+                    "vd": 0.0,
+                    "yaw": self._pose.yaw,
+                    "yaw_rate": None,
+                    "subject_ne": None,
+                    "max_speed_mps": cfg.max_speed_mps,
+                    "candidates": None,
+                    "margin_m": cfg.obstacle_margin_m,
+                },
+                now,
             )
-            await self._send_setpoint(hold, now)
-            self._hold_sends_remaining -= 1
         await self._publish_state(
             cfg,
             now=now,
@@ -326,13 +507,13 @@ class FollowLoopMixin:
             force=force,
         )
 
-    async def _send_setpoint(self, sp: setpoint.LocalSetpoint, now: float) -> None:
-        """Send one SET_POSITION_TARGET_LOCAL_NED and count it toward the
-        published send rate (the agent's own setpoints never reach a ground
-        tlog, so the read-back is where a bench reads the rate)."""
-        await self._ctx.flight.guided_setpoint(
-            **mavlink_frames.build_local_setpoint(**asdict(sp))
-        )
+    async def _send_goal(self, goal: dict[str, Any], now: float) -> None:
+        """Send one goal under the lease and count it toward the published
+        send rate (the read-back is where a bench reads the rate)."""
+        lease_id = self._lease_id
+        if lease_id is None:
+            return
+        await self._ctx.flight.goal_send(lease_id, goal)
         self._setpoint_times.append(now)
 
     async def _point_gimbal(

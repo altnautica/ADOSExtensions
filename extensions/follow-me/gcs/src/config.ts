@@ -11,6 +11,8 @@
 
 import {
   DEFAULT_CONFIG,
+  normalizeFollowMode,
+  normalizeOrbitDirection,
   normalizeReacquireMode,
   type FollowConfig,
 } from "./types";
@@ -41,6 +43,12 @@ export function normalizeConfig(raw: unknown): FollowConfig {
       DEFAULT_CONFIG.reacquire_min_similarity,
     ),
     max_speed_mps: numberOr(r.max_speed_mps, DEFAULT_CONFIG.max_speed_mps),
+    follow_mode: normalizeFollowMode(r.follow_mode),
+    follow_angle_deg: numberOr(r.follow_angle_deg, DEFAULT_CONFIG.follow_angle_deg),
+    orbit_radius_m: numberOr(r.orbit_radius_m, DEFAULT_CONFIG.orbit_radius_m),
+    orbit_rate_dps: numberOr(r.orbit_rate_dps, DEFAULT_CONFIG.orbit_rate_dps),
+    orbit_direction: normalizeOrbitDirection(r.orbit_direction),
+    obstacle_margin_m: numberOr(r.obstacle_margin_m, DEFAULT_CONFIG.obstacle_margin_m),
   };
 }
 

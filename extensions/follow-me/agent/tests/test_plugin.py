@@ -215,13 +215,13 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
 
 # ---------------------------------------------------------------------------
 # Flight-controller command gate: commanding is honest about the FC state.
-# A locked, active, posed follow only commands when the FC is armed AND in a
-# guided/offboard mode that accepts the setpoints.
+# A locked, active, posed follow only commands when the FC is armed AND the
+# pilot grants the motion lease.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_armed_but_not_guided_holds_without_commanding() -> None:
+async def test_a_refused_lease_holds_without_commanding() -> None:
     ctx = _Ctx(
         config={
             "active": True,
@@ -232,14 +232,15 @@ async def test_armed_but_not_guided_holds_without_commanding() -> None:
     )
     plugin = _make_plugin(ctx)
     _level_pose(plugin)
-    # Armed, but in a non-guided mode (ArduCopter LOITER == 5).
+    # Armed in LOITER (5); the pilot refuses the lease.
     _arm_guided(plugin, custom_mode=5)
+    ctx.flight.acquire_reply = {"ok": False, "err": "not_guided_capable"}
 
     _seed_lock(plugin, track_id=7, lock_state=LOCK_LOCKED)
 
     await plugin._tick()
 
-    assert not ctx.flight.setpoints, "a non-guided FC must not be commanded"
+    assert not ctx.flight.setpoints, "no goal without the pilot's lease"
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is False
     assert states[-1]["fc_armed"] is True

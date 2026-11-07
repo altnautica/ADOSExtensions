@@ -1,8 +1,8 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.3.1"
-description: "Lock onto an operator-designated subject and fly a standoff follow from the companion. A flight Skill in the cockpit Skill Bar, a click-a-target Follow action, and a per-drone settings tab."
+version: "0.4.0"
+description: "Lock onto an operator-designated subject and follow it at a distance and an angle (behind, side or lead) or orbit it, flown by the agent's pilot with obstacle avoidance. A flight Skill in the cockpit skill picker, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a set
   distance and height above the ground. A generic person/object detector on
@@ -10,10 +10,20 @@ description_long: |
   companion locks onto that track, estimates the subject's position from the
   box (ground intersection of the feet, box height, and an optional planar
   lidar return, fused by their uncertainty), tracks its velocity with a
-  Kalman filter, and streams local-frame guided setpoints (position, velocity
-  feed-forward and yaw) to the flight controller at 20 Hz. A downward
-  rangefinder on the flight controller keeps the follow height above the
-  terrain.
+  Kalman filter, and sends follow goals (position, velocity feed-forward,
+  yaw and the subject) to the agent's pilot at 20 Hz under a motion lease.
+  The pilot flies them through its obstacle planner, speed limits and
+  geofence. A downward rangefinder on the flight controller keeps the follow
+  height above the terrain.
+
+  Two modes: Follow holds a distance and an angle from the subject's travel
+  heading (180 behind, 90 on its right, 0 leading); Orbit circles the subject
+  at a radius and an angular rate, clockwise or counter-clockwise. While it
+  flies, the operator's sticks nudge the parameters: right stick sideways the
+  angle (or orbit rate), right stick forward and back the distance (or
+  radius), left stick up and down the height. A pause, a land, an RTH, a full
+  stick takeover or an FC mode change hands the vehicle back to the pilot,
+  which holds, and the skill switches off.
 
   A lock-state safety gate stops commanding when the tracker reports the
   subject uncertain or lost. On a loss the re-acquire mode decides: Strict
@@ -22,12 +32,14 @@ description_long: |
   appearance appears where the subject should be, designates it and
   announces the re-acquire. The engine never re-locks silently.
 
-  Requires a flight controller in a guided position-hold mode (ArduPilot
-  Guided, PX4 Offboard/position). Works with a forward or downward camera;
-  point a gimbal at the subject when one is present.
+  Requires the agent's pilot (a multirotor, or a VTOL in hover). Works with
+  a forward or downward camera; points a gimbal at the subject when one is
+  present.
 features:
   - "Click a detected subject in the cockpit and pick Follow to designate it"
-  - "Standoff follow with velocity feed-forward at 20 Hz in the local frame"
+  - "Follow at a distance and an angle (behind, side, lead) or orbit the subject"
+  - "Obstacle avoidance by the agent's pilot: detours that keep the subject in view"
+  - "Stick nudges for angle, distance, height, orbit radius and rate while following"
   - "Terrain-following height from a downward rangefinder, barometric fallback"
   - "Range from the feet ray, the box height and an optional planar lidar, fused by uncertainty"
   - "Strict or Smart re-acquire after an occlusion, operator selectable"
@@ -36,7 +48,7 @@ features:
   - "Live read-back: phase, lock, range with uncertainty, height source, latency"
 hardware_requirements:
   cameras: "USB UVC or CSI camera bound to the vision pipeline"
-  fc_firmware: "ArduPilot or PX4 in a guided position-hold mode"
+  fc_firmware: "ArduPilot or PX4, flown by the agent's pilot in guided mode"
   boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 resource_impact:
   output_rate_hz: 20
@@ -53,10 +65,9 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  # The agent's drone stream table (LOCAL_POSITION_NED and DISTANCE_SENSOR)
-  # and the detection-embedding subscription arrive in 0.108.0. The
-  # follow-camera detection lease is used when the agent offers it.
-  ados_version: ">=0.108.0"
+  # The pilot's motion lease, goals and stick feed (flight.motion) arrive in
+  # 0.109.0.
+  ados_version: ">=0.109.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 
@@ -72,7 +83,8 @@ agent:
     - id: vision.track.designate
     - id: mavlink.read
     - id: mavlink.write
-    - id: flight.guided_setpoint
+    # The pilot's motion lease: goals, the stick nudge feed and revocation.
+    - id: flight.motion
     - id: event.publish
     # The optional planar scan the world-engine extension shares
     # (plugin.world-engine.scan, subscribe capability telemetry.read).
@@ -80,8 +92,8 @@ agent:
     - id: telemetry.read
     - id: mcp.expose
   mavlink_components:
-    # The companion's own component id: the guided setpoints and the gimbal
-    # pitch/yaw frames are transmitted from it (ONBOARD_COMPUTER_COMP_ID in
+    # The companion's own component id: the gimbal pitch/yaw frames are
+    # transmitted from it (ONBOARD_COMPUTER_COMP_ID in
     # agent/follow_me/mavlink_frames.py).
     - component_id: 191
       component_kind: generic
@@ -123,11 +135,23 @@ gcs:
         icon: "crosshair"
         category: behavior
         toggle: true
-        # Arming streams guided setpoints to the flight controller, so the
-        # Skill Bar toggle confirms before it arms rather than firing on a
-        # single keypress.
+        # Arming hands the vehicle to the follow, so the toggle confirms
+        # before it arms rather than firing on a single keypress.
         confirm: true
         arm_requirement: armed
+        # Commands the vehicle (holds the pilot's motion lease, preempted by
+        # the built-ins) and takes the operator's sticks as nudges.
+        motion: true
+        nudge: true
+        vehicle_classes: [multirotor, vtol]
+        params:
+          - follow_mode
+          - follow_distance_m
+          - follow_angle_deg
+          - orbit_radius_m
+          - orbit_rate_dps
+          - orbit_direction
+          - follow_height_m
         # The Skill Bar toggle is a distinct chord from the click-a-target
         # Follow action below so the two never share one key.
         default_binding:
@@ -175,6 +199,17 @@ gcs:
     # the agent reads the same per-drone keys live each loop. `active` is not
     # here — it is the skill toggle, not an operator setting.
     parameters:
+      - key: follow_mode
+        binding: plugin.config
+        schema:
+          type: string
+          enum: ["follow", "orbit"]
+          default: "follow"
+        ui:
+          widget: enum
+          label: "settings.followMode"
+          group: "settings.title"
+          order: 5
       - key: follow_distance_m
         binding: plugin.config
         schema:
@@ -188,6 +223,63 @@ gcs:
           label: "settings.followDistance"
           group: "settings.title"
           order: 10
+          visible_if: { key: follow_mode, equals: "follow" }
+      # The follow angle from the subject's travel heading: 180 behind, 90 on
+      # its right, 270 on its left, 0 leading.
+      - key: follow_angle_deg
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0
+          maximum: 355
+          step: 5
+          default: 180
+        ui:
+          widget: range
+          label: "settings.followAngle"
+          group: "settings.title"
+          order: 12
+          visible_if: { key: follow_mode, equals: "follow" }
+      - key: orbit_radius_m
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 3
+          maximum: 30
+          step: 0.5
+          default: 8
+        ui:
+          widget: range
+          label: "settings.orbitRadius"
+          group: "settings.title"
+          order: 14
+          visible_if: { key: follow_mode, equals: "orbit" }
+      - key: orbit_rate_dps
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 2
+          maximum: 30
+          step: 1
+          default: 10
+        ui:
+          widget: range
+          label: "settings.orbitRate"
+          group: "settings.title"
+          order: 16
+          visible_if: { key: follow_mode, equals: "orbit" }
+      - key: orbit_direction
+        binding: plugin.config
+        schema:
+          type: string
+          enum: ["cw", "ccw"]
+          default: "cw"
+        ui:
+          widget: enum
+          label: "settings.orbitDirection"
+          group: "settings.title"
+          order: 18
+          visible_if: { key: follow_mode, equals: "orbit" }
       - key: follow_height_m
         binding: plugin.config
         schema:
@@ -299,6 +391,21 @@ gcs:
           label: "settings.maxSpeed"
           group: "settings.title"
           order: 70
+      # The clearance the pilot's planner keeps from obstacles while this
+      # skill flies (overrides the pilot's default margin).
+      - key: obstacle_margin_m
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 0.8
+          maximum: 5
+          step: 0.1
+          default: 1.5
+        ui:
+          widget: range
+          label: "settings.obstacleMargin"
+          group: "settings.title"
+          order: 72
       # The camera whose detections the follow loop consumes. A registry
       # picker: the operator pins a camera or leaves it on auto (the first
       # detect camera → any camera for the detection filter).

@@ -25,6 +25,7 @@ import {
   DEFAULT_CONFIG,
   holdReasonLabelKey,
   isStaleHold,
+  modeSummary,
   type FollowConfig,
   type FollowState,
 } from "./types";
@@ -192,6 +193,21 @@ function MetricsSection({
           </span>
         </div>
       ) : null}
+      <MetricRow
+        label={t("metrics.followMode")}
+        value={modeSummary(follow, follow.distanceSetpointM)}
+        testId="fm-mode"
+      />
+      <MetricRow
+        label={t("metrics.lease")}
+        value={follow.leaseId ?? "—"}
+        testId="fm-lease"
+      />
+      <MetricRow
+        label={t("metrics.nudged")}
+        value={follow.nudged ? t("metrics.yes") : t("metrics.no")}
+        testId="fm-nudged"
+      />
       <MetricRow
         label={t("metrics.fcArmed")}
         value={follow.fcArmed ? t("metrics.yes") : t("metrics.no")}
