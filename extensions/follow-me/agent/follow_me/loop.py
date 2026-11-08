@@ -54,7 +54,7 @@ from follow_me.state import (
     PHASE_LOST,
     FollowConfig,
 )
-from follow_me.target_filter import TargetFilter
+from follow_me.target_filter import TargetFilter, subject_max_speed_mps
 
 # The fixed cadence the follow loop commands at, decoupled from the
 # inference rate so the setpoint stream is smooth regardless of detector
@@ -65,6 +65,10 @@ _LOOP_PERIOD = 1.0 / _LOOP_HZ
 # With no new range fix for this long the prediction is no longer trusted
 # enough to command on a live lock.
 _MEASUREMENT_STALE_S = 1.0
+# The camera is turned toward the latest sighting's measured bearing while
+# that sighting is at most this old (through a short unsure spell too);
+# after that the estimate's bearing takes over.
+_SIGHTING_YAW_S = 3.0
 # The follow ring the pilot's planner searches for detour goals that keep
 # the subject in view: ±90° around the follow angle, ±60° around the orbit
 # phase.
@@ -91,6 +95,7 @@ class Sighting:
     ts_ms: int
     received_s: float
     confidence: float
+    class_label: str
     embedding: Embedding | None
 
 
@@ -108,6 +113,7 @@ class FollowLoopMixin:
     _sighting: Sighting | None
     _measured_bbox: Any
     _last_fix: TargetFix | None
+    _last_fix_s: float
     _coast: Coast | None
     _phase: str
     # The pilot's lease id as it sent it (pilot.v1: an unsigned integer),
@@ -186,12 +192,16 @@ class FollowLoopMixin:
             return
         target = self._tracker.locked_target(now)
         if target is None:
+            # Unsure: hold, keep the camera on the latest sighting, and stop
+            # the estimate where it is rather than carry its velocity on.
+            self._filter.stop(now)
             await self._hold(
                 cfg,
                 now,
                 phase=PHASE_HOLDING,
                 hold_reason=HOLD_LOCK_UNCERTAIN,
                 lock_state=lock.value,
+                yaw_rad=self._sighted_bearing(now),
             )
             return
         if self._filter_track_id != target.track_id:
@@ -244,6 +254,8 @@ class FollowLoopMixin:
         fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, exposed_s)
         if fix is None:
             return
+        if s is not None:
+            self._filter.max_speed_mps = subject_max_speed_mps(s.class_label)
         self._filter.update(
             s.received_s if s else now,
             self._pose.north_m + fix.offset_north_m,
@@ -251,11 +263,25 @@ class FollowLoopMixin:
             fix.covariance(),
         )
         self._last_fix = fix
+        self._last_fix_s = now
         if s is not None:
             if s.ts_ms > 0:
                 self._pending_latency_ts_ms = s.ts_ms
             if s.embedding is not None:
                 self._template = blend_template(self._template, s.embedding)
+
+    def _sighted_bearing(self, now: float) -> float | None:
+        """The bearing the latest sighting measured (through the attitude its
+        frame was exposed at), while it is recent enough to aim at.
+
+        The camera is aimed along the measured line of sight, not at the
+        filtered position: the bearing comes straight from the box and the
+        attitude, while the position also carries the range's noise, so a
+        wrong range or velocity cannot turn the subject out of the frame."""
+        fix = self._last_fix
+        if fix is None or (now - self._last_fix_s) > _SIGHTING_YAW_S:
+            return None
+        return fix.bearing_rad
 
     # -- the pilot motion lease -----------------------------------------
 
@@ -404,6 +430,9 @@ class FollowLoopMixin:
                 "angle_deg": math.degrees(self._ref_heading + math.radians(cfg.follow_angle_deg)) % 360.0,
                 "angle_span_deg": _FOLLOW_SPAN_DEG,
             }
+        # The camera looks along the latest sighting's line of sight; the
+        # position goal stays on the estimate.
+        sighted = self._sighted_bearing(now)
         return {
             "kind": kind,
             "n": g.north_m,
@@ -412,7 +441,7 @@ class FollowLoopMixin:
             "vn": g.vn_mps,
             "ve": g.ve_mps,
             "vd": 0.0,
-            "yaw": g.yaw_rad,
+            "yaw": g.yaw_rad if sighted is None else sighted,
             "yaw_rate": None,
             "subject_ne": [tn, te],
             "max_speed_mps": cfg.max_speed_mps,
@@ -477,10 +506,12 @@ class FollowLoopMixin:
         active: bool = True,
         coast_remaining_s: float = 0.0,
         force: bool = False,
+        yaw_rad: float | None = None,
     ) -> None:
         if self._lease_id is not None and active and self._pose.ready(now):
             # Keep the lease alive and the vehicle where it is: the pilot
-            # holds a position goal at the current position.
+            # holds a position goal at the current position, at the current
+            # heading or the one the caller gives.
             await self._send_goal(
                 {
                     "kind": "position",
@@ -490,7 +521,7 @@ class FollowLoopMixin:
                     "vn": 0.0,
                     "ve": 0.0,
                     "vd": 0.0,
-                    "yaw": self._pose.yaw,
+                    "yaw": self._pose.yaw if yaw_rad is None else yaw_rad,
                     "yaw_rate": None,
                     "subject_ne": None,
                     "max_speed_mps": cfg.max_speed_mps,

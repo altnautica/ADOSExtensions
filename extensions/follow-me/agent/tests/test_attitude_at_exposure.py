@@ -119,6 +119,7 @@ def test_a_sighting_is_measured_at_its_frames_exposure(monkeypatch: Any) -> None
         ts_ms=ts_ms,
         received_s=clock.now,
         confidence=0.9,
+        class_label="person",
         embedding=None,
     )
     plugin._measure_sighting(_CFG, clock.now, _WALKER)

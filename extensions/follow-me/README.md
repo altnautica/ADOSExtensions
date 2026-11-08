@@ -19,8 +19,10 @@ then on the agent runs a 20 Hz loop:
 
 1. It reads the locked subject's box from the detection stream.
 2. It casts a ray through the box **bottom-centre** (the subject's feet)
-   using a pinhole model, the flight controller's attitude, and the camera
-   mount or gimbal angles.
+   using a pinhole model, the flight controller's attitude at the frame's
+   exposure, and the camera mount or gimbal angles. A commanded gimbal
+   angle counts only once a gimbal has reported (`MOUNT_ORIENTATION`);
+   without one the camera is fixed and the mount pitch applies.
 3. It estimates the horizontal range from up to three cues, fused by
    inverse variance:
    - **ground**: where the feet ray meets the ground. It uses the height
@@ -35,6 +37,10 @@ then on the agent runs a 20 Hz loop:
      25 % of the other cues.
 4. A constant-velocity Kalman filter tracks the subject's north/east position
    and velocity in the flight controller's local frame (`LOCAL_POSITION_NED`).
+   The velocity estimate is capped by the subject's detector class: a
+   `person` at 3 m/s, a steady run; faster readings are range noise, and a
+   4 m/s runner is still followed, trailed by under a metre. Other classes
+   are not capped there.
 5. It holds the agent pilot's motion lease and sends it a goal every tick
    (20 Hz). The pilot flies the goal through its obstacle planner, speed
    limits and geofence. Each goal carries:
@@ -49,8 +55,10 @@ then on the agent runs a 20 Hz loop:
      drone is within 2 m of it;
    - the subject's velocity (plus the orbit's tangential velocity) as
      feed-forward, clamped to `max_speed_mps`;
-   - yaw toward the subject, and a terrain-following height of
-     `follow_height_m` above the ground;
+   - yaw along the latest sighting's measured bearing (the estimate's
+     bearing once no sighting is newer than 3 s), so a wrong range or
+     velocity cannot turn the subject out of the frame, and a
+     terrain-following height of `follow_height_m` above the ground;
    - the subject's position and the ring the pilot's planner searches for a
      detour that keeps the subject in view (±90° of the follow angle, ±60°
      of the orbit phase), with `obstacle_margin_m`.
@@ -59,6 +67,8 @@ then on the agent runs a 20 Hz loop:
 A lock-state safety gate stops commanding when the tracker reports the
 subject uncertain, or when the pose or the heartbeat is missing; while the
 lease is held a hold sends a position goal at the drone's current position.
+While the lock is uncertain that hold faces the latest sighting, and the
+subject estimate stops where it is instead of carrying its velocity on.
 Switching the skill off releases the lease and the pilot brakes to its own
 hold.
 

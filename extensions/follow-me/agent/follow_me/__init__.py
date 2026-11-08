@@ -148,6 +148,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._sighting: Sighting | None = None
         self._measured_bbox: Any = None
         self._last_fix: Any = None
+        self._last_fix_s: float = 0.0
         self._coast: Coast | None = None
         self._phase = PHASE_IDLE
         # The pilot's motion lease, the last refusal and when it was asked.
@@ -417,6 +418,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
                         ts_ms=int(getattr(batch, "ts_ms", 0) or 0),
                         received_s=now,
                         confidence=float(det.confidence),
+                        class_label=str(getattr(det, "class_label", "") or ""),
                         embedding=embedding_of(det),
                     )
                 break

@@ -26,6 +26,23 @@ _INIT_VEL_SIGMA_MPS = 3.0
 # treats the track as gone.
 MAX_PREDICT_S = 30.0
 
+# The fastest a followed subject of each detector class is taken to move,
+# m/s. A person's cap is a steady run: a velocity estimate above it comes from
+# range noise between sightings, not from the subject, and extrapolating it
+# carries the estimate away from the subject within a second. A faster
+# subject is still followed: each sighting still moves the estimate, which
+# then trails a 4 m/s runner by under a metre. A class with no entry is not
+# capped here (the goal's feed-forward is still clamped to the configured
+# max_speed_mps).
+SUBJECT_MAX_SPEED_MPS: dict[str, float] = {"person": 3.0}
+
+
+def subject_max_speed_mps(class_label: str | None) -> float | None:
+    """The speed cap for a subject of ``class_label``, or ``None``."""
+    if not class_label:
+        return None
+    return SUBJECT_MAX_SPEED_MPS.get(class_label.strip().lower())
+
 
 def _zeros(n: int, m: int) -> Mat:
     return [[0.0] * m for _ in range(n)]
@@ -95,12 +112,18 @@ Cov2 = tuple[tuple[float, float], tuple[float, float]]
 class TargetFilter:
     """The subject track. Call :meth:`update` with each new measurement and
     :meth:`predicted` to read the state at any later time; prediction never
-    mutates the filter, so a coast never accumulates drift into the state."""
+    mutates the filter, so a coast never accumulates drift into the state.
+
+    ``max_speed_mps`` caps the velocity estimate (see
+    :data:`SUBJECT_MAX_SPEED_MPS`); ``None`` leaves it free."""
 
     def __init__(self) -> None:
         self._x: list[float] | None = None
         self._p: Mat = _zeros(4, 4)
+        # The time the state is propagated to, and the last measurement.
         self._t: float = 0.0
+        self._t_meas: float = 0.0
+        self.max_speed_mps: float | None = None
 
     @property
     def initialized(self) -> bool:
@@ -108,12 +131,45 @@ class TargetFilter:
 
     @property
     def last_update_s(self) -> float:
-        return self._t
+        """When the last measurement was fused."""
+        return self._t_meas
 
     def reset(self) -> None:
         self._x = None
         self._p = _zeros(4, 4)
         self._t = 0.0
+        self._t_meas = 0.0
+
+    def stop(self, t: float) -> None:
+        """Stop the estimate where it is predicted at ``t``, with no velocity.
+
+        While the lock is unsure no sighting corrects the estimate, and the
+        last velocity (often range noise) would carry it metres from the
+        subject before the next one. The velocity spread restarts at a fresh
+        track's, so the next sightings estimate the motion again. Calling it
+        again while the hold lasts leaves the estimate where it is."""
+        if self._x is None:
+            return
+        x, p = self._propagate(t)
+        v = _INIT_VEL_SIGMA_MPS * _INIT_VEL_SIGMA_MPS
+        self._x = [x[0], x[1], 0.0, 0.0]
+        self._p = [
+            [p[0][0], p[0][1], 0.0, 0.0],
+            [p[1][0], p[1][1], 0.0, 0.0],
+            [0.0, 0.0, v, 0.0],
+            [0.0, 0.0, 0.0, v],
+        ]
+        self._t = max(self._t, t)
+
+    def _cap_speed(self) -> None:
+        cap = self.max_speed_mps
+        if self._x is None or cap is None:
+            return
+        speed = math.hypot(self._x[2], self._x[3])
+        if speed > cap > 0.0:
+            k = cap / speed
+            self._x[2] *= k
+            self._x[3] *= k
 
     def _propagate(self, t: float) -> tuple[list[float], Mat]:
         assert self._x is not None
@@ -166,6 +222,7 @@ class TargetFilter:
                 [0.0, 0.0, 0.0, v],
             ]
             self._t = t
+            self._t_meas = t
             return
         x, p = self._propagate(t)
         hp = _mul(_H, p)
@@ -182,7 +239,9 @@ class TargetFilter:
         i_kh = [[(1.0 if i == j else 0.0) - kh[i][j] for j in range(4)] for i in range(4)]
         p_new = _mul(i_kh, p)
         self._p = [[(p_new[i][j] + p_new[j][i]) / 2.0 for j in range(4)] for i in range(4)]
+        self._cap_speed()
         self._t = max(self._t, t)
+        self._t_meas = max(self._t_meas, t)
 
 
 def position_sigma(p: Mat) -> float:
@@ -194,4 +253,11 @@ def position_sigma(p: Mat) -> float:
     return math.sqrt(max(0.0, tr / 2.0 + disc))
 
 
-__all__ = ["ACCEL_SIGMA_MPS2", "MAX_PREDICT_S", "TargetFilter", "position_sigma"]
+__all__ = [
+    "ACCEL_SIGMA_MPS2",
+    "MAX_PREDICT_S",
+    "SUBJECT_MAX_SPEED_MPS",
+    "TargetFilter",
+    "position_sigma",
+    "subject_max_speed_mps",
+]

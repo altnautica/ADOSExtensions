@@ -118,11 +118,8 @@ async def test_reported_gimbal_attitude_feeds_the_projection(
     assert captured["mount_pitch_deg"] == 0.0
 
 
-@pytest.mark.asyncio
-async def test_falls_back_to_the_last_commanded_gimbal_angle(
-    monkeypatch: Any,
-) -> None:
-    ctx = _Ctx(
+def _gimbal_point_ctx() -> _Ctx:
+    return _Ctx(
         config={
             "active": True,
             "gimbal_point": True,
@@ -133,37 +130,65 @@ async def test_falls_back_to_the_last_commanded_gimbal_angle(
             "follow_height_m": 4.0,
         }
     )
-    plugin = _make_plugin(ctx)
-    _level_pose(plugin)
-    _arm_guided(plugin)
 
-    # Tick 1: no gimbal report yet, so the loop bootstraps on the fixed mount
-    # pitch, then commands the gimbal and caches that angle.
+
+async def _two_sightings(plugin: Any, clock: Any, monkeypatch: Any) -> dict[str, Any]:
+    """Tick on one sighting (which commands the gimbal), then project a
+    second, fresh one (a new bbox, so not coasting); what that projection
+    was given."""
     _seed_lock(
-        plugin,
-        track_id=7,
-        lock_state=LOCK_LOCKED,
-        bbox=BoundingBox(315.0, 235.0, 10.0, 10.0),
+        plugin, track_id=7, lock_state=LOCK_LOCKED, bbox=BoundingBox(315.0, 235.0, 10.0, 10.0), at=clock.now
     )
     await plugin._tick()
     assert plugin._commanded_gimbal is not None
-    last_commanded = plugin._commanded_gimbal
-
-    # Tick 2 on a FRESH sighting (a new bbox, so not coasting): still no report,
-    # so the projection uses the last commanded gimbal angle, not the mount.
+    clock.advance(0.05)
     captured = _spy_projection(monkeypatch)
     _seed_lock(
-        plugin,
-        track_id=7,
-        lock_state=LOCK_LOCKED,
-        bbox=BoundingBox(320.0, 240.0, 12.0, 12.0),
+        plugin, track_id=7, lock_state=LOCK_LOCKED, bbox=BoundingBox(320.0, 240.0, 12.0, 12.0), at=clock.now
     )
     await plugin._tick()
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_falls_back_to_the_last_commanded_gimbal_angle(
+    monkeypatch: Any,
+) -> None:
+    clock = _install_clock(monkeypatch)
+    plugin = _make_plugin(_gimbal_point_ctx())
+    # A gimbal is on board: it reported once, then the report aged out.
+    plugin._on_mount_orientation(_mount_orientation(-30.0, 0.0))
+    clock.advance(2.5)
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    # The first sighting bootstraps on the fixed mount pitch and commands the
+    # gimbal; the second, with still no current report, is projected through
+    # the commanded angle, not the mount.
+    captured = await _two_sightings(plugin, clock, monkeypatch)
 
     assert (captured["gimbal_pitch_deg"], captured["gimbal_yaw_deg"]) == (
-        last_commanded
+        plugin._commanded_gimbal
     )
     assert captured["mount_pitch_deg"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_camera_is_projected_through_its_mount_whatever_was_commanded(
+    monkeypatch: Any,
+) -> None:
+    # No gimbal has ever reported: the pointing command goes nowhere and the
+    # camera still looks along its mount. Projecting through the commanded
+    # angle would aim each measurement at the previous estimate.
+    clock = _install_clock(monkeypatch)
+    plugin = _make_plugin(_gimbal_point_ctx())
+    _level_pose(plugin)
+    _arm_guided(plugin)
+
+    captured = await _two_sightings(plugin, clock, monkeypatch)
+
+    assert captured["mount_pitch_deg"] == 30.0
+    assert (captured["gimbal_pitch_deg"], captured["gimbal_yaw_deg"]) == (0.0, 0.0)
 
 
 @pytest.mark.asyncio

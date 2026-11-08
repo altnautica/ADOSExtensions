@@ -4,6 +4,34 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.3] - 2026-11-08
+
+### Fixed
+
+- On a vehicle with a fixed camera and gimbal pointing left on (the
+  default), every box after the first was projected as if the camera
+  pointed where the plugin had asked a gimbal to point, at the previous
+  estimate. Each measurement then agreed with the estimate rather than the
+  subject: in a recorded flight the measured bearing read 21–38° for a
+  subject at 89°, the estimate ran metres off, and the yaw turned the
+  subject out of the frame. A commanded gimbal angle now counts only once a
+  gimbal has reported `MOUNT_ORIENTATION`; until then the camera is fixed
+  at its mount pitch.
+
+### Changed
+
+- The goal's yaw follows the latest sighting's measured bearing (through
+  the attitude at its frame's exposure) while that sighting is at most 3 s
+  old, instead of the bearing to the filtered position; the position goal
+  still follows the filter. A hold while the lock is uncertain faces the
+  same bearing instead of the current heading.
+- The subject's velocity estimate is capped by its detector class: a
+  `person` at 3 m/s. The estimate had read 4–6 m/s for a 1.2 m/s walker. A
+  4 m/s runner is still followed, trailed by under a metre.
+- While the lock is uncertain the estimate stops where it is (no velocity)
+  instead of extrapolating its last velocity through the hold; the next
+  sightings estimate the motion again.
+
 ## [0.4.2] - 2026-11-08
 
 ### Fixed

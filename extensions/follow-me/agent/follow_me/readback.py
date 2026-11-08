@@ -103,13 +103,17 @@ class ReadbackMixin:
         configured mount pitch.
 
         Preference: the FC's CURRENT reported gimbal attitude, then the last
-        angle the plugin commanded (only when gimbal pointing is enabled),
-        then ``None``. A report that has aged out drops to the commanded angle
-        rather than being believed indefinitely.
+        angle the plugin commanded (only when gimbal pointing is enabled and
+        a gimbal has reported at least once), then ``None``. A report that has
+        aged out drops to the commanded angle rather than being believed
+        indefinitely. With no gimbal the camera is fixed: projecting a box
+        through the angle the plugin asked for would aim each measurement at
+        the previous estimate, and the estimate then runs away from the
+        subject.
         """
         if self._gimbal.report.is_fresh(now):
             return (self._gimbal.pitch_deg, self._gimbal.yaw_deg)
-        if cfg.gimbal_point and self._commanded_gimbal is not None:
+        if cfg.gimbal_point and self._gimbal.present and self._commanded_gimbal is not None:
             return self._commanded_gimbal
         return None
 

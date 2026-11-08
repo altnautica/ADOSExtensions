@@ -292,14 +292,19 @@ class GimbalState:
     The report is only the boresight while it is current; a report old enough
     to predate the gimbal's current aim is a worse estimate than the angle the
     plugin itself last commanded. The gate therefore decays back to that
-    fallback (and then to the fixed mount) instead of latching."""
+    fallback (and then to the fixed mount) instead of latching.
 
-    __slots__ = ("pitch_deg", "yaw_deg", "report")
+    ``present`` records that a gimbal has reported at all. Without one the
+    camera is fixed, and a pointing command goes nowhere: the camera still
+    looks along the mount, whatever angle was asked for."""
+
+    __slots__ = ("pitch_deg", "yaw_deg", "report", "present")
 
     def __init__(self, max_age_s: float = _GIMBAL_MAX_AGE_S) -> None:
         self.pitch_deg = 0.0
         self.yaw_deg = 0.0
         self.report = FreshnessGate(max_age_s)
+        self.present = False
 
 
 class FcStateMixin:
@@ -334,6 +339,7 @@ class FcStateMixin:
         self._gimbal.pitch_deg = -float(msg["pitch"])
         self._gimbal.yaw_deg = float(msg["yaw"])
         self._gimbal.report.mark(monotonic())
+        self._gimbal.present = True
 
     def _on_attitude(self, delivery: dict[str, Any]) -> None:
         msg = mavlink_frames.decode_fields(delivery)
