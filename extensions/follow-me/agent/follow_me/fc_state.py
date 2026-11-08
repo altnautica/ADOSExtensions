@@ -10,7 +10,10 @@ mixin of :class:`follow_me.FollowMePlugin`.
 
 from __future__ import annotations
 
+import bisect
+import math
 import time
+from collections import deque
 from typing import Any
 
 from follow_me import mavlink_frames
@@ -31,6 +34,17 @@ from follow_me.freshness import FreshnessGate
 # pose corrupts the origin and heading the projection measures from, which
 # grows the setpoint error without bound as the aircraft flies on.
 _POSE_MAX_AGE_S = 0.5
+
+# Attitude history. A detection batch reaches the loop a few hundred
+# milliseconds after its frame was exposed, and a following drone pitches and
+# yaws by several degrees in that time. A box is projected through the
+# attitude at its frame's exposure, read from these samples: three seconds at
+# up to 50 Hz. A frame newer than the newest sample by more than the hold, one
+# older than the history, or one inside a gap between two samples has no
+# attitude of its own and takes the latest.
+_ATTITUDE_HISTORY = 150
+_ATTITUDE_HOLD_S = 0.1
+_ATTITUDE_MAX_GAP_S = 0.25
 
 # Downward rangefinder. Usable as the AGL source only while younger than
 # this; older readings fall back to barometric height.
@@ -144,6 +158,7 @@ class Pose:
         "attitude",
         "position",
         "global_position",
+        "_history",
     )
 
     def __init__(self, max_age_s: float = _POSE_MAX_AGE_S) -> None:
@@ -162,6 +177,39 @@ class Pose:
         self.attitude = FreshnessGate(max_age_s)
         self.position = FreshnessGate(max_age_s)
         self.global_position = FreshnessGate(_GLOBAL_MAX_AGE_S)
+        # (arrival s, roll, pitch, yaw), oldest first.
+        self._history: deque[tuple[float, float, float, float]] = deque(
+            maxlen=_ATTITUDE_HISTORY
+        )
+
+    def set_attitude(self, roll: float, pitch: float, yaw: float, at_s: float) -> None:
+        """The latest ATTITUDE, and its arrival on the plugin's clock."""
+        self.roll = roll
+        self.pitch = pitch
+        self.yaw = yaw
+        if self._history and at_s < self._history[-1][0]:
+            self._history.clear()
+        self._history.append((at_s, roll, pitch, yaw))
+        self.attitude.mark(at_s)
+
+    def attitude_at(self, t_s: float) -> tuple[float, float, float]:
+        """Roll, pitch and yaw at ``t_s`` on the plugin's clock (a frame's
+        exposure), interpolated between the samples around it; the latest
+        attitude when the history does not cover that instant."""
+        latest = (self.roll, self.pitch, self.yaw)
+        h = self._history
+        if not h or t_s < h[0][0] or t_s > h[-1][0] + _ATTITUDE_HOLD_S:
+            return latest
+        if t_s >= h[-1][0]:
+            return h[-1][1:]
+        i = bisect.bisect_right(h, t_s, key=lambda s: s[0])
+        a, b = h[i - 1], h[i]
+        span = b[0] - a[0]
+        if span > _ATTITUDE_MAX_GAP_S:
+            return latest
+        f = (t_s - a[0]) / span
+        dyaw = (b[3] - a[3] + math.pi) % (2.0 * math.pi) - math.pi
+        return (a[1] + f * (b[1] - a[1]), a[2] + f * (b[2] - a[2]), a[3] + f * dyaw)
 
     def ready(self, now_monotonic_s: float) -> bool:
         """Whether BOTH halves of the pose are current enough to project
@@ -291,13 +339,12 @@ class FcStateMixin:
         msg = mavlink_frames.decode_fields(delivery)
         if msg is None:
             return
-        self._pose.roll = float(msg["roll"])
-        self._pose.pitch = float(msg["pitch"])
-        self._pose.yaw = float(msg["yaw"])
         # Marked separately from position: ATTITUDE and LOCAL_POSITION_NED
         # are different messages at different rates and either can stall on
         # its own.
-        self._pose.attitude.mark(monotonic())
+        self._pose.set_attitude(
+            float(msg["roll"]), float(msg["pitch"]), float(msg["yaw"]), monotonic()
+        )
 
     def _on_local_position(self, delivery: dict[str, Any]) -> None:
         # LOCAL_POSITION_NED: metres and m/s in the FC's local NED frame.

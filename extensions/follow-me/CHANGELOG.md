@@ -4,6 +4,21 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.2] - 2026-11-08
+
+### Fixed
+
+- The drone pitched back and forth by 10–20° while following, and its
+  follow goal jumped by metres on every detection batch. A batch reaches
+  the follow loop about 0.4 s after its frame was exposed, and the box was
+  projected through the attitude at arrival: a drone that had pitched 10°
+  since put the subject's feet metres nearer or farther (ground-range cue
+  5.4 m, then 212 m, on a subject 8 m away), the goal followed, and the
+  drone pitched again. The plugin now keeps three seconds of `ATTITUDE`
+  and projects each box through the attitude at its frame's exposure
+  (the batch's `ts_ms`); a frame the history does not cover takes the
+  latest attitude, as before.
+
 ## [0.4.1] - 2026-11-07
 
 ### Fixed

@@ -113,21 +113,33 @@ class ReadbackMixin:
             return self._commanded_gimbal
         return None
 
-    def _camera_pose(self, cfg: FollowConfig, now: float) -> CameraPose:
+    def _camera_pose(
+        self, cfg: FollowConfig, now: float, exposed_s: float | None = None
+    ) -> CameraPose:
+        """The camera's pose, with the vehicle attitude at ``exposed_s`` (a
+        frame's exposure on the plugin's clock) when given, else the latest.
+        A box is a picture of where the subject was when its frame was
+        exposed; the vehicle has pitched and yawed since, and projecting the
+        box through the newer attitude moves the subject by metres."""
+        roll, pitch, yaw = (
+            self._pose.attitude_at(exposed_s)
+            if exposed_s is not None
+            else (self._pose.roll, self._pose.pitch, self._pose.yaw)
+        )
         # A reported or commanded gimbal angle is the TOTAL orientation
         # relative to the vehicle, so it replaces the fixed mount tilt.
         gimbal = self._gimbal_angles_deg(cfg, now)
         if gimbal is None:
             return CameraPose(
-                roll_rad=self._pose.roll,
-                pitch_rad=self._pose.pitch,
-                yaw_rad=self._pose.yaw,
+                roll_rad=roll,
+                pitch_rad=pitch,
+                yaw_rad=yaw,
                 mount_pitch_deg=cfg.mount_pitch_deg,
             )
         return CameraPose(
-            roll_rad=self._pose.roll,
-            pitch_rad=self._pose.pitch,
-            yaw_rad=self._pose.yaw,
+            roll_rad=roll,
+            pitch_rad=pitch,
+            yaw_rad=yaw,
             gimbal_pitch_deg=gimbal[0],
             gimbal_yaw_deg=gimbal[1],
         )
@@ -147,7 +159,13 @@ class ReadbackMixin:
         return self._scan
 
     def _measure_box(
-        self, cfg: FollowConfig, now: float, bbox: Any, frame_w: int, frame_h: int
+        self,
+        cfg: FollowConfig,
+        now: float,
+        bbox: Any,
+        frame_w: int,
+        frame_h: int,
+        exposed_s: float | None = None,
     ) -> TargetFix | None:
         agl, source = self._agl(now)
         return projection.measure_target(
@@ -158,7 +176,7 @@ class ReadbackMixin:
             frame_width=frame_w,
             frame_height=frame_h,
             horizontal_fov_deg=cfg.camera_hfov_deg,
-            cam=self._camera_pose(cfg, now),
+            cam=self._camera_pose(cfg, now, exposed_s),
             agl_m=agl,
             agl_source=source,
             scan=self._fresh_scan(now),

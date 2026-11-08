@@ -239,7 +239,9 @@ class FollowLoopMixin:
         self._measured_bbox = bbox
         s = self._sighting if (self._sighting and self._sighting.bbox is bbox) else None
         frame_w, frame_h = s.frame_wh if (s and s.frame_wh) else self._frame_size()
-        fix = self._measure_box(cfg, now, bbox, frame_w, frame_h)
+        # The box is projected through the attitude its frame was exposed at.
+        exposed_s = s.ts_ms / 1000.0 if (s and s.ts_ms > 0) else None
+        fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, exposed_s)
         if fix is None:
             return
         self._filter.update(

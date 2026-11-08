@@ -153,9 +153,12 @@ class CoastMixin:
         fw = getattr(batch, "frame_width", None)
         fh = getattr(batch, "frame_height", None)
         frame_w, frame_h = (int(fw), int(fh)) if fw and fh else self._frame_size()
+        # The boxes are projected through the attitude their frame was exposed at.
+        ts_ms = getattr(batch, "ts_ms", 0) or 0
+        exposed_s = ts_ms / 1000.0 if ts_ms > 0 else None
 
         def measure(bbox: Any) -> tuple[float, float, Any] | None:
-            fix = self._measure_box(cfg, now, bbox, frame_w, frame_h)
+            fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, exposed_s)
             if fix is None:
                 return None
             return (
