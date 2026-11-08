@@ -397,3 +397,22 @@ fn no_rig_for_an_uncalibrated_camera_or_unpaired_frames() {
         assert!(ran.cmd("rig_configurator").is_none());
     }
 }
+
+/// A `frames.json` that lists each frame several times (a dataset staged
+/// from a session with repeated image messages) gives COLMAP each image
+/// once: a repeated name in the image list stalls `feature_extractor`.
+#[test]
+fn a_repeated_frame_record_is_listed_once() {
+    let unique = frames(6, true);
+    let repeated: Vec<FrameRecord> = unique
+        .iter()
+        .flat_map(|f| std::iter::repeat_n(f.clone(), 3))
+        .collect();
+    let ran = run_with(&repeated, REFINE);
+    let list = fs::read_to_string(ran.sfm.join("images_cam0.txt")).unwrap();
+    let names: Vec<&str> = list.lines().collect();
+    let want: Vec<&str> = unique.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, want);
+    let extract = ran.cmd("feature_extractor").unwrap();
+    assert_eq!(value(extract, "--image_list_path"), ran.sfm.join("images_cam0.txt").to_str());
+}

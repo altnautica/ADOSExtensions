@@ -174,6 +174,10 @@ pub fn run(
         .collect();
 
     let mut records: Vec<(FrameRecord, f64)> = Vec::new();
+    // A session can hold the same image message more than once; each frame
+    // is exported once, or COLMAP's image list repeats it and the feature
+    // extractor stalls.
+    let mut exported: HashSet<String> = HashSet::new();
     let mut sweeps = Sweeps::default();
     let total = wanted.len().max(1) as f32;
     reader.for_each_message(|m| {
@@ -184,10 +188,14 @@ pub fn run(
             let Some(sensor) = cams.get(cam) else {
                 return Ok(());
             };
+            let name = frame_name(cam, instant);
+            if exported.contains(&name) {
+                return Ok(());
+            }
             let Some(decoded) = decode_image(&m)? else {
                 return Ok(());
             };
-            let name = frame_name(cam, instant);
+            exported.insert(name.clone());
             let path = dataset_dir.join("images").join(&name);
             fs::create_dir_all(path.parent().expect("camera folder"))?;
             decoded
@@ -414,11 +422,14 @@ fn room_records(index: &SessionIndex) -> Vec<RoomRecord> {
         .collect()
 }
 
-/// Read `frames.json` back.
+/// Read `frames.json` back, each image once: a dataset written before
+/// `run` skipped repeated image messages can list a frame several times.
 pub fn read_frames(dataset_dir: &Path) -> Result<Vec<FrameRecord>, StageError> {
-    Ok(serde_json::from_slice(&fs::read(
-        dataset_dir.join("frames.json"),
-    )?)?)
+    let mut frames: Vec<FrameRecord> =
+        serde_json::from_slice(&fs::read(dataset_dir.join("frames.json"))?)?;
+    let mut seen: HashSet<String> = HashSet::with_capacity(frames.len());
+    frames.retain(|f| seen.insert(f.name.clone()));
+    Ok(frames)
 }
 
 /// Read `rooms.json` back.

@@ -354,6 +354,14 @@ All notable changes to the World Engine extension.
   payload tick (5 s) the payload now also carries every tile within 20 m of
   the vehicle, changed or not; consumers overwrite tiles, so a repeat is
   harmless. 2.1.16.
+- **Structure-from-motion no longer stalls on a session with repeated image
+  messages.** The input stage exported a keyframe once per copy of its image
+  message, so `frames.json` and the COLMAP image list could name one image up
+  to seven times. On such a list `feature_extractor` stopped after the first
+  image and never finished. The input stage now exports each frame once.
+  Reading `frames.json` keeps the first record of each image name, so a
+  dataset staged by an earlier node also resumes. Test: a frames list with
+  every frame three times gives an image list with each name once. 2.1.17.
 
 ## [2.0.0]
 
