@@ -4,6 +4,15 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.6] - 2026-11-12
+
+### Fixed
+
+- A live follow report no longer reads Stale when the drone clock runs
+  behind or a poll is slow. Only the first report is judged by its own
+  timestamp, so an old report shown on opening the tab still reads Stale,
+  and the tab still reads Stale 2 s after the reports stop.
+
 ## [0.4.5] - 2026-11-12
 
 ### Fixed

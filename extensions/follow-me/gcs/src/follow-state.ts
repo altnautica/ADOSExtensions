@@ -8,16 +8,25 @@
  * off the wire and normalized to the camelCase FollowState here.
  *
  * The hook also reports the report's age so the tab never shows a silent
- * drone's last values as live: the report is stamped with its own `ts_ms`
- * when the host forwards it, else with the time it arrived, and a 1 Hz tick
- * re-renders so the age keeps moving between reports.
+ * drone's last values as live. The SDK's SampleClock does the ageing: the
+ * report's own `ts_ms` judges only the first report of a run (an old report
+ * replayed on mount reads stale at once), and later reports age from their
+ * arrival, so a drone clock running behind or a slow poll never makes a
+ * live feed read stale. The same report delivered again is ignored. A 1 Hz
+ * tick keeps the age moving between reports, and a timer fires at the
+ * moment the latest report turns stale.
  *
  * @license GPL-3.0-or-later
  */
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import type { PluginContext } from "@altnautica/plugin-sdk";
+import {
+  agentTimestampOf,
+  SampleClock,
+  STALE_AFTER_MS,
+  type PluginContext,
+} from "@altnautica/plugin-sdk";
 
 import {
   FOLLOW_STATE_TOPIC,
@@ -27,7 +36,7 @@ import {
 } from "./types";
 
 /** A report this old (or older) is stale: values are blanked, age shown. */
-export const FOLLOW_STALE_MS = 2000;
+export const FOLLOW_STALE_MS = STALE_AFTER_MS;
 
 export interface FollowReading {
   /** The latest report, or null before the first one. */
@@ -39,31 +48,40 @@ export interface FollowReading {
 /** Subscribe to the agent follow read-back and surface the latest report
  * with its age. */
 export function useFollowState(ctx: PluginContext): FollowReading {
-  const [latest, setLatest] = useState<{ state: FollowState; atMs: number } | null>(
-    null,
-  );
+  const clockRef = useRef<SampleClock | null>(null);
+  if (clockRef.current === null) clockRef.current = new SampleClock();
+  const clock = clockRef.current;
+  const [state, setState] = useState<FollowState | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
+    clock.reset();
     const off = ctx.events.subscribe<RawFollowState>(
       FOLLOW_STATE_TOPIC,
       (raw) => {
         const now = Date.now();
-        const ts = raw?.ts_ms;
-        const atMs =
-          typeof ts === "number" && Number.isFinite(ts) ? Math.min(ts, now) : now;
-        setLatest({ state: normalizeFollowState(raw), atMs });
+        if (clock.ingest(agentTimestampOf(raw), now) === null) return;
+        setState(normalizeFollowState(raw));
         setNowMs(now);
       },
     );
     return off;
-  }, [ctx]);
+  }, [ctx, clock]);
 
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  if (!latest) return { state: null, ageMs: null };
-  return { state: latest.state, ageMs: Math.max(0, nowMs - latest.atMs) };
+  const sampleAt = clock.sampleAt;
+  useEffect(() => {
+    if (sampleAt === null) return;
+    const untilStale = sampleAt + FOLLOW_STALE_MS - Date.now();
+    if (untilStale <= 0) return;
+    const id = setTimeout(() => setNowMs(Date.now()), untilStale);
+    return () => clearTimeout(id);
+  }, [sampleAt, nowMs]);
+
+  if (state === null) return { state: null, ageMs: null };
+  return { state, ageMs: clock.ageMs(nowMs) };
 }

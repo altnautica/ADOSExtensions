@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
 
-import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
+import { createPluginHarness, type PluginHarness } from "@altnautica/plugin-sdk/harness";
 
 import { FollowMeTab } from "../src/FollowMeTab";
 import { phaseColor } from "../src/style";
@@ -89,6 +89,113 @@ describe("live read-back freshness", () => {
     });
     expect(screen.getByTestId("fm-status").textContent).toBe(
       "Stale · last report 5 s ago",
+    );
+  });
+
+  // The host delivers every ~750 ms with jitter, drops every fifth tick (a
+  // 1500 ms gap), and each entry is already ~1000 ms old when it arrives,
+  // stamped with the drone's own clock.
+  async function runHostCadence(
+    h: PluginHarness,
+    driftMs: number,
+    samples: number,
+    onCheck: (afterSecond: boolean) => void,
+  ): Promise<void> {
+    const jitter = [0, 40, -30, 25, -45, 10];
+    let delivered = 0;
+    for (let tick = 0; delivered < samples; tick += 1) {
+      if (tick % 5 !== 4) {
+        act(() => {
+          h.pushEvent(FOLLOW_STATE_TOPIC, {
+            active: true,
+            phase: "following",
+            ts_ms: Date.now() - 1000 - driftMs,
+          });
+        });
+        delivered += 1;
+      }
+      const step = 750 + (jitter[tick % jitter.length] ?? 0);
+      for (let elapsed = 0; elapsed < step; elapsed += 50) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(Math.min(50, step - elapsed));
+        });
+        onCheck(delivered >= 2);
+      }
+    }
+  }
+
+  for (const driftMs of [2000, 5000]) {
+    it(`stays live while the drone clock runs ${driftMs / 1000} s behind`, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));
+      const h = harness();
+      render(<FollowMeTab ctx={h.ctx} />);
+      const staleAt: number[] = [];
+      await runHostCadence(h, driftMs, 20, (afterSecond) => {
+        if (afterSecond && screen.queryByTestId("fm-status") !== null) {
+          staleAt.push(Date.now());
+        }
+      });
+      expect(staleAt).toEqual([]);
+      expect(screen.getByTestId("fm-phase").textContent).toBe("Following");
+    });
+  }
+
+  it("reads Stale on mount when the first report is 5 s old", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} />);
+    act(() => {
+      h.pushEvent(FOLLOW_STATE_TOPIC, { phase: "following", ts_ms: Date.now() - 5000 });
+    });
+    expect(screen.getByTestId("fm-status").textContent).toBe(
+      "Stale · last report 5 s ago",
+    );
+    expect(screen.getByTestId("fm-phase").textContent).toBe("—");
+  });
+
+  it("reads Stale exactly 2 s after a live feed stops", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} />);
+    await runHostCadence(h, 0, 6, () => undefined);
+    act(() => {
+      h.pushEvent(FOLLOW_STATE_TOPIC, {
+        active: true,
+        phase: "following",
+        ts_ms: Date.now() - 1000,
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1999);
+    });
+    expect(screen.queryByTestId("fm-status")).toBeNull();
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Following");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(screen.getByTestId("fm-status").textContent).toBe(
+      "Stale · last report 2 s ago",
+    );
+  });
+
+  it("ignores the same report delivered again", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} />);
+    const report = { active: true, phase: "following", ts_ms: Date.now() };
+    act(() => h.pushEvent(FOLLOW_STATE_TOPIC, report));
+    for (let i = 0; i < 4; i += 1) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      act(() => h.pushEvent(FOLLOW_STATE_TOPIC, report));
+    }
+    expect(screen.getByTestId("fm-status").textContent).toBe(
+      "Stale · last report 3 s ago",
     );
   });
 });
