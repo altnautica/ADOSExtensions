@@ -1,17 +1,20 @@
 /**
  * A tiny store for the pod read-back the agent publishes on the "siyi"
  * telemetry channel. The panel and overlay subscribe; ingest normalises the raw
- * payload, stamps the time it arrived, and notifies listeners only when the
+ * payload, stamps its sample time, and notifies listeners only when the
  * normalised state changed.
  *
- * The feed runs at 5 Hz, so a sample older than {@link STALE_AFTER_MS} means the
- * agent stopped publishing and the last values are no longer live.
+ * The host delivers the agent's state by polling about every 750 ms and can skip
+ * a tick, so 1500 ms gaps are normal. Each payload carries the agent's write
+ * time (`ts_ms`); the sample time is that, capped at arrival, so an old entry
+ * delivered on the first poll after mount reads stale at once. A sample older
+ * than {@link STALE_AFTER_MS} means the agent stopped publishing.
  */
 
 import type { PodState } from "./types";
 
-/** Past this age the read-back is not live (five missed 5 Hz samples). */
-export const STALE_AFTER_MS = 1_000;
+/** Past this age the read-back is not live (the shared host cutoff). */
+export const STALE_AFTER_MS = 2_000;
 
 /** A laser range is shown for this long after it was measured. */
 export const RANGE_SHOW_MS = 10_000;
@@ -20,13 +23,17 @@ export class PodStateStore {
   private state: PodState | null = null;
   private stateKey = "";
   private receivedAtMs: number | null = null;
+  private lastTsMs: number | null = null;
   private readonly listeners = new Set<(s: PodState) => void>();
 
   get(): PodState | null {
     return this.state;
   }
 
-  /** When the last payload arrived (epoch ms), or null before the first. */
+  /**
+   * When the last sample was taken (epoch ms): the agent's `ts_ms` capped at
+   * arrival, or the arrival time without one. Null before the first payload.
+   */
   receivedAt(): number | null {
     return this.receivedAtMs;
   }
@@ -39,7 +46,14 @@ export class PodStateStore {
 
   ingest(raw: unknown, now: number = Date.now()): void {
     if (!isRecord(raw)) return;
-    this.receivedAtMs = now;
+    const ts = num(raw.ts_ms);
+    if (ts === null) {
+      this.receivedAtMs = now;
+    } else if (ts !== this.lastTsMs) {
+      // A repeated ts_ms is the same sample re-delivered; it does not refresh.
+      this.lastTsMs = ts;
+      this.receivedAtMs = Math.min(ts, now);
+    }
     const next = normalise(raw);
     const key = JSON.stringify(next);
     if (this.state && key === this.stateKey) return;

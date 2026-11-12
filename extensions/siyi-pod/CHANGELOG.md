@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.1
+
+- The console and the video HUD no longer flash "No pod data" during the
+  normal pauses between state updates. The feed now reads stale only after
+  2 s without a fresh sample, so a pending Range confirmation is no longer
+  cancelled by a short pause.
+- The age of the pod state now comes from when the drone wrote it. A state
+  that was already old when the console opened shows "No pod data" straight
+  away instead of looking live for a second or two, and a state delivered
+  again unchanged does not count as fresh.
+
 ## 0.6.0
 
 - The console header follows the pod link: "Connected" while the pod
