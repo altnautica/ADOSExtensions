@@ -145,6 +145,32 @@ describe("stale gimbal state", () => {
     await h.teardown();
   });
 
+  it("keeps the newer reading when a report stamped earlier arrives after it", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    const readout = rootEl.querySelector<HTMLElement>(".agm-readout")!;
+    let stamp = 0;
+    for (let i = 0; i < 3; i += 1) {
+      stamp = Date.now() - 1000;
+      panel.setState({ ...sample({ timestampMs: stamp }), ts_ms: stamp });
+      vi.advanceTimersByTime(750);
+    }
+    // A failed poll: the host falls back to a slower source whose report is
+    // stamped 4 s before the one shown.
+    const older = stamp - 4000;
+    panel.setState({ ...sample({ timestampMs: older, pitchDeg: -60 }), ts_ms: older });
+    expect(panel.getState()!.pitchDeg).toBe(-20);
+    expect(rootEl.textContent).toContain("-20.0 deg");
+    expect(readout.hidden).toBe(false);
+    // The older report does not keep the feed live: the newer reading still
+    // goes stale once it is 2000 ms old.
+    vi.advanceTimersByTime(1250);
+    expect(readout.hidden).toBe(true);
+    panel.destroy();
+    await h.teardown();
+  });
+
   it("does not reset the age when the same sample is delivered again", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const h = await harness();

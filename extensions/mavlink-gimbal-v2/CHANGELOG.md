@@ -2,6 +2,12 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.5.3
+
+- An older gimbal update that arrives after a newer one (the host falling
+  back to a slower source after a failed poll) no longer replaces the newer
+  angles or keeps the gimbal reading live.
+
 ## 1.5.2
 
 - A live gimbal no longer reads "Gimbal not reporting" when the drone clock
