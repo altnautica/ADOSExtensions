@@ -314,6 +314,17 @@ describe("late subscribers to host state events", () => {
     expect(seen).toEqual([{ accent: "#fff" }]);
   });
 
+  it("replays the last cameras.changed roster to a late handler", async () => {
+    const { transport, client } = setup();
+    pushEvent(transport, "cameras.changed", {
+      cameras: [{ id: "cam-front-0", name: "Front" }],
+    });
+    const seen: unknown[] = [];
+    client.on("cameras.changed", (c) => seen.push(c));
+    await Promise.resolve();
+    expect(seen).toEqual([{ cameras: [{ id: "cam-front-0", name: "Front" }] }]);
+  });
+
   it("does not replay to a handler that unsubscribed before the microtask ran", async () => {
     const { transport, client } = setup();
     pushEvent(transport, "config.changed", { a: 1 });

@@ -91,6 +91,7 @@
   "lease.held": "Held",
   "lease.none": "None",
   "specs.cameraAuto": "Auto (first detect camera)",
+  "specs.cameraNamed": "{name} ({id})",
   "mode.followSummary": "{mode} {angle} · {distance}",
   "mode.followSummaryNoDistance": "{mode} {angle}",
   "mode.orbitSummary": "{mode} {radius} · {rate} · {direction}",

@@ -23,7 +23,7 @@ import { useEffect, useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import { normalizeConfig } from "./config";
+import { CAMERAS_CHANGED_TOPIC, cameraNameMap, normalizeConfig } from "./config";
 import { FOLLOW_STALE_MS, useFollowState } from "./follow-state";
 import {
   card,
@@ -79,6 +79,18 @@ export function FollowMeTab({
     return off;
   }, [ctx]);
 
+  // Camera display names from the host's node roster; absent until the host
+  // knows the roster, in which case the About row shows the raw id.
+  const [cameraNames, setCameraNames] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    const off = ctx.events.subscribe(CAMERAS_CHANGED_TOPIC, (payload) => {
+      setCameraNames(cameraNameMap(payload));
+    });
+    return off;
+  }, [ctx]);
+
   const t: Translate = (key, params) => ctx.i18n.t(key, params);
 
   const container: CSSProperties = {
@@ -110,7 +122,7 @@ export function FollowMeTab({
         {t("tab.title")}
       </h2>
 
-      <SpecsSection t={t} config={config} />
+      <SpecsSection t={t} config={config} cameraNames={cameraNames} />
 
       <MetricsSection
         t={t}
@@ -124,10 +136,14 @@ export function FollowMeTab({
 function SpecsSection({
   t,
   config,
+  cameraNames,
 }: {
   t: Translate;
   config: FollowConfig;
+  cameraNames: ReadonlyMap<string, string>;
 }): JSX.Element {
+  const cameraId = config.designate_camera;
+  const cameraName = cameraNames.get(cameraId);
   return (
     <section style={card} data-testid="fm-specs">
       <h3 style={sectionTitle}>{t("specs.title")}</h3>
@@ -135,9 +151,11 @@ function SpecsSection({
       <SpecRow
         label={t("specs.camera")}
         value={
-          config.designate_camera === "auto"
+          cameraId === "auto"
             ? t("specs.cameraAuto")
-            : config.designate_camera
+            : cameraName
+              ? t("specs.cameraNamed", { name: cameraName, id: cameraId })
+              : cameraId
         }
         testId="fm-camera"
       />

@@ -4,6 +4,14 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.5] - 2026-11-12
+
+### Fixed
+
+- The About row names the configured camera the way the host does,
+  "Name (id)", from the camera list the host sends. It shows the id when
+  the host has no name for that camera.
+
 ## [0.4.4] - 2026-11-12
 
 ### Fixed

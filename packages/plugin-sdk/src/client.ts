@@ -31,12 +31,13 @@ export const TOKEN_MISSING_REFUSAL = "capability_denied:token_missing";
  * Host-pushed events that carry current state rather than a sample stream.
  * The client keeps the last payload of each and hands it to a handler that
  * subscribes after the push, so a plugin whose effects register late still
- * sees the host's config and theme. Telemetry, perception and overlay props
- * are samples that go stale and are never replayed.
+ * sees the host's config, theme and camera roster. Telemetry, perception and
+ * overlay props are samples that go stale and are never replayed.
  */
 const REPLAYED_EVENTS: Readonly<Record<string, true>> = {
   "config.changed": true,
   "theme.changed": true,
+  "cameras.changed": true,
 };
 
 /** One in-flight request awaiting the host's response. */

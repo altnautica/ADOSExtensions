@@ -4,7 +4,7 @@
     {
       "id": "com.altnautica.follow-me",
       "name": "ADOS Follow-Me",
-      "version": "0.4.4",
+      "version": "0.4.5",
       "description": "Lock onto an operator-designated subject and follow it at a distance and an angle (behind, side or lead) or orbit it, flown by the agent's pilot with obstacle avoidance. A flight Skill in the cockpit skill picker, a click-a-target Follow action, and a per-drone settings tab.",
       "category": null,
       "supported_boards": [

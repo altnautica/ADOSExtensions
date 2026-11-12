@@ -175,6 +175,35 @@ describe("words through the locale", () => {
     );
   });
 
+  it("names the configured camera from the host roster as Name (id)", () => {
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} followOverride={following} />);
+    act(() => {
+      h.pushEvent("config.changed", { designate_camera: "cam-front-0" });
+      h.pushEvent("cameras.changed", {
+        cameras: [
+          { id: "cam-front-0", name: "Front camera" },
+          { id: "cam-down-1", name: null },
+        ],
+      });
+    });
+    expect(screen.getByTestId("fm-camera").textContent).toBe(
+      "Front camera (cam-front-0)",
+    );
+  });
+
+  it("falls back to the camera id when the roster has no name for it", () => {
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} followOverride={following} />);
+    act(() => {
+      h.pushEvent("config.changed", { designate_camera: "cam-down-1" });
+      h.pushEvent("cameras.changed", {
+        cameras: [{ id: "cam-down-1", name: null }],
+      });
+    });
+    expect(screen.getByTestId("fm-camera").textContent).toBe("cam-down-1");
+  });
+
   it("keys every unit template", () => {
     const en = enLocale as Record<string, string>;
     for (const key of [

@@ -56,3 +56,20 @@ function numberOr(v: unknown, fallback: number): number {
   const n = typeof v === "string" ? Number(v) : v;
   return typeof n === "number" && Number.isFinite(n) ? n : fallback;
 }
+
+/** Host event carrying the node's camera roster: `{cameras: [{id, name|null}]}`. */
+export const CAMERAS_CHANGED_TOPIC = "cameras.changed";
+
+/** Map camera id to display name; entries without a usable name are left out. */
+export function cameraNameMap(raw: unknown): ReadonlyMap<string, string> {
+  const names = new Map<string, string>();
+  const list = (raw as { cameras?: unknown } | null)?.cameras;
+  if (!Array.isArray(list)) return names;
+  for (const entry of list) {
+    const e = entry as { id?: unknown; name?: unknown } | null;
+    if (typeof e?.id === "string" && typeof e.name === "string" && e.name.trim()) {
+      names.set(e.id, e.name.trim());
+    }
+  }
+  return names;
+}

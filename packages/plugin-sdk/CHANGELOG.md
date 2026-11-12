@@ -2,6 +2,12 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.5.1
+
+- The host's camera list (`cameras.changed`, `{cameras: [{id, name}]}`) is
+  handed to a late subscriber the same way as the config and theme, so a
+  panel that subscribes after the host posted it still names its cameras.
+
 ## 1.5.0
 
 - `ctx.config.onChange` and `ctx.theme.onChange` hand a handler registered
