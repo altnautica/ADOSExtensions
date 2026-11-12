@@ -6,15 +6,17 @@
  *
  * The host delivers the agent's state by polling about every 750 ms and can skip
  * a tick, so 1500 ms gaps are normal. Each payload carries the agent's write
- * time (`ts_ms`); the sample time is that, capped at arrival, so an old entry
- * delivered on the first poll after mount reads stale at once. A sample older
- * than {@link STALE_AFTER_MS} means the agent stopped publishing.
+ * time (`ts_ms`), aged by the shared {@link SampleClock}: an old entry
+ * delivered on the first poll after mount reads stale at once, while a live
+ * feed stays live whatever the drone clock skew. A sample older than
+ * {@link STALE_AFTER_MS} means the agent stopped publishing.
  */
+
+import { agentTimestampOf, SampleClock, STALE_AFTER_MS } from "@altnautica/plugin-sdk";
 
 import type { PodState } from "./types";
 
-/** Past this age the read-back is not live (the shared host cutoff). */
-export const STALE_AFTER_MS = 2_000;
+export { STALE_AFTER_MS };
 
 /** A laser range is shown for this long after it was measured. */
 export const RANGE_SHOW_MS = 10_000;
@@ -22,8 +24,7 @@ export const RANGE_SHOW_MS = 10_000;
 export class PodStateStore {
   private state: PodState | null = null;
   private stateKey = "";
-  private receivedAtMs: number | null = null;
-  private lastTsMs: number | null = null;
+  private readonly clock = new SampleClock();
   private readonly listeners = new Set<(s: PodState) => void>();
 
   get(): PodState | null {
@@ -31,11 +32,11 @@ export class PodStateStore {
   }
 
   /**
-   * When the last sample was taken (epoch ms): the agent's `ts_ms` capped at
-   * arrival, or the arrival time without one. Null before the first payload.
+   * When the last sample was taken (epoch ms, browser clock), as aged by the
+   * shared sample clock. Null before the first payload.
    */
   receivedAt(): number | null {
-    return this.receivedAtMs;
+    return this.clock.sampleAt;
   }
 
   subscribe(fn: (s: PodState) => void): () => void {
@@ -46,14 +47,9 @@ export class PodStateStore {
 
   ingest(raw: unknown, now: number = Date.now()): void {
     if (!isRecord(raw)) return;
-    const ts = num(raw.ts_ms);
-    if (ts === null) {
-      this.receivedAtMs = now;
-    } else if (ts !== this.lastTsMs) {
-      // A repeated ts_ms is the same sample re-delivered; it does not refresh.
-      this.lastTsMs = ts;
-      this.receivedAtMs = Math.min(ts, now);
-    }
+    // A repeated ts_ms (the same report on the other channel, or re-delivered)
+    // does not refresh the age.
+    this.clock.ingest(agentTimestampOf(raw), now);
     const next = normalise(raw);
     const key = JSON.stringify(next);
     if (this.state && key === this.stateKey) return;

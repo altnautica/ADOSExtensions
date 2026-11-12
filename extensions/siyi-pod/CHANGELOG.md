@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2
+
+- A live pod feed no longer reads "No pod data" when the drone clock runs
+  behind the console or a state poll is slow, and a pending Range
+  confirmation is no longer cancelled by it. A state that was already old
+  when the console opened still shows "No pod data" straight away, and the
+  feed still reads stale 2 s after it stops.
+
 ## 0.6.1
 
 - The console and the video HUD no longer flash "No pod data" during the

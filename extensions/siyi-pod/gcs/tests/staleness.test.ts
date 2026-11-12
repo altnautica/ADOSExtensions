@@ -34,15 +34,17 @@ async function withHarness(): Promise<PluginHarness> {
 }
 
 /**
- * Host delivery: the sidecar is polled every 750 ms (with jitter) and a slow
- * request skips the next tick, leaving 1500 ms gaps. Each delivery carries the
- * agent's write time; the agent writes at most every 500 ms.
+ * Host delivery: the sidecar is polled every 750 ms (with jitter) and every
+ * 5th tick is skipped, leaving a 1500 ms gap. Each entry is already about
+ * 1000 ms old when it arrives (agent write throttle plus poll latency).
  */
-function hostGaps(): number[] {
+function hostGaps(n = 24): number[] {
   const gaps: number[] = [];
-  for (let i = 0; i < 24; i++) gaps.push(i % 4 === 3 ? 1500 : 750 + ((i * 37) % 60) - 30);
+  for (let i = 1; i <= n; i++) gaps.push(i % 5 === 0 ? 1500 : 750 + ((i * 37) % 60) - 30);
   return gaps;
 }
+
+const ENTRY_AGE_MS = 1_000;
 
 describe("staleness at the real host cadence", () => {
   beforeEach(() => {
@@ -55,31 +57,73 @@ describe("staleness at the real host cadence", () => {
     expect(STALE_AFTER_MS).toBe(2_000);
   });
 
-  it("never shows 'No pod data' or cancels a pending Range confirm across poll gaps", async () => {
-    const harness = await withHarness();
-    const store = new PodStateStore();
-    store.ingest({ ...ZT30, ts_ms: Date.now() });
-    const root = document.createElement("div");
-    document.body.appendChild(root);
-    const handle = mountPanel(harness.ctx, root, store);
-    const btn = root.querySelector<HTMLButtonElement>('[data-testid="siyi-range-btn"]')!;
-    const link = root.querySelector('[data-testid="siyi-link"]')!;
-    btn.click();
-    expect(btn.textContent).toBe("Confirm: fire laser");
+  for (const skewMs of [2_000, 5_000]) {
+    it(`stays live with the drone clock ${skewMs / 1000} s behind (panel, HUD, pending Range confirm)`, async () => {
+      const harness = await withHarness();
+      const store = new PodStateStore();
+      // The drone stamps ts_ms with its own clock, behind the browser's.
+      const deliver = () =>
+        store.ingest({ ...ZT30, ts_ms: Date.now() - skewMs - ENTRY_AGE_MS });
+      deliver();
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const handle = mountPanel(harness.ctx, root, store);
+      const btn = root.querySelector<HTMLButtonElement>('[data-testid="siyi-range-btn"]')!;
+      const link = root.querySelector('[data-testid="siyi-link"]')!;
+      const gaps = hostGaps();
+      vi.advanceTimersByTime(gaps[0]!);
+      deliver();
+      // The panel repaints on its 1 s tick; from then on it must read live.
+      const mountAt = Date.now() - gaps[0]!;
+      let clickAt: number | null = null;
+      let next = Date.now();
+      const due: number[] = gaps.slice(1).map((g) => (next += g));
+      const end = due[due.length - 1]!;
+      // From the second sample on, check every 50 ms.
+      while (Date.now() < end) {
+        vi.advanceTimersByTime(50);
+        while (due.length && due[0]! <= Date.now()) {
+          due.shift();
+          deliver();
+        }
+        expect(isLive(store)).toBe(true);
+        expect(hudLines(store, Date.now(), t)).not.toEqual(["No pod data"]);
+        if (Date.now() - mountAt < 1_000) continue;
+        expect(link.textContent).not.toBe("No pod data");
+        if (clickAt === null) {
+          btn.click();
+          clickAt = Date.now();
+        }
+        if (Date.now() - clickAt < 5_000) expect(btn.textContent).toBe("Confirm: fire laser");
+      }
+      expect(clickAt).not.toBeNull();
+      handle.destroy();
+    });
+  }
 
-    let elapsed = 0;
-    for (const gap of hostGaps()) {
-      // Sample just before the next delivery: the worst case.
-      vi.advanceTimersByTime(gap - 1);
-      expect(link.textContent).not.toBe("No pod data");
-      expect(hudLines(store, Date.now(), t)).not.toEqual(["No pod data"]);
-      if (elapsed + gap < 5_000) expect(btn.textContent).toBe("Confirm: fire laser");
-      vi.advanceTimersByTime(1);
-      elapsed += gap;
-      // The agent stamped this write up to 500 ms before MC fetched it.
-      store.ingest({ ...ZT30, ts_ms: Date.now() - 400 });
+  it("a stopped feed reads stale at 2000 ms after the last sample", () => {
+    const store = new PodStateStore();
+    for (const gap of hostGaps(6)) {
+      store.ingest({ ...ZT30, ts_ms: Date.now() - 2_000 - ENTRY_AGE_MS });
+      vi.advanceTimersByTime(gap);
     }
-    handle.destroy();
+    store.ingest({ ...ZT30, ts_ms: Date.now() - 2_000 - ENTRY_AGE_MS });
+    vi.advanceTimersByTime(1_999);
+    expect(isLive(store)).toBe(true);
+    vi.advanceTimersByTime(1);
+    expect(isLive(store)).toBe(false);
+  });
+
+  it("feeds siyi and siyi.pod.state deliveries into one clock", () => {
+    const store = new PodStateStore();
+    const ts = Date.now() - 3_000;
+    store.ingest({ ...ZT30, ts_ms: ts });
+    vi.advanceTimersByTime(750);
+    // The same report on the second channel is a repeat, not a new sample.
+    store.ingest({ ...ZT30, ts_ms: ts });
+    vi.advanceTimersByTime(750);
+    store.ingest({ ...ZT30, ts_ms: Date.now() - 3_000 });
+    expect(isLive(store)).toBe(true);
   });
 
   it("renders a 5 s old ts_ms payload stale on first paint (panel and HUD)", async () => {
