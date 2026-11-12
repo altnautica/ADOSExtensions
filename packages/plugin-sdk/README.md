@@ -60,6 +60,18 @@ returns records in key order. A refusal rejects with a `HostError` whose
 code is `refused` and whose message names the reason (`unavailable` when
 the operator is signed out).
 
+## Config and theme
+
+```ts
+const off = ctx.config.onChange((config) => render(config));
+```
+
+`ctx.config.onChange` and `ctx.theme.onChange` deliver every host push. A
+handler registered after the host already pushed also receives the last
+value, on a microtask after the call, so subscribing from an effect never
+misses the config the host sent on load. Telemetry and other sample streams
+are not replayed: a new subscriber waits for the next live sample.
+
 ## The `contributes` model
 
 A plugin declares what it adds to the GCS in its manifest's

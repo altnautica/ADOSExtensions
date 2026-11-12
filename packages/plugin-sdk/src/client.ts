@@ -27,6 +27,18 @@ export const CAPABILITY_TOKEN_EVENT = "capability.token";
 /** The host's refusal of a request that carried no capability token. */
 export const TOKEN_MISSING_REFUSAL = "capability_denied:token_missing";
 
+/**
+ * Host-pushed events that carry current state rather than a sample stream.
+ * The client keeps the last payload of each and hands it to a handler that
+ * subscribes after the push, so a plugin whose effects register late still
+ * sees the host's config and theme. Telemetry, perception and overlay props
+ * are samples that go stale and are never replayed.
+ */
+const REPLAYED_EVENTS: Readonly<Record<string, true>> = {
+  "config.changed": true,
+  "theme.changed": true,
+};
+
 /** One in-flight request awaiting the host's response. */
 interface PendingRequest {
   resolve: (value: unknown) => void;
@@ -44,6 +56,9 @@ export class PluginClient {
   private readonly transport: Transport;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly subscriptions = new Map<string, Set<EventHandler>>();
+  /** Last payload of each {@link REPLAYED_EVENTS} method, boxed so a fresher
+   * push is told apart from an equal value. */
+  private readonly lastState = new Map<string, { args: unknown }>();
   private readonly disposers: Array<() => void> = [];
   private readonly idGen: () => string;
   /**
@@ -71,6 +86,7 @@ export class PluginClient {
     }
     this.pending.clear();
     this.subscriptions.clear();
+    this.lastState.clear();
     for (const waiter of [...this.tokenWaiters]) waiter(false);
   }
 
@@ -168,18 +184,31 @@ export class PluginClient {
   /**
    * Subscribe to host-pushed events for one method (e.g. theme.changed,
    * telemetry.battery). Returns an unsubscribe function.
+   *
+   * For a state event (`config.changed`, `theme.changed`) the host already
+   * pushed, the handler also gets the last payload on a microtask after
+   * this call, unless it unsubscribed or a fresher push reached it first.
    */
   on<TArgs = unknown>(
     method: string,
     handler: EventHandler<TArgs>,
   ): () => void {
+    const fn = handler as EventHandler;
     const set = this.subscriptions.get(method) ?? new Set<EventHandler>();
-    set.add(handler as EventHandler);
+    set.add(fn);
     this.subscriptions.set(method, set);
+    const cached = this.lastState.get(method);
+    if (cached !== undefined) {
+      queueMicrotask(() => {
+        if (this.lastState.get(method) !== cached) return;
+        if (!this.subscriptions.get(method)?.has(fn)) return;
+        fn(cached.args);
+      });
+    }
     return () => {
       const live = this.subscriptions.get(method);
       if (!live) return;
-      live.delete(handler as EventHandler);
+      live.delete(fn);
       if (live.size === 0) this.subscriptions.delete(method);
     };
   }
@@ -273,6 +302,9 @@ export class PluginClient {
         if (this.token !== null) {
           for (const waiter of [...this.tokenWaiters]) waiter(true);
         }
+      }
+      if (REPLAYED_EVENTS[env.method] === true) {
+        this.lastState.set(env.method, { args: env.args });
       }
       const set = this.subscriptions.get(env.method);
       if (!set) return;

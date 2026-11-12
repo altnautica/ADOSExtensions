@@ -2,6 +2,16 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.5.0
+
+- `ctx.config.onChange` and `ctx.theme.onChange` hand a handler registered
+  after the host's push the last config or theme it sent. A plugin whose
+  effects subscribe after the host posted the config on load used to miss
+  it and show defaults until the next change. The replay runs on a
+  microtask after the subscribe call, and is skipped when the handler
+  unsubscribed or a newer push already reached it. Telemetry, perception
+  and video overlay props are live samples and are never replayed.
+
 ## 1.4.0
 
 - `ctx.videoOverlay.onProps(handler)` delivers the `video.overlay` host props

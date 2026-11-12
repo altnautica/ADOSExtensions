@@ -280,6 +280,70 @@ describe("PluginClient.on", () => {
   });
 });
 
+describe("late subscribers to host state events", () => {
+  function pushEvent(transport: MemoryTransport, method: string, args: unknown, id = "evt") {
+    transport.pushFromHost({
+      id,
+      type: "event",
+      method,
+      capability: "",
+      args,
+      version: PROTOCOL_VERSION,
+    });
+  }
+
+  it("replays the last config.changed to a handler registered after it was pushed", async () => {
+    const { transport, client } = setup();
+    pushEvent(transport, "config.changed", { cameraId: "old" }, "c1");
+    pushEvent(transport, "config.changed", { cameraId: "cam-front-0" }, "c2");
+    const seen: unknown[] = [];
+    const ctx = createPluginContext({ client });
+    ctx.config.onChange((cfg) => seen.push(cfg));
+    // Delivered on a microtask, never inside the subscribe call itself.
+    expect(seen).toEqual([]);
+    await Promise.resolve();
+    expect(seen).toEqual([{ cameraId: "cam-front-0" }]);
+  });
+
+  it("replays the last theme.changed to a late handler", async () => {
+    const { transport, client } = setup();
+    pushEvent(transport, "theme.changed", { accent: "#fff" });
+    const seen: unknown[] = [];
+    client.on("theme.changed", (t) => seen.push(t));
+    await Promise.resolve();
+    expect(seen).toEqual([{ accent: "#fff" }]);
+  });
+
+  it("does not replay to a handler that unsubscribed before the microtask ran", async () => {
+    const { transport, client } = setup();
+    pushEvent(transport, "config.changed", { a: 1 });
+    const seen: unknown[] = [];
+    const off = client.on("config.changed", (c) => seen.push(c));
+    off();
+    await Promise.resolve();
+    expect(seen).toEqual([]);
+  });
+
+  it("does not replay a value a fresher push already superseded", async () => {
+    const { transport, client } = setup();
+    pushEvent(transport, "config.changed", { v: 1 }, "c1");
+    const seen: unknown[] = [];
+    client.on("config.changed", (c) => seen.push(c));
+    pushEvent(transport, "config.changed", { v: 2 }, "c2");
+    await Promise.resolve();
+    expect(seen).toEqual([{ v: 2 }]);
+  });
+
+  it("never replays telemetry samples, which go stale", async () => {
+    const { transport, client } = setup();
+    pushEvent(transport, "telemetry.battery", { x: 1 });
+    const seen: unknown[] = [];
+    client.on("telemetry.battery", (s) => seen.push(s));
+    await Promise.resolve();
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("PluginClient.dispose", () => {
   it("rejects every in-flight request with a disposed HostError", async () => {
     const { client } = setup();
