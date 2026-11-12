@@ -97,6 +97,7 @@
     "absent": "Absent",
     "healthy": "Healthy",
     "noReading": "No reading",
+    "outOfRange": "Out of range",
     "error": "Error"
   },
   "imuSource": {
@@ -160,6 +161,7 @@
     "blocked": "Blocked",
     "waiting": "Waiting for the vision-nav agent…",
     "denied": "Mission Control did not grant navigation telemetry.",
+    "subscribeFailed": "Could not subscribe to navigation telemetry.",
     "checks": {
       "companion_active": "Companion process active",
       "flow_quality": "Optical flow quality",

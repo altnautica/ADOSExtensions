@@ -23,6 +23,27 @@ export function freshnessOf(receivedAt: number | null, now: number): Freshness {
   return age >= STALE_AFTER_MS ? { kind: "stale", ageS: Math.floor(age / 1000) } : LIVE;
 }
 
+/** The payload's agent `ts_ms` (epoch ms, drone clock), or `null`
+ * without one. A repeat of the last one is the same report delivered
+ * twice; the stores drop it so it neither resets the age nor adds a
+ * trend sample. */
+export function agentTsOf(payload: unknown): number | null {
+  const ts = (payload as { ts_ms?: unknown } | null)?.ts_ms;
+  return typeof ts === "number" && Number.isFinite(ts) ? ts : null;
+}
+
+/**
+ * When a delivered payload was sampled: the agent's `ts_ms` capped at
+ * this clock, so a drone clock running ahead never makes a value look
+ * older than its arrival, or the arrival time when it carries none. The
+ * host replays the sidecar's last entry on mount whatever its age, so
+ * the arrival time alone would show an old value as live.
+ */
+export function sampleTimeOf(payload: unknown, now: number): number {
+  const ts = agentTsOf(payload);
+  return ts === null ? now : Math.min(ts, now);
+}
+
 /** "No data", with the age once a value has gone stale. */
 export function noDataLabel(t: TFn, f: Freshness): string {
   return f.kind === "stale"

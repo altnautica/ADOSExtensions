@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
-import type { PluginContext } from "@altnautica/plugin-sdk";
+import { HostError, type PluginContext } from "@altnautica/plugin-sdk";
 
+import { agentTsOf, sampleTimeOf } from "./freshness";
 import {
   EMPTY_NAV_STATE,
   ENGAGE_TOPIC,
@@ -18,13 +19,16 @@ const EMPTY: VisionNavTelemetry = {
   opticalFlowSupported: false,
 };
 
-/** The latest navigation block and when it arrived. */
+/** The latest navigation block and when it was sampled. */
 export interface TelemetryFeed {
   snapshot: VisionNavTelemetry;
-  /** `Date.now()` when the snapshot arrived; `null` before the first one. */
+  /** When the snapshot was sampled (see `sampleTimeOf`); `null` before
+   * the first one. */
   receivedAt: number | null;
   /** The host refused the `navigation` telemetry subscription. */
   denied: boolean;
+  /** The subscription failed for another reason (timeout, host fault). */
+  subscribeFailed: boolean;
 }
 
 /**
@@ -38,21 +42,28 @@ export function useVisionNavTelemetry(ctx: PluginContext): TelemetryFeed {
     snapshot: EMPTY,
     receivedAt: null,
     denied: false,
+    subscribeFailed: false,
   });
 
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | null = null;
+    let lastTs: number | null = null;
 
     void ctx.telemetry
       .subscribe<VisionNavTelemetry>("navigation", (next) => {
         if (cancelled || !next) return;
+        const ts = agentTsOf(next);
+        if (ts !== null && ts === lastTs) return;
+        lastTs = ts;
+        const sampledAt = sampleTimeOf(next, Date.now());
         // Defensive normalization: the agent may publish a partial
         // payload during warm-up. Keep the support flag sticky once
         // observed so the UI does not flicker between firmware tiers.
         setFeed((prev) => ({
           denied: false,
-          receivedAt: Date.now(),
+          subscribeFailed: false,
+          receivedAt: sampledAt,
           snapshot: {
             opticalFlowSupported:
               next.opticalFlowSupported ?? prev.snapshot.opticalFlowSupported,
@@ -86,10 +97,12 @@ export function useVisionNavTelemetry(ctx: PluginContext): TelemetryFeed {
         }
         off = unsubscribe;
       })
-      .catch(() => {
-        // The host refused the subscription; the tab says so instead of
-        // showing an empty feed as if the agent were silent.
-        if (!cancelled) setFeed((prev) => ({ ...prev, denied: true }));
+      .catch((err: unknown) => {
+        // Say why the feed is empty instead of showing it as if the
+        // agent were silent: a denial only for `capability_denied`.
+        if (cancelled) return;
+        const denied = err instanceof HostError && err.code === "capability_denied";
+        setFeed((prev) => ({ ...prev, denied, subscribeFailed: !denied }));
       });
 
     return () => {
@@ -101,7 +114,7 @@ export function useVisionNavTelemetry(ctx: PluginContext): TelemetryFeed {
   return feed;
 }
 
-/** The latest value of an agent event topic and when it arrived. */
+/** The latest value of an agent event topic and when it was sampled. */
 export interface EventFeed<T> {
   value: T;
   receivedAt: number | null;
@@ -114,13 +127,15 @@ function useEventFeed<R, T>(
   normalize: (raw: R) => T,
 ): EventFeed<T> {
   const [feed, setFeed] = useState<EventFeed<T>>({ value: empty, receivedAt: null });
-  useEffect(
-    () =>
-      ctx.events.subscribe<R>(topic, (raw) => {
-        setFeed({ value: normalize(raw), receivedAt: Date.now() });
-      }),
-    [ctx, topic, normalize],
-  );
+  useEffect(() => {
+    let lastTs: number | null = null;
+    return ctx.events.subscribe<R>(topic, (raw) => {
+      const ts = agentTsOf(raw);
+      if (ts !== null && ts === lastTs) return;
+      lastTs = ts;
+      setFeed({ value: normalize(raw), receivedAt: sampleTimeOf(raw, Date.now()) });
+    });
+  }, [ctx, topic, normalize]);
   return feed;
 }
 

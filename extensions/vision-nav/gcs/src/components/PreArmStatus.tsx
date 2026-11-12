@@ -10,8 +10,9 @@ interface Props {
   ctx: PluginContext;
   telemetry: VisionNavTelemetry;
   freshness: Freshness;
-  /** The host refused the navigation telemetry subscription. */
-  denied: boolean;
+  /** The navigation telemetry subscription: refused by the host
+   * (`denied`), failed for another reason (`failed`), or in place. */
+  subscription: "ok" | "denied" | "failed";
 }
 
 /** The flow-quality pre-arm minimum, as the agent's gate applies it (`>=`). */
@@ -24,16 +25,17 @@ const FLOW_QUALITY_GATE = 50;
  * string. Severity drives the indicator colour; the detail appears as a
  * sub-row when present.
  *
- * Before the first navigation block the card says it is waiting, and
- * when the host refused the telemetry it says so; neither claims a
- * fault. A stale block keeps its rows (dimmed by the tab) but the
+ * Before the first navigation block the card says it is waiting; when
+ * the host refused the telemetry, or the subscription failed, it says
+ * which. None of these claims a fault. A stale block keeps its rows
+ * (dimmed by the tab) but the
  * Ready / Blocked pill reads "No data" with the age.
  *
  * Backward compat: a block that has data but no ``preArmReport`` (an
  * older agent) renders the legacy three-check list derived from the
  * flat telemetry fields.
  */
-export function PreArmStatus({ ctx, telemetry, freshness, denied }: Props): JSX.Element {
+export function PreArmStatus({ ctx, telemetry, freshness, subscription }: Props): JSX.Element {
   const t = ctx.i18n.t;
   const head = (pill: JSX.Element | null): JSX.Element => (
     <header style={headerRow}>
@@ -42,12 +44,18 @@ export function PreArmStatus({ ctx, telemetry, freshness, denied }: Props): JSX.
     </header>
   );
 
-  if (denied || freshness.kind === "none") {
+  if (subscription !== "ok" || freshness.kind === "none") {
+    const hint =
+      subscription === "denied"
+        ? { id: "vn-pre-arm-denied", key: "navigation.preArm.denied" }
+        : subscription === "failed"
+          ? { id: "vn-pre-arm-subscribe-failed", key: "navigation.preArm.subscribeFailed" }
+          : { id: "vn-pre-arm-waiting", key: "navigation.preArm.waiting" };
     return (
       <section style={card} data-testid="vn-pre-arm">
         {head(null)}
-        <p style={hintStyle} data-testid={denied ? "vn-pre-arm-denied" : "vn-pre-arm-waiting"}>
-          {tr(t, denied ? "navigation.preArm.denied" : "navigation.preArm.waiting")}
+        <p style={hintStyle} data-testid={hint.id}>
+          {tr(t, hint.key)}
         </p>
       </section>
     );

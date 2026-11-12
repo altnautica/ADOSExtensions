@@ -47,7 +47,13 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
   const telemetryFresh: Freshness = props.telemetryOverride
     ? LIVE
     : freshnessOf(live.receivedAt, now);
-  const denied = !props.telemetryOverride && live.denied;
+  const subscription = props.telemetryOverride
+    ? "ok"
+    : live.denied
+      ? "denied"
+      : live.subscribeFailed
+        ? "failed"
+        : "ok";
   const navState = props.navStateOverride ?? liveNav.value;
   const navFresh: Freshness = props.navStateOverride
     ? LIVE
@@ -114,7 +120,12 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
         <EstimatorCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
         <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
         <FlowHealthCard ctx={props.ctx} telemetry={telemetry} />
-        <PreArmStatus ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} denied={denied} />
+        <PreArmStatus
+          ctx={props.ctx}
+          telemetry={telemetry}
+          freshness={telemetryFresh}
+          subscription={subscription}
+        />
       </div>
       <NavStateCard
         ctx={props.ctx}

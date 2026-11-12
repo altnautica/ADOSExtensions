@@ -1,4 +1,4 @@
-import { MemoryTransport, PluginClient, type PluginContext } from "@altnautica/plugin-sdk";
+import { HostError, MemoryTransport, PluginClient, type PluginContext } from "@altnautica/plugin-sdk";
 
 export type Locale = Record<string, string> | ((key: string) => string);
 
@@ -14,8 +14,10 @@ export interface Harness {
 
 export interface HarnessOptions {
   locale?: Locale;
-  /** The host refuses `telemetry.subscribe`. */
+  /** The host refuses `telemetry.subscribe` with `capability_denied`. */
   denyTelemetry?: boolean;
+  /** `telemetry.subscribe` fails with this host error code (not a denial). */
+  failTelemetry?: string;
 }
 
 /** A plugin context whose telemetry and event subscriptions the test drives. */
@@ -44,7 +46,10 @@ export function harness(opts: HarnessOptions = {}): Harness {
     telemetry: {
       subscribe: (topic: string, h: (args: unknown) => void) => {
         if (opts.denyTelemetry) {
-          return Promise.reject(new Error("refused"));
+          return Promise.reject(new HostError("capability_denied", "refused"));
+        }
+        if (opts.failTelemetry) {
+          return Promise.reject(new HostError(opts.failTelemetry, "failed"));
         }
         return Promise.resolve(add(telemetry, topic, h));
       },

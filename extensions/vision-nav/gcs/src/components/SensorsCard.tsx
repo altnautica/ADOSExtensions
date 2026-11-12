@@ -92,8 +92,10 @@ function ImuRow({ telemetry, t, gate }: RowProps): JSX.Element {
 /**
  * The rangefinder pill reports its health, not its wiring: red with a
  * driver error, or with no reading in the mode that needs one; amber
- * with no reading where the scale ladder can stand in; green with a
- * reading. Where it is wired goes in the sublabel.
+ * with no reading where the scale ladder can stand in. With a reading,
+ * the agent's pre-arm rangefinder check sets the colour when the report
+ * carries one (a reading outside the configured range blocks arming),
+ * and green otherwise. Where it is wired goes in the sublabel.
  */
 function rangefinderTone(telemetry: VisionNavTelemetry, t: TFn): Tone {
   const required = telemetry.mode === "optical_flow";
@@ -106,6 +108,13 @@ function rangefinderTone(telemetry: VisionNavTelemetry, t: TFn): Tone {
   }
   if (typeof telemetry.flowDistanceM !== "number") {
     return { kind: required ? "error" : "warn", label: tr(t, "navigation.sensorsCard.noReading") };
+  }
+  const check = telemetry.preArmReport?.checks.find((c) => c.id === "rangefinder");
+  if (check && check.severity !== "ok") {
+    return {
+      kind: check.severity === "blocking" ? "error" : "warn",
+      label: tr(t, "navigation.sensorsCard.outOfRange"),
+    };
   }
   return { kind: "ok", label: tr(t, "navigation.sensorsCard.healthy") };
 }

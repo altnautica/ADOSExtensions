@@ -4,6 +4,23 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.7.1]
+
+### Fixed
+
+- An old navigation block, nav state or engage state no longer shows as
+  live when the tab opens. The tab ages each value from the time the
+  drone recorded it, so a value already two seconds old reads "No data"
+  with its age from the first paint.
+- The same report delivered twice no longer adds a second point to the
+  trend charts or makes the value look newer.
+- The rangefinder pill turns red when pre-arm blocks the rangefinder,
+  for example a reading outside its configured range, instead of
+  showing "Healthy" because a reading is present.
+- "Mission Control did not grant navigation telemetry" now appears only
+  when the permission is refused. Any other subscription failure says
+  "Could not subscribe to navigation telemetry."
+
 ## [0.7.0]
 
 ### Added
