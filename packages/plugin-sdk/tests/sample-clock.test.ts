@@ -99,6 +99,27 @@ describe("SampleClock", () => {
     },
   );
 
+  it("ignores the shown report delivered again after an older one was dropped", () => {
+    const clock = new SampleClock();
+    let now = 1_000_000;
+    const shown = now - 1000;
+    clock.ingest(shown - 750, now - 750);
+    clock.ingest(shown, now);
+    const lastLive = now;
+    // The feed has stopped. Failed polls alternate the slower source's older
+    // report with the faster source's last (unchanged) report.
+    for (let i = 0; i < 3; i++) {
+      now += 750;
+      expect(clock.ingest(shown - 4000, now)).toBeNull();
+      now += 750;
+      expect(clock.ingest(shown, now)).toBeNull();
+    }
+    expect(clock.sampleAt).toBe(lastLive);
+    expect(clock.isStale(lastLive + 1999)).toBe(false);
+    expect(clock.isStale(lastLive + 2000)).toBe(true);
+    expect(clock.isStale(lastLive + 4000)).toBe(true);
+  });
+
   it("costs one sample, not the feed, when the drone clock steps back", () => {
     const clock = new SampleClock();
     let now = 1_000_000;

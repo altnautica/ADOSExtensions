@@ -2,6 +2,13 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.5.4
+
+- `SampleClock` also remembers the key of the shown sample. The shown report
+  delivered again after an older one was dropped is still a repeat and
+  returns `null`, so a stopped feed goes stale 2000 ms after its last report
+  arrived even when failed polls alternate it with an older report.
+
 ## 1.5.3
 
 - `SampleClock` ignores a sample stamped earlier than the one before it (an

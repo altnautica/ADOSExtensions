@@ -18,7 +18,9 @@
  * poll). It is ignored, so it neither replaces the newer reading nor reads
  * live. The stamp is compared with the previous delivery only, not with the
  * newest ever seen, so a drone clock that steps back costs one sample rather
- * than freezing the feed until the clock catches up.
+ * than freezing the feed until the clock catches up. The shown report
+ * delivered again after a dropped one is still a repeat, so a stopped feed
+ * goes stale 2000 ms after its last report arrived.
  *
  * @license GPL-3.0-or-later
  */
@@ -36,6 +38,7 @@ export function agentTimestampOf(payload: unknown): number | null {
 export class SampleClock {
   private lastArrivalMs: number | null = null;
   private lastKey: unknown = undefined;
+  private shownKey: unknown = undefined;
   private lastTsMs: number | null = null;
   private sampledAt: number | null = null;
 
@@ -45,13 +48,15 @@ export class SampleClock {
    * Record a delivery that arrived at `now`, carrying the agent timestamp
    * `tsMs` (or `null`). `key` identifies the report (defaults to `tsMs`).
    * Returns `null`, and changes no reading, for a delivery the caller must
-   * ignore: one whose non-null key equals the last one (the same report
-   * delivered again), or one stamped earlier than the delivery before it (an
+   * ignore: one whose non-null key equals the last one or the shown one (the
+   * same report delivered again, also after an older one was dropped), or one stamped earlier than the delivery before it (an
    * older report delivered late). Otherwise returns the sample time the age
    * is counted from.
    */
   ingest(tsMs: number | null, now: number, key: unknown = tsMs): number | null {
-    if (key !== null && key !== undefined && key === this.lastKey) return null;
+    if (key !== null && key !== undefined && (key === this.lastKey || key === this.shownKey)) {
+      return null;
+    }
     this.lastKey = key;
     const previousTsMs = this.lastTsMs;
     if (tsMs !== null) this.lastTsMs = tsMs;
@@ -59,6 +64,7 @@ export class SampleClock {
     const forward = tsMs === null || previousTsMs === null || tsMs > previousTsMs;
     const continuing =
       forward && this.lastArrivalMs !== null && now - this.lastArrivalMs < this.staleAfterMs;
+    this.shownKey = key;
     this.lastArrivalMs = now;
     this.sampledAt = continuing || tsMs === null ? now : Math.min(tsMs, now);
     return this.sampledAt;
@@ -84,6 +90,7 @@ export class SampleClock {
   reset(): void {
     this.lastArrivalMs = null;
     this.lastKey = undefined;
+    this.shownKey = undefined;
     this.lastTsMs = null;
     this.sampledAt = null;
   }
