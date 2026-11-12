@@ -4,6 +4,33 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.4] - 2026-11-12
+
+### Fixed
+
+- The tab no longer shows a silent drone's last report as live. A report
+  2 s old or older blanks the live values and reads "Stale" with the time
+  since the last report; the age is taken from the report's own timestamp
+  when the host forwards it.
+- Before the first report the tab says it is waiting for the drone's follow
+  report and shows dashes, instead of readings such as Phase Idle and
+  Commanding No that looked real.
+- The Pilot lease row read "—" while the follow held a lease, because the
+  pilot's lease id is a number. It now reads Held or None.
+- In orbit the read-back no longer carries the follow distance as a
+  distance setpoint, and the tab shows the orbit radius in its place.
+- The Holding phase reads in the warning tone and Acquiring in the track
+  tone, matching the video HUD.
+- The tab uses the host's UI font, and every row label reads in the same
+  muted tone.
+
+### Changed
+
+- The Mode summary, units and the designate camera are worded through the
+  locale: "Orbit 10.5 m · 12°/s · Counter-clockwise", and an `auto` camera
+  reads "Auto (first detect camera)".
+- The plugin reports the same version as its manifest.
+
 ## [0.4.3] - 2026-11-08
 
 ### Fixed

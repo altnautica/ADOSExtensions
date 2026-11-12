@@ -306,7 +306,10 @@ class ReadbackMixin:
             state.orbit_rate_dps = _r(cfg.orbit_rate_dps, 1)
             state.orbit_direction = cfg.orbit_direction
             if commanding:
-                state.distance_setpoint_m = cfg.follow_distance_m
+                # In orbit the flown geometry is the orbit radius (already
+                # published); the follow distance is not a setpoint there.
+                if cfg.follow_mode != "orbit":
+                    state.distance_setpoint_m = cfg.follow_distance_m
                 state.height_setpoint_m = cfg.follow_height_m
         if self._sighting is not None and self._tracker.has_lock:
             state.confidence = _r(float(self._sighting.confidence), 3)

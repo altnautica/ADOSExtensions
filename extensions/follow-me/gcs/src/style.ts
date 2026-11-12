@@ -41,8 +41,9 @@ export function phaseColor(phase: FollowPhase): string {
     case "lost":
       return "var(--fm-error, #ef4444)";
     case "holding":
+      return "var(--hud-warn, #f59e0b)";
     case "acquiring":
-      return "var(--fm-text, #ededed)";
+      return "var(--hud-track, #FF5A1F)";
     default:
       return "var(--fm-tertiary, #94a3b8)";
   }
@@ -71,6 +72,12 @@ export const labelRow: CSSProperties = {
   gap: "0.75rem",
   fontSize: "0.8125rem",
   padding: "0.25rem 0",
+};
+
+/** Every row label reads in the same muted tone. The tab container defines
+ * the `--fm-text-muted` default, so a host theme can still override it. */
+export const mutedLabel: CSSProperties = {
+  color: "var(--fm-text-muted)",
 };
 
 export const inputStyle: CSSProperties = {

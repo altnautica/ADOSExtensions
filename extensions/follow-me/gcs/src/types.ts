@@ -144,8 +144,9 @@ export interface FollowState {
   orbitDirection: OrbitDirection;
   /** Bearing of the vehicle's ring point from the subject; null outside an orbit. */
   orbitPhaseDeg: number | null;
-  /** The pilot motion lease the follow holds, or null. */
-  leaseId: string | null;
+  /** The pilot motion lease the follow holds (the pilot issues an integer),
+   * or null. Shown only as held / none, never as the raw id. */
+  leaseId: number | string | null;
   /** The operator nudged the parameters with the sticks this session. */
   nudged: boolean;
 }
@@ -179,7 +180,9 @@ export interface RawFollowState {
   orbit_rate_dps?: number;
   orbit_direction?: string;
   orbit_phase_deg?: number | null;
-  lease_id?: string | null;
+  lease_id?: number | string | null;
+  /** Agent wall-clock time of the report, when the host forwards it. */
+  ts_ms?: number;
   nudged?: boolean;
 }
 
@@ -293,7 +296,11 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     orbitRateDps: num(raw.orbit_rate_dps) ?? 10,
     orbitDirection: normalizeOrbitDirection(raw.orbit_direction),
     orbitPhaseDeg: num(raw.orbit_phase_deg),
-    leaseId: typeof raw.lease_id === "string" && raw.lease_id ? raw.lease_id : null,
+    leaseId:
+      (typeof raw.lease_id === "number" && Number.isFinite(raw.lease_id)) ||
+      (typeof raw.lease_id === "string" && raw.lease_id)
+        ? (raw.lease_id ?? null)
+        : null,
     nudged: raw.nudged === true,
   };
 }
@@ -308,13 +315,29 @@ export function normalizeOrbitDirection(v: unknown): OrbitDirection {
   return v === "ccw" ? "ccw" : "cw";
 }
 
-/** "Follow 180° · 8 m" or "Orbit 8 m · 10°/s · CW". */
-export function modeSummary(f: FollowState, distanceM: number | null): string {
+/** "Follow 180° · 8 m" or "Orbit 8 m · 10°/s · Clockwise", built from the
+ * locale so the mode and direction words are translated. */
+export function modeSummary(
+  f: FollowState,
+  distanceM: number | null,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string {
+  const mode = t(`follow_mode.${f.followMode}`);
   if (f.followMode === "orbit") {
-    return `Orbit ${f.orbitRadiusM} m · ${f.orbitRateDps}°/s · ${f.orbitDirection.toUpperCase()}`;
+    return t("mode.orbitSummary", {
+      mode,
+      radius: t("unit.m", { value: f.orbitRadiusM }),
+      rate: t("unit.dps", { value: f.orbitRateDps }),
+      direction: t(`orbit_direction.${f.orbitDirection}`),
+    });
   }
-  const d = distanceM == null ? "" : ` · ${distanceM} m`;
-  return `Follow ${Math.round(f.followAngleDeg)}°${d}`;
+  const angle = t("unit.deg", { value: Math.round(f.followAngleDeg) });
+  if (distanceM == null) return t("mode.followSummaryNoDistance", { mode, angle });
+  return t("mode.followSummary", {
+    mode,
+    angle,
+    distance: t("unit.m", { value: distanceM }),
+  });
 }
 
 /** Strict unless the value is exactly "smart": an unknown mode must never

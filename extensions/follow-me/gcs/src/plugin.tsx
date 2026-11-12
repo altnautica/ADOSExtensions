@@ -20,10 +20,10 @@ import { createRoot } from "react-dom/client";
 import { definePlugin, type PluginContext } from "@altnautica/plugin-sdk";
 
 import { FollowMeTab } from "./FollowMeTab";
+import { PLUGIN_VERSION } from "./version";
 import enLocale from "../../locales/en.json";
 
 const PLUGIN_ID = "com.altnautica.follow-me";
-const PLUGIN_VERSION = "0.4.0";
 
 let rootEl: HTMLElement | null = null;
 let reactRoot: Root | null = null;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
+
 import {
   EMPTY_FOLLOW_STATE,
   holdReasonLabelKey,
@@ -179,6 +181,12 @@ describe("normalizeConfig", () => {
 });
 
 describe("follow modes", () => {
+  const { ctx } = createPluginHarness({
+    mount: () => undefined,
+    locale: enLocale as Record<string, string>,
+  });
+  const t = ctx.i18n.t;
+
   it("normalizes the mode, orbit and lease fields", () => {
     const s = normalizeFollowState({
       follow_mode: "orbit",
@@ -186,15 +194,15 @@ describe("follow modes", () => {
       orbit_rate_dps: 15,
       orbit_direction: "ccw",
       orbit_phase_deg: 90,
-      lease_id: "L1",
+      lease_id: 7,
       nudged: true,
     });
     expect(s.followMode).toBe("orbit");
     expect(s.orbitDirection).toBe("ccw");
     expect(s.orbitPhaseDeg).toBe(90);
-    expect(s.leaseId).toBe("L1");
+    expect(s.leaseId).toBe(7);
     expect(s.nudged).toBe(true);
-    expect(modeSummary(s, null)).toBe("Orbit 12 m · 15°/s · CCW");
+    expect(modeSummary(s, null, t)).toBe("Orbit 12 m · 15°/s · Counter-clockwise");
   });
 
   it("defaults unknown words to follow and clockwise", () => {
@@ -202,7 +210,7 @@ describe("follow modes", () => {
     expect(s.followMode).toBe("follow");
     expect(s.orbitDirection).toBe("cw");
     expect(s.leaseId).toBeNull();
-    expect(modeSummary({ ...s, followAngleDeg: 90 }, 8)).toBe("Follow 90° · 8 m");
+    expect(modeSummary({ ...s, followAngleDeg: 90 }, 8, t)).toBe("Follow 90° · 8 m");
   });
 
   it("drops the retired fc-not-guided reason", () => {

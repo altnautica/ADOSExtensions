@@ -11,6 +11,11 @@
  * re-acquire mode itself is a native parameter (rendered as a Strict | Smart
  * toggle); the tab shows the mode in effect.
  *
+ * Before the first report, and once the latest report is FOLLOW_STALE_MS
+ * old, every live value reads as a dash under a status line that says why
+ * (waiting, or stale with the report's age), so a silent drone never looks
+ * like a live one.
+ *
  * @license GPL-3.0-or-later
  */
 
@@ -19,8 +24,15 @@ import { useEffect, useState, type CSSProperties } from "react";
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
 import { normalizeConfig } from "./config";
-import { useFollowState } from "./follow-state";
-import { card, labelRow, lockColor, phaseColor, sectionTitle } from "./style";
+import { FOLLOW_STALE_MS, useFollowState } from "./follow-state";
+import {
+  card,
+  labelRow,
+  lockColor,
+  mutedLabel,
+  phaseColor,
+  sectionTitle,
+} from "./style";
 import {
   DEFAULT_CONFIG,
   holdReasonLabelKey,
@@ -30,9 +42,14 @@ import {
   type FollowState,
 } from "./types";
 
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+const DASH = "—";
+
 export interface FollowMeTabProps {
   ctx: PluginContext;
-  /** Test seam: drive the live metrics without a real subscription. */
+  /** Test seam: drive the live metrics without a real subscription. The
+   * override is treated as a fresh report. */
   followOverride?: FollowState;
 }
 
@@ -40,8 +57,10 @@ export function FollowMeTab({
   ctx,
   followOverride,
 }: FollowMeTabProps): JSX.Element {
-  const liveFollow = useFollowState(ctx);
-  const follow = followOverride ?? liveFollow;
+  const live = useFollowState(ctx);
+  const reading = followOverride
+    ? { state: followOverride, ageMs: 0 }
+    : live;
   // Read-only view of the per-drone config so Specs can show the live camera.
   // The settings are edited through the host's native parameter controls, not
   // here, so the tab never writes config.
@@ -60,7 +79,7 @@ export function FollowMeTab({
     return off;
   }, [ctx]);
 
-  const t = (key: string): string => ctx.i18n.t(key);
+  const t: Translate = (key, params) => ctx.i18n.t(key, params);
 
   const container: CSSProperties = {
     display: "flex",
@@ -69,10 +88,21 @@ export function FollowMeTab({
     padding: "0.875rem",
     background: "var(--fm-bg, #0a0a0a)",
     color: "var(--fm-text, #ededed)",
+    fontFamily:
+      "var(--fm-font, var(--font-sans, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif))",
     minHeight: "100%",
     boxSizing: "border-box",
+    ["--fm-text-muted" as string]: "#94a3b8",
     ...(themeVars as CSSProperties),
   };
+
+  const stale = reading.ageMs != null && reading.ageMs >= FOLLOW_STALE_MS;
+  const status =
+    reading.state == null
+      ? t("status.waiting")
+      : stale
+        ? t("status.stale", { age: Math.floor((reading.ageMs ?? 0) / 1000) })
+        : null;
 
   return (
     <div style={container} data-testid="fm-tab">
@@ -80,33 +110,44 @@ export function FollowMeTab({
         {t("tab.title")}
       </h2>
 
-      <SpecsSection ctx={ctx} config={config} />
+      <SpecsSection t={t} config={config} />
 
-      <MetricsSection ctx={ctx} follow={follow} />
+      <MetricsSection
+        t={t}
+        follow={stale ? null : reading.state}
+        status={status}
+      />
     </div>
   );
 }
 
 function SpecsSection({
-  ctx,
+  t,
   config,
 }: {
-  ctx: PluginContext;
+  t: Translate;
   config: FollowConfig;
 }): JSX.Element {
-  const t = (key: string): string => ctx.i18n.t(key);
   return (
     <section style={card} data-testid="fm-specs">
       <h3 style={sectionTitle}>{t("specs.title")}</h3>
       <SpecRow label={t("specs.detector")} value={t("specs.detectorValue")} />
-      <SpecRow label={t("specs.camera")} value={config.designate_camera} />
+      <SpecRow
+        label={t("specs.camera")}
+        value={
+          config.designate_camera === "auto"
+            ? t("specs.cameraAuto")
+            : config.designate_camera
+        }
+        testId="fm-camera"
+      />
       <SpecRow
         label={t("settings.reacquireMode")}
         value={t(`reacquire.${config.reacquire_mode}`)}
       />
       <SpecRow label={t("specs.fcMode")} value={t("specs.fcModeValue")} />
       <SpecRow label={t("specs.resource")} value={t("specs.resourceValue")} />
-      <p style={{ margin: "0.4rem 0 0", fontSize: "0.7rem", color: "var(--fm-text-muted, #94a3b8)" }} data-testid="fm-settings-hint">
+      <p style={{ margin: "0.4rem 0 0", fontSize: "0.7rem", ...mutedLabel }} data-testid="fm-settings-hint">
         {t("specs.settingsHint")}
       </p>
     </section>
@@ -114,167 +155,205 @@ function SpecsSection({
 }
 
 function MetricsSection({
-  ctx,
+  t,
   follow,
+  status,
 }: {
-  ctx: PluginContext;
-  follow: FollowState;
+  t: Translate;
+  /** The fresh report, or null when there is none or it is stale. */
+  follow: FollowState | null;
+  /** Why the values are blank (waiting / stale), or null when live. */
+  status: string | null;
 }): JSX.Element {
-  const t = (key: string): string => ctx.i18n.t(key);
-  const lockLabel = follow.lockState
-    ? t(`lock.${follow.lockState}`)
-    : t("lock.none");
+  const f = follow;
+  const yesNo = (v: boolean): string => (v ? t("metrics.yes") : t("metrics.no"));
+  const meters = (v: number | null): string =>
+    v == null || !Number.isFinite(v) ? DASH : t("unit.m", { value: v.toFixed(1) });
+  const lockLabel = !f
+    ? DASH
+    : f.lockState
+      ? t(`lock.${f.lockState}`)
+      : t("lock.none");
+  const orbit = f?.followMode === "orbit";
   return (
     <section style={card} data-testid="fm-metrics">
       <h3 style={sectionTitle}>{t("metrics.title")}</h3>
+      {status ? (
+        <div style={{ ...labelRow, color: "var(--hud-warn, #f59e0b)" }} data-testid="fm-status">
+          {status}
+        </div>
+      ) : null}
       <div style={labelRow}>
-        <span>{t("metrics.phase")}</span>
+        <span style={mutedLabel}>{t("metrics.phase")}</span>
         <span
-          style={{ color: phaseColor(follow.phase), fontWeight: 600 }}
+          style={{ color: f ? phaseColor(f.phase) : undefined, fontWeight: 600 }}
           data-testid="fm-phase"
         >
-          {t(`phase.${follow.phase}`)}
+          {f ? t(`phase.${f.phase}`) : DASH}
         </span>
       </div>
       <MetricRow
         label={t("metrics.reacquireMode")}
-        value={t(`reacquire.${follow.reacquireMode}`)}
+        value={f ? t(`reacquire.${f.reacquireMode}`) : DASH}
         testId="fm-reacquire-mode"
       />
-      {follow.phase === "coasting" || follow.phase === "searching" ? (
+      {f && (f.phase === "coasting" || f.phase === "searching") ? (
         <MetricRow
           label={t("metrics.coastRemaining")}
-          value={`${follow.coastRemainingS.toFixed(1)} s`}
+          value={t("unit.s", { value: f.coastRemainingS.toFixed(1) })}
           testId="fm-coast-remaining"
         />
       ) : null}
       <div style={labelRow}>
-        <span>{t("metrics.lockState")}</span>
+        <span style={mutedLabel}>{t("metrics.lockState")}</span>
         <span
           style={{
             display: "inline-flex",
             alignItems: "center",
             gap: "0.4rem",
-            color: lockColor(follow.lockState),
+            color: f ? lockColor(f.lockState) : undefined,
           }}
           data-testid="fm-lock-state"
         >
-          <span
-            style={{
-              width: "0.55rem",
-              height: "0.55rem",
-              borderRadius: "999px",
-              background: lockColor(follow.lockState),
-            }}
-          />
+          {f ? (
+            <span
+              style={{
+                width: "0.55rem",
+                height: "0.55rem",
+                borderRadius: "999px",
+                background: lockColor(f.lockState),
+              }}
+            />
+          ) : null}
           {lockLabel}
         </span>
       </div>
       <MetricRow
         label={t("metrics.commanding")}
-        value={follow.commanding ? t("metrics.yes") : t("metrics.no")}
+        value={f ? yesNo(f.commanding) : DASH}
         testId="fm-commanding"
       />
-      {!follow.commanding && follow.holdReason !== null ? (
+      {f && !f.commanding && f.holdReason !== null ? (
         // "Not commanding" on its own reads the same whether the aircraft is
         // sitting disarmed on the ground or its telemetry died mid-follow.
         // Name the gate, and colour the two telemetry faults as faults.
         <div style={labelRow} data-testid="fm-hold-reason-row">
-          <span>{t("metrics.holdReason")}</span>
+          <span style={mutedLabel}>{t("metrics.holdReason")}</span>
           <span
             style={{
-              color: isStaleHold(follow.holdReason)
+              color: isStaleHold(f.holdReason)
                 ? "var(--fm-error, #ef4444)"
                 : "var(--fm-text-muted, #94a3b8)",
             }}
             data-testid="fm-hold-reason"
           >
-            {t(holdReasonLabelKey(follow.holdReason))}
+            {t(holdReasonLabelKey(f.holdReason))}
           </span>
         </div>
       ) : null}
       <MetricRow
         label={t("metrics.followMode")}
-        value={modeSummary(follow, follow.distanceSetpointM)}
+        value={f ? modeSummary(f, f.distanceSetpointM, t) : DASH}
         testId="fm-mode"
       />
       <MetricRow
         label={t("metrics.lease")}
-        value={follow.leaseId ?? "—"}
+        value={f ? (f.leaseId != null ? t("lease.held") : t("lease.none")) : DASH}
         testId="fm-lease"
       />
       <MetricRow
         label={t("metrics.nudged")}
-        value={follow.nudged ? t("metrics.yes") : t("metrics.no")}
+        value={f ? yesNo(f.nudged) : DASH}
         testId="fm-nudged"
       />
       <MetricRow
         label={t("metrics.fcArmed")}
-        value={follow.fcArmed ? t("metrics.yes") : t("metrics.no")}
+        value={f ? yesNo(f.fcArmed) : DASH}
         testId="fm-fc-armed"
       />
       <MetricRow
         label={t("metrics.guidedMode")}
-        value={follow.fcGuided ? t("metrics.yes") : t("metrics.no")}
+        value={f ? yesNo(f.fcGuided) : DASH}
         testId="fm-fc-guided"
       />
       <MetricRow
         label={t("metrics.targetId")}
-        value={follow.targetId != null ? `#${follow.targetId}` : "—"}
+        value={
+          f?.targetId != null ? t("unit.targetId", { value: f.targetId }) : DASH
+        }
         testId="fm-target-id"
       />
       <MetricRow
         label={t("metrics.range")}
-        value={fmtRange(follow.rangeM, follow.rangeSigmaM)}
+        value={
+          f?.rangeM == null || !Number.isFinite(f.rangeM)
+            ? DASH
+            : f.rangeSigmaM == null || !Number.isFinite(f.rangeSigmaM)
+              ? meters(f.rangeM)
+              : t("unit.rangeSigma", {
+                  value: f.rangeM.toFixed(1),
+                  sigma: f.rangeSigmaM.toFixed(1),
+                })
+        }
         testId="fm-range"
       />
       <MetricRow
         label={t("metrics.rangeCues")}
         value={
-          follow.rangeCues.length
-            ? follow.rangeCues.map((c) => t(`cue.${c.kind}`)).join(" · ")
-            : "—"
+          f?.rangeCues.length
+            ? f.rangeCues.map((c) => t(`cue.${c.kind}`)).join(" · ")
+            : DASH
         }
         testId="fm-range-cues"
       />
       <MetricRow
         label={t("metrics.agl")}
         value={
-          follow.aglM == null
-            ? "—"
-            : `${fmtMeters(follow.aglM)} · ${t(`agl.${follow.aglSource ?? "baro"}`)}`
+          f?.aglM == null
+            ? DASH
+            : `${meters(f.aglM)} · ${t(`agl.${f.aglSource ?? "baro"}`)}`
         }
         testId="fm-agl"
       />
       <MetricRow
         label={t("metrics.targetSpeed")}
         value={
-          follow.targetSpeedMps == null
-            ? "—"
-            : `${follow.targetSpeedMps.toFixed(1)} m/s`
+          f?.targetSpeedMps == null
+            ? DASH
+            : t("unit.mps", { value: f.targetSpeedMps.toFixed(1) })
         }
         testId="fm-target-speed"
       />
       <MetricRow
         label={t("metrics.latency")}
         value={
-          follow.pipelineLatencyMs == null ? "—" : `${follow.pipelineLatencyMs} ms`
+          f?.pipelineLatencyMs == null
+            ? DASH
+            : t("unit.ms", { value: f.pipelineLatencyMs })
         }
         testId="fm-latency"
       />
       <MetricRow
         label={t("metrics.setpointRate")}
-        value={`${follow.setpointRateHz.toFixed(1)} Hz`}
+        value={f ? t("unit.hz", { value: f.setpointRateHz.toFixed(1) }) : DASH}
         testId="fm-setpoint-rate"
       />
-      <MetricRow
-        label={t("metrics.distanceSetpoint")}
-        value={fmtMeters(follow.distanceSetpointM)}
-        testId="fm-distance-setpoint"
-      />
+      {orbit ? (
+        <MetricRow
+          label={t("metrics.orbitRadius")}
+          value={meters(f?.orbitRadiusM ?? null)}
+          testId="fm-orbit-radius"
+        />
+      ) : (
+        <MetricRow
+          label={t("metrics.distanceSetpoint")}
+          value={meters(f?.distanceSetpointM ?? null)}
+          testId="fm-distance-setpoint"
+        />
+      )}
       <MetricRow
         label={t("metrics.heightSetpoint")}
-        value={fmtMeters(follow.heightSetpointM)}
+        value={meters(f?.heightSetpointM ?? null)}
         testId="fm-height-setpoint"
       />
     </section>
@@ -284,14 +363,16 @@ function MetricsSection({
 function SpecRow({
   label,
   value,
+  testId,
 }: {
   label: string;
   value: string;
+  testId?: string;
 }): JSX.Element {
   return (
     <div style={labelRow}>
-      <span style={{ color: "var(--fm-text-muted, #94a3b8)" }}>{label}</span>
-      <span>{value}</span>
+      <span style={mutedLabel}>{label}</span>
+      <span data-testid={testId}>{value}</span>
     </div>
   );
 }
@@ -307,21 +388,10 @@ function MetricRow({
 }): JSX.Element {
   return (
     <div style={labelRow}>
-      <span style={{ color: "var(--fm-text-muted, #94a3b8)" }}>{label}</span>
+      <span style={mutedLabel}>{label}</span>
       <span style={{ fontFamily: "monospace" }} data-testid={testId}>
         {value}
       </span>
     </div>
   );
-}
-
-function fmtMeters(v: number | null): string {
-  if (v == null || !Number.isFinite(v)) return "—";
-  return `${v.toFixed(1)} m`;
-}
-
-function fmtRange(range: number | null, sigma: number | null): string {
-  if (range == null || !Number.isFinite(range)) return "—";
-  if (sigma == null || !Number.isFinite(sigma)) return fmtMeters(range);
-  return `${range.toFixed(1)} ± ${sigma.toFixed(1)} m`;
 }
