@@ -77,15 +77,12 @@ describe("a payload carrying an old agent timestamp", () => {
 });
 
 describe("the host's delivery cadence", () => {
-  it("stays live through 750 ms ticks with jitter and 1500 ms skipped ticks", () => {
-    const h = mount();
-    // Gaps between deliveries: 750 ms with jitter and skipped ticks.
-    const gaps = [750, 810, 690, 1500, 760, 740, 1500, 1500, 700, 800, 1500, 750];
-    let sent = 0;
+  // MC polls the sidecar every 750 ms with jitter and skips every 5th
+  // tick (a 1500 ms gap); each entry is already ~1000 ms old on arrival.
+  const JITTER = [0, 60, -60, 40, -30, 20, -50, 30];
+  function runCadence(h: Harness, skewMs: number, ticks: number): void {
     const deliver = (): void => {
-      // The agent wrote the sidecar up to 400 ms before MC polled it.
-      const ts = Date.now() - (sent % 2 === 0 ? 400 : 120);
-      sent += 1;
+      const ts = Date.now() - 1000 - skewMs;
       act(() => {
         h.emitTelemetry("navigation", { ...SNAPSHOT, ts_ms: ts });
         h.emitEvent("nav.state", { ...NAV, ts_ms: ts });
@@ -93,15 +90,58 @@ describe("the host's delivery cadence", () => {
       });
     };
     deliver();
-    for (const gap of gaps) {
+    act(() => vi.advanceTimersByTime(750));
+    deliver();
+    for (let tick = 2; tick < ticks; tick += 1) {
+      const gap = tick % 5 === 4 ? 1500 : 750 + (JITTER[tick % JITTER.length] ?? 0);
       for (let step = 0; step < gap; step += 50) {
-        act(() => vi.advanceTimersByTime(50));
+        act(() => vi.advanceTimersByTime(Math.min(50, gap - step)));
         expect(screen.queryByTestId("vn-feed-stale")).toBeNull();
         expect(navStale()).toBe("false");
         expect(screen.getByTestId("vn-mode-disengaged")).toBeTruthy();
       }
       deliver();
     }
+  }
+
+  it("stays live with the drone clock 2 s behind", () => {
+    runCadence(mount(), 2000, 30);
+  });
+
+  it("stays live with the drone clock 5 s behind", () => {
+    runCadence(mount(), 5000, 30);
+  });
+
+  it("reads an old first sample stale on mount", () => {
+    const h = mount();
+    act(() => {
+      h.emitTelemetry("navigation", { ...SNAPSHOT, ts_ms: T0 - 5000 });
+      h.emitEvent("nav.state", { ...NAV, ts_ms: T0 - 5000 });
+      h.emitEvent("navigation.engage", { state: "idle", ts_ms: T0 - 5000 });
+    });
+    expect(screen.getByTestId("vn-feed-stale")).toBeTruthy();
+    expect(navStale()).toBe("true");
+    expect(screen.queryByTestId("vn-mode-disengaged")).toBeNull();
+  });
+
+  it("reads a stopped feed stale 2000 ms after its last sample", () => {
+    const h = mount();
+    const deliver = (): void => {
+      const ts = Date.now() - 1000 - 2000;
+      act(() => {
+        h.emitTelemetry("navigation", { ...SNAPSHOT, ts_ms: ts });
+        h.emitEvent("nav.state", { ...NAV, ts_ms: ts });
+      });
+    };
+    deliver();
+    act(() => vi.advanceTimersByTime(1000));
+    deliver();
+    act(() => vi.advanceTimersByTime(1999));
+    expect(screen.queryByTestId("vn-feed-stale")).toBeNull();
+    expect(navStale()).toBe("false");
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByTestId("vn-feed-stale")).toBeTruthy();
+    expect(navStale()).toBe("true");
   });
 });
 

@@ -1,8 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { HostError, type PluginContext } from "@altnautica/plugin-sdk";
+import { agentTimestampOf, HostError, SampleClock, type PluginContext } from "@altnautica/plugin-sdk";
 
-import { agentTsOf, sampleTimeOf } from "./freshness";
 import {
   EMPTY_NAV_STATE,
   ENGAGE_TOPIC,
@@ -22,7 +21,7 @@ const EMPTY: VisionNavTelemetry = {
 /** The latest navigation block and when it was sampled. */
 export interface TelemetryFeed {
   snapshot: VisionNavTelemetry;
-  /** When the snapshot was sampled (see `sampleTimeOf`); `null` before
+  /** When the snapshot was sampled (see `SampleClock`); `null` before
    * the first one. */
   receivedAt: number | null;
   /** The host refused the `navigation` telemetry subscription. */
@@ -48,15 +47,15 @@ export function useVisionNavTelemetry(ctx: PluginContext): TelemetryFeed {
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | null = null;
-    let lastTs: number | null = null;
+    const clock = new SampleClock();
 
     void ctx.telemetry
       .subscribe<VisionNavTelemetry>("navigation", (next) => {
         if (cancelled || !next) return;
-        const ts = agentTsOf(next);
-        if (ts !== null && ts === lastTs) return;
-        lastTs = ts;
-        const sampledAt = sampleTimeOf(next, Date.now());
+        // A repeated report returns null: it neither resets the age
+        // nor adds a trend sample.
+        const sampledAt = clock.ingest(agentTimestampOf(next), Date.now());
+        if (sampledAt === null) return;
         // Defensive normalization: the agent may publish a partial
         // payload during warm-up. Keep the support flag sticky once
         // observed so the UI does not flicker between firmware tiers.
@@ -128,12 +127,11 @@ function useEventFeed<R, T>(
 ): EventFeed<T> {
   const [feed, setFeed] = useState<EventFeed<T>>({ value: empty, receivedAt: null });
   useEffect(() => {
-    let lastTs: number | null = null;
+    const clock = new SampleClock();
     return ctx.events.subscribe<R>(topic, (raw) => {
-      const ts = agentTsOf(raw);
-      if (ts !== null && ts === lastTs) return;
-      lastTs = ts;
-      setFeed({ value: normalize(raw), receivedAt: sampleTimeOf(raw, Date.now()) });
+      const sampledAt = clock.ingest(agentTimestampOf(raw), Date.now());
+      if (sampledAt === null) return;
+      setFeed({ value: normalize(raw), receivedAt: sampledAt });
     });
   }, [ctx, topic, normalize]);
   return feed;

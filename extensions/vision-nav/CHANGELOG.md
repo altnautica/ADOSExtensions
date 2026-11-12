@@ -4,6 +4,16 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.7.2]
+
+### Fixed
+
+- A live navigation block, nav state or engage state no longer reads
+  stale when the drone clock runs behind or a poll is slow. Only the
+  first value after the tab opens or the feed resumes is aged by the
+  drone's timestamp; while values keep arriving, each is aged from its
+  arrival.
+
 ## [0.7.1]
 
 ### Fixed
