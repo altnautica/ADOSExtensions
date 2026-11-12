@@ -4,7 +4,7 @@
     {
       "id": "com.altnautica.follow-me",
       "name": "ADOS Follow-Me",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "description": "Lock onto an operator-designated subject and follow it at a distance and an angle (behind, side or lead) or orbit it, flown by the agent's pilot with obstacle avoidance. A flight Skill in the cockpit skill picker, a click-a-target Follow action, and a per-drone settings tab.",
       "category": null,
       "supported_boards": [
@@ -40,7 +40,7 @@
     {
       "id": "com.altnautica.mavlink-gimbal-v2",
       "name": "ADOS MAVLink Gimbal v2 Controller",
-      "version": "1.4.2",
+      "version": "1.5.0",
       "description": "MAVLink Gimbal v2 control: manual sliders, ROI lock-on-target, and an 'Aim at this target' action that keeps the gimbal on a vision-locked detection.",
       "category": null,
       "supported_boards": [
@@ -70,7 +70,7 @@
     {
       "id": "com.altnautica.siyi-pod",
       "name": "ADOS SIYI Optical Pod",
-      "version": "0.5.3",
+      "version": "0.6.0",
       "description": "Native driver for the SIYI optical-pod line (A2 mini, A8 mini, ZR10, ZR30, ZT6, ZT30) with per-model capability negotiation: gimbal, zoom, focus, photo/record, thermal palette and gain, and a laser rangefinder with subject geolocation.",
       "category": null,
       "supported_boards": [
@@ -111,7 +111,7 @@
     {
       "id": "com.altnautica.thermal-flir-lepton-usb",
       "name": "ADOS Thermal Camera FLIR Lepton USB UVC",
-      "version": "1.3.3",
+      "version": "1.4.0",
       "description": "FLIR Lepton 3.5 radiometric thermal driver, palettes and spot-meter overlay for a PureThermal 2 USB UVC dongle. Capture requires a UVC backend supplied by the agent; without one the extension reports the camera as unavailable.",
       "category": null,
       "supported_boards": [
@@ -179,7 +179,7 @@
     {
       "id": "com.altnautica.world-engine",
       "name": "ADOS World Engine",
-      "version": "2.1.17",
+      "version": "2.1.18",
       "description": "3D world model from drone flights, reconstructed on a LAN compute node, plus perception offload for drones without an NPU.",
       "category": null,
       "supported_boards": [
