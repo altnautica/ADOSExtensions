@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Callable
 
 from altnautica_thermal_camera.driver import LeptonUvcDriver
@@ -76,6 +77,10 @@ _SKILL_STATE_TOPICS = {
 # The radiometric linear resolution (kelvin per count) each gain setting maps
 # to: high gain trades range for temperature sensitivity, low gain the reverse.
 _GAIN_TLINEAR = {True: 0.01, False: 0.1}
+
+# Consecutive frame reads that may fail (or yield nothing) before the stream
+# is declared failed. At the control rate this is about one second.
+_MAX_FRAME_READ_FAILURES = 5
 
 BackendFactory = Callable[[], LibUvcBackend]
 
@@ -146,6 +151,8 @@ class ThermalUsbPlugin:
         # The open frame stream; the control loop pulls one frame per tick to
         # compute the spot temperature the overlay renders.
         self._frames: Any = None
+        # Consecutive frame reads that delivered nothing usable.
+        self._frame_read_failures = 0
         self._control_task: asyncio.Task | None = None
         # Declarative-key cache so a control tick only re-applies a changed key.
         self._applied: dict[str, Any] = {}
@@ -377,12 +384,13 @@ class ThermalUsbPlugin:
             frame = await anext(frames, None)
         except Exception as exc:  # noqa: BLE001
             self._log(f"thermal frame read failed: {exc}")
-            return
-        if frame is None:
-            return
-        readout = _frame_readout(frame)
+            frame = None
+        readout = _frame_readout(frame) if frame is not None else None
         if readout is None:
+            await self._note_frame_read_failure()
             return
+        self._frame_read_failures = 0
+        readout["timestampMs"] = int(time.time() * 1000)
         tel = getattr(self._ctx, "telemetry", None)
         if tel is None or not hasattr(tel, "extend"):
             return
@@ -390,6 +398,21 @@ class ThermalUsbPlugin:
             await tel.extend(_FRAME_CHANNEL, readout)
         except Exception:  # noqa: BLE001
             log.debug("thermal frame telemetry extend failed", exc_info=True)
+
+    async def _note_frame_read_failure(self) -> None:
+        """Count a frame read that delivered nothing usable. After repeated
+        failures the session is released and the state channel reports
+        ``stream-failed``, so the overlay stops showing the last reading as if
+        the camera were still live."""
+        self._frame_read_failures += 1
+        if self._frame_read_failures < _MAX_FRAME_READ_FAILURES:
+            return
+        self._frame_read_failures = 0
+        await self._release_session()
+        await self._fail_closed(
+            REASON_STREAM_FAILED,
+            "thermal frame stream stopped delivering frames",
+        )
 
     async def _publish_state(self) -> None:
         """Publish the thermal read-back (connectivity, palette, gain) on the

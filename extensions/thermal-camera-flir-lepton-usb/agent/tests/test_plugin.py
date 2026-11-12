@@ -211,3 +211,53 @@ def test_stream_failure_releases_the_session_and_fails_closed(monkeypatch):
     assert states, ctx.telemetry.extended
     assert states[-1]["connected"] is False
     assert states[-1]["reason"] == REASON_STREAM_FAILED
+
+
+def test_frame_readout_carries_a_timestamp():
+    # The overlay ages the spot reading; a read-back without a timestamp
+    # cannot be told apart from a repeat of an old one.
+    ctx = _Ctx()
+    plugin = ThermalUsbPlugin(backend_factory=_factory())
+
+    async def _run() -> None:
+        await plugin.on_start(ctx)
+        await plugin.apply_config_once()
+        await plugin.on_stop(ctx)
+
+    asyncio.run(_run())
+
+    frames = _channel(ctx, "camera.thermal.frame")
+    assert frames, ctx.telemetry.extended
+    assert isinstance(frames[0]["timestampMs"], int)
+    assert frames[0]["timestampMs"] > 0
+
+
+def test_repeated_frame_read_failures_fail_closed_as_stream_failed():
+    # A stream that opened and then stops delivering must not leave the
+    # camera reported as connected with the last reading on screen.
+    ctx = _Ctx()
+    backend = MockUvcBackend()
+    plugin = ThermalUsbPlugin(backend_factory=lambda: backend)
+
+    class _DeadFrames:
+        async def __anext__(self):
+            raise OSError("libuvc: frame timeout")
+
+        async def aclose(self) -> None:
+            return None
+
+    async def _run() -> None:
+        await plugin.on_start(ctx)
+        plugin._frames = _DeadFrames()
+        for _ in range(5):
+            await plugin.apply_config_once()
+        await plugin.on_stop(ctx)
+
+    asyncio.run(_run())
+
+    states = _channel(ctx, "thermal")
+    assert any(
+        s["connected"] is False and s.get("reason") == REASON_STREAM_FAILED
+        for s in states
+    ), states
+    assert backend.opened_devices == set()

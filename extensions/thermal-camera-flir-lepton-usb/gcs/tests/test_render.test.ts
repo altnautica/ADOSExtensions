@@ -25,7 +25,7 @@ function syntheticFrame(width: number, height: number): ThermalFrame {
     y16[i] = Math.round(lo + (hi - lo) * t);
   }
   return {
-    timestampNs: 1,
+    timestampMs: 1,
     sequence: 1,
     width,
     height,

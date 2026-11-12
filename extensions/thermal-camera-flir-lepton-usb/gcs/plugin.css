@@ -1,6 +1,14 @@
-/* Minimal styling for the thermal overlay.
-   The host injects its theme CSS variables; we only define plugin-local
-   structure. The canvas sizes itself to its container. */
+/* Styling for the thermal overlay. Inlined into the bundle and injected as
+   a <style> at mount. The host injects its theme CSS variables; this file
+   defines plugin-local structure. The overlay fills the frame and the canvas
+   sizes itself to it. The overlay has no controls: any added later needs a
+   48 px minimum touch target. */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
 
 .thm-root {
   position: relative;
@@ -31,6 +39,28 @@
   padding: 4px 8px;
   background: var(--ados-color-overlay-bg, rgba(0, 0, 0, 0.55));
   border-radius: 4px;
+  max-width: calc(100% - 16px);
+}
+
+.thm-overlay__palette {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  background: var(--ados-color-overlay-bg, rgba(0, 0, 0, 0.55));
+  border-radius: 4px;
+}
+
+.thm-overlay__palette[hidden],
+.thm-spot[hidden] {
+  display: none;
+}
+
+/* A reading that stopped refreshing: dimmed, value withheld, age shown. */
+.thm-overlay__readout--stale {
+  border-left: 3px solid var(--ados-color-warning, #ff8a00);
+  color: var(--ados-color-text-muted, #b0b0b0);
+  opacity: 0.8;
 }
 
 .thm-overlay__readout--hot {
@@ -54,28 +84,4 @@
   border-radius: 50%;
   pointer-events: none;
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5);
-}
-
-.thm-action-rail {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 6px;
-  padding: 4px 6px;
-  background: var(--ados-color-overlay-bg, rgba(0, 0, 0, 0.55));
-  border-radius: 4px;
-}
-
-.thm-action-rail__button {
-  background: transparent;
-  color: inherit;
-  border: 1px solid var(--ados-color-border, #444);
-  padding: 2px 6px;
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.thm-action-rail__button:hover {
-  background: var(--ados-color-hover, rgba(255, 255, 255, 0.08));
 }

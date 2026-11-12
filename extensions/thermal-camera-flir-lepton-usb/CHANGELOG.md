@@ -2,6 +2,22 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.4.0
+
+- Frame read-backs now carry `timestampMs`. When the spot reading is 2 s
+  old or more, the overlay stops showing the temperature and reads
+  "Thermal frames stopped" with how long ago the last reading arrived.
+- When the camera stops delivering frames for about a second, the agent
+  closes the session and reports the camera as unavailable ("stopped
+  delivering frames") instead of leaving it connected.
+- The overlay's styles are now built into the plugin and applied when it
+  loads, so the readout and spot marker sit correctly over the video.
+- Removed the palette dropdown from the overlay: it changed nothing on the
+  drone. Change the palette with the Palette setting or the Cycle palette
+  Skill; the overlay now shows the palette the agent applied.
+- All overlay text comes from the locale file, and a missing sensor has one
+  message everywhere.
+
 ## 1.3.3
 
 - `supported_boards` now lists HAL board profile names or SoC ids (`cm4`,

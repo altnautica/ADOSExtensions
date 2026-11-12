@@ -22,7 +22,7 @@ function celsiusToY16(celsius: number): number {
 function frameOf(width: number, height: number, fillC: number): ThermalFrame {
   const raw = celsiusToY16(fillC);
   const y16 = new Uint16Array(width * height).fill(raw);
-  return { timestampNs: 0, sequence: 0, width, height, y16 };
+  return { timestampMs: 0, sequence: 0, width, height, y16 };
 }
 
 describe("clientToFrame", () => {
@@ -77,7 +77,7 @@ describe("celsiusAt", () => {
 
   it("respects an override TLinear resolution", () => {
     const frame: ThermalFrame = {
-      timestampNs: 0,
+      timestampMs: 0,
       sequence: 0,
       width: 1,
       height: 1,
@@ -97,7 +97,7 @@ describe("frameExtrema", () => {
     y16[2] = celsiusToY16(20);
     y16[3] = celsiusToY16(60);
     const frame: ThermalFrame = {
-      timestampNs: 0,
+      timestampMs: 0,
       sequence: 0,
       width: 2,
       height: 2,
@@ -112,7 +112,7 @@ describe("frameExtrema", () => {
 describe("celsiusAt without a Y16 grid", () => {
   it("returns null for a lightweight read-back (no pixels client-side)", () => {
     const frame: ThermalFrame = {
-      timestampNs: 0,
+      timestampMs: 0,
       sequence: 0,
       width: 160,
       height: 120,
@@ -125,7 +125,7 @@ describe("celsiusAt without a Y16 grid", () => {
 describe("readSpot", () => {
   it("uses the agent-measured spot on a lightweight read-back", () => {
     const frame: ThermalFrame = {
-      timestampNs: 0,
+      timestampMs: 0,
       sequence: 0,
       width: 160,
       height: 120,

@@ -58,7 +58,7 @@ scripts/pack.sh thermal-camera-flir-lepton-usb
 
 | Slot | Purpose |
 |------|---------|
-| `video.overlay` | Thermal canvas, spot readout, and palette rail above the video pane. |
+| `video.overlay` | Thermal canvas, spot readout (dimmed with its age once frames stop), and the palette the agent applied, above the video pane. |
 | `settings.section` | Native palette and gain settings the agent reads each control tick. |
 | Flight Skills | Cycle palette and flat field correction, fired from the Skill Bar. |
 

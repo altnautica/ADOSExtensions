@@ -21,10 +21,13 @@ export const PALETTE_NAMES: ReadonlyArray<PaletteName> = [
 export type AgcMode = "linear" | "histogram" | "fixed";
 
 export interface ThermalFrame {
-  /** Monotonic timestamp from the agent's frame loop. */
-  timestampNs: number;
-  /** Sequence number from the driver. */
-  sequence: number;
+  /**
+   * Agent wall-clock time (ms since the epoch) the read-back was measured.
+   * The overlay treats a repeat of the same value as no new frame.
+   */
+  timestampMs?: number;
+  /** Sequence number from the driver, when the payload carries one. */
+  sequence?: number;
   /** Frame width in pixels. */
   width: number;
   /** Frame height in pixels. */
