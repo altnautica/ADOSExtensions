@@ -12,7 +12,8 @@
  * report's own `ts_ms` judges only the first report of a run (an old report
  * replayed on mount reads stale at once), and later reports age from their
  * arrival, so a drone clock running behind or a slow poll never makes a
- * live feed read stale. The same report delivered again is ignored. A 1 Hz
+ * live feed read stale. The same report delivered again is ignored, and so
+ * is a report stamped earlier than the one before it. A 1 Hz
  * tick keeps the age moving between reports, and a timer fires at the
  * moment the latest report turns stale.
  *

@@ -181,6 +181,36 @@ describe("live read-back freshness", () => {
     );
   });
 
+  it("keeps the newer report when one stamped earlier arrives after it", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} />);
+    await runHostCadence(h, 0, 3, () => undefined);
+    const newest = Date.now() - 1000;
+    act(() => {
+      h.pushEvent(FOLLOW_STATE_TOPIC, { active: true, phase: "following", ts_ms: newest });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    // A failed poll: the host falls back to a slower source whose report is
+    // stamped 4 s before the one shown.
+    act(() => {
+      h.pushEvent(FOLLOW_STATE_TOPIC, { active: true, phase: "holding", ts_ms: newest - 4000 });
+    });
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Following");
+    expect(screen.queryByTestId("fm-status")).toBeNull();
+    // It does not keep the feed live: the newer report reads Stale once it is
+    // 2000 ms old.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1250);
+    });
+    expect(screen.getByTestId("fm-status").textContent).toBe(
+      "Stale · last report 2 s ago",
+    );
+  });
+
   it("ignores the same report delivered again", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));

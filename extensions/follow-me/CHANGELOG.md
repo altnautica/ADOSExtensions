@@ -4,6 +4,14 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.7] - 2026-11-12
+
+### Fixed
+
+- An older follow report that arrives after a newer one (the host falling
+  back to a slower source after a failed poll) no longer replaces the newer
+  phase or keeps the tab reading live.
+
 ## [0.4.6] - 2026-11-12
 
 ### Fixed
