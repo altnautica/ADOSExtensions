@@ -6,6 +6,7 @@
  * (the page shows its empty state).
  */
 
+import { translator } from "../../host/i18n";
 import type { ArtifactSource } from "../../lib/net/artifact-source";
 import type { ArtifactFrame } from "../../lib/world/placement";
 import { ErrorBoundary } from "../ui/ErrorBoundary";
@@ -17,15 +18,17 @@ import { PointCloudViewer } from "./viewers/PointCloudViewer";
 import { RerunViewer } from "./viewers/RerunViewer";
 import { ViewerError } from "./viewers/ViewerError";
 
+const t = translator("atlas");
+
 /** The frame every viewer renders into, so the overlays have a box to fill. */
 const VIEWER_FRAME = "we:relative we:w-full we:h-full we:min-h-[320px]";
 
-/** The name each viewer's error overlay uses for what failed to load. */
-const VIEWER_WHAT: Record<AtlasViewer, string> = {
-  rerun: "Rerun",
-  splat: "splat",
-  cloud: "point cloud",
-  lod: "point cloud",
+/** The catalogue key naming what failed to load in each viewer's error overlay. */
+const VIEWER_WHAT_KEY: Record<AtlasViewer, string> = {
+  rerun: "viewerStatus.what.rerun",
+  splat: "viewerStatus.what.splat",
+  cloud: "viewerStatus.what.pointCloud",
+  lod: "viewerStatus.what.pointCloud",
 };
 
 function ViewerFor({ viewer, source, frame }: { viewer: AtlasViewer; source: ArtifactSource; frame: ArtifactFrame }) {
@@ -66,7 +69,7 @@ export function WorldModelViewport({
         resetKey={`${viewer}|${artifact.key}`}
         fallback={
           <div className={VIEWER_FRAME}>
-            <ViewerError what={VIEWER_WHAT[viewer]} />
+            <ViewerError what={t(VIEWER_WHAT_KEY[viewer])} />
           </div>
         }
       >

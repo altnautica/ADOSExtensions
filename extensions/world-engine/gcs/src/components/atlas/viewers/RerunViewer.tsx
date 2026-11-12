@@ -16,12 +16,15 @@
 import { useEffect, useRef, useState } from "react";
 import { WebViewer, type LogChannel } from "@rerun-io/web-viewer";
 
+import { translator } from "../../../host/i18n";
 import { useHost } from "../../../host/context";
 import type { ArtifactSource } from "../../../lib/net/artifact-source";
 import { fetchArrayBufferWithProgress, type FetchProgress } from "../../../lib/net/fetch-with-progress";
 import { startRerunViewer } from "./rerun-start";
 import { ViewerError } from "./ViewerError";
 import { ViewerLoading } from "./ViewerLoading";
+
+const t = translator("atlas");
 
 /** Poll a getter until it is true (Rerun exposes readiness as a getter, with no
  * guaranteed event), bounded so a viewer that never becomes ready gives up. */
@@ -133,10 +136,10 @@ export function RerunViewer({ source }: { source: ArtifactSource }) {
           percent={progress?.percent ?? undefined}
           receivedBytes={progress?.receivedBytes}
           totalBytes={progress?.totalBytes ?? undefined}
-          label="Loading world"
+          label={t("viewerStatus.loadingWorld")}
         />
       )}
-      {failed && <ViewerError what="Rerun" />}
+      {failed && <ViewerError what={t("viewerStatus.what.rerun")} />}
     </div>
   );
 }

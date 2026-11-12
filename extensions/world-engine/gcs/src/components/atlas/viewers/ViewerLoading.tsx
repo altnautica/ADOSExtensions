@@ -10,6 +10,8 @@
 
 import { Loader2 } from "lucide-react";
 
+import { translator } from "../../../host/i18n";
+
 export interface ViewerLoadingProps {
   /** 0–100 when the download size is known; omit for an indeterminate spinner. */
   percent?: number;
@@ -20,6 +22,8 @@ export interface ViewerLoadingProps {
   /** Short phase label, e.g. "Downloading splat". */
   label?: string;
 }
+
+const t = translator("atlas");
 
 const toMb = (bytes: number) => (bytes / (1024 * 1024)).toFixed(1);
 
@@ -40,7 +44,7 @@ export function ViewerLoading({
     <div
       className="we:absolute we:inset-0 we:flex we:flex-col we:items-center we:justify-center we:gap-3 we:bg-bg-primary/40"
       role="status"
-      aria-label={label ?? "Loading viewer"}
+      aria-label={label ?? t("viewerStatus.loadingViewer")}
       aria-live="polite"
     >
       {determinate ? (
@@ -52,7 +56,7 @@ export function ViewerLoading({
             />
           </div>
           <div className="we:flex we:items-center we:justify-between we:text-[10px] we:font-mono we:tabular-nums we:text-text-tertiary">
-            <span>{label ?? "Loading"}</span>
+            <span>{label ?? t("viewerStatus.loading")}</span>
             <span>
               {haveBytes
                 ? `${toMb(receivedBytes)} / ${toMb(totalBytes)} MB`

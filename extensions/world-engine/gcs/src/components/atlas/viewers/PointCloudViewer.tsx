@@ -23,8 +23,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { BufferGeometry, Material, WebGLRenderer } from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { translator } from "../../../host/i18n";
 import { ViewerError } from "./ViewerError";
 import { ViewerLoading } from "./ViewerLoading";
+
 import { orientCloudToYUp } from "./coordinate-frame";
 import { decodeLaz } from "./cloud-laz";
 import { followCanvasSize, frameCloud } from "./cloud-view";
@@ -33,6 +35,8 @@ import {
   type FetchProgress,
 } from "../../../lib/net/fetch-with-progress";
 import type { ArtifactSource } from "../../../lib/net/artifact-source";
+
+const t = translator("atlas");
 
 export function PointCloudViewer({ source }: { source: ArtifactSource }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -164,10 +168,10 @@ export function PointCloudViewer({ source }: { source: ArtifactSource }) {
           percent={progress?.percent ?? undefined}
           receivedBytes={progress?.receivedBytes}
           totalBytes={progress?.totalBytes ?? undefined}
-          label="Downloading cloud"
+          label={t("viewerStatus.downloadingCloud")}
         />
       )}
-      {failed && <ViewerError what="point cloud" />}
+      {failed && <ViewerError what={t("viewerStatus.what.pointCloud")} />}
     </div>
   );
 }

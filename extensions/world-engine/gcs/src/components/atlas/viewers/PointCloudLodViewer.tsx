@@ -21,8 +21,10 @@
 import { useEffect, useRef, useState } from "react";
 import type { BufferGeometry, Material, WebGLRenderer } from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { translator } from "../../../host/i18n";
 import { ViewerError } from "./ViewerError";
 import { ViewerLoading } from "./ViewerLoading";
+
 import { startDecimateWorker, type DecimateWorker } from "./decimate-in-worker";
 import { orientCloudToYUp } from "./coordinate-frame";
 import { followCanvasSize, frameCloud } from "./cloud-view";
@@ -31,6 +33,8 @@ import {
   type FetchProgress,
 } from "../../../lib/net/fetch-with-progress";
 import type { ArtifactSource } from "../../../lib/net/artifact-source";
+
+const t = translator("atlas");
 
 /** Retained-point cap. ~1.5M points = ~18 MB of float positions, GPU-comfortable. */
 const LOD_POINT_BUDGET = 1_500_000;
@@ -178,10 +182,10 @@ export function PointCloudLodViewer({ source }: { source: ArtifactSource }) {
           percent={progress?.percent ?? undefined}
           receivedBytes={progress?.receivedBytes}
           totalBytes={progress?.totalBytes ?? undefined}
-          label="Downloading cloud"
+          label={t("viewerStatus.downloadingCloud")}
         />
       )}
-      {failed && <ViewerError what="point cloud" />}
+      {failed && <ViewerError what={t("viewerStatus.what.pointCloud")} />}
       {stats?.decimated && !failed && (
         <div className="we:absolute we:bottom-2 we:left-2 we:rounded we:bg-bg-primary/70 we:px-2 we:py-1 we:text-[10px] we:font-mono we:text-text-tertiary we:tabular-nums">
           {`showing ${stats.kept.toLocaleString()} / ${stats.total.toLocaleString()} points`}

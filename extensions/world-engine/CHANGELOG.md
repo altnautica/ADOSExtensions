@@ -378,7 +378,8 @@ All notable changes to the World Engine extension.
   touch screen and a visible keyboard focus ring. 2.1.18.
 - **Capture states, tracking health, links and viewer names are worded from
   the extension's strings** instead of the agent's raw ids, with "Other" for
-  a value it does not know. The extension ships English only: the host's
+  a value it does not know; the viewers' loading and error messages are worded
+  the same way. The extension ships English only: the host's
   string service does not tell an extension which language is selected.
   2.1.18.
 - **The compute node and the offload target are shown by name**, with the

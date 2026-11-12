@@ -50,6 +50,17 @@
     "liveMapHeading": "Live map",
     "liveMapCaption": "Live map: {tiles} tiles, {points} points at {voxel} cm",
     "viewerGroupLabel": "Viewer",
+    "viewerStatus": {
+      "loading": "Loading",
+      "loadingViewer": "Loading viewer",
+      "loadingWorld": "Loading world",
+      "downloadingCloud": "Downloading cloud",
+      "what": {
+        "rerun": "Rerun",
+        "splat": "splat",
+        "pointCloud": "point cloud"
+      }
+    },
     "viewer": {
       "rerun": "World",
       "splat": "Splat",
