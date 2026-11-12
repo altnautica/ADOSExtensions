@@ -4,6 +4,15 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.7.4]
+
+### Fixed
+
+- For navigation, nav.state and engage, the last report delivered again
+  after an older one was dropped (a failed poll falling back to a slower
+  source) is still ignored, so a feed that has stopped reads stale 2000 ms
+  after its last report arrived instead of staying live.
+
 ## [0.7.3]
 
 ### Fixed

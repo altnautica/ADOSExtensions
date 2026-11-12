@@ -2,6 +2,13 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.5.4
+
+- The gimbal panel's the last report delivered again after an older one was
+  dropped (a failed poll falling back to a slower source) is still ignored,
+  so a feed that has stopped reads stale 2000 ms after its last report
+  arrived instead of staying live.
+
 ## 1.5.3
 
 - An older gimbal update that arrives after a newer one (the host falling

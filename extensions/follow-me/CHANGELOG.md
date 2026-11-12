@@ -4,6 +4,15 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.8] - 2026-11-12
+
+### Fixed
+
+- The follow tab's the last report delivered again after an older one was
+  dropped (a failed poll falling back to a slower source) is still ignored,
+  so a feed that has stopped reads stale 2000 ms after its last report
+  arrived instead of staying live.
+
 ## [0.4.7] - 2026-11-12
 
 ### Fixed

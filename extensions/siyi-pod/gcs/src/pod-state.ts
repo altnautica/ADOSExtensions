@@ -63,8 +63,10 @@ export class PodStateStore {
     // A repeated or older ts_ms on this channel is ignored by its clock.
     const at = this.clocks[channel].ingest(agentTimestampOf(raw), now);
     if (at === null) return;
-    // A sample older than the one shown (from the other channel) does not
-    // replace it.
+    // A sample judged older than the one shown (an old entry on the other
+    // channel) does not replace it. In a live run both channels age from
+    // arrival, so the throttled event copy may still replace the state with
+    // content up to one throttle period older.
     if (this.sampledAt !== null && at < this.sampledAt) return;
     this.sampledAt = at;
     const next = normalise(raw);

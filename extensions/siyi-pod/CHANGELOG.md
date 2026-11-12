@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.4
+
+- On each channel, the last report delivered again after an older one was
+  dropped (a failed poll falling back to a slower source) is still ignored,
+  so a feed that has stopped reads stale 2000 ms after its last report
+  arrived instead of staying live.
+
 ## 0.6.3
 
 - The pod state arrives on two channels that the drone stamps separately.

@@ -211,6 +211,40 @@ describe("live read-back freshness", () => {
     );
   });
 
+  it("goes stale when the stopped feed's last report repeats between older ones", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));
+    const h = harness();
+    render(<FollowMeTab ctx={h.ctx} />);
+    await runHostCadence(h, 0, 3, () => undefined);
+    const newest = Date.now() - 1000;
+    const shown = { active: true, phase: "following", ts_ms: newest };
+    act(() => {
+      h.pushEvent(FOLLOW_STATE_TOPIC, shown);
+    });
+    // The feed stops. Failed polls fall back to a slower source's older
+    // report, then the faster source serves the last report again.
+    for (let i = 0; i < 2; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      act(() => {
+        h.pushEvent(FOLLOW_STATE_TOPIC, { active: true, phase: "holding", ts_ms: newest - 4000 });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      act(() => {
+        h.pushEvent(FOLLOW_STATE_TOPIC, { ...shown });
+      });
+    }
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    // Stale, although the last delivery arrived 1000 ms ago.
+    expect(screen.getByTestId("fm-status").textContent).toMatch(/^Stale · last report/);
+  });
+
   it("ignores the same report delivered again", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:10Z"));

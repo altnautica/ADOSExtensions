@@ -10,7 +10,7 @@ import { definePlugin } from "@altnautica/plugin-sdk";
 import enLocale from "../../locales/en.json";
 import { mountOverlay, type OverlayHandle } from "./overlay";
 
-export const PLUGIN_VERSION = "1.4.3";
+export const PLUGIN_VERSION = "1.4.4";
 
 let handle: OverlayHandle | null = null;
 
