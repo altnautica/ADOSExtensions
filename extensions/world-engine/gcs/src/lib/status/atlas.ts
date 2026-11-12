@@ -76,7 +76,11 @@ export function mapAtlasSlice(
   }
 
   // Merge over the current slice so a sparse heartbeat preserves last-known
-  // values for fields it omitted.
+  // values for fields it omitted. The bearer and the keyframe facts derived
+  // from it are the exception: the agent sends a full slice (one with `state`)
+  // without a bearer once nothing forwards, so such a slice clears all three
+  // rather than keeping the last forward status and its notice.
+  const forwardReported = bearer !== null || state !== null;
   const live: AtlasLiveState = {
     state: state ?? current.live.state,
     sessionId: sessionId ?? current.live.sessionId,
@@ -86,15 +90,15 @@ export function mapAtlasSlice(
     vioHealth: vioHealth ?? current.live.vioHealth,
     computeNodeId: computeNodeId ?? current.live.computeNodeId,
     lastKfAt: lastKfAt ?? current.live.lastKfAt,
-    bearer: bearer ?? current.live.bearer,
-    keyframesCarried: keyframesCarried ?? current.live.keyframesCarried,
+    bearer: forwardReported ? bearer : current.live.bearer,
+    keyframesCarried: forwardReported ? keyframesCarried : (keyframesCarried ?? current.live.keyframesCarried),
     capped: capped ?? current.live.capped,
     anchored: anchored ?? current.live.anchored,
     poseTier: poseTier ?? current.live.poseTier,
     droppedKeyframes: droppedKeyframes ?? current.live.droppedKeyframes,
     // The agent omits the reason whenever the bearer carries keyframes, so a
-    // slice that reports a bearer replaces it outright.
-    degradedReason: bearer !== null ? degradedReason : (degradedReason ?? current.live.degradedReason),
+    // slice that reports the forward status replaces it outright.
+    degradedReason: forwardReported ? degradedReason : (degradedReason ?? current.live.degradedReason),
     updatedAt: nowMs,
   };
 

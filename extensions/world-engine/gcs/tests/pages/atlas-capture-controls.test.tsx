@@ -67,7 +67,10 @@ describe("AtlasCaptureControls", () => {
   });
 
   it("keeps Start enabled for an answering node", () => {
-    show(control({}));
+    // An answering node has reported a readiness; a null readiness is a node
+    // that has not answered yet, which the page gates through `canStart`.
+    const readiness = { capturing: false, state: "idle" } as AtlasReadiness;
+    show(control({ readiness }));
     expect((screen.getByRole("button", { name: c.startCapture }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByText(c.nodeNotAnswering)).toBeNull();
   });

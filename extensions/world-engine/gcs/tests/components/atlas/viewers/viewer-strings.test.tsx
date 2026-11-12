@@ -31,6 +31,21 @@ describe("viewer strings", () => {
     }
   });
 
+  it("no viewer shows words from a template literal", () => {
+    // A template literal's static text (its `${...}` parts removed) holding a
+    // word is operator text that bypasses the catalogue. Comments are dropped
+    // first so prose mentioning `.ply` or a symbol name does not count.
+    for (const file of readdirSync(VIEWERS_DIR).filter((f) => f.endsWith(".tsx"))) {
+      const code = readFileSync(join(VIEWERS_DIR, file), "utf8")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/^\s*\/\/.*$/gm, "");
+      const worded = [...code.matchAll(/`((?:[^`\\]|\\.)*)`/g)]
+        .map((m) => m[1] ?? "")
+        .filter((body) => /[A-Za-z]{3,}/.test(body.replace(/\$\{[^}]*\}/g, "")));
+      expect(worded, file).toEqual([]);
+    }
+  });
+
   it("the world viewport names failed viewers from the catalogue", () => {
     const source = readFileSync(join(VIEWERS_DIR, "../WorldModelViewport.tsx"), "utf8");
     expect(source).not.toMatch(/"point cloud"|"Rerun"/);

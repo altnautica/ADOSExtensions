@@ -386,6 +386,18 @@ All notable changes to the World Engine extension.
   device id or address on hover. 2.1.18.
 - **Removed the "Relay decimation" row**, which the drone never reports and
   always read "—". 2.1.18.
+- **Start waits for the drone to answer on the Live World page.** Until the
+  drone reports its capture readiness, Start is disabled with "Waiting for
+  the drone to report its capture readiness" written under it, as on the
+  setup page. A drone that has never answered now reads "not answering" after
+  three readiness checks in a row get no reply (about 20 s), instead of
+  "unknown" for as long as the page is open. 2.1.19.
+- **"No keyframes on this link" goes away when forwarding stops.** The link,
+  its keyframe notice and its reason are cleared once the drone reports a
+  capture state with no link, instead of keeping the last link's notice.
+  2.1.19.
+- **The point cloud's "showing … / … points" label is worded from the
+  extension's strings.** 2.1.19.
 
 ## [2.0.0]
 

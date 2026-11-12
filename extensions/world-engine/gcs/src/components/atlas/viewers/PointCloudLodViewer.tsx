@@ -21,7 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BufferGeometry, Material, WebGLRenderer } from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { translator } from "../../../host/i18n";
+import { LOCALE, translator } from "../../../host/i18n";
 import { ViewerError } from "./ViewerError";
 import { ViewerLoading } from "./ViewerLoading";
 
@@ -188,7 +188,10 @@ export function PointCloudLodViewer({ source }: { source: ArtifactSource }) {
       {failed && <ViewerError what={t("viewerStatus.what.pointCloud")} />}
       {stats?.decimated && !failed && (
         <div className="we:absolute we:bottom-2 we:left-2 we:rounded we:bg-bg-primary/70 we:px-2 we:py-1 we:text-[10px] we:font-mono we:text-text-tertiary we:tabular-nums">
-          {`showing ${stats.kept.toLocaleString()} / ${stats.total.toLocaleString()} points`}
+          {t("viewerStatus.decimated", {
+            kept: stats.kept.toLocaleString(LOCALE),
+            total: stats.total.toLocaleString(LOCALE),
+          })}
         </div>
       )}
     </div>

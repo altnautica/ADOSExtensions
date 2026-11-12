@@ -9,7 +9,9 @@
  * service is enabled on it, every 10 s while it is off, so the page still
  * reflects a capture another GCS started. Each snapshot expires three poll
  * intervals after it was observed, so a node that stops answering reads as
- * offline instead of keeping its last state.
+ * offline instead of keeping its last state. A node that has never answered
+ * has no snapshot to expire: it reads as offline once
+ * {@link READINESS_FAILED_POLLS_OFFLINE} polls in a row got no answer.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -35,14 +37,22 @@ export const ATLAS_READINESS_IDLE_POLL_INTERVAL_MS = 10_000;
 /** A snapshot stays current for this many poll intervals after it was observed. */
 const READINESS_LIFETIME_POLLS = 3;
 
+/** Readiness polls in a row with no answer after which a node with no current
+ * snapshot reads as not answering. Three matches the snapshot lifetime, so a
+ * node that never answered goes offline on the same budget as one that
+ * stopped: about 20 s at the idle cadence (polls at 0, 10 and 20 s). */
+export const READINESS_FAILED_POLLS_OFFLINE = 3;
+
 export interface AtlasControl {
   /** The drone this control targets, or null when none. */
   deviceId: string | null;
   /** Current readiness (reactive): null until the first poll resolves, and
    * again once the last snapshot expired because the node stopped answering. */
   readiness: AtlasReadiness | null;
-  /** True when a snapshot was observed and has since expired: the node
-   * stopped answering. False before the first answer. */
+  /** True when the node is not answering: a snapshot was observed and has
+   * since expired, or, with no current snapshot, the last
+   * {@link READINESS_FAILED_POLLS_OFFLINE} polls in a row got no answer.
+   * False before that, while it is still unknown. Implies `readiness` is null. */
   offline: boolean;
   /** The agent's reason for the last config write it refused (a failed
    * service restart included), or null after a write that landed. */
@@ -83,7 +93,9 @@ export function useAtlasControl(deviceId: string | null): AtlasControl {
   const now = useNow();
   const snapshot = useAtlasReadinessStore((s) => (deviceId ? s.snapshots[deviceId] : undefined));
   const readiness = currentReadiness(snapshot, now);
-  const offline = snapshot !== undefined && readiness === null;
+  const failedPolls = useAtlasReadinessStore((s) => (deviceId ? (s.failedPolls[deviceId] ?? 0) : 0));
+  const offline =
+    readiness === null && (snapshot !== undefined || failedPolls >= READINESS_FAILED_POLLS_OFFLINE);
   const [configError, setConfigError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
@@ -99,11 +111,14 @@ export function useAtlasControl(deviceId: string | null): AtlasControl {
       useAtlasReadinessStore
         .getState()
         .setReadiness(deviceId, r, Date.now() + READINESS_LIFETIME_POLLS * pollIntervalMs);
+    } else {
+      useAtlasReadinessStore.getState().recordFailedPoll(deviceId);
     }
   }, [client, deviceId, pollIntervalMs]);
 
   // Readiness poll. Re-arms on drone switch and cadence changes. A failed poll
-  // writes nothing, so the last snapshot expires on its own.
+  // stores no snapshot, so the last one expires on its own; it is counted so a
+  // node that never answered still reaches "not answering".
   useEffect(() => {
     if (!client) return;
     void refreshReadiness();

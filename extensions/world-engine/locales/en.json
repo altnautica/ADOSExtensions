@@ -55,6 +55,7 @@
       "loadingViewer": "Loading viewer",
       "loadingWorld": "Loading world",
       "downloadingCloud": "Downloading cloud",
+      "decimated": "showing {kept} / {total} points",
       "what": {
         "rerun": "Rerun",
         "splat": "splat",

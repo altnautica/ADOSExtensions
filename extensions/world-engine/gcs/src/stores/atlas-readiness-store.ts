@@ -42,8 +42,14 @@ export function currentReadiness(
 interface AtlasReadinessState {
   /** Last snapshot per bare device id, current or expired. */
   snapshots: Record<string, AtlasReadinessSnapshot>;
-  /** Store (replace) the snapshot for a device. */
+  /** Readiness polls in a row that got no answer, per bare device id. An
+   * answer resets it; a drone that never answered is told apart from one not
+   * yet asked by this count, since it has no snapshot to expire. */
+  failedPolls: Record<string, number>;
+  /** Store (replace) the snapshot for a device; an answer ends a failure run. */
   setReadiness: (deviceId: string, readiness: AtlasReadiness, expiresAt: number | null) => void;
+  /** Count one readiness poll that got no answer. */
+  recordFailedPoll: (deviceId: string) => void;
   /** Drop the readiness for a device (e.g. on unpair). */
   clear: (deviceId: string) => void;
   /** The device's readiness if its snapshot is current at `now`, or null. */
@@ -58,16 +64,25 @@ interface AtlasReadinessState {
 
 export const useAtlasReadinessStore = create<AtlasReadinessState>((set, get) => ({
   snapshots: {},
+  failedPolls: {},
   setReadiness: (deviceId, readiness, expiresAt) =>
+    set((state) => {
+      const failedPolls = { ...state.failedPolls };
+      delete failedPolls[deviceId];
+      return { snapshots: { ...state.snapshots, [deviceId]: { readiness, expiresAt } }, failedPolls };
+    }),
+  recordFailedPoll: (deviceId) =>
     set((state) => ({
-      snapshots: { ...state.snapshots, [deviceId]: { readiness, expiresAt } },
+      failedPolls: { ...state.failedPolls, [deviceId]: (state.failedPolls[deviceId] ?? 0) + 1 },
     })),
   clear: (deviceId) =>
     set((state) => {
-      if (!(deviceId in state.snapshots)) return state;
-      const next = { ...state.snapshots };
-      delete next[deviceId];
-      return { snapshots: next };
+      if (!(deviceId in state.snapshots) && !(deviceId in state.failedPolls)) return state;
+      const snapshots = { ...state.snapshots };
+      delete snapshots[deviceId];
+      const failedPolls = { ...state.failedPolls };
+      delete failedPolls[deviceId];
+      return { snapshots, failedPolls };
     }),
   getReadiness: (deviceId, now) => currentReadiness(get().snapshots[deviceId], now),
   isCapturing: (deviceId, now) => {

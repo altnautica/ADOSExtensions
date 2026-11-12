@@ -70,6 +70,9 @@ export function LiveWorldPage() {
   const localFrame = useOutputFrame(local.computeClient, local.output, local.outputs);
 
   const commandable = control.live;
+  // Start needs a reported readiness: before the drone answers, nothing says
+  // its capture service can take a start.
+  const readinessKnown = control.readiness !== null;
   const reconstructAvailable = local.computeClient !== null && live.sessionId !== null;
   const reconstructSubmit = async (): Promise<boolean> => {
     const client = local.computeClient;
@@ -163,8 +166,8 @@ export function LiveWorldPage() {
           <ReconstructQualitySelect control={control} />
           <AtlasCaptureControls
             control={control}
-            canStart={commandable}
-            startBlockedKey={null}
+            canStart={commandable && readinessKnown}
+            startBlockedKey={readinessKnown ? null : "capture.startBlockedReadinessUnknown"}
             blockedKey={commandable ? null : "capture.notLocalReason"}
             reconstruct={{
               available: reconstructAvailable,

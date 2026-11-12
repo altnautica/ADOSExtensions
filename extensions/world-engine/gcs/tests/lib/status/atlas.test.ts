@@ -145,6 +145,32 @@ describe("mapAtlasSlice", () => {
     });
   });
 
+  it("clears the bearer and its keyframe notice when a state slice no longer reports one", () => {
+    // The agent sends the bearer, keyframesCarried and degradedReason only
+    // while something forwards; a full slice (it always carries `state`)
+    // without a bearer means forwarding stopped, so the old notice must go.
+    const prior = {
+      live: {
+        ...EMPTY_ATLAS_LIVE,
+        state: "capturing",
+        bearer: "wfb-relay",
+        keyframesCarried: false,
+        degradedReason: "relay datagrams are too small",
+      },
+    };
+    const patch = mapAtlasSlice({ state: "capturing", keyframesIngested: 12 }, prior, 21);
+    expect(patch?.live.bearer).toBeNull();
+    expect(patch?.live.keyframesCarried).toBeNull();
+    expect(patch?.live.degradedReason).toBeNull();
+  });
+
+  it("keeps the bearer across a sparse slice with no state", () => {
+    const prior = { live: { ...EMPTY_ATLAS_LIVE, state: "capturing", bearer: "direct-lan", keyframesCarried: true } };
+    const patch = mapAtlasSlice({ keyframesIngested: 12 }, prior, 22);
+    expect(patch?.live.bearer).toBe("direct-lan");
+    expect(patch?.live.keyframesCarried).toBe(true);
+  });
+
   it("ignores non-finite numerics (treated as absent)", () => {
     const patch = mapAtlasSlice(
       { state: "capturing", ingestRateHz: Number.NaN, cameraCount: Infinity },
