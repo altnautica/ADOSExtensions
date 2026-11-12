@@ -1,118 +1,30 @@
-import type { CSSProperties } from "react";
+import type { PluginContext } from "@altnautica/plugin-sdk";
 
-interface ParamRow {
-  id: string;
-  description: string;
-  /** Shown only when the flight controller reports it. */
-  optional?: boolean;
-}
+import { ParamCard, type ParamGroup } from "./ParamCard";
 
-interface ParamGroup {
-  title: string;
-  rows: ParamRow[];
-}
+/** Shown only when the flight controller reports them: the PX4 1.14+
+ * flow control and the older aid mask are alternatives. */
+const OPTIONAL: Record<string, true> = { EKF2_OF_CTRL: true, EKF2_AID_MASK: true };
 
 const GROUPS: ParamGroup[] = [
-  {
-    title: "Optical flow",
-    rows: [
-      {
-        id: "EKF2_OF_CTRL",
-        description: "Optical flow fusion control (PX4 1.14 and newer).",
-        optional: true,
-      },
-      { id: "SENS_FLOW_MAXR", description: "Maximum flow rate the sensor reports (rad/s)." },
-    ],
-  },
-  {
-    title: "Aid + height",
-    rows: [
-      {
-        id: "EKF2_AID_MASK",
-        description: "Aiding sensor selection bitmask (PX4 before 1.14).",
-        optional: true,
-      },
-      { id: "EKF2_HGT_REF", description: "Primary height source reference." },
-    ],
-  },
+  { id: "flow", rows: ["EKF2_OF_CTRL", "SENS_FLOW_MAXR"] },
+  { id: "aid", rows: ["EKF2_AID_MASK", "EKF2_HGT_REF"] },
 ];
 
 export interface Px4VisionParamsProps {
+  ctx: PluginContext;
   /** Watched parameters the flight controller has reported
    * (``fcParams`` on the navigation telemetry). */
   fcParams?: readonly string[];
 }
 
-export function Px4VisionParams({ fcParams = [] }: Px4VisionParamsProps): JSX.Element {
+export function Px4VisionParams({ ctx, fcParams = [] }: Px4VisionParamsProps): JSX.Element {
   const reported = new Set(fcParams);
   const groups = GROUPS.map((group) => ({
     ...group,
-    rows: group.rows.filter((row) => !row.optional || reported.has(row.id)),
+    rows: group.rows.filter((id) => !OPTIONAL[id] || reported.has(id)),
   })).filter((group) => group.rows.length > 0);
-  const card: CSSProperties = {
-    background: "var(--vn-surface, rgba(255,255,255,0.02))",
-    border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
-    borderRadius: "0.5rem",
-    padding: "0.875rem 1rem",
-    color: "var(--vn-text, #ededed)",
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.75rem",
-  };
-  const heading: CSSProperties = {
-    fontSize: "0.8125rem",
-    fontWeight: 600,
-    margin: 0,
-    color: "var(--vn-text-2, #b4b4b4)",
-  };
-  const subheading: CSSProperties = {
-    fontSize: "0.75rem",
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-    color: "var(--vn-text-3, #94a3b8)",
-    margin: "0 0 0.375rem 0",
-  };
-  const note: CSSProperties = {
-    fontSize: "0.75rem",
-    color: "var(--vn-text-3, #94a3b8)",
-    margin: 0,
-  };
-  const table: CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "max-content 1fr",
-    columnGap: "0.875rem",
-    rowGap: "0.25rem",
-    fontSize: "0.8125rem",
-  };
-  const paramName: CSSProperties = {
-    fontFamily: "var(--vn-mono, ui-monospace, SFMono-Regular, monospace)",
-    color: "var(--vn-text, #ededed)",
-  };
-  const paramDesc: CSSProperties = {
-    color: "var(--vn-text-3, #94a3b8)",
-  };
-
   return (
-    <section style={card} data-testid="vn-px4-params">
-      <h3 style={heading}>PX4 vision parameters</h3>
-      <p style={note}>
-        Read-only summary. Edit in Mission Control&apos;s parameter editor and
-        restart the EKF after changes.
-      </p>
-      {groups.map((group) => (
-        <div key={group.title}>
-          <p style={subheading}>{group.title}</p>
-          <dl style={table}>
-            {group.rows.map((row) => (
-              <div key={row.id} style={{ display: "contents" }}>
-                <dt style={paramName}>{row.id}</dt>
-                <dd style={paramDesc}>{row.description}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      ))}
-    </section>
+    <ParamCard t={ctx.i18n.t} prefix="navigation.params.px4" groups={groups} testId="vn-px4-params" />
   );
 }

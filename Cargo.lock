@@ -7556,7 +7556,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vision-nav"
-version = "0.6.7"
+version = "0.7.0"
 dependencies = [
  "ados-protocol",
  "ados-sdk",

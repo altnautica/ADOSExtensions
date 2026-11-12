@@ -2,7 +2,9 @@ import { useEffect, useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import { useNavState, useVisionNavTelemetry } from "../store";
+import { freshnessOf, LIVE, useNow, type Freshness } from "../freshness";
+import { tr } from "../i18n";
+import { useEngage, useNavState, useVisionNavTelemetry } from "../store";
 import type { FirmwareType, NavState, VisionNavTelemetry } from "../types";
 
 import { ArduPilotVisionParams } from "./ArduPilotVisionParams";
@@ -25,20 +27,33 @@ export interface NavigationTabProps {
   firmware: FirmwareType;
   /**
    * Optional override for tests that want to drive the UI without
-   * pumping the telemetry transport.
+   * pumping the telemetry transport. An override counts as live.
    */
   telemetryOverride?: VisionNavTelemetry;
-  /** Optional `nav.state` override for tests. */
+  /** Optional `nav.state` override for tests. An override counts as live. */
   navStateOverride?: NavState;
 }
 
 export function NavigationTab(props: NavigationTabProps): JSX.Element {
+  const t = props.ctx.i18n.t;
+  const now = useNow();
   const live = useVisionNavTelemetry(props.ctx);
-  const telemetry = props.telemetryOverride ?? live;
   const liveNav = useNavState(props.ctx);
-  const navState = props.navStateOverride ?? liveNav;
+  const engage = useEngage(props.ctx);
   const [themeVars, setThemeVars] = useState<Record<string, string>>({});
   const [tourReplay, setTourReplay] = useState(false);
+
+  const telemetry = props.telemetryOverride ?? live.snapshot;
+  const telemetryFresh: Freshness = props.telemetryOverride
+    ? LIVE
+    : freshnessOf(live.receivedAt, now);
+  const denied = !props.telemetryOverride && live.denied;
+  const navState = props.navStateOverride ?? liveNav.value;
+  const navFresh: Freshness = props.navStateOverride
+    ? LIVE
+    : freshnessOf(liveNav.receivedAt, now);
+  const engaged = freshnessOf(engage.receivedAt, now).kind === "live" ? engage.value : null;
+  const stale = telemetryFresh.kind === "stale";
 
   useEffect(() => {
     const off = props.ctx.theme.onChange((vars) => {
@@ -46,11 +61,6 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
     });
     return off;
   }, [props.ctx]);
-
-  function tr(key: string, fallback: string): string {
-    const r = props.ctx.i18n.t(key);
-    return r === key ? fallback : r;
-  }
 
   const container: CSSProperties = {
     display: "flex",
@@ -63,43 +73,21 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
     boxSizing: "border-box",
     ...(themeVars as CSSProperties),
   };
-  const header: CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "0.75rem",
-  };
-  const title: CSSProperties = {
-    margin: 0,
-    fontSize: "1rem",
-    fontWeight: 600,
-  };
-
-  const tabTitle = props.ctx.i18n.t("navigation.tabTitle");
-  const renderedTitle = tabTitle === "navigation.tabTitle" ? "Vision Nav" : tabTitle;
 
   return (
     <div style={container} data-testid="vn-navigation-tab">
       <header style={header}>
-        <h2 style={title}>{renderedTitle}</h2>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+        <h2 style={title}>{tr(t, "navigation.tabTitle")}</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
           <button
             type="button"
             onClick={() => setTourReplay(true)}
-            style={{
-              background: "transparent",
-              border: "none",
-              color: "var(--vn-text-muted, #94a3b8)",
-              fontSize: "0.7rem",
-              cursor: "pointer",
-              padding: 0,
-              textDecoration: "underline",
-            }}
+            style={replayButton}
             data-testid="vn-tour-replay"
           >
-            {tr("navigation.tour.replay", "Replay tour")}
+            {tr(t, "navigation.tour.replay")}
           </button>
-          <CompanionStatusPill state={telemetry.companionState} />
+          <CompanionStatusPill t={t} state={telemetry.companionState} freshness={telemetryFresh} />
         </div>
       </header>
       <TourOrchestrator
@@ -108,46 +96,89 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
         replay={tourReplay}
         onClose={() => setTourReplay(false)}
       />
-      <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
-      <ModeCard ctx={props.ctx} telemetry={telemetry} />
-      <NavStateCard ctx={props.ctx} state={navState} poseAgeMs={telemetry.poseAgeMs} />
-      <SensorsCard ctx={props.ctx} telemetry={telemetry} />
-      <EstimatorCard ctx={props.ctx} telemetry={telemetry} />
-      <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
-      <FlowHealthCard telemetry={telemetry} />
-      <PreArmStatus telemetry={telemetry} />
+      {telemetryFresh.kind === "stale" ? (
+        <p style={staleNotice} role="status" data-testid="vn-feed-stale">
+          {tr(t, "navigation.feedStale", { s: telemetryFresh.ageS })}
+        </p>
+      ) : null}
+      <div
+        style={stale ? { ...body, opacity: 0.5 } : body}
+        data-testid="vn-telemetry-body"
+        data-stale={stale ? "true" : "false"}
+      >
+        {telemetryFresh.kind === "live" ? (
+          <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
+        ) : null}
+        <ModeCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} engaged={engaged} />
+        <SensorsCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
+        <EstimatorCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
+        <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
+        <FlowHealthCard ctx={props.ctx} telemetry={telemetry} />
+        <PreArmStatus ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} denied={denied} />
+      </div>
+      <NavStateCard
+        ctx={props.ctx}
+        state={navState}
+        freshness={navFresh}
+        poseAgeMs={telemetryFresh.kind === "live" ? telemetry.poseAgeMs : null}
+      />
       {props.firmware === "ardupilot" ? (
-        <ArduPilotVisionParams />
+        <ArduPilotVisionParams ctx={props.ctx} />
       ) : props.firmware === "px4" ? (
-        <Px4VisionParams fcParams={telemetry.fcParams} />
+        <Px4VisionParams ctx={props.ctx} fcParams={telemetry.fcParams} />
       ) : props.firmware === "inav" ? (
-        <InavVisionParams />
+        <InavVisionParams ctx={props.ctx} />
       ) : props.firmware === "betaflight" ? (
-        <BetaflightUnsupported />
+        <BetaflightUnsupported ctx={props.ctx} />
       ) : (
-        <UnsupportedFirmware firmware={props.firmware} />
+        <section style={unsupportedCard} data-testid="vn-unsupported-firmware">
+          {tr(t, "navigation.params.unsupported", { firmware: props.firmware })}
+        </section>
       )}
     </div>
   );
 }
 
-function UnsupportedFirmware({
-  firmware,
-}: {
-  firmware: FirmwareType;
-}): JSX.Element {
-  const card: CSSProperties = {
-    background: "var(--vn-surface, rgba(255,255,255,0.02))",
-    border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
-    borderRadius: "0.5rem",
-    padding: "0.875rem 1rem",
-    color: "var(--vn-text-3, #94a3b8)",
-    fontSize: "0.8125rem",
-  };
-  return (
-    <section style={card} data-testid="vn-unsupported-firmware">
-      Vision navigation parameters are only surfaced for ArduPilot and PX4.
-      Detected firmware: {firmware}.
-    </section>
-  );
-}
+const header: CSSProperties = {
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+  gap: "0.75rem",
+};
+const title: CSSProperties = {
+  margin: 0,
+  fontSize: "1rem",
+  fontWeight: 600,
+};
+const replayButton: CSSProperties = {
+  background: "transparent",
+  border: "none",
+  color: "var(--vn-text-muted, #94a3b8)",
+  fontSize: "0.8125rem",
+  cursor: "pointer",
+  padding: "0 0.5rem",
+  minHeight: "48px",
+  minWidth: "48px",
+  textDecoration: "underline",
+};
+const staleNotice: CSSProperties = {
+  margin: 0,
+  padding: "0.5rem 0.75rem",
+  borderRadius: "0.375rem",
+  border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
+  color: "var(--vn-text-2, #b4b4b4)",
+  fontSize: "0.8125rem",
+};
+const body: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "0.75rem",
+};
+const unsupportedCard: CSSProperties = {
+  background: "var(--vn-surface, rgba(255,255,255,0.02))",
+  border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
+  borderRadius: "0.5rem",
+  padding: "0.875rem 1rem",
+  color: "var(--vn-text-3, #94a3b8)",
+  fontSize: "0.8125rem",
+};

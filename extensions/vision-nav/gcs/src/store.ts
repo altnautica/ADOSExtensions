@@ -4,9 +4,12 @@ import type { PluginContext } from "@altnautica/plugin-sdk";
 
 import {
   EMPTY_NAV_STATE,
+  ENGAGE_TOPIC,
   NAV_STATE_TOPIC,
+  normalizeEngage,
   normalizeNavState,
   type NavState,
+  type RawEngage,
   type RawNavState,
   type VisionNavTelemetry,
 } from "./types";
@@ -15,54 +18,65 @@ const EMPTY: VisionNavTelemetry = {
   opticalFlowSupported: false,
 };
 
+/** The latest navigation block and when it arrived. */
+export interface TelemetryFeed {
+  snapshot: VisionNavTelemetry;
+  /** `Date.now()` when the snapshot arrived; `null` before the first one. */
+  receivedAt: number | null;
+  /** The host refused the `navigation` telemetry subscription. */
+  denied: boolean;
+}
+
 /**
  * Subscribe to the navigation telemetry topic the agent half publishes
- * and surface the latest snapshot as React state. The plugin iframe
- * has no global state library; each instance owns its own subscription
- * lifecycle.
+ * and surface the latest snapshot, with its receive time, as React
+ * state. The plugin iframe has no global state library; each instance
+ * owns its own subscription lifecycle.
  */
-export function useVisionNavTelemetry(
-  ctx: PluginContext,
-): VisionNavTelemetry {
-  const [snapshot, setSnapshot] = useState<VisionNavTelemetry>(EMPTY);
+export function useVisionNavTelemetry(ctx: PluginContext): TelemetryFeed {
+  const [feed, setFeed] = useState<TelemetryFeed>({
+    snapshot: EMPTY,
+    receivedAt: null,
+    denied: false,
+  });
 
   useEffect(() => {
     let cancelled = false;
     let off: (() => void) | null = null;
 
-    void ctx.telemetry.subscribe<VisionNavTelemetry>("navigation", (next) => {
+    void ctx.telemetry
+      .subscribe<VisionNavTelemetry>("navigation", (next) => {
         if (cancelled || !next) return;
         // Defensive normalization: the agent may publish a partial
         // payload during warm-up. Keep the support flag sticky once
         // observed so the UI does not flicker between firmware tiers.
-        setSnapshot((prev) => ({
-          opticalFlowSupported:
-            next.opticalFlowSupported ?? prev.opticalFlowSupported,
-          flowQuality: next.flowQuality,
-          flowRateHz: next.flowRateHz,
-          flowDistanceM: next.flowDistanceM,
-          companionState: next.companionState,
-          rangefinderTopology: next.rangefinderTopology,
-          recommendedCameraId: next.recommendedCameraId,
-          // Estimator framework + IMU + calibration fields. All
-          // optional; an older agent that does not emit them leaves
-          // the new cards in their "awaiting wiring" empty state.
-          mode: next.mode,
-          availableEstimators: next.availableEstimators,
-          estimatorState: next.estimatorState,
-          flowScaleSource: next.flowScaleSource,
-          imuSource: next.imuSource,
-          imuRateHz: next.imuRateHz,
-          cameraIntrinsicsLoaded: next.cameraIntrinsicsLoaded,
-          cameraImuSyncOffsetMs: next.cameraImuSyncOffsetMs,
-          preArmReport: next.preArmReport,
-          // Diagnostics the agent publishes on the same block; the PX4
-          // parameter card reads fcParams.
-          emitErrors: next.emitErrors,
-          rangefinderError: next.rangefinderError,
-          degradedReasons: next.degradedReasons,
-          fcParams: next.fcParams,
-          poseAgeMs: next.poseAgeMs,
+        setFeed((prev) => ({
+          denied: false,
+          receivedAt: Date.now(),
+          snapshot: {
+            opticalFlowSupported:
+              next.opticalFlowSupported ?? prev.snapshot.opticalFlowSupported,
+            flowQuality: next.flowQuality,
+            flowRateHz: next.flowRateHz,
+            flowDistanceM: next.flowDistanceM,
+            companionState: next.companionState,
+            rangefinderTopology: next.rangefinderTopology,
+            recommendedCameraId: next.recommendedCameraId,
+            mode: next.mode,
+            availableEstimators: next.availableEstimators,
+            estimatorState: next.estimatorState,
+            flowScaleSource: next.flowScaleSource,
+            imuSource: next.imuSource,
+            imuRateHz: next.imuRateHz,
+            cameraIntrinsicsLoaded: next.cameraIntrinsicsLoaded,
+            cameraImuSyncOffsetMs: next.cameraImuSyncOffsetMs,
+            preArmReport: next.preArmReport,
+            emitErrors: next.emitErrors,
+            rangefinderError: next.rangefinderError,
+            degradedReasons: next.degradedReasons,
+            fcParams: next.fcParams,
+            poseAgeMs: next.poseAgeMs,
+          },
         }));
       })
       .then((unsubscribe) => {
@@ -73,8 +87,9 @@ export function useVisionNavTelemetry(
         off = unsubscribe;
       })
       .catch(() => {
-        // Host denied the subscription. Component renders the empty
-        // baseline and pre-arm rows surface the gap to the operator.
+        // The host refused the subscription; the tab says so instead of
+        // showing an empty feed as if the agent were silent.
+        if (!cancelled) setFeed((prev) => ({ ...prev, denied: true }));
       });
 
     return () => {
@@ -83,27 +98,45 @@ export function useVisionNavTelemetry(
     };
   }, [ctx]);
 
-  return snapshot;
+  return feed;
+}
+
+/** The latest value of an agent event topic and when it arrived. */
+export interface EventFeed<T> {
+  value: T;
+  receivedAt: number | null;
+}
+
+function useEventFeed<R, T>(
+  ctx: PluginContext,
+  topic: string,
+  empty: T,
+  normalize: (raw: R) => T,
+): EventFeed<T> {
+  const [feed, setFeed] = useState<EventFeed<T>>({ value: empty, receivedAt: null });
+  useEffect(
+    () =>
+      ctx.events.subscribe<R>(topic, (raw) => {
+        setFeed({ value: normalize(raw), receivedAt: Date.now() });
+      }),
+    [ctx, topic, normalize],
+  );
+  return feed;
 }
 
 /**
  * Subscribe to the agent's `nav.state` event (active EKF source set,
  * external-nav health, ODOMETRY and obstacle rates, nearest obstacle,
- * GPS fix) and surface the latest as React state.
+ * GPS fix).
  */
-export function useNavState(ctx: PluginContext): NavState {
-  const [state, setState] = useState<NavState>(EMPTY_NAV_STATE);
-
-  useEffect(() => {
-    const off = ctx.events.subscribe<RawNavState>(NAV_STATE_TOPIC, (raw) => {
-      setState(normalizeNavState(raw));
-    });
-    return off;
-  }, [ctx]);
-
-  return state;
+export function useNavState(ctx: PluginContext): EventFeed<NavState> {
+  return useEventFeed<RawNavState, NavState>(ctx, NAV_STATE_TOPIC, EMPTY_NAV_STATE, normalizeNavState);
 }
 
-export function resetSnapshot(): VisionNavTelemetry {
-  return { ...EMPTY };
+/**
+ * Subscribe to the agent's `navigation.engage` event: whether vision
+ * navigation is engaged (`true`), idle (`false`), or unknown (`null`).
+ */
+export function useEngage(ctx: PluginContext): EventFeed<boolean | null> {
+  return useEventFeed<RawEngage, boolean | null>(ctx, ENGAGE_TOPIC, null, normalizeEngage);
 }

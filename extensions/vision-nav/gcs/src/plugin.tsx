@@ -12,36 +12,12 @@ import { createRoot } from "react-dom/client";
 
 import { definePlugin } from "@altnautica/plugin-sdk";
 
-import en from "../../locales/en.json";
-
 import { NavigationTab } from "./components/NavigationTab";
 import { firmwareFromConfig, type VisionNavConfig } from "./firmware";
+import { FLAT_LOCALE } from "./i18n";
 import type { FirmwareType } from "./types";
 
 const DEFAULT_FIRMWARE: FirmwareType = "ardupilot";
-
-type LocaleTree = { [key: string]: string | LocaleTree };
-
-/**
- * Flatten the shipped locale tree into the dotted keys the host's i18n
- * lookup uses. `locales/en.json` is the single source for this copy —
- * the manifest ships it and the bundle embeds the same file, so the two
- * cannot drift.
- */
-function flattenLocale(tree: LocaleTree, prefix: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [key, value] of Object.entries(tree)) {
-    const path = `${prefix}${key}`;
-    if (typeof value === "string") {
-      out[path] = value;
-    } else {
-      Object.assign(out, flattenLocale(value, `${path}.`));
-    }
-  }
-  return out;
-}
-
-const FLAT_LOCALE = flattenLocale(en as LocaleTree, "navigation.");
 
 let rootEl: HTMLElement | null = null;
 let reactRoot: Root | null = null;
@@ -70,7 +46,7 @@ function renderTree(ctx: import("@altnautica/plugin-sdk").PluginContext): void {
 
 definePlugin({
   id: "com.altnautica.vision-nav",
-  version: "0.6.7",
+  version: "0.7.0",
   locale: FLAT_LOCALE,
   async mount(ctx) {
     const host = ensureRootEl();

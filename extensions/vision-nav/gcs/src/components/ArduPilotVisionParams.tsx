@@ -1,109 +1,55 @@
-import type { CSSProperties } from "react";
+import type { PluginContext } from "@altnautica/plugin-sdk";
 
-interface ParamRow {
-  id: string;
-  description: string;
-}
+import { ParamCard, type ParamGroup } from "./ParamCard";
 
-interface ParamGroup {
-  title: string;
-  rows: ParamRow[];
-}
-
+/**
+ * Every ArduPilot parameter `required_fc_parameters.ardupilot` in the
+ * manifest names, grouped by the mode that needs it, plus the source-set
+ * and flow-tuning parameters the optical-flow modes read.
+ */
 const GROUPS: ParamGroup[] = [
+  { id: "drivers", rows: ["FLOW_TYPE"] },
   {
-    title: "Sensor drivers",
+    id: "sourceSets",
     rows: [
-      { id: "FLOW_TYPE", description: "Optical flow sensor backend (5 = MAVLink)." },
+      "EK3_SRC1_POSXY",
+      "EK3_SRC1_VELXY",
+      "EK3_SRC1_YAW",
+      "EK3_SRC2_POSXY",
+      "EK3_SRC2_VELXY",
+      "EK3_SRC3_POSXY",
+      "EK3_SRC3_VELXY",
+      "EK3_SRC_OPTIONS",
     ],
   },
   {
-    title: "EKF source sets",
-    rows: [
-      { id: "EK3_SRC1_POSXY", description: "Source set 1 horizontal position." },
-      { id: "EK3_SRC1_VELXY", description: "Source set 1 horizontal velocity." },
-      { id: "EK3_SRC2_POSXY", description: "Source set 2 horizontal position." },
-      { id: "EK3_SRC2_VELXY", description: "Source set 2 horizontal velocity." },
-      { id: "EK3_SRC3_POSXY", description: "Source set 3 horizontal position." },
-      { id: "EK3_SRC3_VELXY", description: "Source set 3 horizontal velocity." },
-      { id: "EK3_SRC_OPTIONS", description: "Source-set switching options bitmask." },
-    ],
+    id: "flowTuning",
+    rows: ["EK3_FLOW_DELAY", "EK3_FLOW_QUAL_MIN", "FLOW_HEIGHT_MIN", "FLOW_HEIGHT_MAX"],
   },
   {
-    title: "Flow tuning",
+    id: "externalNav",
     rows: [
-      { id: "EK3_FLOW_DELAY", description: "Optical flow measurement delay (ms)." },
-      { id: "EK3_FLOW_QUAL_MIN", description: "Minimum flow quality (0-255)." },
-      { id: "FLOW_HEIGHT_MIN", description: "Minimum AGL for flow fusion (m)." },
-      { id: "FLOW_HEIGHT_MAX", description: "Maximum AGL for flow fusion (m)." },
+      "VISO_TYPE",
+      "VISO_DELAY_MS",
+      "AHRS_OPTIONS",
+      "AHRS_ORIGIN_LAT",
+      "AHRS_ORIGIN_LON",
+      "AHRS_ORIGIN_ALT",
+      "COMPASS_AUTODEC",
+      "EK3_MAG_EF_LIM",
+      "ARMING_SKIPCHK",
     ],
   },
+  { id: "obstacle", rows: ["PRX1_TYPE"] },
 ];
 
-export function ArduPilotVisionParams(): JSX.Element {
-  const card: CSSProperties = {
-    background: "var(--vn-surface, rgba(255,255,255,0.02))",
-    border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
-    borderRadius: "0.5rem",
-    padding: "0.875rem 1rem",
-    color: "var(--vn-text, #ededed)",
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.75rem",
-  };
-  const heading: CSSProperties = {
-    fontSize: "0.8125rem",
-    fontWeight: 600,
-    margin: 0,
-    color: "var(--vn-text-2, #b4b4b4)",
-  };
-  const subheading: CSSProperties = {
-    fontSize: "0.75rem",
-    fontWeight: 600,
-    textTransform: "uppercase",
-    letterSpacing: "0.05em",
-    color: "var(--vn-text-3, #94a3b8)",
-    margin: "0 0 0.375rem 0",
-  };
-  const note: CSSProperties = {
-    fontSize: "0.75rem",
-    color: "var(--vn-text-3, #94a3b8)",
-    margin: 0,
-  };
-  const table: CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "max-content 1fr",
-    columnGap: "0.875rem",
-    rowGap: "0.25rem",
-    fontSize: "0.8125rem",
-  };
-  const paramName: CSSProperties = {
-    fontFamily: "var(--vn-mono, ui-monospace, SFMono-Regular, monospace)",
-    color: "var(--vn-text, #ededed)",
-  };
-  const paramDesc: CSSProperties = {
-    color: "var(--vn-text-3, #94a3b8)",
-  };
-
+export function ArduPilotVisionParams({ ctx }: { ctx: PluginContext }): JSX.Element {
   return (
-    <section style={card} data-testid="vn-ardupilot-params">
-      <h3 style={heading}>ArduPilot vision parameters</h3>
-      <p style={note}>
-        Read-only summary. Edit in Mission Control&apos;s parameter editor.
-      </p>
-      {GROUPS.map((group) => (
-        <div key={group.title}>
-          <p style={subheading}>{group.title}</p>
-          <dl style={table}>
-            {group.rows.map((row) => (
-              <div key={row.id} style={{ display: "contents" }}>
-                <dt style={paramName}>{row.id}</dt>
-                <dd style={paramDesc}>{row.description}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      ))}
-    </section>
+    <ParamCard
+      t={ctx.i18n.t}
+      prefix="navigation.params.ardupilot"
+      groups={GROUPS}
+      testId="vn-ardupilot-params"
+    />
   );
 }

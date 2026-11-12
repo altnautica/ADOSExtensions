@@ -2,14 +2,8 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
+import { tr, type TFn } from "../i18n";
 import type { VisionNavTelemetry } from "../types";
-
-type TFn = PluginContext["i18n"]["t"];
-
-function tr(t: TFn, key: string, fallback: string): string {
-  const result = t(key);
-  return result === key ? fallback : result;
-}
 
 interface Props {
   ctx: PluginContext;
@@ -22,25 +16,25 @@ interface Props {
 const BUFFER_LIMIT = 60;
 
 interface Series {
+  id: string;
   label: string;
-  unit: string;
   values: number[];
+  format: (v: number) => string;
   colorVar: string;
-  yMin?: number;
-  yMax?: number;
+  yMin: number;
+  yMax: number;
 }
 
 /**
- * Inline-SVG sparklines for the live estimator telemetry. Each
- * sparkline maintains its own local rolling buffer; we do not depend
- * on the host's telemetry-store ring buffer here because the plugin
- * iframe is sandboxed and reads only through ``ctx.telemetry``.
+ * Inline-SVG sparklines for the live estimator telemetry. Each series
+ * keeps its own rolling buffer; the plugin iframe is sandboxed and reads
+ * only through ``ctx.telemetry``, so the host's ring buffer is out of
+ * reach.
  *
- * The component subscribes to the same telemetry stream the rest of
- * the cards use; on each new heartbeat we push the matching field
- * into each series' buffer and re-render. Empty series render as a
- * muted "no data" placeholder so the card doesn't collapse mid-flight
- * when a metric goes ``null`` for one tick.
+ * Every received navigation block adds one sample, whether or not the
+ * value moved, so a steady value still draws a line and the window is
+ * a minute of heartbeats. A series with one sample shows it as the
+ * current value.
  */
 export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
   const t = ctx.i18n.t;
@@ -48,13 +42,12 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
   const syncOffsetRef = useRef<number[]>([]);
   const [, setTick] = useState(0);
 
+  // Keyed on the snapshot object: the store builds a new one per
+  // received block, and re-renders between blocks keep the same one.
   useEffect(() => {
     let changed = false;
     if (typeof telemetry.flowQuality === "number") {
-      flowQualityRef.current = pushAndCap(
-        flowQualityRef.current,
-        telemetry.flowQuality,
-      );
+      flowQualityRef.current = pushAndCap(flowQualityRef.current, telemetry.flowQuality);
       changed = true;
     }
     if (typeof telemetry.cameraImuSyncOffsetMs === "number") {
@@ -67,21 +60,23 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
     if (changed) {
       setTick((n) => n + 1);
     }
-  }, [telemetry.flowQuality, telemetry.cameraImuSyncOffsetMs]);
+  }, [telemetry]);
 
   const series: Series[] = [
     {
-      label: tr(t, "navigation.charts.flowQuality", "Flow quality"),
-      unit: "/255",
+      id: "flow-quality",
+      label: tr(t, "navigation.charts.flowQuality"),
       values: flowQualityRef.current,
+      format: (v) => tr(t, "navigation.format.quality", { v: Math.round(v) }),
       colorVar: "var(--vn-accent, #3a82ff)",
       yMin: 0,
       yMax: 255,
     },
     {
-      label: tr(t, "navigation.charts.syncOffset", "Sync offset"),
-      unit: "ms",
+      id: "sync-offset",
+      label: tr(t, "navigation.charts.syncOffset"),
       values: syncOffsetRef.current,
+      format: (v) => tr(t, "navigation.format.ms", { v: v.toFixed(2) }),
       colorVar: "var(--vn-warn, #f59e0b)",
       yMin: 0,
       yMax: 40,
@@ -90,86 +85,56 @@ export function TelemetryCharts({ ctx, telemetry }: Props): JSX.Element {
 
   return (
     <section style={card} data-testid="vn-telemetry-charts">
-      <h3 style={heading}>
-        {tr(t, "navigation.charts.title", "Telemetry trends")}
-      </h3>
+      <h3 style={heading}>{tr(t, "navigation.charts.title")}</h3>
       <div style={grid}>
         {series.map((s) => (
-          <Sparkline key={s.label} {...s} t={t} />
+          <Sparkline key={s.id} series={s} t={t} />
         ))}
       </div>
     </section>
   );
 }
 
-interface SparklineProps extends Series {
-  t: TFn;
-}
+const W = 180;
+const H = 36;
 
-function Sparkline({
-  label,
-  unit,
-  values,
-  colorVar,
-  yMin,
-  yMax,
-  t,
-}: SparklineProps): JSX.Element {
-  const w = 180;
-  const h = 36;
-  const last = values.length > 0 ? values[values.length - 1] : null;
+function Sparkline({ series, t }: { series: Series; t: TFn }): JSX.Element {
+  const { id, label, values, format, colorVar, yMin, yMax } = series;
+  const last = values.length > 0 ? values[values.length - 1] : undefined;
+  const span = Math.max(yMax - yMin, 1e-6);
+  const y = (v: number): number => H - ((Math.min(Math.max(v, yMin), yMax) - yMin) / span) * H;
 
-  if (values.length < 2) {
-    return (
-      <div style={cell} data-testid={`vn-sparkline-${slug(label)}`}>
-        <div style={labelRow}>
-          <span style={labelText}>{label}</span>
-          <span style={valueText}>
-            {tr(t, "navigation.charts.noData", "no data")}
-          </span>
-        </div>
-        <svg width={w} height={h} style={{ display: "block" }} aria-hidden>
-          <line
-            x1={0}
-            x2={w}
-            y1={h / 2}
-            y2={h / 2}
-            stroke="var(--vn-border, rgba(255,255,255,0.08))"
-            strokeDasharray="2 2"
-          />
-        </svg>
-      </div>
+  let plot: JSX.Element;
+  if (last === undefined) {
+    plot = (
+      <line
+        x1={0}
+        x2={W}
+        y1={H / 2}
+        y2={H / 2}
+        stroke="var(--vn-border, rgba(255,255,255,0.08))"
+        strokeDasharray="2 2"
+      />
     );
+  } else if (values.length === 1) {
+    plot = <circle cx={W} cy={y(last)} r={2} fill={colorVar} />;
+  } else {
+    const points = values
+      .map((v, i) => `${((i / (values.length - 1)) * W).toFixed(1)},${y(v).toFixed(1)}`)
+      .join(" ");
+    plot = <polyline points={points} fill="none" stroke={colorVar} strokeWidth={1.5} />;
   }
 
-  const min = yMin ?? Math.min(...values);
-  const max = yMax ?? Math.max(...values);
-  const span = Math.max(max - min, 1e-6);
-  const points = values
-    .map((v, i) => {
-      const x = (i / Math.max(values.length - 1, 1)) * w;
-      const y = h - ((v - min) / span) * h;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-
   return (
-    <div style={cell} data-testid={`vn-sparkline-${slug(label)}`}>
+    <div style={cell} data-testid={`vn-sparkline-${id}`}>
       <div style={labelRow}>
         <span style={labelText}>{label}</span>
         <span style={valueText}>
-          {typeof last === "number"
-            ? `${formatValue(last, unit)}${unit ? " " + unit : ""}`
-            : "—"}
+          {last === undefined ? tr(t, "navigation.noData") : format(last)}
         </span>
       </div>
-      <svg width={w} height={h} style={{ display: "block" }} aria-hidden>
-        <polyline
-          points={points}
-          fill="none"
-          stroke={colorVar}
-          strokeWidth={1.5}
-        />
+      <svg width={W} height={H} style={{ display: "block", overflow: "visible" }} aria-hidden>
+        {plot}
       </svg>
     </div>
   );
@@ -179,17 +144,6 @@ function pushAndCap(buf: number[], value: number): number[] {
   const next = buf.length >= BUFFER_LIMIT ? buf.slice(1) : buf.slice();
   next.push(value);
   return next;
-}
-
-function formatValue(v: number, unit: string): string {
-  if (unit === "ms" || unit === "m") {
-    return v.toFixed(2);
-  }
-  return Number.isInteger(v) ? v.toString() : v.toFixed(2);
-}
-
-function slug(label: string): string {
-  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 }
 
 const card: CSSProperties = {

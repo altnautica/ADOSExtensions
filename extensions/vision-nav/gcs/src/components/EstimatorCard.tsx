@@ -2,99 +2,60 @@ import type { CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import type {
-  EstimatorMode,
-  EstimatorState,
-  VisionNavTelemetry,
-} from "../types";
+import type { Freshness } from "../freshness";
+import { DASH, tr } from "../i18n";
+import type { VisionNavTelemetry } from "../types";
 
-type TFn = PluginContext["i18n"]["t"];
-
-function tr(t: TFn, key: string, fallback: string): string {
-  const result = t(key);
-  return result === key ? fallback : result;
-}
+import { EstimatorStatePill } from "./EstimatorStatePill";
 
 interface Props {
   ctx: PluginContext;
   telemetry: VisionNavTelemetry;
+  freshness: Freshness;
 }
+
+const ENGINES = ["optical_flow", "optical_flow_degraded", "external_nav"];
 
 /**
  * Estimator status card. Shows the engine name, the current state, the
  * flow quality, and the camera-IMU sync offset the aligner measures.
  */
-export function EstimatorCard({ ctx, telemetry }: Props): JSX.Element {
+export function EstimatorCard({ ctx, telemetry, freshness }: Props): JSX.Element {
   const t = ctx.i18n.t;
-  const mode = (telemetry.mode as EstimatorMode | undefined) ?? "off";
-  const state = (telemetry.estimatorState as EstimatorState | undefined) ?? "off";
-
-  const engineLabel = ENGINE_LABELS[mode] ?? "—";
+  const mode = telemetry.mode;
+  const engine =
+    typeof mode === "string" && ENGINES.includes(mode) ? tr(t, `navigation.engine.${mode}`) : DASH;
+  const sync = telemetry.cameraImuSyncOffsetMs;
 
   return (
     <section style={card} data-testid="vn-estimator-card">
       <header style={header}>
-        <h3 style={heading}>
-          {tr(t, "navigation.estimatorCard.title", "Estimator")}
-        </h3>
-        <StatePill state={state} t={t} />
+        <h3 style={heading}>{tr(t, "navigation.estimatorCard.title")}</h3>
+        <EstimatorStatePill
+          t={t}
+          state={telemetry.estimatorState}
+          freshness={freshness}
+          testId="vn-estimator-pill"
+        />
       </header>
       <div style={rows}>
+        <Row label={tr(t, "navigation.estimatorCard.engine")} value={engine} />
         <Row
-          label={tr(t, "navigation.estimatorCard.engine", "Engine")}
-          value={engineLabel}
-        />
-        <Row
-          label={tr(t, "navigation.estimatorCard.flowQuality", "Flow quality")}
+          label={tr(t, "navigation.estimatorCard.flowQuality")}
           value={
             typeof telemetry.flowQuality === "number"
-              ? `${telemetry.flowQuality}/255`
-              : "—"
+              ? tr(t, "navigation.format.quality", { v: telemetry.flowQuality })
+              : DASH
           }
         />
         <Row
-          label={tr(t, "navigation.estimatorCard.syncOffset", "Sync offset")}
-          value={
-            typeof telemetry.cameraImuSyncOffsetMs === "number"
-              ? `${telemetry.cameraImuSyncOffsetMs.toFixed(1)} ms`
-              : "—"
-          }
+          label={tr(t, "navigation.estimatorCard.syncOffset")}
+          value={typeof sync === "number" ? tr(t, "navigation.format.ms", { v: sync.toFixed(1) }) : DASH}
         />
       </div>
     </section>
   );
 }
-
-const ENGINE_LABELS: Partial<Record<EstimatorMode, string>> = {
-  off: "—",
-  optical_flow: "Lucas-Kanade",
-  optical_flow_degraded: "Lucas-Kanade (degraded)",
-  external_nav: "External pose (ODOMETRY)",
-};
-
-interface PillProps {
-  state: EstimatorState;
-  t: TFn;
-}
-
-function StatePill({ state, t }: PillProps): JSX.Element {
-  const tone = STATE_TONES[state] ?? STATE_TONES.off;
-  return (
-    <span style={pill(tone.color)} data-testid={`vn-estimator-pill-${state}`}>
-      <span style={dot(tone.color)} aria-hidden />
-      {tr(t, `navigation.estimatorState.${state}`, tone.label)}
-    </span>
-  );
-}
-
-const STATE_TONES: Record<EstimatorState, { color: string; label: string }> = {
-  off: { color: "var(--vn-muted, #6b7280)", label: "Off" },
-  init: { color: "var(--vn-warn, #f59e0b)", label: "Initializing" },
-  converging: { color: "var(--vn-warn, #f59e0b)", label: "Converging" },
-  converged: { color: "var(--vn-ok, #34d399)", label: "Converged" },
-  degraded: { color: "var(--vn-warn, #f59e0b)", label: "Degraded" },
-  failed: { color: "var(--vn-error, #ef4444)", label: "Failed" },
-};
 
 interface RowProps {
   label: string;
@@ -152,21 +113,3 @@ const rowValue: CSSProperties = {
   fontWeight: 600,
   fontVariantNumeric: "tabular-nums",
 };
-const pill = (color: string): CSSProperties => ({
-  display: "inline-flex",
-  alignItems: "center",
-  gap: "0.375rem",
-  padding: "0.25rem 0.5rem",
-  borderRadius: "999px",
-  border: `1px solid ${color}`,
-  color,
-  fontSize: "0.7rem",
-  fontWeight: 600,
-});
-const dot = (color: string): CSSProperties => ({
-  width: "0.5rem",
-  height: "0.5rem",
-  borderRadius: "50%",
-  background: color,
-  display: "inline-block",
-});

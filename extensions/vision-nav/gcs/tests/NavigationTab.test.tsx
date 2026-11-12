@@ -248,7 +248,7 @@ describe("NavigationTab", () => {
         })}
       />,
     );
-    expect(screen.getByTestId("vn-mode-optical_flow_degraded").title).toContain(
+    expect(screen.getByTestId("vn-mode-optical_flow_degraded").textContent).toContain(
       "baro / GPS (outdoor) ladder",
     );
   });
@@ -315,9 +315,9 @@ describe("NavigationTab", () => {
         navStateOverride={navState}
       />,
     );
-    expect(screen.getByTestId("vn-nav-active-set").textContent).toBe("1");
+    expect(screen.getByTestId("vn-nav-active-set").textContent).toBe("Set 1");
     expect(screen.getByTestId("vn-nav-extnav-health").textContent).toBe("◐ Degraded");
-    expect(screen.getByTestId("vn-nav-odom-rate").textContent).toBe("29.6 Hz");
+    expect(screen.getByTestId("vn-nav-odom-rate").textContent).toBe("30 Hz");
     expect(screen.getByTestId("vn-nav-reset-counter").textContent).toBe("2");
     expect(screen.getByTestId("vn-nav-min-obstacle").textContent).toBe("3.20 m");
     expect(screen.getByTestId("vn-nav-gps-fix").textContent).toBe("No GPS");

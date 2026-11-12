@@ -2,17 +2,8 @@ import type { CSSProperties } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
-import type {
-  EstimatorState,
-  VisionNavTelemetry,
-} from "../types";
-
-type TFn = PluginContext["i18n"]["t"];
-
-function tr(t: TFn, key: string, fallback: string): string {
-  const result = t(key);
-  return result === key ? fallback : result;
-}
+import { tr } from "../i18n";
+import type { VisionNavTelemetry } from "../types";
 
 interface Props {
   ctx: PluginContext;
@@ -28,127 +19,55 @@ interface Props {
  */
 export function FallbackBanner({ ctx, telemetry }: Props): JSX.Element | null {
   const t = ctx.i18n.t;
-  const state = (telemetry.estimatorState as EstimatorState | undefined) ?? "off";
-
+  const state = telemetry.estimatorState;
   if (state !== "degraded" && state !== "failed") {
     return null;
   }
-
   const isFailed = state === "failed";
-  const reason = describeDegradation(telemetry, t);
-  const suggestion = suggestionFor(telemetry, t);
 
   return (
-    <section
-      style={banner(isFailed)}
-      data-testid={`vn-fallback-banner-${state}`}
-      role="alert"
-    >
-      <div style={iconBlock(isFailed)}>{isFailed ? "✕" : "!"}</div>
+    <section style={banner(isFailed)} data-testid={`vn-fallback-banner-${state}`} role="alert">
+      <div style={iconBlock(isFailed)} aria-hidden>
+        {isFailed ? "✕" : "!"}
+      </div>
       <div style={textBlock}>
         <div style={title}>
-          {isFailed
-            ? tr(
-                t,
-                "navigation.fallback.failedTitle",
-                "Vision estimator failed",
-              )
-            : tr(
-                t,
-                "navigation.fallback.degradedTitle",
-                "Vision estimator degraded",
-              )}
+          {tr(t, isFailed ? "navigation.fallback.failedTitle" : "navigation.fallback.degradedTitle")}
         </div>
         <div style={body}>
-          {reason} {suggestion}
+          {tr(t, reasonKey(telemetry))} {tr(t, suggestionKey(telemetry))}
         </div>
       </div>
     </section>
   );
 }
 
-function describeDegradation(
-  telemetry: VisionNavTelemetry,
-  t: TFn,
-): string {
-  // Order the reasons by likelihood; only return the first match so
-  // the banner stays short. The estimator card carries the full
-  // diagnostic context for operators who want details.
-  if (telemetry.flowScaleSource === "static") {
-    return tr(
-      t,
-      "navigation.fallback.reasonStaticScale",
-      "No live altitude source; the flow scale is a fixed 1.5 m estimate.",
-    );
-  }
-  if (typeof telemetry.flowQuality === "number" && telemetry.flowQuality < 50) {
-    return tr(
-      t,
-      "navigation.fallback.reasonLowQuality",
-      "Optical-flow quality dropped below the safe gate.",
-    );
-  }
-  if (
-    typeof telemetry.cameraImuSyncOffsetMs === "number" &&
-    Math.abs(telemetry.cameraImuSyncOffsetMs) > 30
-  ) {
-    return tr(
-      t,
-      "navigation.fallback.reasonSyncDrift",
-      "Camera-IMU time sync drifted beyond 30 ms.",
-    );
-  }
+const syncDrifted = (telemetry: VisionNavTelemetry): boolean =>
+  typeof telemetry.cameraImuSyncOffsetMs === "number" &&
+  Math.abs(telemetry.cameraImuSyncOffsetMs) > 30;
+const lowQuality = (telemetry: VisionNavTelemetry): boolean =>
+  typeof telemetry.flowQuality === "number" && telemetry.flowQuality < 50;
+
+/** The most likely reason, first match only, so the banner stays short;
+ * the estimator and sensor cards carry the full context. */
+function reasonKey(telemetry: VisionNavTelemetry): string {
+  if (telemetry.flowScaleSource === "static") return "navigation.fallback.reasonStaticScale";
+  if (lowQuality(telemetry)) return "navigation.fallback.reasonLowQuality";
+  if (syncDrifted(telemetry)) return "navigation.fallback.reasonSyncDrift";
   if (telemetry.flowScaleSource === null || telemetry.flowScaleSource === undefined) {
-    return tr(
-      t,
-      "navigation.fallback.reasonNoScale",
-      "No altitude or depth source is healthy for OF scaling.",
-    );
+    return "navigation.fallback.reasonNoScale";
   }
-  return tr(
-    t,
-    "navigation.fallback.reasonGeneric",
-    "Estimator inputs are below the safe operating envelope.",
-  );
+  return "navigation.fallback.reasonGeneric";
 }
 
-function suggestionFor(
-  telemetry: VisionNavTelemetry,
-  t: TFn,
-): string {
-  if (
-    telemetry.flowScaleSource === null ||
-    telemetry.flowScaleSource === undefined ||
-    telemetry.flowScaleSource === "static"
-  ) {
-    return tr(
-      t,
-      "navigation.fallback.suggestionLand",
-      "Land, or switch the flight controller back to GPS with your RC source-set switch.",
-    );
+function suggestionKey(telemetry: VisionNavTelemetry): string {
+  const scale = telemetry.flowScaleSource;
+  if (scale === null || scale === undefined || scale === "static") {
+    return "navigation.fallback.suggestionLand";
   }
-  if (
-    typeof telemetry.cameraImuSyncOffsetMs === "number" &&
-    Math.abs(telemetry.cameraImuSyncOffsetMs) > 30
-  ) {
-    return tr(
-      t,
-      "navigation.fallback.suggestionRecalibrate",
-      "Re-run the camera-IMU calibration before the next flight.",
-    );
-  }
-  if (typeof telemetry.flowQuality === "number" && telemetry.flowQuality < 50) {
-    return tr(
-      t,
-      "navigation.fallback.suggestionSlowYaw",
-      "Slow yaw rate and fly over a more textured surface.",
-    );
-  }
-  return tr(
-    t,
-    "navigation.fallback.suggestionWatch",
-    "Watch closely and prepare to hand back to manual.",
-  );
+  if (syncDrifted(telemetry)) return "navigation.fallback.suggestionRecalibrate";
+  if (lowQuality(telemetry)) return "navigation.fallback.suggestionSlowYaw";
+  return "navigation.fallback.suggestionWatch";
 }
 
 const banner = (isFailed: boolean): CSSProperties => ({
@@ -157,11 +76,7 @@ const banner = (isFailed: boolean): CSSProperties => ({
   gap: "0.75rem",
   padding: "0.625rem 0.875rem",
   borderRadius: "0.5rem",
-  border: `1px solid ${
-    isFailed
-      ? "var(--vn-error, #ef4444)"
-      : "var(--vn-warn, #f59e0b)"
-  }`,
+  border: `1px solid ${isFailed ? "var(--vn-error, #ef4444)" : "var(--vn-warn, #f59e0b)"}`,
   background: isFailed
     ? "color-mix(in srgb, var(--vn-error, #ef4444) 12%, transparent)"
     : "color-mix(in srgb, var(--vn-warn, #f59e0b) 12%, transparent)",
@@ -174,9 +89,7 @@ const iconBlock = (isFailed: boolean): CSSProperties => ({
   alignItems: "center",
   justifyContent: "center",
   borderRadius: "50%",
-  background: isFailed
-    ? "var(--vn-error, #ef4444)"
-    : "var(--vn-warn, #f59e0b)",
+  background: isFailed ? "var(--vn-error, #ef4444)" : "var(--vn-warn, #f59e0b)",
   color: "white",
   fontWeight: 700,
   fontSize: "0.95rem",

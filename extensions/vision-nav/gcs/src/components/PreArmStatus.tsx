@@ -1,59 +1,88 @@
 import type { CSSProperties } from "react";
 
-import type {
-  PreArmCheck,
-  PreArmCheckSeverity,
-  VisionNavTelemetry,
-} from "../types";
+import type { PluginContext } from "@altnautica/plugin-sdk";
+
+import { noDataLabel, type Freshness } from "../freshness";
+import { FLAT_LOCALE, tr, type TFn } from "../i18n";
+import type { PreArmCheck, PreArmCheckSeverity, VisionNavTelemetry } from "../types";
 
 interface Props {
+  ctx: PluginContext;
   telemetry: VisionNavTelemetry;
+  freshness: Freshness;
+  /** The host refused the navigation telemetry subscription. */
+  denied: boolean;
 }
+
+/** The flow-quality pre-arm minimum, as the agent's gate applies it (`>=`). */
+const FLOW_QUALITY_GATE = 50;
 
 /**
  * Mode-aware pre-arm status. Reads ``telemetry.preArmReport.checks``
  * from the agent and renders one row per check. Each check carries an
- * id, a severity (``ok`` / ``pending`` / ``blocking``), and a free-form
- * detail string. Severity drives the indicator colour; the detail
- * appears as a sub-row when present.
+ * id, a severity (``ok`` / ``pending`` / ``blocking``), and a detail
+ * string. Severity drives the indicator colour; the detail appears as a
+ * sub-row when present.
  *
- * Backward compat: when ``preArmReport`` is absent (older agent that
- * predates the runtime-wired pipeline) the card falls back to the
- * legacy three-check render derived from the flat telemetry fields.
+ * Before the first navigation block the card says it is waiting, and
+ * when the host refused the telemetry it says so; neither claims a
+ * fault. A stale block keeps its rows (dimmed by the tab) but the
+ * Ready / Blocked pill reads "No data" with the age.
+ *
+ * Backward compat: a block that has data but no ``preArmReport`` (an
+ * older agent) renders the legacy three-check list derived from the
+ * flat telemetry fields.
  */
-export function PreArmStatus({ telemetry }: Props): JSX.Element {
+export function PreArmStatus({ ctx, telemetry, freshness, denied }: Props): JSX.Element {
+  const t = ctx.i18n.t;
+  const head = (pill: JSX.Element | null): JSX.Element => (
+    <header style={headerRow}>
+      <h3 style={heading}>{tr(t, "navigation.preArm.title")}</h3>
+      {pill}
+    </header>
+  );
+
+  if (denied || freshness.kind === "none") {
+    return (
+      <section style={card} data-testid="vn-pre-arm">
+        {head(null)}
+        <p style={hintStyle} data-testid={denied ? "vn-pre-arm-denied" : "vn-pre-arm-waiting"}>
+          {tr(t, denied ? "navigation.preArm.denied" : "navigation.preArm.waiting")}
+        </p>
+      </section>
+    );
+  }
+
   const report = telemetry.preArmReport;
-  const checks = report ? report.checks : legacyChecks(telemetry);
-  const armable = report
-    ? report.armable
-    : checks.every((c) => c.severity === "ok");
+  const checks = report ? report.checks : legacyChecks(telemetry, t);
+  const armable = report ? report.armable : checks.every((c) => c.severity === "ok");
+  const pill =
+    freshness.kind === "stale" ? (
+      <span style={armablePill(MUTED)} data-testid="vn-pre-arm-stale">
+        {noDataLabel(t, freshness)}
+      </span>
+    ) : (
+      <span
+        style={armablePill(armable ? OK : ERROR)}
+        data-testid={`vn-pre-arm-${armable ? "armable" : "blocked"}`}
+      >
+        {tr(t, armable ? "navigation.preArm.ready" : "navigation.preArm.blocked")}
+      </span>
+    );
 
   return (
     <section style={card} data-testid="vn-pre-arm">
-      <header style={headerRow}>
-        <h3 style={heading}>Pre-arm</h3>
-        <span
-          style={armablePill(armable)}
-          data-testid={`vn-pre-arm-${armable ? "armable" : "blocked"}`}
-        >
-          {armable ? "Ready" : "Blocked"}
-        </span>
-      </header>
+      {head(pill)}
       <ul style={list}>
         {checks.map((check) => (
-          <li
-            key={check.id}
-            style={item}
-            data-state={check.severity}
-            data-check-id={check.id}
-          >
+          <li key={check.id} style={item} data-state={check.severity} data-check-id={check.id}>
             <span style={row}>
               <span style={indicator(check.severity)} aria-hidden="true">
-                {iconFor(check.severity)}
+                {ICONS[check.severity]}
               </span>
-              <span>{titleFor(check.id, check.detail)}</span>
+              <span>{titleFor(check.id, t)}</span>
             </span>
-            {check.detail ? <span style={hintStyle}>{check.detail}</span> : null}
+            {check.detail ? <span style={detailStyle}>{check.detail}</span> : null}
           </li>
         ))}
       </ul>
@@ -61,66 +90,54 @@ export function PreArmStatus({ telemetry }: Props): JSX.Element {
   );
 }
 
-function legacyChecks(telemetry: VisionNavTelemetry): PreArmCheck[] {
+function legacyChecks(telemetry: VisionNavTelemetry, t: TFn): PreArmCheck[] {
   // Fallback for agents that don't yet emit preArmReport. Surface the
   // same three checks the old card showed so a half-upgraded fleet
   // does not render an empty pre-arm card.
   const companionOk = telemetry.companionState === "active";
-  const flowOk = (telemetry.flowQuality ?? 0) > 50;
+  const quality = telemetry.flowQuality ?? 0;
+  const flowOk = quality >= FLOW_QUALITY_GATE;
   return [
     {
       id: "companion_active",
       severity: companionOk ? "ok" : "blocking",
-      detail: companionOk
-        ? ""
-        : "Vision companion is not running. Check agent logs.",
+      detail: companionOk ? "" : tr(t, "navigation.preArm.legacy.companionDown"),
     },
     {
       id: "flow_quality",
       severity: flowOk ? "ok" : "blocking",
       detail: flowOk
-        ? `Quality ${telemetry.flowQuality ?? 0}/255.`
-        : "Flow quality is below the pre-arm gate (50/255).",
+        ? tr(t, "navigation.preArm.legacy.flowOk", { q: quality })
+        : tr(t, "navigation.preArm.legacy.flowLow"),
     },
     {
       id: "ekf_source",
       severity: "pending",
-      detail: "Configure EKF source set manually in the parameter editor.",
+      detail: tr(t, "navigation.preArm.legacy.ekfSource"),
     },
   ];
 }
 
-function titleFor(id: string, _detail: string): string {
-  return TITLES[id] ?? humanise(id);
+// Keyed by the check ids the agent's pre-arm gate emits. An id with no
+// locale entry falls back to its words with the underscores removed, so
+// a new check still renders a label.
+function titleFor(id: string, t: TFn): string {
+  const key = `navigation.preArm.checks.${id}`;
+  if (key in FLAT_LOCALE) return tr(t, key);
+  const words = id.split("_").join(" ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-// Keyed by the check ids the agent's pre-arm gate emits. An id with no
-// entry falls back to `humanise`, so a new check still renders a label.
-const TITLES: Record<string, string> = {
-  companion_active: "Companion process active",
-  flow_quality: "Optical flow quality",
-  rangefinder: "Rangefinder healthy",
-  scale_source: "Altitude scale source",
-  extnav_source: "External nav source",
-  extnav_health: "External nav tracking",
-  ekf_origin: "EKF origin set",
-  fc_params: "Flight controller parameters",
-  viso_delay: "Pose delay",
-  obstacle_feed: "Obstacle feed",
+const ICONS: Record<PreArmCheckSeverity, string> = {
+  ok: "✓",
+  pending: "…",
+  blocking: "✕",
 };
 
-function humanise(id: string): string {
-  return id
-    .split("_")
-    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-    .join(" ");
-}
-
-function iconFor(severity: PreArmCheckSeverity): string {
-  if (severity === "ok") return "✓";
-  if (severity === "pending") return "…";
-  return "✕";
-}
+const OK = "var(--vn-ok, #34d399)";
+const WARN = "var(--vn-warn, #f59e0b)";
+const ERROR = "var(--vn-error, #ef4444)";
+const MUTED = "var(--vn-muted, #6b7280)";
 
 const card: CSSProperties = {
   background: "var(--vn-surface, rgba(255,255,255,0.02))",
@@ -143,13 +160,13 @@ const heading: CSSProperties = {
   margin: 0,
   color: "var(--vn-text-2, #b4b4b4)",
 };
-const armablePill = (ready: boolean): CSSProperties => ({
+const armablePill = (color: string): CSSProperties => ({
   display: "inline-flex",
   alignItems: "center",
   padding: "0.2rem 0.5rem",
   borderRadius: "999px",
-  border: `1px solid ${ready ? "var(--vn-ok, #34d399)" : "var(--vn-error, #ef4444)"}`,
-  color: ready ? "var(--vn-ok, #34d399)" : "var(--vn-error, #ef4444)",
+  border: `1px solid ${color}`,
+  color,
   fontSize: "0.7rem",
   fontWeight: 600,
 });
@@ -173,6 +190,11 @@ const row: CSSProperties = {
   alignItems: "center",
 };
 const hintStyle: CSSProperties = {
+  margin: 0,
+  color: "var(--vn-text-3, #94a3b8)",
+  fontSize: "0.8125rem",
+};
+const detailStyle: CSSProperties = {
   color: "var(--vn-text-3, #94a3b8)",
   fontSize: "0.75rem",
   marginLeft: "1.25rem",
@@ -182,12 +204,7 @@ const indicator = (severity: PreArmCheckSeverity): CSSProperties => ({
   width: "0.875rem",
   height: "0.875rem",
   borderRadius: "9999px",
-  background:
-    severity === "ok"
-      ? "var(--vn-ok, #34d399)"
-      : severity === "pending"
-        ? "var(--vn-warn, #f59e0b)"
-        : "var(--vn-error, #ef4444)",
+  background: severity === "ok" ? OK : severity === "pending" ? WARN : ERROR,
   color: "#0a0a0a",
   alignItems: "center",
   justifyContent: "center",

@@ -207,10 +207,12 @@ impl PreArmGate {
             CompanionState::Inactive => {
                 PreArmCheck::pending("companion_active", "Companion has not reported active yet.")
             }
-            other => PreArmCheck::blocking(
-                "companion_active",
-                format!("Companion state {:?}.", other.as_str()),
-            ),
+            CompanionState::Critical => {
+                PreArmCheck::blocking("companion_active", "Companion critical.")
+            }
+            CompanionState::Terminating => {
+                PreArmCheck::blocking("companion_active", "Companion stopping.")
+            }
         }
     }
 
@@ -230,6 +232,11 @@ impl PreArmGate {
     fn rangefinder_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
         match inputs.rangefinder_topology.as_deref() {
             Some(topology @ ("companion" | "fc" | "both")) => {
+                let wired = match topology {
+                    "companion" => "Companion rangefinder",
+                    "fc" => "Flight controller rangefinder",
+                    _ => "Companion and flight controller rangefinders",
+                };
                 let (min, max) = (inputs.rangefinder_min_m, inputs.rangefinder_max_m);
                 match inputs.rangefinder_reading_m {
                     None => PreArmCheck::blocking("rangefinder", "No fresh rangefinder reading."),
@@ -237,9 +244,7 @@ impl PreArmGate {
                         "rangefinder",
                         format!("Rangefinder reading {d:.2} m outside {min:.2}-{max:.2} m."),
                     ),
-                    Some(d) => {
-                        PreArmCheck::ok("rangefinder", format!("Topology: {topology}, {d:.2} m"))
-                    }
+                    Some(d) => PreArmCheck::ok("rangefinder", format!("{wired}, {d:.2} m.")),
                 }
             }
             _ => PreArmCheck::blocking(
@@ -253,7 +258,13 @@ impl PreArmGate {
     fn scale_source_check(&self, inputs: &PreArmInputs) -> PreArmCheck {
         match inputs.flow_scale_source.as_deref() {
             Some(source @ ("rangefinder" | "baro" | "gps" | "vision")) => {
-                PreArmCheck::ok("scale_source", format!("Scale source: {source}."))
+                let from = match source {
+                    "rangefinder" => "the rangefinder",
+                    "baro" => "the barometer",
+                    "gps" => "GPS altitude",
+                    _ => "vision",
+                };
+                PreArmCheck::ok("scale_source", format!("Scale from {from}."))
             }
             Some("static") => PreArmCheck::blocking(
                 "scale_source",
@@ -366,5 +377,48 @@ mod tests {
         i.flow_scale_source = Some("baro".to_string());
         let r = PreArmGate::default().evaluate(&i);
         assert!(r.armable, "{:?}", r.checks);
+    }
+
+    fn detail(i: &PreArmInputs, id: &str) -> String {
+        PreArmGate::default()
+            .evaluate(i)
+            .checks
+            .into_iter()
+            .find(|c| c.id == id)
+            .unwrap()
+            .detail
+    }
+
+    #[test]
+    fn details_are_plain_words() {
+        let mut i = base(Mode::OpticalFlow);
+        i.companion_state = CompanionState::Critical;
+        assert_eq!(detail(&i, "companion_active"), "Companion critical.");
+        i.companion_state = CompanionState::Terminating;
+        assert_eq!(detail(&i, "companion_active"), "Companion stopping.");
+
+        i.rangefinder_reading_m = Some(1.25);
+        for (topology, words) in [
+            ("companion", "Companion rangefinder, 1.25 m."),
+            ("fc", "Flight controller rangefinder, 1.25 m."),
+            (
+                "both",
+                "Companion and flight controller rangefinders, 1.25 m.",
+            ),
+        ] {
+            i.rangefinder_topology = Some(topology.to_string());
+            assert_eq!(detail(&i, "rangefinder"), words);
+        }
+
+        let mut d = base(Mode::OpticalFlowDegraded);
+        for (source, words) in [
+            ("rangefinder", "Scale from the rangefinder."),
+            ("baro", "Scale from the barometer."),
+            ("gps", "Scale from GPS altitude."),
+            ("vision", "Scale from vision."),
+        ] {
+            d.flow_scale_source = Some(source.to_string());
+            assert_eq!(detail(&d, "scale_source"), words);
+        }
     }
 }

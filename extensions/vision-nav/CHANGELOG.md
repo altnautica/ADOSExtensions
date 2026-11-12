@@ -4,6 +4,58 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.7.0]
+
+### Added
+
+- The Vision Nav tab shows when vision navigation is disengaged: with the
+  Engage skill off, the Mode card says so and that Off is the effective
+  mode, and points at the Engage skill (Shift+N).
+- A Diagnostics row in the Sensors card shows the rangefinder error, the
+  count of failed MAVLink sends, and each input the plugin could not read
+  (for example "Cannot read RAW_IMU from the flight controller"), in words.
+- The ArduPilot parameter card lists the external navigation parameters
+  (`VISO_TYPE`, `VISO_DELAY_MS`, `EK3_SRC1_YAW`, `AHRS_OPTIONS`,
+  `AHRS_ORIGIN_*`, `COMPASS_AUTODEC`, `EK3_MAG_EF_LIM`, `ARMING_SKIPCHK`) and
+  the obstacle feed parameter (`PRX1_TYPE`), so every parameter the manifest
+  requires is on the card.
+
+### Changed
+
+- Values in the tab count as live for 2 s after they arrive. After that the
+  cards dim, a line says how long the agent has been silent, and the
+  companion computer, estimator, pre-arm and external-nav pills read
+  "No data · N s" instead of the last state. The age updates every second.
+- Before the first navigation data the pre-arm card says it is waiting for
+  the agent, and when Mission Control does not grant navigation telemetry it
+  says that, instead of reporting the companion as down.
+- The rangefinder pill shows the rangefinder's health (healthy, no reading,
+  error) rather than where it is wired; the wiring moved to the row's
+  sublabel and the scale source to its own column.
+- The navigation feed card uses the same words as the cockpit and the TUI:
+  "Set 1", "Odometry 10 Hz", and GPS fix names including Static and PPP
+  (an unknown fix type reads "Unknown").
+- The IMU and scale sources read as words ("Flight controller IMU
+  (RAW_IMU)", "Barometer"), and the pre-arm details from the agent are plain
+  sentences ("Companion critical.", "Companion rangefinder, 1.25 m.",
+  "Scale from the barometer.").
+- The status pill says "Companion computer".
+- The mode list is a read-only list with each mode's description shown
+  under it, instead of button-like tiles with the description in a tooltip.
+- The guided tour is a dialog: focus moves to Next, Escape skips it, and
+  Replay tour, Skip and Next are at least 48 px for touch.
+- Every string in the tab comes from `locales/en.json`.
+
+### Fixed
+
+- In Mission Control, where the panel cannot use browser storage, the tour
+  no longer covers the tab on every visit; it opens from Replay tour.
+- The trend charts add one sample per received update, so a steady flow
+  quality draws a line instead of "no data", and a single sample shows as
+  the current value.
+- The pre-arm card's fallback for older agents passes flow quality at
+  exactly 50, as the agent does.
+
 ## [0.6.7]
 
 ### Added

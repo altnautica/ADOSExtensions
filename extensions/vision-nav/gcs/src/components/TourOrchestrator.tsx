@@ -22,10 +22,13 @@ interface Props {
  * First-run guided tour for the Vision Navigation tab.
  *
  * Auto-opens on first mount when localStorage has no record of the
- * tour completing. Walks the operator through every visible card in
- * the order they will interact with the tab. Each step has an
- * optional pre-condition that skips the step when the telemetry does
- * not support it.
+ * tour completing. Where storage is unavailable (Mission Control mounts
+ * the panel in a sandboxed iframe with an opaque origin, so reading it
+ * throws) "seen" cannot be kept, so the tour does not auto-open and
+ * stays one click away on Replay. Walks the operator through every
+ * visible card in the order they will interact with the tab. Each step
+ * has an optional pre-condition that skips the step when the telemetry
+ * does not support it.
  *
  * The component renders nothing when the tour is dismissed.
  */
@@ -64,9 +67,8 @@ export function TourOrchestrator({
         setActive(true);
       }
     } catch {
-      // Private-mode browsers reject localStorage; just default to
-      // opening the tour. Slightly noisier UX but not broken.
-      setActive(true);
+      // Storage is unavailable, so a dismissal could not be kept and the
+      // tour would cover the tab on every visit. Leave it to Replay.
     }
   }, [replay]);
 

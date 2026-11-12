@@ -1,15 +1,9 @@
-import type { CSSProperties } from "react";
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent } from "react";
 
 import type { PluginContext } from "@altnautica/plugin-sdk";
 
+import { tr } from "../i18n";
 import type { TourStep as StepSpec } from "../tour/steps";
-
-type TFn = PluginContext["i18n"]["t"];
-
-function tr(t: TFn, key: string, fallback: string): string {
-  const result = t(key);
-  return result === key ? fallback : result;
-}
 
 interface Props {
   step: StepSpec;
@@ -22,9 +16,9 @@ interface Props {
 }
 
 /**
- * One step's overlay + content card. The orchestrator owns the
- * step index and the persistence; this component renders the card
- * and exposes Next / Skip / Finish.
+ * One step's overlay + content card, as a modal dialog: focus moves to
+ * the primary button on each step and Escape skips the tour. The
+ * orchestrator owns the step index and the persistence.
  */
 export function TourStep({
   step,
@@ -37,44 +31,49 @@ export function TourStep({
 }: Props): JSX.Element {
   const t = ctx.i18n.t;
   const isLast = index === total - 1;
+  const primary = useRef<HTMLButtonElement>(null);
+  const titleId = `vn-tour-title-${step.id}`;
+
+  useEffect(() => {
+    primary.current?.focus();
+  }, [step.id]);
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onSkip();
+    }
+  };
+
   return (
-    <div style={overlay} data-testid="vn-tour-overlay">
-      <div style={card} data-testid={`vn-tour-step-${step.id}`}>
+    <div style={overlay} data-testid="vn-tour-overlay" onKeyDown={onKeyDown}>
+      <div
+        style={card}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        data-testid={`vn-tour-step-${step.id}`}
+      >
         <header style={header}>
-          <span style={counter}>
-            {tr(t, "navigation.tour.step", "Step")} {index + 1}/{total}
-          </span>
-          <button
-            type="button"
-            style={skipBtn}
-            onClick={onSkip}
-            data-testid="vn-tour-skip"
-          >
-            {tr(t, "navigation.tour.skip", "Skip")}
+          <span style={counter}>{tr(t, "navigation.tour.step", { n: index + 1, total })}</span>
+          <button type="button" style={skipBtn} onClick={onSkip} data-testid="vn-tour-skip">
+            {tr(t, "navigation.tour.skip")}
           </button>
         </header>
-        <h3 style={title}>{tr(t, step.titleKey, step.titleFallback)}</h3>
-        <p style={body}>{tr(t, step.bodyKey, step.bodyFallback)}</p>
+        <h3 style={title} id={titleId}>
+          {tr(t, step.titleKey)}
+        </h3>
+        <p style={body}>{tr(t, step.bodyKey)}</p>
         <div style={actions}>
-          {isLast ? (
-            <button
-              type="button"
-              style={primaryBtn}
-              onClick={onFinish}
-              data-testid="vn-tour-finish"
-            >
-              {tr(t, "navigation.tour.finish", "Finish")}
-            </button>
-          ) : (
-            <button
-              type="button"
-              style={primaryBtn}
-              onClick={onNext}
-              data-testid="vn-tour-next"
-            >
-              {tr(t, "navigation.tour.next", "Next")}
-            </button>
-          )}
+          <button
+            ref={primary}
+            type="button"
+            style={primaryBtn}
+            onClick={isLast ? onFinish : onNext}
+            data-testid={isLast ? "vn-tour-finish" : "vn-tour-next"}
+          >
+            {tr(t, isLast ? "navigation.tour.finish" : "navigation.tour.next")}
+          </button>
         </div>
       </div>
     </div>
@@ -132,8 +131,11 @@ const actions: CSSProperties = {
   display: "flex",
   justifyContent: "flex-end",
 };
+// Both buttons keep a 48 px hit area for touch.
 const primaryBtn: CSSProperties = {
   padding: "0.5rem 1rem",
+  minHeight: "48px",
+  minWidth: "48px",
   background: "var(--vn-accent, #3a82ff)",
   color: "white",
   border: "none",
@@ -143,11 +145,13 @@ const primaryBtn: CSSProperties = {
   fontSize: "0.8125rem",
 };
 const skipBtn: CSSProperties = {
-  padding: "0.25rem 0.5rem",
+  padding: "0.25rem 0.75rem",
+  minHeight: "48px",
+  minWidth: "48px",
   background: "transparent",
   color: "var(--vn-text-muted, #94a3b8)",
   border: "1px solid var(--vn-border, rgba(255,255,255,0.08))",
   borderRadius: "0.25rem",
   cursor: "pointer",
-  fontSize: "0.7rem",
+  fontSize: "0.8125rem",
 };

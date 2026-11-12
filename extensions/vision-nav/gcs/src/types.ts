@@ -161,3 +161,18 @@ export function normalizeNavState(raw: RawNavState | null | undefined): NavState
     gpsFix: num(raw.gps_fix),
   };
 }
+
+/** The event topic the agent publishes the engage state on, each second. */
+export const ENGAGE_TOPIC = "navigation.engage";
+
+/** The `navigation.engage` payload as the agent sends it. */
+export interface RawEngage {
+  state?: string;
+}
+
+/** Engaged (`true`), idle (`false`), or a payload the tab does not know (`null`). */
+export function normalizeEngage(raw: RawEngage | null | undefined): boolean | null {
+  if (raw?.state === "active") return true;
+  if (raw?.state === "idle") return false;
+  return null;
+}

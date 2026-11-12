@@ -1,26 +1,192 @@
 {
   "tabTitle": "Vision Nav",
-  "panel": {
-    "title": "Vision Navigation",
-    "subtitle": "Optical flow GPS-denied flight"
+  "noData": "No data",
+  "noDataAge": "No data · {s} s",
+  "feedStale": "No data from the vision-nav agent for {s} s. The values below are the last received.",
+  "format": {
+    "hz": "{v} Hz",
+    "ms": "{v} ms",
+    "m": "{v} m",
+    "quality": "{v}/255"
   },
-  "health": {
+  "companion": {
+    "pill": "Companion computer: {state}",
+    "state": {
+      "active": "Active",
+      "critical": "Critical",
+      "terminating": "Stopping",
+      "inactive": "Not active yet"
+    }
+  },
+  "tour": {
+    "replay": "Replay tour",
+    "step": "Step {n}/{total}",
+    "skip": "Skip",
+    "next": "Next",
+    "finish": "Finish",
+    "modeTitle": "Navigation mode",
+    "modeBody": "The modes the agent can run, with the current one marked. The plugin's per-drone settings choose the mode; the Engage skill starts and stops it.",
+    "sensorsTitle": "Sensor health",
+    "sensorsBody": "Camera, IMU, and rangefinder health at a glance. The camera row shows whether the agent loaded a camera calibration (camchain.yaml in the plugin's data directory).",
+    "estimatorTitle": "Estimator state",
+    "estimatorBody": "Live state of the active estimator. The pill shows initializing, converging, converged, degraded or failed.",
+    "chartsTitle": "Telemetry trends",
+    "chartsBody": "Sixty seconds of rolling history. Watch the flow quality stay above the pre-arm minimum and the camera-IMU sync offset stay green.",
+    "preArmTitle": "Pre-arm checklist",
+    "preArmBody": "Advisory arm-readiness for this mode. It does not stop the flight controller from arming; check every row is green before you arm."
+  },
+  "modeCard": {
+    "title": "Mode",
+    "subhead": "The estimator the plugin feeds to the flight controller. The plugin's per-drone settings choose the mode; the Engage skill starts and stops it.",
+    "awaitingAgent": "The agent has not advertised its available estimators yet. Reconnect or wait for the next heartbeat.",
+    "disengaged": "Disengaged: use the Engage skill (Shift+N) to start vision navigation. Off is the effective mode while disengaged.",
+    "current": "Current"
+  },
+  "modes": {
+    "off": {
+      "label": "Off",
+      "description": "Sensors only. The estimator sends no MAVLink and the EKF is untouched. Useful for hardware diagnostics and calibration runs.",
+      "needs": "No hardware required."
+    },
+    "optical_flow": {
+      "label": "Optical Flow",
+      "description": "Downward camera plus a rangefinder. A Lucas-Kanade tracker feeds the EKF (OPTICAL_FLOW on ArduPilot and iNav, OPTICAL_FLOW_RAD on PX4). The default GPS-denied path.",
+      "needs": "Downward USB or CSI camera and a rangefinder."
+    },
+    "optical_flow_degraded": {
+      "label": "Optical Flow (degraded)",
+      "description": "Same tracker as Optical Flow, but the scale comes from the baro / GPS (outdoor) ladder instead of a rangefinder. Reduced accuracy; the estimator state shows degraded.",
+      "needs": "Downward camera. No rangefinder required."
+    },
+    "external_nav": {
+      "label": "External Navigation",
+      "description": "The pose another plugin publishes (for example a planar lidar SLAM) goes to the flight controller as ODOMETRY, and the EKF source set switches to it while it tracks. ArduPilot.",
+      "needs": "A plugin publishing the shared pose topic, and an EKF origin."
+    }
+  },
+  "estimatorState": {
+    "off": "Off",
+    "init": "Initializing",
+    "converging": "Converging",
+    "converged": "Converged",
+    "degraded": "Degraded",
+    "failed": "Failed"
+  },
+  "estimatorCard": {
+    "title": "Estimator",
+    "engine": "Engine",
     "flowQuality": "Flow quality",
-    "flowRate": "Flow rate",
-    "companionState": "Companion state"
+    "syncOffset": "Sync offset"
+  },
+  "engine": {
+    "optical_flow": "Lucas-Kanade",
+    "optical_flow_degraded": "Lucas-Kanade (degraded)",
+    "external_nav": "External pose"
+  },
+  "sensorsCard": {
+    "title": "Sensors",
+    "camera": "Camera",
+    "calibrated": "Calibrated",
+    "notCalibrated": "Not calibrated",
+    "calibrationHint": "The agent reads a Kalibr camchain.yaml (cam0 block) from the plugin's data directory at start-up.",
+    "imu": "IMU",
+    "rate": "Rate",
+    "rangefinder": "Rangefinder",
+    "distance": "Distance",
+    "scale": "Scale",
+    "absent": "Absent",
+    "healthy": "Healthy",
+    "noReading": "No reading",
+    "error": "Error"
+  },
+  "imuSource": {
+    "mavlink-raw-imu": "Flight controller IMU (RAW_IMU)",
+    "mavlink-scaled-imu2": "Flight controller IMU 2 (SCALED_IMU2)",
+    "direct-i2c": "Companion IMU (I²C)",
+    "direct-dronecan": "DroneCAN IMU",
+    "unknown": "Unknown"
+  },
+  "scaleSource": {
+    "rangefinder": "Rangefinder",
+    "baro": "Barometer",
+    "gps": "GPS altitude",
+    "vision": "Vision",
+    "static": "Fixed 1.5 m estimate"
+  },
+  "topology": {
+    "companion": "Companion",
+    "fc": "Flight controller",
+    "both": "Companion and flight controller"
+  },
+  "syncBand": {
+    "green": "Sync ≤10 ms",
+    "yellow": "Sync ≤30 ms",
+    "red": "Sync >30 ms"
+  },
+  "diagnostics": {
+    "title": "Diagnostics",
+    "emitErrors": "Failed MAVLink sends: {n}",
+    "mavlinkDenied": "Cannot read {msg} from the flight controller: the subscription was refused.",
+    "eventDenied": "Cannot read the {topic} topic: the subscription was refused.",
+    "other": "Input not wired: {reason}"
+  },
+  "fallback": {
+    "failedTitle": "Vision estimator failed",
+    "degradedTitle": "Vision estimator degraded",
+    "reasonStaticScale": "No live altitude source; the flow scale is a fixed 1.5 m estimate.",
+    "reasonLowQuality": "Optical-flow quality dropped below the pre-arm minimum (50/255).",
+    "reasonSyncDrift": "Camera-IMU time sync drifted beyond 30 ms.",
+    "reasonNoScale": "No altitude or depth source is healthy to scale the optical flow.",
+    "reasonGeneric": "Estimator inputs are below the safe operating envelope.",
+    "suggestionLand": "Land, or switch the flight controller back to GPS with your RC source-set switch.",
+    "suggestionRecalibrate": "Re-run the camera-IMU calibration before the next flight.",
+    "suggestionSlowYaw": "Slow yaw rate and fly over a more textured surface.",
+    "suggestionWatch": "Watch closely and prepare to hand back to manual."
+  },
+  "charts": {
+    "title": "Telemetry trends",
+    "flowQuality": "Flow quality",
+    "syncOffset": "Sync offset"
+  },
+  "flowHealth": {
+    "title": "Flow health",
+    "quality": "Flow quality",
+    "rate": "Flow rate",
+    "distance": "Flow distance"
   },
   "preArm": {
+    "title": "Pre-arm",
     "ready": "Ready",
-    "originBlocker": "EKF origin not set",
-    "fcParams": "Flight controller parameters",
-    "visoDelay": "Pose delay"
+    "blocked": "Blocked",
+    "waiting": "Waiting for the vision-nav agent…",
+    "denied": "Mission Control did not grant navigation telemetry.",
+    "checks": {
+      "companion_active": "Companion process active",
+      "flow_quality": "Optical flow quality",
+      "rangefinder": "Rangefinder healthy",
+      "scale_source": "Altitude scale source",
+      "extnav_source": "External nav source",
+      "extnav_health": "External nav tracking",
+      "ekf_origin": "EKF origin set",
+      "ekf_source": "EKF source set",
+      "fc_params": "Flight controller parameters",
+      "viso_delay": "Pose delay",
+      "obstacle_feed": "Obstacle feed"
+    },
+    "legacy": {
+      "companionDown": "Vision companion is not running. Check agent logs.",
+      "flowOk": "Quality {q}/255.",
+      "flowLow": "Flow quality is below the pre-arm minimum (50/255).",
+      "ekfSource": "Configure the EKF source set in the parameter editor."
+    }
   },
   "navState": {
     "title": "Navigation feed",
     "waiting": "Waiting for the agent's navigation state.",
     "activeSet": "EKF source set",
+    "setN": "Set {n}",
     "extnavHealth": "External nav",
-    "odomRate": "ODOMETRY rate",
+    "odomRate": "Odometry",
     "poseAge": "Pose age",
     "resetCounter": "Pose resets",
     "obstacleRate": "Obstacle feed",
@@ -30,6 +196,104 @@
       "good": "Good",
       "degraded": "Degraded",
       "lost": "Lost"
+    },
+    "fix": {
+      "0": "No GPS",
+      "1": "No fix",
+      "2": "2D",
+      "3": "3D",
+      "4": "DGPS",
+      "5": "RTK float",
+      "6": "RTK fixed",
+      "7": "Static",
+      "8": "PPP",
+      "unknown": "Unknown"
+    }
+  },
+  "params": {
+    "unsupported": "Vision navigation parameters are shown for ArduPilot, PX4 and iNav. Detected firmware: {firmware}.",
+    "ardupilot": {
+      "title": "ArduPilot vision parameters",
+      "note": "Read-only summary. Edit in Mission Control's parameter editor.",
+      "groups": {
+        "drivers": "Sensor drivers",
+        "sourceSets": "EKF source sets",
+        "flowTuning": "Flow tuning",
+        "externalNav": "External navigation",
+        "obstacle": "Obstacle feed"
+      },
+      "rows": {
+        "FLOW_TYPE": "Optical flow sensor backend (5 = MAVLink).",
+        "EK3_SRC1_POSXY": "Source set 1 horizontal position (6 = external nav).",
+        "EK3_SRC1_VELXY": "Source set 1 horizontal velocity (6 = external nav).",
+        "EK3_SRC1_YAW": "Source set 1 yaw (1 = compass; keep the compass with external nav).",
+        "EK3_SRC2_POSXY": "Source set 2 horizontal position.",
+        "EK3_SRC2_VELXY": "Source set 2 horizontal velocity (5 = optical flow for the fallback set).",
+        "EK3_SRC3_POSXY": "Source set 3 horizontal position.",
+        "EK3_SRC3_VELXY": "Source set 3 horizontal velocity.",
+        "EK3_SRC_OPTIONS": "Source-set switching options bitmask.",
+        "EK3_FLOW_DELAY": "Optical flow measurement delay (ms).",
+        "EK3_FLOW_QUAL_MIN": "Minimum flow quality (0-255).",
+        "FLOW_HEIGHT_MIN": "Minimum height above ground for flow fusion (m).",
+        "FLOW_HEIGHT_MAX": "Maximum height above ground for flow fusion (m).",
+        "VISO_TYPE": "Accept ODOMETRY over MAVLink (1).",
+        "VISO_DELAY_MS": "How old a pose is when its ODOMETRY reaches the flight controller (ms).",
+        "AHRS_OPTIONS": "16: set the EKF origin at boot from AHRS_ORIGIN_LAT/LON/ALT (GNSS-denied, ArduPilot 4.7+).",
+        "AHRS_ORIGIN_LAT": "Take-off site latitude for the boot-time EKF origin.",
+        "AHRS_ORIGIN_LON": "Take-off site longitude for the boot-time EKF origin.",
+        "AHRS_ORIGIN_ALT": "Take-off site altitude for the boot-time EKF origin.",
+        "COMPASS_AUTODEC": "Before ArduPilot 4.7: 0, with COMPASS_DEC set to the site's declination.",
+        "EK3_MAG_EF_LIM": "With COMPASS_AUTODEC on: above 0 (default 50), so a late declination step cannot reach the yaw.",
+        "ARMING_SKIPCHK": "GNSS-denied: 8 skips the GPS pre-arm check.",
+        "PRX1_TYPE": "Accept OBSTACLE_DISTANCE over MAVLink (2)."
+      }
+    },
+    "px4": {
+      "title": "PX4 vision parameters",
+      "note": "Read-only summary. Edit in Mission Control's parameter editor and restart the EKF after changes.",
+      "groups": {
+        "flow": "Optical flow",
+        "aid": "Aid + height"
+      },
+      "rows": {
+        "EKF2_OF_CTRL": "Optical flow fusion control (PX4 1.14 and newer).",
+        "SENS_FLOW_MAXR": "Maximum flow rate the sensor reports (rad/s).",
+        "EKF2_AID_MASK": "Aiding sensor selection bitmask (PX4 before 1.14).",
+        "EKF2_HGT_REF": "Primary height source reference."
+      }
+    },
+    "inav": {
+      "title": "iNav optical-flow parameters",
+      "note": "Read-only summary. Edit in Mission Control's parameter editor over MSP.",
+      "groups": {
+        "flow": "Optical flow source",
+        "nav": "Position hold + navigation",
+        "rangefinder": "Rangefinder"
+      },
+      "rows": {
+        "opflow_hardware": "Optical flow driver. Set to MAVLINK to consume the plugin's OPTICAL_FLOW messages over the FC's MAVLink rx UART.",
+        "opflow_scale": "Pixels-per-radian scale. Leave the default with the MAVLINK driver; the plugin sends pre-scaled angular rates.",
+        "nav_use_optflow_for_poshold": "Set to ON. Enables position hold (NAV POSHOLD mode) using the optical-flow stream when GPS is unavailable.",
+        "nav_extra_arming_safety": "When ON the FC refuses to arm until flow quality is reported as healthy. Recommended for indoor and over-ground flight.",
+        "nav_landing_speed": "Vertical speed during NAV LAND. Tune so landings stay inside the rangefinder's valid altitude band.",
+        "rangefinder_hardware": "Set to the wired driver (LIDARMT for MTF-01, VL53L1X, TFMINI, etc.) or MSP to relay a companion-side reading.",
+        "nav_rangefinder_for_terrain": "Set to ON for terrain following on top of flow-based position hold."
+      },
+      "notesTitle": "Setup notes",
+      "notes": {
+        "version": "iNav 7.0 or newer is required for OPTICAL_FLOW reception over MAVLink rx.",
+        "serial": "Set the FC's serial port function to MAVLINK on the UART wired to the ADOS Drone Agent.",
+        "component": "The plugin's component id is 198. iNav accepts the message from any component when opflow_hardware = MAVLINK."
+      }
+    },
+    "betaflight": {
+      "title": "Betaflight is not supported",
+      "lines": {
+        "estimator": "Betaflight is a racing and freestyle flight stack. It does not ship a position estimator.",
+        "ekf": "Optical flow needs a consumer inside the FC's EKF to fuse flow samples into. Betaflight has neither an EKF nor a position controller.",
+        "upstream": "This is a deliberate firmware-upstream choice. The plugin cannot work around it from the companion side.",
+        "crossFlash": "Operators on Betaflight hardware who need GPS-denied flight should cross-flash iNav or ArduPilot Copter on the same FC. Most STM32F405, F722, and H743 boards run all three firmwares."
+      }
     }
   }
 }
