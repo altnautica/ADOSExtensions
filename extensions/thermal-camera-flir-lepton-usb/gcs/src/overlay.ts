@@ -81,10 +81,15 @@ export async function mountOverlay(
   let lastFrame: ThermalFrame | null = null;
   let config: ThermalCameraConfig = { ...DEFAULT_THERMAL_CONFIG };
   let thermalState: ThermalState | null = null;
-  // When the current reading arrived (local clock), and the agent timestamp
-  // it carried, so a repeated read-back does not refresh the age.
-  let receivedAtMs: number | null = null;
+  // When the current reading was sampled (local clock), plus the read-back
+  // and host stamps it carried, so a repeated payload does not refresh the
+  // age. The host attaches the agent's `ts_ms` to each payload; the sample
+  // time is `min(ts_ms, now)`, so an old entry delivered on mount reads as
+  // old and a drone clock running ahead cannot keep a reading live. Without
+  // `ts_ms` the arrival time stands in.
+  let sampledAtMs: number | null = null;
   let lastTimestampMs: number | null = null;
+  let lastHostTsMs: number | null = null;
   let spot: SpotMeterState = {
     x: DEFAULT_THERMAL_CONFIG.spotMeter.x,
     y: DEFAULT_THERMAL_CONFIG.spotMeter.y,
@@ -95,7 +100,7 @@ export async function mountOverlay(
     readout({
       state: thermalState,
       spotC: spot.temperatureC,
-      ageMs: receivedAtMs === null ? null : Date.now() - receivedAtMs,
+      ageMs: sampledAtMs === null ? null : Date.now() - sampledAtMs,
       t,
     });
 
@@ -149,11 +154,15 @@ export async function mountOverlay(
   }
 
   function ingestFrame(frame: ThermalFrame): void {
-    const ts = typeof frame.timestampMs === "number" ? frame.timestampMs : null;
+    const ts = Number.isFinite(frame.timestampMs) ? frame.timestampMs! : null;
+    const hostTs = Number.isFinite(frame.ts_ms) ? frame.ts_ms! : null;
     if (ts !== null && ts === lastTimestampMs) return;
+    if (hostTs !== null && hostTs === lastHostTsMs) return;
     lastTimestampMs = ts;
+    lastHostTsMs = hostTs;
     lastFrame = frame;
-    receivedAtMs = Date.now();
+    const now = Date.now();
+    sampledAtMs = hostTs === null ? now : Math.min(hostTs, now);
 
     // The colorized image rides the video leg; the overlay draws the spot
     // marker and readout over it. A lightweight read-back carries the
@@ -187,7 +196,7 @@ export async function mountOverlay(
       // no further one is coming; drop the reading so the readout cannot keep
       // showing a temperature for a camera that is gone.
       spot = { x: spot.x, y: spot.y, temperatureC: null };
-      receivedAtMs = null;
+      sampledAtMs = null;
     }
     updateReadout();
   }

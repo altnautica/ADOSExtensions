@@ -2,6 +2,23 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.4.1
+
+- The camera comes back on its own after its frames stop. When the stream
+  fails, the agent tries to reopen it after 2 s and then every 5 s until
+  the camera answers. The camera then reads connected again, the spot
+  temperature returns, and palette, gain and FFC work again. Before, the
+  camera stayed unavailable until the plugin was restarted.
+- The overlay now ages the spot reading from when the drone recorded it,
+  not from when it reached the ground station. An old reading shown when
+  the overlay opens reads "Thermal frames stopped" right away instead of
+  briefly looking live.
+- The palette shown on the overlay changes only once the camera accepts
+  it. A palette the camera rejected is no longer shown as applied, and the
+  Cycle palette Skill no longer writes a rejected palette back to settings.
+  The same now holds for the gain setting.
+- The plugin reports its own version correctly.
+
 ## 1.4.0
 
 - Frame read-backs now carry `timestampMs`. When the spot reading is 2 s

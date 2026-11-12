@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from altnautica_thermal_camera.driver import LeptonUvcDriver
 from altnautica_thermal_camera.palettes import list_palettes
@@ -81,6 +81,12 @@ _GAIN_TLINEAR = {True: 0.01, False: 0.1}
 # Consecutive frame reads that may fail (or yield nothing) before the stream
 # is declared failed. At the control rate this is about one second.
 _MAX_FRAME_READ_FAILURES = 5
+
+# Wait before each attempt to reopen a failed stream: the first after 2 s,
+# then every 5 s for as long as it takes. There is no attempt cap: a camera
+# that drops off the bus and comes back must come back for the operator.
+_REOPEN_FIRST_DELAY_S = 2.0
+_REOPEN_DELAY_S = 5.0
 
 BackendFactory = Callable[[], LibUvcBackend]
 
@@ -141,7 +147,7 @@ class ThermalUsbPlugin:
     """
 
     plugin_id = "com.altnautica.thermal-flir-lepton-usb"
-    version = "1.3.0"
+    version = "1.4.1"
 
     def __init__(self, backend_factory: BackendFactory | None = None) -> None:
         self._backend_factory: BackendFactory | None = backend_factory
@@ -154,8 +160,14 @@ class ThermalUsbPlugin:
         # Consecutive frame reads that delivered nothing usable.
         self._frame_read_failures = 0
         self._control_task: asyncio.Task | None = None
-        # Declarative-key cache so a control tick only re-applies a changed key.
+        # Sleep used by the control loop; a test swaps in a fake clock.
+        self._sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        # Declarative-key cache: what the camera has accepted, so the state
+        # read-back only reports a value once the camera took it.
         self._applied: dict[str, Any] = {}
+        # The last config value tried per key, so a value the camera refused
+        # is not re-sent every tick; a new value is tried again.
+        self._requested: dict[str, Any] = {}
         # Last published thermal state, so the read-back is emitted on change.
         self._last_state: dict[str, Any] | None = None
         # Why there is no open session, reported with the unavailable state.
@@ -181,49 +193,7 @@ class ThermalUsbPlugin:
             )
             return
         self._driver = LeptonUvcDriver(self._backend_factory())
-
-        try:
-            candidates = await self._driver.discover()
-        except Exception as exc:  # noqa: BLE001
-            # A backend that cannot enumerate the bus has established no
-            # device, which is indistinguishable from an empty bus here.
-            await self._fail_closed(
-                REASON_NO_DEVICE,
-                f"thermal-flir-lepton-usb device enumeration failed: {exc}",
-            )
-            return
-        if not candidates:
-            await self._fail_closed(
-                REASON_NO_DEVICE,
-                "thermal-flir-lepton-usb found no device on the bus",
-            )
-            return
-
-        initial_palette = str(await self._cfg("palette", "ironbow"))
-        try:
-            self._session = await self._driver.open(
-                candidates[0], {"palette": initial_palette}
-            )
-        except Exception as exc:  # noqa: BLE001
-            await self._fail_closed(
-                REASON_OPEN_FAILED,
-                f"thermal-flir-lepton-usb open failed: {exc}",
-            )
-            return
-        self._applied["palette"] = initial_palette
-
-        # Open the radiometric frame stream so the control loop can read a live
-        # spot temperature off the Y16 grid and publish it for the overlay. A
-        # session that cannot stream frames produces no temperature at all, so
-        # it is released rather than left reporting a connected camera.
-        try:
-            self._frames = await self._driver.frame_iterator(self._session)
-        except Exception as exc:  # noqa: BLE001
-            await self._release_session()
-            await self._fail_closed(
-                REASON_STREAM_FAILED,
-                f"thermal frame stream open failed: {exc}",
-            )
+        if not await self._open_stream():
             return
 
         # Advertise the thermal stream leg to the video pipeline when a
@@ -231,13 +201,76 @@ class ThermalUsbPlugin:
         # endpoint to serve the colorized feed, no leg is advertised).
         await self._maybe_declare_source()
 
-        self._reason = ""
         self._control_task = asyncio.create_task(self._control_loop())
-        await self._publish_state()
         self._log(
             "thermal-flir-lepton-usb started",
             driver_id=self._driver.driver_id,
         )
+
+    async def _open_stream(self, *, quiet: bool = False) -> bool:
+        """Find the device, open a session and its radiometric frame stream.
+
+        On success the state channel reports a connected camera. On failure
+        the reason is published through :meth:`_fail_closed` and nothing is
+        left open. ``quiet`` logs a failed reopen attempt at info level, so a
+        camera that stays away does not flood the error log every 5 s.
+        """
+        driver = self._driver
+        assert driver is not None
+
+        async def fail(reason: str, message: str) -> bool:
+            if quiet:
+                self._log(f"thermal reopen attempt failed: {message}")
+                return False
+            await self._fail_closed(reason, message)
+            return False
+
+        try:
+            candidates = await driver.discover()
+        except Exception as exc:  # noqa: BLE001
+            # A backend that cannot enumerate the bus has established no
+            # device, which is indistinguishable from an empty bus here.
+            return await fail(
+                REASON_NO_DEVICE,
+                f"thermal-flir-lepton-usb device enumeration failed: {exc}",
+            )
+        if not candidates:
+            return await fail(
+                REASON_NO_DEVICE,
+                "thermal-flir-lepton-usb found no device on the bus",
+            )
+
+        initial_palette = str(await self._cfg("palette", "ironbow"))
+        try:
+            session = await driver.open(candidates[0], {"palette": initial_palette})
+        except Exception as exc:  # noqa: BLE001
+            return await fail(
+                REASON_OPEN_FAILED,
+                f"thermal-flir-lepton-usb open failed: {exc}",
+            )
+
+        # Open the radiometric frame stream so the control loop can read a live
+        # spot temperature off the Y16 grid and publish it for the overlay. A
+        # session that cannot stream frames produces no temperature at all, so
+        # it is released rather than left reporting a connected camera.
+        self._session = session
+        try:
+            self._frames = await driver.frame_iterator(session)
+        except Exception as exc:  # noqa: BLE001
+            await self._release_session()
+            return await fail(
+                REASON_STREAM_FAILED,
+                f"thermal frame stream open failed: {exc}",
+            )
+
+        # A fresh session starts from what open set, so every declarative key
+        # is applied again on the next tick.
+        self._applied = {"palette": initial_palette}
+        self._requested = {"palette": initial_palette}
+        self._frame_read_failures = 0
+        self._reason = ""
+        await self._publish_state()
+        return True
 
     async def _fail_closed(self, reason: str, message: str) -> None:
         """Report an unavailable thermal camera and capture nothing.
@@ -321,13 +354,33 @@ class ThermalUsbPlugin:
     async def _control_loop(self) -> None:
         period = 1.0 / _CONTROL_HZ
         while True:
-            await asyncio.sleep(period)
+            if self._session is None and self._reason == REASON_STREAM_FAILED:
+                await self._reopen_until_connected()
+                continue
+            await self._sleep(period)
             try:
                 await self.apply_config_once()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
                 self._log(f"thermal control tick failed: {exc}")
+
+    async def _reopen_until_connected(self) -> None:
+        """Reopen a stream that failed: wait 2 s, then retry every 5 s until
+        the camera answers. Throughout, the state channel keeps reporting
+        ``stream-failed``; a successful reopen reports connected again."""
+        delay = _REOPEN_FIRST_DELAY_S
+        while True:
+            await self._sleep(delay)
+            delay = _REOPEN_DELAY_S
+            try:
+                if await self._open_stream(quiet=True):
+                    self._log("thermal frame stream reopened")
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._log(f"thermal reopen attempt failed: {exc}")
 
     async def apply_config_once(self) -> None:
         """Read the config keys and apply any change / fire any one-shot.
@@ -341,17 +394,19 @@ class ThermalUsbPlugin:
 
         # Declarative: palette.
         palette = await self._cfg("palette", None)
-        if palette is not None and self._applied.get("palette") != palette:
-            self._applied["palette"] = palette
-            await self._safe_set_param("palette", palette)
+        if palette is not None and self._requested.get("palette") != palette:
+            self._requested["palette"] = palette
+            if await self._safe_set_param("palette", palette):
+                self._applied["palette"] = palette
 
         # Declarative: high/low gain -> radiometric linear resolution.
         gain = await self._cfg("gain", None)
-        if gain is not None and self._applied.get("gain") != gain:
-            self._applied["gain"] = gain
-            await self._safe_set_param(
+        if gain is not None and self._requested.get("gain") != gain:
+            self._requested["gain"] = gain
+            if await self._safe_set_param(
                 "tlinear_resolution", _GAIN_TLINEAR[bool(gain)]
-            )
+            ):
+                self._applied["gain"] = gain
 
         # One-shot: cycle to the next palette (the cycle-palette Skill).
         if bool(await self._cfg("palette_cycle", False)):
@@ -479,8 +534,10 @@ class ThermalUsbPlugin:
         except ValueError:
             idx = -1
         nxt = palettes[(idx + 1) % len(palettes)]
-        await self._safe_set_param("palette", nxt)
+        if not await self._safe_set_param("palette", nxt):
+            return
         self._applied["palette"] = nxt
+        self._requested["palette"] = nxt
         # Write the cycled palette back so the settings picker reflects it.
         setter = getattr(self._ctx.config_kv, "set", None)
         if setter is not None:
@@ -489,11 +546,14 @@ class ThermalUsbPlugin:
             except Exception:  # noqa: BLE001
                 log.debug("thermal palette write-back failed", exc_info=True)
 
-    async def _safe_set_param(self, param: str, value: Any) -> None:
+    async def _safe_set_param(self, param: str, value: Any) -> bool:
+        """Send one camera parameter; True only when the camera took it."""
         try:
             await self._driver.set_param(self._session, param, value)
         except Exception as exc:  # noqa: BLE001
             self._log(f"thermal set_param {param} failed: {exc}")
+            return False
+        return True
 
     async def _reset_key(self, key: str) -> None:
         """Clear a one-shot key so a re-press fires again (the Skill Bar writes

@@ -26,6 +26,12 @@ export interface ThermalFrame {
    * The overlay treats a repeat of the same value as no new frame.
    */
   timestampMs?: number;
+  /**
+   * Agent time (ms since the epoch, drone clock) of the state entry this
+   * payload came from, attached by the host. The overlay ages the reading
+   * from `min(ts_ms, now)` and treats a repeat as no new frame.
+   */
+  ts_ms?: number;
   /** Sequence number from the driver, when the payload carries one. */
   sequence?: number;
   /** Frame width in pixels. */

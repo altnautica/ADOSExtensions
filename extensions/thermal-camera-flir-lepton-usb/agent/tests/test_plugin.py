@@ -18,6 +18,9 @@ test dependency).
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+
+import altnautica_thermal_camera.plugin as plugin_mod
 
 from altnautica_thermal_camera.driver import LeptonUvcDriver
 from altnautica_thermal_camera.plugin import (
@@ -261,3 +264,161 @@ def test_repeated_frame_read_failures_fail_closed_as_stream_failed():
         for s in states
     ), states
     assert backend.opened_devices == set()
+
+
+class _FlakyBackend(MockUvcBackend):
+    """A backend whose stream can stall and whose device can drop off the
+    bus, then come back, the way a USB stall plays out on the drone."""
+
+    def __init__(self) -> None:
+        super().__init__(width=16, height=12)
+        self.stalled = False
+        self.unplugged = False
+
+    def enumerate(self):
+        return [] if self.unplugged else super().enumerate()
+
+    def frames(self, device):
+        for frame in super().frames(device):
+            if self.stalled:
+                raise OSError("libuvc: frame timeout")
+            yield frame
+
+
+async def _until(cond, what: str, timeout: float = 5.0) -> None:
+    loop = asyncio.get_running_loop()
+    end = loop.time() + timeout
+    while not cond():
+        if loop.time() > end:
+            raise AssertionError(f"timed out waiting for {what}")
+        await asyncio.sleep(0.001)
+
+
+def test_stream_failed_reconnects_when_the_device_returns(monkeypatch):
+    # A short USB stall must not lose the camera for the rest of the flight:
+    # after the stream is declared failed the control loop keeps trying to
+    # reopen it (2 s, then every 5 s), and once the device answers again the
+    # camera reads connected, fresh read-backs flow and settings apply again.
+    clock = [1_000.0]
+    monkeypatch.setattr(plugin_mod, "time", SimpleNamespace(time=lambda: clock[0]))
+
+    ctx = _Ctx()
+    backend = _FlakyBackend()
+    plugin = ThermalUsbPlugin(backend_factory=lambda: backend)
+    delays: list[float] = []
+    backoff_started_ms: list[int] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        if seconds >= 1.0 and not backoff_started_ms:
+            backoff_started_ms.append(int(clock[0] * 1000))
+        delays.append(seconds)
+        clock[0] += seconds
+        # The device comes back while the third reopen attempt is waiting.
+        if sum(1 for d in delays if d >= 1.0) == 3:
+            backend.unplugged = False
+            backend.stalled = False
+        await asyncio.sleep(0)
+
+    plugin._sleep = fake_sleep
+
+    def failed() -> bool:
+        return any(
+            s["connected"] is False and s.get("reason") == REASON_STREAM_FAILED
+            for s in _channel(ctx, "thermal")
+        )
+
+    async def _run() -> dict:
+        await plugin.on_start(ctx)
+        await _until(lambda: _channel(ctx, "camera.thermal.frame"), "a first read-back")
+        backend.stalled = True
+        backend.unplugged = True
+        await _until(failed, "stream-failed")
+        n_frames = len(_channel(ctx, "camera.thermal.frame"))
+        await _until(
+            lambda: plugin.session is not None
+            and len(_channel(ctx, "camera.thermal.frame")) > n_frames,
+            "the stream to reopen and deliver",
+        )
+        await ctx.config_kv.set("palette", "rainbow")
+        await _until(
+            lambda: _channel(ctx, "thermal")[-1]["palette"] == "rainbow",
+            "the palette to apply after the reopen",
+        )
+        await plugin.on_stop(ctx)
+        return {"n_frames": n_frames}
+
+    seen = asyncio.run(_run())
+
+    assert [d for d in delays if d >= 1.0] == [2.0, 5.0, 5.0]
+    states = _channel(ctx, "thermal")
+    i_failed = next(
+        i for i, s in enumerate(states) if s.get("reason") == REASON_STREAM_FAILED
+    )
+    assert any(
+        s["connected"] is True and "reason" not in s for s in states[i_failed:]
+    ), states
+    resumed = _channel(ctx, "camera.thermal.frame")[seen["n_frames"]:]
+    assert resumed[0]["timestampMs"] >= backoff_started_ms[0] + 12_000
+    assert plugin.session is None  # released by on_stop
+    assert backend.opened_devices == set()
+
+
+def test_reconnect_retries_without_a_cap():
+    # The device may stay away for a long time; the loop keeps trying every
+    # 5 s rather than giving up after a few attempts.
+    ctx = _Ctx()
+    backend = _FlakyBackend()
+    plugin = ThermalUsbPlugin(backend_factory=lambda: backend)
+    delays: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        delays.append(seconds)
+        await asyncio.sleep(0)
+
+    plugin._sleep = fake_sleep
+
+    async def _run() -> None:
+        await plugin.on_start(ctx)
+        backend.stalled = True
+        backend.unplugged = True
+        await _until(
+            lambda: sum(1 for d in delays if d >= 1.0) >= 40, "forty reopen attempts"
+        )
+        assert plugin.session is None
+        assert plugin.unavailable_reason == REASON_STREAM_FAILED
+        await plugin.on_stop(ctx)
+
+    asyncio.run(_run())
+    backoff = [d for d in delays if d >= 1.0]
+    assert backoff[0] == 2.0
+    assert set(backoff[1:]) == {5.0}
+
+
+def test_palette_is_reported_only_after_the_camera_accepts_it(monkeypatch):
+    # A palette the camera rejected must not be shown as the applied palette.
+    real_set_param = LeptonUvcDriver.set_param
+
+    async def _reject_palette(self, session, param, value):
+        if param == "palette":
+            raise OSError("libuvc: control transfer failed")
+        await real_set_param(self, session, param, value)
+
+    monkeypatch.setattr(LeptonUvcDriver, "set_param", _reject_palette)
+
+    ctx = _Ctx()
+    plugin = ThermalUsbPlugin(backend_factory=_factory(width=16, height=12))
+
+    async def _run() -> None:
+        await plugin.on_start(ctx)
+        await ctx.config_kv.set("palette", "grayscale")
+        await plugin.apply_config_once()
+        await ctx.config_kv.set("palette_cycle", True)
+        await plugin.apply_config_once()
+        await plugin.on_stop(ctx)
+
+    asyncio.run(_run())
+
+    palettes = [s["palette"] for s in _channel(ctx, "thermal")]
+    assert palettes and set(palettes) == {"ironbow"}, palettes
+    # The cycle did not write a palette the camera refused back to settings.
+    assert ctx.config_kv._d.get("palette") == "grayscale"

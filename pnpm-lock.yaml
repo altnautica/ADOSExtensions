@@ -104,6 +104,9 @@ importers:
       esbuild:
         specifier: ^0.24.0
         version: 0.24.2
+      happy-dom:
+        specifier: ^15.7.4
+        version: 15.11.7
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
