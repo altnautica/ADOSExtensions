@@ -2,6 +2,14 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.4.2
+
+- A live thermal feed no longer reads "frames stopped" when the drone clock
+  runs behind or a poll is slow. The drone's timestamp now judges only the
+  first reading after the overlay opens or the feed resumes, so an old
+  reading still shows as stopped at once, and a feed that stops still reads
+  stopped 2 s after its last frame.
+
 ## 1.4.1
 
 - The camera comes back on its own after its frames stop. When the stream

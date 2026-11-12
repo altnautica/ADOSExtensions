@@ -14,7 +14,7 @@
  * the palette the agent reports as applied.
  */
 
-import type { PluginContext } from "@altnautica/plugin-sdk";
+import { SampleClock, type PluginContext } from "@altnautica/plugin-sdk";
 
 import { paintFrame } from "./render";
 import { celsiusAt, clientToFrame, frameToCanvas, readSpot } from "./spotMeter";
@@ -87,9 +87,7 @@ export async function mountOverlay(
   // time is `min(ts_ms, now)`, so an old entry delivered on mount reads as
   // old and a drone clock running ahead cannot keep a reading live. Without
   // `ts_ms` the arrival time stands in.
-  let sampledAtMs: number | null = null;
-  let lastTimestampMs: number | null = null;
-  let lastHostTsMs: number | null = null;
+  const clock = new SampleClock();
   let spot: SpotMeterState = {
     x: DEFAULT_THERMAL_CONFIG.spotMeter.x,
     y: DEFAULT_THERMAL_CONFIG.spotMeter.y,
@@ -100,7 +98,7 @@ export async function mountOverlay(
     readout({
       state: thermalState,
       spotC: spot.temperatureC,
-      ageMs: sampledAtMs === null ? null : Date.now() - sampledAtMs,
+      ageMs: clock.ageMs(Date.now()),
       t,
     });
 
@@ -156,13 +154,8 @@ export async function mountOverlay(
   function ingestFrame(frame: ThermalFrame): void {
     const ts = Number.isFinite(frame.timestampMs) ? frame.timestampMs! : null;
     const hostTs = Number.isFinite(frame.ts_ms) ? frame.ts_ms! : null;
-    if (ts !== null && ts === lastTimestampMs) return;
-    if (hostTs !== null && hostTs === lastHostTsMs) return;
-    lastTimestampMs = ts;
-    lastHostTsMs = hostTs;
+    if (clock.ingest(hostTs, Date.now(), ts ?? hostTs) === null) return;
     lastFrame = frame;
-    const now = Date.now();
-    sampledAtMs = hostTs === null ? now : Math.min(hostTs, now);
 
     // The colorized image rides the video leg; the overlay draws the spot
     // marker and readout over it. A lightweight read-back carries the
@@ -196,7 +189,7 @@ export async function mountOverlay(
       // no further one is coming; drop the reading so the readout cannot keep
       // showing a temperature for a camera that is gone.
       spot = { x: spot.x, y: spot.y, temperatureC: null };
-      sampledAtMs = null;
+      clock.reset();
     }
     updateReadout();
   }
