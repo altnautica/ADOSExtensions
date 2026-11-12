@@ -1,8 +1,8 @@
 /**
- * A tiny store for the pod read-back the agent publishes on the "siyi"
- * telemetry channel. The panel and overlay subscribe; ingest normalises the raw
- * payload, stamps its sample time, and notifies listeners only when the
- * normalised state changed.
+ * A tiny store for the pod read-back the agent publishes, once on the "siyi"
+ * telemetry channel and once as the siyi.pod.state event. The panel and
+ * overlay subscribe; ingest normalises the raw payload, stamps its sample
+ * time, and notifies listeners only when the normalised state changed.
  *
  * The host delivers the agent's state by polling about every 750 ms and can skip
  * a tick, so 1500 ms gaps are normal. Each payload carries the agent's write
@@ -10,6 +10,12 @@
  * delivered on the first poll after mount reads stale at once, while a live
  * feed stays live whatever the drone clock skew. A sample older than
  * {@link STALE_AFTER_MS} means the agent stopped publishing.
+ *
+ * The two channels are stamped separately on the drone (the event is
+ * throttled and stamped when it is written), so one report arrives with two
+ * different `ts_ms`. Each channel therefore has its own clock: the second
+ * channel's copy of an old report is that channel's first sample and is
+ * judged by its stamp, rather than continuing the other channel's run.
  */
 
 import { agentTimestampOf, SampleClock, STALE_AFTER_MS } from "@altnautica/plugin-sdk";
@@ -21,10 +27,17 @@ export { STALE_AFTER_MS };
 /** A laser range is shown for this long after it was measured. */
 export const RANGE_SHOW_MS = 10_000;
 
+/** The feed a payload came in on: the telemetry channel or the event. */
+export type PodChannel = "telemetry" | "event";
+
 export class PodStateStore {
   private state: PodState | null = null;
   private stateKey = "";
-  private readonly clock = new SampleClock();
+  private sampledAt: number | null = null;
+  private readonly clocks: Record<PodChannel, SampleClock> = {
+    telemetry: new SampleClock(),
+    event: new SampleClock(),
+  };
   private readonly listeners = new Set<(s: PodState) => void>();
 
   get(): PodState | null {
@@ -32,11 +45,11 @@ export class PodStateStore {
   }
 
   /**
-   * When the last sample was taken (epoch ms, browser clock), as aged by the
-   * shared sample clock. Null before the first payload.
+   * When the shown sample was taken (epoch ms, browser clock), as aged by
+   * its channel's sample clock. Null before the first payload.
    */
   receivedAt(): number | null {
-    return this.clock.sampleAt;
+    return this.sampledAt;
   }
 
   subscribe(fn: (s: PodState) => void): () => void {
@@ -45,11 +58,15 @@ export class PodStateStore {
     return () => this.listeners.delete(fn);
   }
 
-  ingest(raw: unknown, now: number = Date.now()): void {
+  ingest(raw: unknown, channel: PodChannel = "telemetry", now: number = Date.now()): void {
     if (!isRecord(raw)) return;
-    // A repeated ts_ms (the same report on the other channel, or re-delivered)
-    // does not refresh the age.
-    this.clock.ingest(agentTimestampOf(raw), now);
+    // A repeated or older ts_ms on this channel is ignored by its clock.
+    const at = this.clocks[channel].ingest(agentTimestampOf(raw), now);
+    if (at === null) return;
+    // A sample older than the one shown (from the other channel) does not
+    // replace it.
+    if (this.sampledAt !== null && at < this.sampledAt) return;
+    this.sampledAt = at;
     const next = normalise(raw);
     const key = JSON.stringify(next);
     if (this.state && key === this.stateKey) return;

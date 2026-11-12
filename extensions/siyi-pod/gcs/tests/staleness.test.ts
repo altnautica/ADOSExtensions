@@ -6,6 +6,7 @@ import {
 } from "@altnautica/plugin-sdk/harness";
 
 import { hudLines } from "../src/overlay-draw";
+import { mountSiyi } from "../src/mount";
 import { mountPanel } from "../src/panel";
 import { dataAgeS, isLive, PodStateStore, STALE_AFTER_MS } from "../src/pod-state";
 import enLocale from "../../locales/en.json";
@@ -114,16 +115,100 @@ describe("staleness at the real host cadence", () => {
     expect(isLive(store)).toBe(false);
   });
 
-  it("feeds siyi and siyi.pod.state deliveries into one clock", () => {
+  for (const order of [
+    ["telemetry", "event"],
+    ["event", "telemetry"],
+  ] as const) {
+    it(`keeps an old report stale on mount when both channels carry it with their own stamps (${order[0]} first)`, async () => {
+      // The drone stamps the telemetry entry and the throttled event entry
+      // separately, so one report arrives twice with different ts_ms.
+      const harness = createPluginHarness({
+        grantedCapabilities: ["command.send", "telemetry.subscribe.siyi"],
+        mount: () => undefined,
+      });
+      await harness.start();
+      harness.ctx.i18n.t = t;
+      const root = document.createElement("div");
+      document.body.appendChild(root);
+      const handles = await mountSiyi(harness.ctx, root);
+      const T = Date.now() - 5_000;
+      const stamps = { telemetry: T + 3, event: T };
+      for (const channel of order) {
+        const payload = { ...ZT30, ts_ms: stamps[channel] };
+        if (channel === "telemetry") harness.pushTelemetry("siyi", payload);
+        else harness.pushEvent("siyi.pod.state", payload);
+        await Promise.resolve();
+        vi.advanceTimersByTime(5);
+      }
+      const link = root.querySelector('[data-testid="siyi-link"]')!;
+      const btn = root.querySelector<HTMLButtonElement>('[data-testid="siyi-range-btn"]')!;
+      // Through the panel's next 1 s repaint, the old pair reads as old.
+      for (let i = 0; i < 30; i++) {
+        vi.advanceTimersByTime(50);
+        expect(link.textContent).toBe("No pod data");
+        expect(btn.disabled).toBe(true);
+      }
+      for (const h of handles) h.destroy();
+      root.remove();
+      await harness.teardown();
+    });
+  }
+
+  it("keeps the old pair stale for the HUD too, and reads live from each channel's next report", () => {
     const store = new PodStateStore();
-    const ts = Date.now() - 3_000;
-    store.ingest({ ...ZT30, ts_ms: ts });
-    vi.advanceTimersByTime(750);
-    // The same report on the second channel is a repeat, not a new sample.
-    store.ingest({ ...ZT30, ts_ms: ts });
-    vi.advanceTimersByTime(750);
-    store.ingest({ ...ZT30, ts_ms: Date.now() - 3_000 });
+    const T = Date.now() - 5_000;
+    store.ingest({ ...ZT30, ts_ms: T + 3 }, "telemetry");
+    vi.advanceTimersByTime(5);
+    store.ingest({ ...ZT30, ts_ms: T }, "event");
+    expect(isLive(store)).toBe(false);
+    expect(dataAgeS(store)).toBe(5);
+    expect(hudLines(store, Date.now(), t)).toEqual(["No pod data"]);
+    vi.advanceTimersByTime(745);
+    store.ingest({ ...ZT30, ts_ms: T + 753 }, "telemetry");
     expect(isLive(store)).toBe(true);
+  });
+
+  it("stays live, then stale at 2000 ms, when each channel carries its own stamps at the host cadence", () => {
+    // Telemetry is stamped as each report is written; the event is throttled
+    // to 2 Hz and stamped later, so it often repeats or holds an earlier
+    // report than the telemetry entry beside it.
+    const store = new PodStateStore();
+    let eventTs = 0;
+    let lastEventWrite = -Infinity;
+    for (const gap of hostGaps(20)) {
+      const telemetryTs = Date.now() - 2_000 - ENTRY_AGE_MS;
+      if (telemetryTs - lastEventWrite >= 500) {
+        lastEventWrite = telemetryTs;
+        eventTs = telemetryTs + 137;
+      }
+      store.ingest({ ...ZT30, zoom: telemetryTs, ts_ms: telemetryTs }, "telemetry");
+      store.ingest({ ...ZT30, ts_ms: eventTs }, "event");
+      for (let waited = 0; waited < gap; waited += 50) {
+        vi.advanceTimersByTime(Math.min(50, gap - waited));
+        if (Date.now() - T0 > 1_000) expect(isLive(store)).toBe(true);
+      }
+    }
+    const lastAt = store.receivedAt()!;
+    vi.setSystemTime(lastAt + 1_999);
+    expect(isLive(store)).toBe(true);
+    vi.setSystemTime(lastAt + 2_000);
+    expect(isLive(store)).toBe(false);
+  });
+
+  it("ignores a report stamped older than the one shown on the same channel", () => {
+    const store = new PodStateStore();
+    store.ingest({ ...ZT30, zoom: 1, ts_ms: Date.now() - 1_000 }, "telemetry");
+    vi.advanceTimersByTime(750);
+    const newest = Date.now() - 1_000;
+    store.ingest({ ...ZT30, zoom: 2, ts_ms: newest }, "telemetry");
+    const shownAt = store.receivedAt()!;
+    vi.advanceTimersByTime(750);
+    // A failed poll: the host falls back to a source stamped 4 s earlier.
+    store.ingest({ ...ZT30, zoom: 9, ts_ms: newest - 4_000 }, "telemetry");
+    expect(store.get()!.zoom).toBe(2);
+    expect(store.receivedAt()).toBe(shownAt);
+    vi.setSystemTime(shownAt + 2_000);
+    expect(isLive(store)).toBe(false);
   });
 
   it("renders a 5 s old ts_ms payload stale on first paint (panel and HUD)", async () => {

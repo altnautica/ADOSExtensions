@@ -25,9 +25,12 @@ export async function mountSiyi(
   });
 
   // Live pod read-back rides the "siyi" telemetry channel and the
-  // siyi.pod.state event; either updates the store.
-  const unsubTelemetry = await ctx.telemetry.subscribe("siyi", (s) => store.ingest(s));
-  const unsubEvents = ctx.events.subscribe("siyi.pod.state", (s) => store.ingest(s));
+  // siyi.pod.state event; either updates the store, each aged on its own
+  // clock.
+  const unsubTelemetry = await ctx.telemetry.subscribe("siyi", (s) =>
+    store.ingest(s, "telemetry"),
+  );
+  const unsubEvents = ctx.events.subscribe("siyi.pod.state", (s) => store.ingest(s, "event"));
   return [
     panel,
     overlay,

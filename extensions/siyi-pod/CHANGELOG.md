@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.3
+
+- The pod state arrives on two channels that the drone stamps separately.
+  Each channel is now aged on its own, so an old report delivered on both
+  when the console opens, or after a cloud-only gap, reads "No pod data"
+  instead of live. A report older than the one shown no longer replaces it.
+
 ## 0.6.2
 
 - A live pod feed no longer reads "No pod data" when the drone clock runs
