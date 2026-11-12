@@ -1,6 +1,6 @@
 {
   "name": "@altnautica/world-engine-gcs",
-  "version": "2.1.17",
+  "version": "2.1.18",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",

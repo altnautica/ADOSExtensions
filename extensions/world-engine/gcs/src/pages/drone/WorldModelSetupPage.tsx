@@ -67,6 +67,8 @@ function CaptureServiceSwitch({ deviceId }: { deviceId: string | null }) {
         className={cn(
           "we:relative we:inline-flex we:h-5 we:w-9 we:shrink-0 we:items-center we:rounded-full we:transition-colors",
           "we:focus-visible:outline-2 we:focus-visible:outline-accent-primary",
+          // A touch-sized hit area around the drawn switch under a coarse pointer.
+          "we:pointer-coarse:before:absolute we:pointer-coarse:before:-inset-[14px] we:pointer-coarse:before:content-['']",
           "we:disabled:cursor-not-allowed we:disabled:opacity-50",
           checked ? "we:bg-accent-primary" : "we:bg-bg-tertiary we:border we:border-border-default",
         )}

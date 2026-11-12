@@ -7,7 +7,10 @@
 
 import en from "../../../locales/en.json";
 
-/** The one locale the extension ships (number and date formatting). */
+/** The one locale the extension ships (number and date formatting). The
+ * host's `ctx.i18n` resolves keys against a bundle but does not expose which
+ * locale the operator selected, so there is nothing to pick a catalogue by;
+ * the extension stays English-only until the host reports its locale. */
 export const LOCALE = "en";
 
 export type TranslateParams = Record<string, string | number>;

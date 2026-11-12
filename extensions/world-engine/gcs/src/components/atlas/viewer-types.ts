@@ -15,19 +15,13 @@
 /** A selectable World Model viewer. */
 export type AtlasViewer = "rerun" | "splat" | "cloud" | "lod";
 
+/** A switcher entry; its label is the `atlas.viewer.<id>` catalogue key. */
 export interface AtlasViewerSpec {
   id: AtlasViewer;
-  /** Short switcher label. */
-  label: string;
 }
 
 /** The viewers offered in the switcher, in order; the first is the default. */
-export const ATLAS_VIEWERS: readonly AtlasViewerSpec[] = [
-  { id: "rerun", label: "World" },
-  { id: "splat", label: "Splat" },
-  { id: "cloud", label: "Cloud" },
-  { id: "lod", label: "LOD" },
-];
+export const ATLAS_VIEWERS: readonly AtlasViewerSpec[] = [{ id: "rerun" }, { id: "splat" }, { id: "cloud" }, { id: "lod" }];
 
 /** The first viewer in the switcher. */
 export const DEFAULT_ATLAS_VIEWER: AtlasViewer = "rerun";

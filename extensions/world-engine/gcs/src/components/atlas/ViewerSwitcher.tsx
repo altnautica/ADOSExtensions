@@ -12,12 +12,15 @@
  *
  */
 
+import { translator } from "../../host/i18n";
 import { cn } from "../../lib/utils";
 import {
   ATLAS_VIEWERS,
   type AtlasViewer,
   type AtlasViewerSpec,
 } from "./viewer-types";
+
+const t = translator("atlas");
 
 interface ViewerSwitcherProps {
   /** The currently-selected viewer (controlled). */
@@ -53,12 +56,14 @@ export function ViewerSwitcher({
           onClick={() => onSelect(v.id)}
           className={cn(
             "we:text-[11px] we:px-2 we:py-1 we:rounded we:transition-colors",
+            "we:focus-visible:outline-2 we:focus-visible:outline-accent-primary",
+            "we:pointer-coarse:min-h-12 we:pointer-coarse:min-w-12",
             viewer === v.id
               ? "we:bg-accent-primary/20 we:text-accent-primary"
               : "we:text-text-tertiary we:hover:text-text-secondary",
           )}
         >
-          {v.label}
+          {t(`viewer.${v.id}`)}
         </button>
       ))}
     </div>

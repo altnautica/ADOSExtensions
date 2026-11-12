@@ -1,14 +1,18 @@
 /**
- * The Live World capture and stream cards: keyframe / ingest / camera counts
- * and VIO tracking health, plus the paired reconstructor, the active bearer,
- * relay decimation and the last keyframe's age, from the drone's live capture
- * slice. Unreported values render as the no-data glyph.
+ * The Live World capture and stream cards: keyframe / ingest / camera counts,
+ * tracking health, pose source and dropped keyframes, plus the paired
+ * reconstructor, the active bearer and the last keyframe's age, from the
+ * drone's live capture slice. A capture that builds no world model (a link
+ * that carries no keyframes, no position anchor yet, the keyframe cap
+ * reached) says so. Unreported values render as the no-data glyph.
  */
 
 import type { ReactNode } from "react";
-import { Activity, Radio } from "lucide-react";
+import { Activity, Radio, TriangleAlert } from "lucide-react";
 
 import { translator } from "../../host/i18n";
+import { bearerWordKey, degradedReasonKey, healthWordKey, poseTierKey } from "../../lib/atlas/live-words";
+import { nodeLabelForId, type NamedNode } from "../../lib/nodes/node-label";
 import type { AtlasLiveState } from "../../stores/atlas-store";
 import { NO_DATA_GLYPH, cn } from "../../lib/utils";
 
@@ -18,12 +22,6 @@ const VIO_TONE: Record<string, string> = {
   good: "we:text-status-success",
   degraded: "we:text-status-warning",
   lost: "we:text-status-error",
-};
-
-const BEARER_LABEL_KEY: Record<string, string> = {
-  "direct-lan": "capture.bearerDirectLan",
-  "wfb-relay": "capture.bearerWfbRelay",
-  cloud: "capture.bearerCloud",
 };
 
 function Stat({ label, value }: { label: string; value: string }) {
@@ -47,13 +45,29 @@ function Card({ title, icon: Icon, children }: { title: string; icon: typeof Act
   );
 }
 
-function Row({ label, children, title }: { label: string; children: ReactNode; title?: string }) {
+function Row({ label, children, title, tone }: { label: string; children: ReactNode; title?: string; tone?: string }) {
   return (
     <div className="we:flex we:items-center we:justify-between">
       <span className="we:text-text-tertiary">{label}</span>
-      <span className="we:max-w-[60%] we:truncate we:font-mono we:tabular-nums we:text-text-secondary" title={title}>
+      <span
+        className={cn("we:max-w-[60%] we:truncate we:font-mono we:tabular-nums", tone ?? "we:text-text-secondary")}
+        title={title}
+      >
         {children}
       </span>
+    </div>
+  );
+}
+
+/** A capture condition under which no world model is being built. */
+function Notice({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="status"
+      className="we:flex we:items-start we:gap-1.5 we:rounded we:bg-status-warning/10 we:px-2 we:py-1.5 we:text-[11px] we:text-status-warning"
+    >
+      <TriangleAlert className="we:mt-0.5 we:h-3 we:w-3 we:shrink-0" />
+      <div>{children}</div>
     </div>
   );
 }
@@ -62,14 +76,19 @@ export function LiveWorldCards({
   live,
   stale,
   lastKeyframeAgo,
+  nodes,
 }: {
   live: AtlasLiveState;
   /** The heartbeat went quiet past its budget: the rates are dimmed. */
   stale: boolean;
   lastKeyframeAgo: string | null;
+  /** The paired nodes, to name the compute node. */
+  nodes: readonly NamedNode[];
 }) {
   const num = (v: number | null) => (v === null ? NO_DATA_GLYPH : String(v));
-  const bearerKey = live.bearer ? BEARER_LABEL_KEY[live.bearer] : undefined;
+  const computeNode = live.computeNodeId === null ? null : nodeLabelForId(live.computeNodeId, nodes);
+  const reasonKey = degradedReasonKey(live.bearer);
+  const degradedReason = reasonKey ? t(reasonKey) : live.degradedReason;
   return (
     <div className={cn("we:grid we:grid-cols-1 we:gap-4 we:transition-opacity we:xl:grid-cols-2", stale && "we:opacity-50")}>
       <Card title={t("capture.captureSection")} icon={Activity}>
@@ -81,27 +100,40 @@ export function LiveWorldCards({
           />
           <Stat label={t("capture.statCameras")} value={num(live.cameraCount)} />
         </div>
-        {live.vioHealth !== null && (
-          <div className="we:flex we:items-center we:justify-between we:text-[11px]">
-            <span className="we:text-text-tertiary">{t("capture.vioTracking")}</span>
-            <span className={cn("we:font-medium", VIO_TONE[live.vioHealth] ?? "we:text-text-secondary")}>
-              {live.vioHealth}
-            </span>
-          </div>
-        )}
+        {live.anchored === false && <Notice>{t("capture.waitingForAnchor")}</Notice>}
+        {live.capped === true && <Notice>{t("capture.cappedNotice")}</Notice>}
+        <div className="we:space-y-1.5 we:text-[11px]">
+          {live.vioHealth !== null && (
+            <Row label={t("capture.vioTracking")} tone={VIO_TONE[live.vioHealth]}>
+              {t(healthWordKey(live.vioHealth))}
+            </Row>
+          )}
+          {live.poseTier !== null && <Row label={t("capture.poseTierLabel")}>{t(poseTierKey(live.poseTier))}</Row>}
+          {live.droppedKeyframes !== null && (
+            <Row
+              label={t("capture.droppedKeyframes")}
+              tone={live.droppedKeyframes > 0 ? "we:text-status-warning" : undefined}
+            >
+              {String(live.droppedKeyframes)}
+            </Row>
+          )}
+        </div>
       </Card>
 
       <Card title={t("capture.streamSection")} icon={Radio}>
         <div className="we:space-y-1.5 we:text-[11px]">
-          <Row label={t("capture.computeNode")} title={live.computeNodeId ?? undefined}>
-            {live.computeNodeId ?? NO_DATA_GLYPH}
+          <Row label={t("capture.computeNode")} title={computeNode?.title}>
+            {computeNode?.label ?? NO_DATA_GLYPH}
           </Row>
-          <Row label={t("capture.bearer")}>{bearerKey ? t(bearerKey) : (live.bearer ?? NO_DATA_GLYPH)}</Row>
-          {live.bearer === "wfb-relay" && (
-            <Row label={t("capture.relayDecimation")}>{num(live.relayDecimation)}</Row>
-          )}
+          <Row label={t("capture.bearer")}>{live.bearer ? t(bearerWordKey(live.bearer)) : NO_DATA_GLYPH}</Row>
           <Row label={t("capture.lastKeyframe")}>{lastKeyframeAgo ?? NO_DATA_GLYPH}</Row>
         </div>
+        {live.keyframesCarried === false && (
+          <Notice>
+            <span className="we:block we:font-medium">{t("capture.noKeyframesOnLink")}</span>
+            {degradedReason && <span className="we:block">{degradedReason}</span>}
+          </Notice>
+        )}
       </Card>
     </div>
   );

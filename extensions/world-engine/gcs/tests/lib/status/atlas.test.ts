@@ -52,20 +52,23 @@ describe("mapAtlasSlice", () => {
     });
   });
 
-  it("maps the relay transport fields", () => {
+  it("maps the bearer and its keyframe-degraded reason, ignoring unpublished relay fields", () => {
     const patch = mapAtlasSlice(
       {
         state: "capturing",
         bearer: "wfb-relay",
-        relayGroundAgentId: "gs-01",
+        keyframesCarried: false,
+        degradedReason: "relay datagrams are too small",
         relayDecimation: 4,
       },
       current,
       5,
     );
     expect(patch?.live.bearer).toBe("wfb-relay");
-    expect(patch?.live.relayGroundAgentId).toBe("gs-01");
-    expect(patch?.live.relayDecimation).toBe(4);
+    expect(patch?.live.keyframesCarried).toBe(false);
+    expect(patch?.live.degradedReason).toBe("relay datagrams are too small");
+    expect(patch?.live).not.toHaveProperty("relayDecimation");
+    expect(patch?.live).not.toHaveProperty("relayGroundAgentId");
   });
 
   // Each capture-honesty field exists because its absence made a known-false

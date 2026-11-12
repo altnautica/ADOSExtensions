@@ -52,8 +52,7 @@ export function mapAtlasSlice(
   const anchored = asBool(slice.anchored);
   const poseTier = asString(slice.poseTier);
   const droppedKeyframes = asNumber(slice.droppedKeyframes);
-  const relayGroundAgentId = asString(slice.relayGroundAgentId);
-  const relayDecimation = asNumber(slice.relayDecimation);
+  const degradedReason = asString(slice.degradedReason);
 
   // A present-but-empty slice carries nothing to merge.
   if (
@@ -71,8 +70,7 @@ export function mapAtlasSlice(
     anchored === null &&
     poseTier === null &&
     droppedKeyframes === null &&
-    relayGroundAgentId === null &&
-    relayDecimation === null
+    degradedReason === null
   ) {
     return null;
   }
@@ -94,8 +92,9 @@ export function mapAtlasSlice(
     anchored: anchored ?? current.live.anchored,
     poseTier: poseTier ?? current.live.poseTier,
     droppedKeyframes: droppedKeyframes ?? current.live.droppedKeyframes,
-    relayGroundAgentId: relayGroundAgentId ?? current.live.relayGroundAgentId,
-    relayDecimation: relayDecimation ?? current.live.relayDecimation,
+    // The agent omits the reason whenever the bearer carries keyframes, so a
+    // slice that reports a bearer replaces it outright.
+    degradedReason: bearer !== null ? degradedReason : (degradedReason ?? current.live.degradedReason),
     updatedAt: nowMs,
   };
 

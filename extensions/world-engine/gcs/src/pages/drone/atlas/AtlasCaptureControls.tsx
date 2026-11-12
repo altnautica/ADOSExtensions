@@ -56,8 +56,10 @@ export function AtlasCaptureControls({
   // agent reports capturing:false with state:"paused".
   const capturing = readiness ? readiness.capturing === true || isActiveCaptureState(readiness.state) : false;
   const paused = readiness?.state === "paused";
-  const blocked = blockedKey !== null;
-  const blockedTitle = blockedKey ? t(blockedKey) : undefined;
+  // A node that stopped answering cannot be commanded: its last state is gone.
+  const effectiveBlockedKey = blockedKey ?? (control.offline ? "capture.nodeNotAnswering" : null);
+  const blocked = effectiveBlockedKey !== null;
+  const blockedTitle = effectiveBlockedKey ? t(effectiveBlockedKey) : undefined;
 
   const handleResult = (result: CaptureResult, failKey: string) => {
     if (result.ok) return;
@@ -76,76 +78,97 @@ export function AtlasCaptureControls({
     }
   };
 
+  // Why a control is disabled, as text under the bar: a tooltip is out of
+  // reach on touch and for keyboard users.
+  const reasons = [
+    ...new Set(
+      [
+        blockedTitle,
+        !blocked && !capturing && !canStart && startBlockedKey ? t(startBlockedKey) : undefined,
+        reconstruct && !reconstruct.available && reconstruct.disabledKey ? t(reconstruct.disabledKey) : undefined,
+      ].filter((r): r is string => r !== undefined),
+    ),
+  ];
+
   return (
-    <div className="we:flex we:flex-wrap we:items-center we:gap-2">
-      {!capturing && (
-        <Button
-          size="sm"
-          variant="primary"
-          icon={<Play size={12} />}
-          loading={control.busy}
-          disabled={blocked || !canStart || control.busy}
-          title={blocked ? blockedTitle : !canStart && startBlockedKey ? t(startBlockedKey) : undefined}
-          onClick={async () => handleResult(await control.start(), "capture.captureStartFailed")}
-        >
-          {t("capture.startCapture")}
-        </Button>
-      )}
+    <div className="we:space-y-1.5">
+      <div className="we:flex we:flex-wrap we:items-center we:gap-2">
+        {!capturing && (
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<Play size={12} />}
+            loading={control.busy}
+            disabled={blocked || !canStart || control.busy}
+            title={blocked ? blockedTitle : !canStart && startBlockedKey ? t(startBlockedKey) : undefined}
+            onClick={async () => handleResult(await control.start(), "capture.captureStartFailed")}
+          >
+            {t("capture.startCapture")}
+          </Button>
+        )}
 
-      {capturing && paused && (
-        <Button
-          size="sm"
-          variant="primary"
-          icon={<Play size={12} />}
-          loading={control.busy}
-          disabled={blocked || control.busy}
-          title={blockedTitle}
-          onClick={async () => handleResult(await control.resume(), "capture.captureCommandFailed")}
-        >
-          {t("capture.resumeCapture")}
-        </Button>
-      )}
+        {capturing && paused && (
+          <Button
+            size="sm"
+            variant="primary"
+            icon={<Play size={12} />}
+            loading={control.busy}
+            disabled={blocked || control.busy}
+            title={blockedTitle}
+            onClick={async () => handleResult(await control.resume(), "capture.captureCommandFailed")}
+          >
+            {t("capture.resumeCapture")}
+          </Button>
+        )}
 
-      {capturing && !paused && (
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={<Pause size={12} />}
-          loading={control.busy}
-          disabled={blocked || control.busy}
-          title={blockedTitle}
-          onClick={async () => handleResult(await control.pause(), "capture.captureCommandFailed")}
-        >
-          {t("capture.pauseCapture")}
-        </Button>
-      )}
+        {capturing && !paused && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Pause size={12} />}
+            loading={control.busy}
+            disabled={blocked || control.busy}
+            title={blockedTitle}
+            onClick={async () => handleResult(await control.pause(), "capture.captureCommandFailed")}
+          >
+            {t("capture.pauseCapture")}
+          </Button>
+        )}
 
-      {capturing && (
-        <Button
-          size="sm"
-          variant="danger"
-          icon={<Square size={12} />}
-          loading={control.busy}
-          disabled={blocked || control.busy}
-          title={blockedTitle}
-          onClick={async () => handleResult(await control.stop(), "capture.captureStopFailed")}
-        >
-          {t("capture.stopCapture")}
-        </Button>
-      )}
+        {capturing && (
+          <Button
+            size="sm"
+            variant="danger"
+            icon={<Square size={12} />}
+            loading={control.busy}
+            disabled={blocked || control.busy}
+            title={blockedTitle}
+            onClick={async () => handleResult(await control.stop(), "capture.captureStopFailed")}
+          >
+            {t("capture.stopCapture")}
+          </Button>
+        )}
 
-      {reconstruct && (
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={<Boxes size={12} />}
-          loading={reconstructing}
-          disabled={!reconstruct.available || reconstructing}
-          title={!reconstruct.available && reconstruct.disabledKey ? t(reconstruct.disabledKey) : undefined}
-          onClick={() => void onReconstruct()}
-        >
-          {t("capture.reconstructNow")}
-        </Button>
+        {reconstruct && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Boxes size={12} />}
+            loading={reconstructing}
+            disabled={!reconstruct.available || reconstructing}
+            title={!reconstruct.available && reconstruct.disabledKey ? t(reconstruct.disabledKey) : undefined}
+            onClick={() => void onReconstruct()}
+          >
+            {t("capture.reconstructNow")}
+          </Button>
+        )}
+      </div>
+      {reasons.length > 0 && (
+        <ul className="we:space-y-0.5 we:text-[11px] we:text-text-tertiary">
+          {reasons.map((r) => (
+            <li key={r}>{r}</li>
+          ))}
+        </ul>
       )}
     </div>
   );

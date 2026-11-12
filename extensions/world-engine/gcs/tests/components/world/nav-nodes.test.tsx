@@ -57,4 +57,17 @@ describe("navigation nodes", () => {
     fireEvent.click(screen.getByRole("button", { name: messages.world.mode.dollhouse }));
     expect(screen.queryByRole("button", { name: label("n0") })).toBeNull();
   });
+
+  it("gives the walk-to discs and the toolbar a focus ring and a touch-sized target", () => {
+    render(<SparkViewer scene={scene} />);
+    const buttons = [
+      screen.getByRole("button", { name: label("n0") }),
+      screen.getByRole("button", { name: messages.world.mode.walk }),
+      screen.getByRole("button", { name: messages.world.measure }),
+    ];
+    for (const b of buttons) {
+      expect(b.className).toContain("we:focus-visible:outline-2");
+      expect(b.className).toContain("we:pointer-coarse:");
+    }
+  });
 });

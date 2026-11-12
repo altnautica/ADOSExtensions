@@ -50,6 +50,12 @@
     "liveMapHeading": "Live map",
     "liveMapCaption": "Live map: {tiles} tiles, {points} points at {voxel} cm",
     "viewerGroupLabel": "Viewer",
+    "viewer": {
+      "rerun": "World",
+      "splat": "Splat",
+      "cloud": "Cloud",
+      "lod": "LOD"
+    },
     "pipelineSegment": "Pipeline",
     "reconstructedWith": "Reconstructed with {backend}",
     "reconstructedWithHint": "Reconstructed by the {backend} backend",
@@ -117,7 +123,45 @@
       "bearerDirectLan": "Direct LAN",
       "bearerWfbRelay": "WFB relay",
       "bearerCloud": "Cloud relay",
-      "relayDecimation": "Relay decimation",
+      "bearerOther": "Other link",
+      "noKeyframesOnLink": "No keyframes on this link",
+      "degraded": {
+        "wfb-relay": "The relay link only carries pose and status, so no world model is built until a LAN link is available."
+      },
+      "waitingForAnchor": "Waiting for position anchor: no keyframes are kept until it is set",
+      "cappedNotice": "Keyframe limit reached: the count is held on purpose",
+      "droppedKeyframes": "Dropped keyframes",
+      "poseTierLabel": "Pose source",
+      "poseTier": {
+        "fc_ekf": "Flight controller",
+        "vio": "Visual odometry",
+        "lidar": "LiDAR odometry",
+        "replay": "Replay",
+        "other": "Other"
+      },
+      "state": {
+        "capturing": "capturing",
+        "active": "active",
+        "finalizing": "finishing",
+        "ready": "ready",
+        "paused": "paused",
+        "bagged": "recorded",
+        "ended": "ended",
+        "idle": "idle",
+        "error": "error",
+        "other": "other"
+      },
+      "health": {
+        "good": "good",
+        "degraded": "degraded",
+        "lost": "lost",
+        "other": "other"
+      },
+      "chip": {
+        "unknown": "unknown",
+        "notAnswering": "not answering"
+      },
+      "nodeNotAnswering": "The drone is not answering, so capture cannot be started or stopped from here.",
       "lastKeyframe": "Last keyframe",
       "noSession": "no session",
       "noHeartbeat": "no heartbeat",

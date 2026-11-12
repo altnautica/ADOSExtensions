@@ -16,6 +16,7 @@ import {
 import type { SelectOption } from "../../components/ui/Select";
 import { useHost } from "../../host/context";
 import { usePairedNodes } from "../../hooks/use-paired-nodes";
+import { nodeLabelForAddr } from "../../lib/nodes/node-label";
 import { NO_DATA_GLYPH } from "../../lib/utils";
 import { nodeToOffloadAddr } from "../../lib/vision/offload-target";
 import { ENABLE_OPTIONS, perceptionT as t } from "./enable-options";
@@ -82,6 +83,9 @@ export function DroneOffloadClient({ config, readOnly, setValue }: OffloadConfig
         ? t("offload.pinNoAddress")
         : t("offload.pinHint");
 
+  // The address the host reports, named by the paired node serving it.
+  const activeLabel = activeTarget ? nodeLabelForAddr(activeTarget, nodes) : null;
+
   return (
     <div className="we:space-y-4">
       {/* Active offload target, as the host reports the perception tier. */}
@@ -90,9 +94,9 @@ export function DroneOffloadClient({ config, readOnly, setValue }: OffloadConfig
           <div className="we:text-xs we:text-text-secondary">{t("offload.activeLabel")}</div>
           <p className="we:mt-0.5 we:text-[11px] we:text-text-tertiary">{t("offload.activeHint")}</p>
         </div>
-        <div className="we:shrink-0 we:font-mono we:text-sm we:text-text-primary">
-          {activeTarget ? (
-            activeTarget
+        <div className="we:shrink-0 we:font-mono we:text-sm we:text-text-primary" title={activeLabel?.title}>
+          {activeLabel ? (
+            activeLabel.label
           ) : (
             <span className="we:text-text-tertiary">
               {activeTarget === null ? t("offload.activeNone") : NO_DATA_GLYPH}

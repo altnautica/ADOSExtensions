@@ -362,6 +362,29 @@ All notable changes to the World Engine extension.
   Reading `frames.json` keeps the first record of each image name, so a
   dataset staged by an earlier node also resumes. Test: a frames list with
   every frame three times gives an image list with each name once. 2.1.17.
+- **The Live World page says when a capture builds no world model.** A link
+  that carries no keyframes shows "No keyframes on this link" with the
+  reason; a capture still waiting for its position anchor, one that reached
+  its keyframe limit, and keyframes the drone dropped are shown in the
+  Capture card, with the pose source. The header no longer shows a degraded
+  capture in the healthy colour. 2.1.18.
+- **A drone that is not answering no longer reads as idle.** The header
+  shows "unknown" before the drone first answers and "not answering" once it
+  stops, and Start, Pause and Stop are disabled while it is not answering.
+  2.1.18.
+- **Why a capture control is disabled is written under the controls**, not
+  only in a tooltip. Buttons, the viewer switcher, the splat viewer's toolbar
+  and walk-to points and the capture switch have a touch-sized target on a
+  touch screen and a visible keyboard focus ring. 2.1.18.
+- **Capture states, tracking health, links and viewer names are worded from
+  the extension's strings** instead of the agent's raw ids, with "Other" for
+  a value it does not know. The extension ships English only: the host's
+  string service does not tell an extension which language is selected.
+  2.1.18.
+- **The compute node and the offload target are shown by name**, with the
+  device id or address on hover. 2.1.18.
+- **Removed the "Relay decimation" row**, which the drone never reports and
+  always read "—". 2.1.18.
 
 ## [2.0.0]
 

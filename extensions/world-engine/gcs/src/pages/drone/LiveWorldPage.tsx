@@ -22,10 +22,12 @@ import { useHost } from "../../host/context";
 import { translator } from "../../host/i18n";
 import { useAtlasControl } from "../../hooks/use-atlas-control";
 import { useCloudJobs } from "../../hooks/use-cloud-jobs";
+import { usePairedNodes } from "../../hooks/use-paired-nodes";
 import { useDroneWorldModel } from "../../hooks/use-drone-world-model";
 import { useOutputFrame } from "../../hooks/use-output-frame";
 import { DEFAULT_RECONSTRUCTION_STEPS, qualityForSteps } from "../../lib/atlas/reconstruction-quality";
 import { useNow } from "../../lib/clock";
+import { captureChip } from "../../lib/atlas/live-words";
 import { cn } from "../../lib/utils";
 import { EMPTY_ATLAS_LIVE, useAtlasStore } from "../../stores/atlas-store";
 import { AtlasCaptureControls } from "./atlas/AtlasCaptureControls";
@@ -39,21 +41,9 @@ const t = translator("atlas");
  * staleness budget is heartbeat-scaled. */
 const STALE_MS = 15_000;
 
-/** The agent's capture-state vocabulary, plus forward-looking states. */
-const STATE_TONE: Record<string, string> = {
-  capturing: "we:text-status-success",
-  active: "we:text-status-success",
-  finalizing: "we:text-accent-primary",
-  ready: "we:text-accent-primary",
-  paused: "we:text-status-warning",
-  bagged: "we:text-text-tertiary",
-  ended: "we:text-text-tertiary",
-  idle: "we:text-text-tertiary",
-  error: "we:text-status-error",
-};
-
 export function LiveWorldPage() {
   const deviceId = useHost().node.deviceId;
+  const nodes = usePairedNodes();
   const live = useAtlasStore((s) => (deviceId ? s.live[deviceId] : undefined) ?? EMPTY_ATLAS_LIVE);
   const now = useNow();
   const control = useAtlasControl(deviceId);
@@ -126,8 +116,16 @@ export function LiveWorldPage() {
   // and the rates are dimmed.
   const hasLive = live.state !== null;
   const isStale = live.updatedAt === null || now - live.updatedAt > STALE_MS;
-  const stateLabel = live.state ?? control.readiness?.state ?? "idle";
-  const stateTone = isStale ? "we:text-status-warning" : (STATE_TONE[stateLabel] ?? "we:text-text-secondary");
+  // With neither a fresh heartbeat nor a readiness answer the state is
+  // unknown (or the node stopped answering), never "idle".
+  const chip = captureChip({
+    liveState: live.state,
+    hasLive,
+    isStale,
+    readinessState: control.readiness?.state ?? null,
+    offline: control.offline,
+    producingNothing: live.keyframesCarried === false || live.anchored === false,
+  });
   const sessionId = live.sessionId ?? control.readiness?.sessionId ?? null;
 
   return (
@@ -140,10 +138,10 @@ export function LiveWorldPage() {
             <span
               className={cn(
                 "we:rounded we:bg-text-primary/[0.04] we:px-1.5 we:py-0.5 we:text-[10px] we:font-medium",
-                stateTone,
+                chip.tone,
               )}
             >
-              {isStale && hasLive ? t("stale") : stateLabel}
+              {t(chip.key)}
             </span>
             {isStale && hasLive && (
               <span className="we:flex we:items-center we:gap-1 we:text-[10px] we:text-status-warning">
@@ -181,7 +179,7 @@ export function LiveWorldPage() {
         </div>
 
         {hasLive ? (
-          <LiveWorldCards live={live} stale={isStale} lastKeyframeAgo={ago(live.lastKfAt)} />
+          <LiveWorldCards live={live} stale={isStale} lastKeyframeAgo={ago(live.lastKfAt)} nodes={nodes} />
         ) : (
           <div className="we:rounded-lg we:border we:border-border-default we:p-6 we:text-center">
             <Boxes className="we:mx-auto we:mb-2 we:h-5 we:w-5 we:animate-pulse we:text-text-tertiary" />

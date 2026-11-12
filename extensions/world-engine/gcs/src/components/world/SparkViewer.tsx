@@ -28,6 +28,14 @@ const t = translator("world");
 
 const MODES: readonly ViewMode[] = ["orbit", "dollhouse", "walk"];
 
+const FOCUS = "we:focus-visible:outline-2 we:focus-visible:outline-on-media";
+/** Toolbar controls grow to a touch-sized target under a coarse pointer. */
+const CONTROL = `${FOCUS} we:pointer-coarse:min-h-12 we:pointer-coarse:min-w-12`;
+/** Hotspots keep their drawn size (they sit on a projected point) and get an
+ * invisible touch-sized hit area around it under a coarse pointer. */
+const HIT_AREA =
+  "we:pointer-coarse:before:absolute we:pointer-coarse:before:-inset-[18px] we:pointer-coarse:before:content-['']";
+
 export interface SparkViewerProps {
   scene: WorldScene;
   /** On-surface distance between two ENU points from the node, or null. */
@@ -141,7 +149,11 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
             aria-label={t("navNode", { id: n.id })}
             title={t("navNode", { id: n.id })}
             onClick={() => jumpTo(n.position)}
-            className="we:absolute we:left-0 we:top-0 we:h-3 we:w-5 we:rounded-[50%] we:bg-on-media/40 we:border we:border-on-media/70 we:hover:bg-on-media/70"
+            className={cn(
+              "we:absolute we:left-0 we:top-0 we:h-3 we:w-5 we:rounded-[50%] we:bg-on-media/40 we:border we:border-on-media/70 we:hover:bg-on-media/70",
+              FOCUS,
+              HIT_AREA,
+            )}
           />
         ))}
       {rooms.map((r, i) => (
@@ -152,7 +164,11 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
           }}
           type="button"
           onClick={() => r.hotspot && jumpTo(r.hotspot)}
-          className="we:absolute we:left-0 we:top-0 we:px-2 we:py-0.5 we:rounded-full we:text-[11px] we:bg-scrim/60 we:text-on-media we:border we:border-on-media/40"
+          className={cn(
+            "we:absolute we:left-0 we:top-0 we:px-2 we:py-0.5 we:rounded-full we:text-[11px] we:bg-scrim/60 we:text-on-media we:border we:border-on-media/40",
+            FOCUS,
+            HIT_AREA,
+          )}
         >
           {r.name}
         </button>
@@ -166,6 +182,7 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
             onClick={() => setMode(m)}
             className={cn(
               "we:text-[11px] we:px-2 we:py-1 we:rounded we:bg-scrim/60 we:text-on-media",
+              CONTROL,
               mode === m && "we:ring-1 we:ring-on-media",
             )}
           >
@@ -177,7 +194,7 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
             type="button"
             aria-pressed={showPlan}
             onClick={() => setShowPlan((v) => !v)}
-            className="we:text-[11px] we:px-2 we:py-1 we:rounded we:bg-scrim/60 we:text-on-media"
+            className={cn("we:text-[11px] we:px-2 we:py-1 we:rounded we:bg-scrim/60 we:text-on-media", CONTROL)}
           >
             {t("plan")}
           </button>
@@ -187,7 +204,7 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
             aria-label={t("floor")}
             value={floorIdx}
             onChange={(e) => setFloorIdx(Number(e.target.value))}
-            className="we:text-[11px] we:px-1 we:rounded we:bg-scrim/60 we:text-on-media"
+            className={cn("we:text-[11px] we:px-1 we:rounded we:bg-scrim/60 we:text-on-media", CONTROL)}
           >
             {floors.map((f, i) => (
               <option key={f.floor} value={i}>
@@ -204,7 +221,7 @@ export function SparkViewer({ scene, measureRemote, className }: SparkViewerProp
             setPoints([]);
             setRemote(null);
           }}
-          className="we:text-[11px] we:px-2 we:py-1 we:rounded we:bg-scrim/60 we:text-on-media"
+          className={cn("we:text-[11px] we:px-2 we:py-1 we:rounded we:bg-scrim/60 we:text-on-media", CONTROL)}
         >
           {t("measure")}
         </button>

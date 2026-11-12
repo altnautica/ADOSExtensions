@@ -43,6 +43,8 @@ export function Button({
         "we:inline-flex we:items-center we:justify-center we:font-medium we:transition-colors we:cursor-pointer",
         "we:disabled:opacity-50 we:disabled:cursor-not-allowed",
         "we:focus-visible:outline-2 we:focus-visible:outline-accent-primary",
+        // A touch-sized target wherever the primary pointer is coarse.
+        "we:pointer-coarse:min-h-12 we:pointer-coarse:min-w-12",
         VARIANT[variant],
         SIZE[size],
         className,

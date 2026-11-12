@@ -48,17 +48,16 @@ export interface AtlasLiveState {
    * before it, so a capture with `anchored: false` is running and producing
    * nothing. */
   anchored: boolean | null;
-  /** Which producer filled the pose being tagged ("fc_ekf" |
-   * "fc_ekf" | "vio" | "lidar" | "replay"), so a switch of provider is
+  /** Which producer filled the pose being tagged ("fc_ekf" | "vio" |
+   * "lidar" | "replay"), so a switch of provider is
    * visible rather than inferred. */
   poseTier: string | null;
   /** Keyframes the capture path produced but the bus could not deliver, so the
    * ingested count is not read as reconstruction input that exists. */
   droppedKeyframes: number | null;
-  /** The ground agent relaying WFB<->LAN, when bearer = "wfb-relay". */
-  relayGroundAgentId: string | null;
-  /** Keyframe decimation on the relay lane (1 = none). */
-  relayDecimation: number | null;
+  /** The agent's sentence for why the bearer carries no keyframes, present
+   * only when `keyframesCarried` is false. */
+  degradedReason: string | null;
   /** Epoch ms of the heartbeat this slice was last populated from, or null. */
   updatedAt: number | null;
 }
@@ -78,8 +77,7 @@ export const EMPTY_ATLAS_LIVE: AtlasLiveState = {
   anchored: null,
   poseTier: null,
   droppedKeyframes: null,
-  relayGroundAgentId: null,
-  relayDecimation: null,
+  degradedReason: null,
   updatedAt: null,
 };
 
