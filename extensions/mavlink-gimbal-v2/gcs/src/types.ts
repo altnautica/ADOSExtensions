@@ -18,6 +18,8 @@ export interface GimbalState {
   yawRateDps?: number;
   rollRateDps?: number;
   mode: GimbalMode;
+  /** Host sidecar stamp (epoch ms), when the host delivers one. */
+  ts_ms?: number;
 }
 
 export interface RoiTarget {

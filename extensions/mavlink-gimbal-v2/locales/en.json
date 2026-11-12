@@ -10,6 +10,7 @@
   "mode.roiLock": "Locked on point",
   "mode.followMe": "Following",
   "mode.neutral": "Neutral",
+  "mode.unknown": "Unknown",
   "unit.deg": "{value} deg",
   "manual.title": "Manual control",
   "manual.pitch": "Pitch",
@@ -26,6 +27,7 @@
   "roi.releaseSent": "Release sent",
   "roi.released": "ROI released",
   "roi.noGimbal": "No gimbal connected",
+  "roi.invalid": "Latitude must be -90 to 90 and longitude -180 to 180",
   "roi.lockDenied": "ROI lock denied by host",
   "roi.releaseDenied": "Release denied by host",
   "settings.title": "Settings"

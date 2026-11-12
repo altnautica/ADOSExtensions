@@ -22,13 +22,21 @@ function ruleFor(selector: string): string {
 }
 
 describe("panel styles", () => {
-  it("inlines plugin.css into the bundle", async () => {
+  it("inlines plugin.css into the bundle the package build script makes", async () => {
+    // Build with exactly the loader options the package's build script
+    // passes, so dropping the flag there fails this test.
+    const script: string = JSON.parse(readFileSync(resolve(GCS, "package.json"), "utf8"))
+      .scripts.build;
+    const loader = Object.fromEntries(
+      [...script.matchAll(/--loader:(\.[\w]+)=(\w+)/g)].map(([, ext, kind]) => [ext!, kind!]),
+    ) as Record<string, "text">;
+    expect(loader[".css"]).toBe("text");
     const out = await build({
       entryPoints: [resolve(GCS, "src/plugin.ts")],
       bundle: true,
       format: "esm",
       write: false,
-      loader: { ".css": "text" },
+      loader,
       logLevel: "silent",
     });
     const text = out.outputFiles[0]!.text;

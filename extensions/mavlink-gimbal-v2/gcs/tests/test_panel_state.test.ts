@@ -43,9 +43,12 @@ async function harness() {
   return h;
 }
 
+// Each agent sample carries its own stamp; the panel ignores a repeat.
+let seq = 0;
 function sample(over: Partial<GimbalState> = {}): GimbalState {
+  seq += 1;
   return {
-    timestampMs: Date.now(),
+    timestampMs: Date.now() + seq,
     pitchDeg: -20,
     yawDeg: 30,
     rollDeg: 0,
@@ -61,7 +64,7 @@ function lastWrite(calls: readonly { args: unknown }[]): OuterArgs["args"] {
 }
 
 describe("stale gimbal state", () => {
-  it("hides the angles once the feed has been silent past one second", async () => {
+  it("hides the angles once the feed has been silent for two seconds", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const h = await harness();
     const panel = mountPanel(h.ctx, rootEl);
@@ -77,13 +80,70 @@ describe("stale gimbal state", () => {
     await h.teardown();
   });
 
-  it("treats a sample stamped ten minutes ago as not reporting", async () => {
+  it("shows a payload whose host stamp is five seconds old as stale on first paint", async () => {
     const h = await harness();
     const panel = mountPanel(h.ctx, rootEl);
-    panel.setState(sample({ timestampMs: Date.now() - 600_000 }));
+    panel.setState({ ...sample(), ts_ms: Date.now() - 5000 });
     expect(rootEl.querySelector<HTMLElement>(".agm-readout")!.hidden).toBe(true);
     expect(rootEl.textContent).toContain("Gimbal not reporting");
     expect(rootEl.textContent).not.toContain("-20.0 deg");
+    panel.destroy();
+    await h.teardown();
+  });
+
+  it("stays live at the host's 750 ms cadence with jitter and skipped ticks", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    const readout = rootEl.querySelector<HTMLElement>(".agm-readout")!;
+    // The agent writes at most every 500 ms, so a delivered sample is up to
+    // ~450 ms old by the host stamp. Gaps include 1500 ms skipped ticks.
+    const gaps = [750, 810, 690, 1500, 760, 740, 1500, 1500, 700, 800];
+    const ageOnArrival = [0, 450, 120, 450, 300, 50, 400, 450, 200, 10];
+    let n = 0;
+    for (const gap of gaps) {
+      const stamp = Date.now() - ageOnArrival[n]!;
+      panel.setState({ ...sample({ timestampMs: stamp }), ts_ms: stamp });
+      // Check the readout at every 50 ms step until the next sample.
+      for (let t = 0; t < gap; t += 50) {
+        vi.advanceTimersByTime(50);
+        expect(readout.hidden, `sample ${n} +${t + 50} ms`).toBe(false);
+      }
+      n += 1;
+    }
+    panel.destroy();
+    await h.teardown();
+  });
+
+  it("stays live when the agent clock runs 1.5 s behind the browser", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    const readout = rootEl.querySelector<HTMLElement>(".agm-readout")!;
+    for (const gap of [750, 1500, 750, 1500, 750]) {
+      panel.setState(sample({ timestampMs: Date.now() - 1500 }));
+      expect(readout.hidden).toBe(false);
+      vi.advanceTimersByTime(gap - 1);
+      expect(readout.hidden).toBe(false);
+      vi.advanceTimersByTime(1);
+    }
+    panel.destroy();
+    await h.teardown();
+  });
+
+  it("does not reset the age when the same sample is delivered again", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    const readout = rootEl.querySelector<HTMLElement>(".agm-readout")!;
+    const first = sample();
+    panel.setState(first);
+    for (let i = 0; i < 3; i += 1) {
+      vi.advanceTimersByTime(750);
+      panel.setState({ ...first });
+    }
+    // 2250 ms since the one real sample: stale despite the repeats.
+    expect(readout.hidden).toBe(true);
     panel.destroy();
     await h.teardown();
   });
@@ -142,7 +202,60 @@ describe("slider seeding", () => {
   });
 });
 
+describe("slider release", () => {
+  it("keeps following the live angle after a release at the start value", async () => {
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    panel.setState(sample({ pitchDeg: -20 }));
+    const pitch = rootEl.querySelector<HTMLInputElement>(".agm-pitch")!;
+    // Drag away and back, then let go: no change event fires.
+    pitch.value = "-30";
+    pitch.dispatchEvent(new Event("input"));
+    pitch.value = "-20";
+    pitch.dispatchEvent(new Event("input"));
+    pitch.dispatchEvent(new Event("pointerup"));
+    panel.setState(sample({ pitchDeg: -25 }));
+    expect(pitch.value).toBe("-25");
+    for (const ev of ["pointercancel", "blur"]) {
+      pitch.dispatchEvent(new Event("input"));
+      pitch.dispatchEvent(new Event(ev));
+      panel.setState(sample({ pitchDeg: ev === "blur" ? -10 : -15 }));
+      expect(pitch.value, ev).toBe(ev === "blur" ? "-10" : "-15");
+    }
+    panel.destroy();
+    await h.teardown();
+  });
+});
+
 describe("ROI status", () => {
+  it("refuses an out-of-range latitude or longitude without sending", async () => {
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    panel.setState(sample());
+    const status = () => rootEl.querySelector(".agm-roi .agm-roi-status")!.textContent;
+    const before = h.calls.length;
+    await panel.submitRoi({ latDeg: 95, lonDeg: 10, altM: 50 });
+    expect(status()).toBe(en["roi.invalid"]);
+    await panel.submitRoi({ latDeg: 10, lonDeg: -181, altM: 50 });
+    expect(status()).toBe(en["roi.invalid"]);
+    expect(h.calls.length).toBe(before);
+    panel.destroy();
+    await h.teardown();
+  });
+
+  it("does not claim a re-lock while already locked from the old lock", async () => {
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    panel.setState(sample({ mode: "roi-lock" }));
+    await panel.submitRoi({ latDeg: 12.971, lonDeg: 77.594, altM: 50 });
+    const status = () => rootEl.querySelector(".agm-roi .agm-roi-status")!.textContent;
+    expect(status()).toBe("ROI sent");
+    panel.setState(sample({ mode: "roi-lock" }));
+    expect(status()).toBe("ROI sent");
+    panel.destroy();
+    await h.teardown();
+  });
+
   it("says the request was sent, then confirms from the telemetry mode", async () => {
     const h = await harness();
     const panel = mountPanel(h.ctx, rootEl);
@@ -196,6 +309,15 @@ describe("operator words", () => {
       panel.setState(sample({ mode: id as GimbalState["mode"] }));
       expect(mode()).toBe(word);
     }
+    panel.destroy();
+    await h.teardown();
+  });
+
+  it("shows a mode it does not know as unknown, not neutral", async () => {
+    const h = await harness();
+    const panel = mountPanel(h.ctx, rootEl);
+    panel.setState(sample({ mode: "gpb-track" as GimbalState["mode"] }));
+    expect(rootEl.querySelector(".agm-mode")!.textContent).toBe("Unknown");
     panel.destroy();
     await h.teardown();
   });

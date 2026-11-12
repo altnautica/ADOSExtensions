@@ -2,6 +2,21 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.5.1
+
+- The Gimbal tab no longer flips to "Gimbal not reporting" on a live
+  gimbal. It waits two seconds without a new update, and it no longer reads
+  the drone's clock against this computer's, so a drone clock that runs
+  behind does not mark the gimbal silent. A repeated update does not count
+  as new.
+- Lock on target refuses a latitude outside -90 to 90 or a longitude
+  outside -180 to 180 and says so, instead of sending it.
+- Locking a new point while already locked shows "ROI sent" rather than
+  claiming "Locked on point" from the previous lock.
+- Letting go of a slider where it started puts it back to following the
+  gimbal's live angle.
+- A gimbal mode the tab does not know shows as "Unknown", not "Neutral".
+
 ## 1.5.0
 
 - The Gimbal tab says "Gimbal not reporting" with the time since the last

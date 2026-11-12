@@ -26,11 +26,13 @@ import {
   type RoiTarget,
 } from "./types";
 
-/** The gimbal feed runs at 5 Hz; a second of silence means it stopped. */
-export const STALE_AFTER_MS = 1000;
-const TICK_MS = 1000;
-/** Below this a `timestampMs` is not wall-clock milliseconds. */
-const EPOCH_MS_FLOOR = 1e12;
+/**
+ * The host polls the agent's state every 750 ms and skips a poll while one is
+ * in flight, so 1500 ms gaps are normal; two seconds without a new sample
+ * means the feed stopped.
+ */
+export const STALE_AFTER_MS = 2000;
+const TICK_MS = 250;
 
 const MODE_KEYS: Record<GimbalMode, string> = {
   manual: "mode.manual",
@@ -63,9 +65,15 @@ export function mountPanel(
   const t: Translate = (key, params) => ctx.i18n.t(key, params);
   const limits: AxisLimits = opts.limits ?? DEFAULT_LIMITS;
   let state: GimbalState | null = null;
-  let receivedAt = 0;
+  // Browser time the current sample was taken, per the host's stamp when it
+  // carries one (never later than its arrival), else its arrival. The
+  // agent's own `timestampMs` is only an identity: its clock is not ours.
+  let sampleAt = 0;
+  let lastTimestampMs: number | null = null;
   // The ROI request awaiting confirmation from the telemetry mode.
   let pendingRoi: "lock" | "release" | null = null;
+  // A lock sent while already locked cannot be confirmed from the mode,
+  // since the state does not carry the target.
   const dragging = { pitch: false, yaw: false };
   const deg = (value: number): string => t("unit.deg", { value: value.toFixed(1) });
 
@@ -73,10 +81,7 @@ export function mountPanel(
 
   function ageMs(now: number): number {
     if (!state) return Infinity;
-    const sinceReceipt = now - receivedAt;
-    return state.timestampMs > EPOCH_MS_FLOOR
-      ? Math.max(sinceReceipt, now - state.timestampMs)
-      : sinceReceipt;
+    return now - sampleAt;
   }
 
   function isFresh(): boolean {
@@ -89,7 +94,7 @@ export function mountPanel(
       dom.statePitch.textContent = deg(state.pitchDeg);
       dom.stateYaw.textContent = deg(state.yawDeg);
       dom.stateRoll.textContent = deg(state.rollDeg);
-      dom.stateMode.textContent = t(MODE_KEYS[state.mode] ?? "mode.neutral");
+      dom.stateMode.textContent = t(MODE_KEYS[state.mode] ?? "mode.unknown");
       dom.empty.hidden = true;
       dom.readout.hidden = false;
     } else {
@@ -151,9 +156,27 @@ export function mountPanel(
       showSlider(axis, numberValue(input));
     });
     input.addEventListener("change", () => void commitSlider(axis, numberValue(input)));
+    // Letting go at the starting value fires no change event; the slider
+    // must still go back to following the live angle.
+    for (const end of ["pointerup", "pointercancel", "blur"]) {
+      input.addEventListener(end, () => {
+        dragging[axis] = false;
+      });
+    }
   }
 
   async function submitRoi(target: RoiTarget): Promise<void> {
+    if (
+      !Number.isFinite(target.latDeg) ||
+      !Number.isFinite(target.lonDeg) ||
+      Math.abs(target.latDeg) > 90 ||
+      Math.abs(target.lonDeg) > 180
+    ) {
+      pendingRoi = null;
+      dom.roiStatus.textContent = t("roi.invalid");
+      return;
+    }
+    const wasLocked = state !== null && isFresh() && state.mode === "roi-lock";
     try {
       await sendRoiLocation(ctx, target);
     } catch {
@@ -162,7 +185,7 @@ export function mountPanel(
       return;
     }
     if (state && isFresh()) {
-      pendingRoi = "lock";
+      pendingRoi = wasLocked ? null : "lock";
       dom.roiStatus.textContent = t("roi.sent");
     } else {
       pendingRoi = null;
@@ -210,8 +233,12 @@ export function mountPanel(
 
   return {
     setState(next) {
+      const ts = Number.isFinite(next?.timestampMs) ? next!.timestampMs : null;
+      if (next && ts !== null && ts === lastTimestampMs) return;
+      lastTimestampMs = ts;
       state = next;
-      receivedAt = Date.now();
+      const now = Date.now();
+      sampleAt = Number.isFinite(next?.ts_ms) ? Math.min(next!.ts_ms!, now) : now;
       refreshReadout();
       seedSliders();
       confirmRoi();

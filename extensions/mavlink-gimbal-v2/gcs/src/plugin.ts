@@ -20,7 +20,7 @@ let rootEl: HTMLElement | null = null;
 
 definePlugin({
   id: "com.altnautica.mavlink-gimbal-v2",
-  version: "1.5.0",
+  version: "1.5.1",
   locale: enLocale,
   async mount(ctx) {
     injectStyles(panelCss);
