@@ -2,6 +2,13 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.5.2
+
+- A live gimbal no longer reads "Gimbal not reporting" when the drone clock
+  runs behind or an update arrives late. An old update shown when the tab
+  opens still reads as not reporting, and a gimbal that goes silent still
+  does so after two seconds.
+
 ## 1.5.1
 
 - The Gimbal tab no longer flips to "Gimbal not reporting" on a live

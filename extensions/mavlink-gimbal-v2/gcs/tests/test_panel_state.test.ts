@@ -91,42 +91,56 @@ describe("stale gimbal state", () => {
     await h.teardown();
   });
 
-  it("stays live at the host's 750 ms cadence with jitter and skipped ticks", async () => {
+  // The host polls every 750 ms with jitter and skips every 5th tick (a
+  // 1500 ms gap); each entry is already ~1000 ms old by the agent clock when
+  // it arrives. `behindMs` is how far the drone clock runs behind.
+  async function runHostCadence(behindMs: number): Promise<void> {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const h = await harness();
     const panel = mountPanel(h.ctx, rootEl);
     const readout = rootEl.querySelector<HTMLElement>(".agm-readout")!;
-    // The agent writes at most every 500 ms, so a delivered sample is up to
-    // ~450 ms old by the host stamp. Gaps include 1500 ms skipped ticks.
-    const gaps = [750, 810, 690, 1500, 760, 740, 1500, 1500, 700, 800];
-    const ageOnArrival = [0, 450, 120, 450, 300, 50, 400, 450, 200, 10];
-    let n = 0;
-    for (const gap of gaps) {
-      const stamp = Date.now() - ageOnArrival[n]!;
+    const jitter = [0, 40, -35, 20, -10, 30, -25, 15, -40, 5, 25, -20];
+    for (let tick = 0; tick < jitter.length; tick += 1) {
+      const gap = (tick + 1) % 5 === 0 ? 1500 : 750 + jitter[tick]!;
+      const stamp = Date.now() - 1000 - behindMs + (tick % 3) * 40;
       panel.setState({ ...sample({ timestampMs: stamp }), ts_ms: stamp });
-      // Check the readout at every 50 ms step until the next sample.
+      if (tick === 0) {
+        vi.advanceTimersByTime(gap);
+        continue;
+      }
       for (let t = 0; t < gap; t += 50) {
         vi.advanceTimersByTime(50);
-        expect(readout.hidden, `sample ${n} +${t + 50} ms`).toBe(false);
+        expect(readout.hidden, `tick ${tick} +${t + 50} ms`).toBe(false);
       }
-      n += 1;
     }
     panel.destroy();
     await h.teardown();
+  }
+
+  it("stays live at the host cadence when the drone clock runs 2 s behind", async () => {
+    await runHostCadence(2000);
   });
 
-  it("stays live when the agent clock runs 1.5 s behind the browser", async () => {
+  it("stays live at the host cadence when the drone clock runs 5 s behind", async () => {
+    await runHostCadence(5000);
+  });
+
+  it("reads stale exactly two seconds after a live feed stops", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
     const h = await harness();
     const panel = mountPanel(h.ctx, rootEl);
     const readout = rootEl.querySelector<HTMLElement>(".agm-readout")!;
-    for (const gap of [750, 1500, 750, 1500, 750]) {
-      panel.setState(sample({ timestampMs: Date.now() - 1500 }));
-      expect(readout.hidden).toBe(false);
-      vi.advanceTimersByTime(gap - 1);
-      expect(readout.hidden).toBe(false);
-      vi.advanceTimersByTime(1);
+    for (let i = 0; i < 4; i += 1) {
+      const stamp = Date.now() - 1000;
+      panel.setState({ ...sample({ timestampMs: stamp }), ts_ms: stamp });
+      vi.advanceTimersByTime(750);
     }
+    const stamp = Date.now() - 1000;
+    panel.setState({ ...sample({ timestampMs: stamp }), ts_ms: stamp });
+    vi.advanceTimersByTime(1999);
+    expect(readout.hidden).toBe(false);
+    vi.advanceTimersByTime(1);
+    expect(readout.hidden).toBe(true);
     panel.destroy();
     await h.teardown();
   });

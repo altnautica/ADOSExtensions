@@ -10,7 +10,12 @@
  * plain buttons and Enter in a field, never a form submission.
  */
 
-import type { PluginContext } from "@altnautica/plugin-sdk";
+import {
+  SampleClock,
+  STALE_AFTER_MS,
+  agentTimestampOf,
+  type PluginContext,
+} from "@altnautica/plugin-sdk";
 
 import {
   sendPitchYaw,
@@ -26,12 +31,6 @@ import {
   type RoiTarget,
 } from "./types";
 
-/**
- * The host polls the agent's state every 750 ms and skips a poll while one is
- * in flight, so 1500 ms gaps are normal; two seconds without a new sample
- * means the feed stopped.
- */
-export const STALE_AFTER_MS = 2000;
 const TICK_MS = 250;
 
 const MODE_KEYS: Record<GimbalMode, string> = {
@@ -65,11 +64,10 @@ export function mountPanel(
   const t: Translate = (key, params) => ctx.i18n.t(key, params);
   const limits: AxisLimits = opts.limits ?? DEFAULT_LIMITS;
   let state: GimbalState | null = null;
-  // Browser time the current sample was taken, per the host's stamp when it
-  // carries one (never later than its arrival), else its arrival. The
-  // agent's own `timestampMs` is only an identity: its clock is not ours.
-  let sampleAt = 0;
-  let lastTimestampMs: number | null = null;
+  // Ages the samples: the agent `ts_ms` judges only the first of a run, so
+  // an old entry replayed on mount reads stale while a live feed stays live
+  // whatever the drone clock skew. The agent's `timestampMs` keys repeats.
+  const clock = new SampleClock();
   // The ROI request awaiting confirmation from the telemetry mode.
   let pendingRoi: "lock" | "release" | null = null;
   // A lock sent while already locked cannot be confirmed from the mode,
@@ -81,7 +79,7 @@ export function mountPanel(
 
   function ageMs(now: number): number {
     if (!state) return Infinity;
-    return now - sampleAt;
+    return clock.ageMs(now) ?? Infinity;
   }
 
   function isFresh(): boolean {
@@ -233,12 +231,13 @@ export function mountPanel(
 
   return {
     setState(next) {
-      const ts = Number.isFinite(next?.timestampMs) ? next!.timestampMs : null;
-      if (next && ts !== null && ts === lastTimestampMs) return;
-      lastTimestampMs = ts;
+      if (next) {
+        const key = Number.isFinite(next.timestampMs) ? next.timestampMs : null;
+        if (clock.ingest(agentTimestampOf(next), Date.now(), key) === null) return;
+      } else {
+        clock.reset();
+      }
       state = next;
-      const now = Date.now();
-      sampleAt = Number.isFinite(next?.ts_ms) ? Math.min(next!.ts_ms!, now) : now;
       refreshReadout();
       seedSliders();
       confirmRoi();
