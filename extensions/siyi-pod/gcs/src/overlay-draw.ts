@@ -13,7 +13,29 @@ import type {
   VideoOverlayRenderedRect,
 } from "@altnautica/plugin-sdk";
 
-import type { PodState } from "./types";
+import { isLive, rangeReading, type PodStateStore } from "./pod-state";
+
+type Translate = (key: string, params?: Record<string, string | number>) => string;
+
+/**
+ * The HUD text lines: the laser range with its age while it is fresh, and the
+ * zoom. When the pod feed has stopped the live values are dropped and the HUD
+ * says so instead.
+ */
+export function hudLines(store: PodStateStore, now: number, t: Translate): string[] {
+  const state = store.get();
+  if (!state) return [];
+  if (!isLive(store, now)) return [t("panel.noData")];
+  const lines: string[] = [];
+  const range = rangeReading(state, now);
+  if (range) {
+    lines.push(t("hud.rangeReading", { m: range.range_m.toFixed(0), s: range.age_s }));
+  }
+  if (state.zoom != null && state.zoom > 1) {
+    lines.push(`${state.zoom.toFixed(1)}x`);
+  }
+  return lines;
+}
 
 export interface PixelRect {
   x: number;
@@ -56,7 +78,7 @@ export function lockColor(lockState: string | null | undefined): string {
 export function drawHud(
   c: CanvasRenderingContext2D | null,
   props: VideoOverlayHostProps | null,
-  state: PodState | null,
+  lines: string[],
 ): void {
   if (!c || !props) return;
   const { renderedRect: rect, detections } = props;
@@ -88,12 +110,5 @@ export function drawHud(
   // Range + zoom readout.
   c.fillStyle = "#e6f2ff";
   c.font = "12px system-ui, sans-serif";
-  const lines: string[] = [];
-  if (state?.laser_range_m != null) {
-    lines.push(`RNG ${state.laser_range_m.toFixed(0)} m`);
-  }
-  if (state?.zoom != null && state.zoom > 1) {
-    lines.push(`${state.zoom.toFixed(1)}x`);
-  }
   lines.forEach((line, i) => c.fillText(line, rect.left + 8, rect.top + 18 + i * 16));
 }

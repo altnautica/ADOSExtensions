@@ -5,21 +5,21 @@
  * sandboxed iframe. One bundle serves the pod's contribution slots: it mounts
  * the control console and a read-only video HUD, subscribes to the pod state,
  * and — when the host pushes video-overlay props (the video.overlay slot) —
- * hides the console so only the HUD paints over the live video.
+ * hides the console so only the HUD paints over the live video. The host loads
+ * only the bundle, so the stylesheet is bundled as text and injected at mount.
  *
  * @license GPL-3.0-or-later
  */
 
 import { definePlugin, type PluginContext } from "@altnautica/plugin-sdk";
 
-import { mountOverlay } from "./overlay";
-import { mountPanel } from "./panel";
-import { PodStateStore } from "./pod-state";
-import type { PodState } from "./types";
+import css from "../plugin.css";
+import { mountSiyi } from "./mount";
+import { injectStyles } from "./styles";
+import { PLUGIN_VERSION } from "./version";
 import enLocale from "../../locales/en.json";
 
 const PLUGIN_ID = "com.altnautica.siyi-pod";
-const PLUGIN_VERSION = "0.5.2";
 
 let handles: { destroy(): void }[] = [];
 let rootEl: HTMLElement | null = null;
@@ -43,20 +43,8 @@ definePlugin({
   version: PLUGIN_VERSION,
   locale: enLocale as Record<string, string>,
   async mount(ctx: PluginContext) {
-    const root = ensureRoot();
-    const store = new PodStateStore();
-    handles = [mountPanel(ctx, root, store), mountOverlay(ctx, root, store)];
-
-    // Overlay props only arrive in the video.overlay slot; when they do, hide
-    // the console so the HUD paints alone over the video.
-    ctx.videoOverlay.onProps(() => {
-      root.classList.add("siyi-overlay-mode");
-    });
-
-    // Live pod read-back rides the "siyi" telemetry channel and the
-    // siyi.pod.state event; either updates the store.
-    await ctx.telemetry.subscribe<PodState>("siyi", (s) => store.ingest(s));
-    ctx.events.subscribe<PodState>("siyi.pod.state", (s) => store.ingest(s));
+    injectStyles(css);
+    handles = await mountSiyi(ctx, ensureRoot());
   },
   async unmount() {
     for (const h of handles) h.destroy();

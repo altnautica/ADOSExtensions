@@ -11,6 +11,7 @@ import math
 from typing import Any
 
 from altnautica_siyi_pod import commands as C
+from altnautica_siyi_pod.control import LaserDisarmed
 from altnautica_siyi_pod.pod import PodUnsupported
 
 
@@ -76,7 +77,7 @@ class ToolsMixin:
             return {"ok": False, "reason": "pod not connected"}
         try:
             range_m = await self._measure_laser()
-        except PodUnsupported as exc:
+        except (PodUnsupported, LaserDisarmed) as exc:
             return {"ok": False, "reason": str(exc)}
         return {"ok": True, "range_m": range_m}
 
@@ -86,7 +87,7 @@ class ToolsMixin:
             return {"ok": False, "reason": "pod not connected"}
         try:
             await self._measure_laser()
-        except PodUnsupported as exc:
+        except (PodUnsupported, LaserDisarmed) as exc:
             return {"ok": False, "reason": str(exc)}
         if self._last_laser_target is None:
             return {"ok": False, "reason": "no vehicle pose for geolocation"}

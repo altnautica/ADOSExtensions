@@ -19,6 +19,8 @@ function state(caps: Partial<PodCapabilities>): PodState {
     palette: null,
     recording: false,
     laser_range_m: null,
+    laser_range_at: null,
+    laser_enabled: false,
     spot_temp_c: null,
     link_ok: true,
     frames_received: 0,

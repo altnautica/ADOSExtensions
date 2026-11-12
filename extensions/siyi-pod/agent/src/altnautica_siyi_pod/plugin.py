@@ -30,7 +30,7 @@ import logging
 import math
 from typing import Any, Callable
 
-from altnautica_siyi_pod.control import _NONCE_KEYS, ControlMixin
+from altnautica_siyi_pod.control import LASER_DISARMED_REASON, _NONCE_KEYS, ControlMixin
 from altnautica_siyi_pod.mavlink_bridge import (
     COMP_CAMERA,
     COMP_GIMBAL,
@@ -406,6 +406,11 @@ class SiyiPodPlugin(ControlMixin, VideoMixin, ToolsMixin):
                         cap, "Unavailable on this pod model"
                     ),
                 }
+        if states["siyi.pod.laser"]["state"] == "idle" and not self._state.laser_enabled:
+            states["siyi.pod.laser"] = {
+                "state": "disabled",
+                "reason": LASER_DISARMED_REASON,
+            }
         states["siyi.pod.record"] = {
             "state": "active" if self._state.recording else "idle"
         }

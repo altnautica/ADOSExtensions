@@ -42,11 +42,20 @@
   border: 1px solid var(--border, #3d3d3d);
   border-radius: 4px;
   padding: 3px 8px;
+  min-height: 48px;
   font: inherit;
   cursor: pointer;
 }
 .siyi-range {
   cursor: default;
+  min-height: 48px;
+}
+.siyi-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.siyi-lost {
+  opacity: 0.45;
 }
 .siyi-hud {
   position: absolute;

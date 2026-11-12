@@ -10,7 +10,7 @@
 
 import type { PluginContext, VideoOverlayHostProps } from "@altnautica/plugin-sdk";
 
-import { drawHud } from "./overlay-draw";
+import { drawHud, hudLines } from "./overlay-draw";
 import type { PodStateStore } from "./pod-state";
 
 export interface OverlayHandle {
@@ -44,7 +44,7 @@ export function mountOverlay(
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
     }
-    drawHud(canvas.getContext("2d"), props, store.get());
+    drawHud(canvas.getContext("2d"), props, hudLines(store, Date.now(), (k, p) => ctx.i18n.t(k, p)));
   };
 
   const unsubProps = ctx.videoOverlay.onProps((p) => {
@@ -53,11 +53,14 @@ export function mountOverlay(
     draw();
   });
   const unsubState = store.subscribe(() => draw());
+  // Ages the range readout and notices a stopped feed between samples.
+  const tick = setInterval(draw, 1_000);
 
   return {
     destroy() {
       unsubProps();
       unsubState();
+      clearInterval(tick);
       canvas.remove();
     },
     hasProps() {

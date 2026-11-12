@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.0
+
+- The console header follows the pod link: "Connected" while the pod
+  answers, "Pod not answering" when the link is up but the pod has gone
+  silent, and "No pod data" with the time of the last update when the
+  feed stops for a second or more. Readouts dim while the link is lost and
+  values from a stopped feed are no longer shown as live.
+- The agent publishes when each laser range was measured
+  (`laser_range_at`). The console and the video HUD show the range with its
+  age ("182 m · 3 s ago") and hide it 10 s after the measurement, so an old
+  range no longer sits beside the live reticle.
+- The laser fires only while the rangefinder is armed (the "Laser
+  rangefinder" setting). Disarmed, the console's Range button is greyed out
+  with a note, the Fire rangefinder Skill shows as unavailable, and the
+  range and geolocate tools refuse with a reason. The agent publishes the
+  armed state as `laser_enabled`.
+- Range asks for a second press ("Confirm: fire laser") before it fires;
+  an unanswered confirmation lapses after 5 s.
+- The console is built once per pod model and updated in place, so a
+  live feed no longer closes an open drop-down or resets a control the
+  operator is changing.
+- The panel styles ship inside the bundle and are added at mount, and the
+  console is hidden directly in the video overlay. Buttons, drop-downs and
+  the zoom slider are 48 px tall.
+- Clearer words: gimbal modes read Lock, Follow and FPV; the thermal
+  palette is a named list (White hot to Red hot) limited to the codes the
+  agent accepts; the recentre button reads Recenter; a refused or failed
+  command is explained in a sentence. Every panel string is translatable.
+- The bundle reports the manifest version.
+
 ## 0.5.3
 
 - The Cycle palette Skill's default key is `b` (was `o`) and the Nadir

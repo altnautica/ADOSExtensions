@@ -37,10 +37,17 @@ export interface PodState {
   palette: number | null;
   recording: boolean;
   laser_range_m: number | null;
+  /** When the range was measured (epoch ms); null when never measured. */
+  laser_range_at: number | null;
+  /** Whether the operator has armed the rangefinder. */
+  laser_enabled: boolean;
   spot_temp_c: number | null;
   link_ok: boolean;
   frames_received: number;
 }
 
 export const GIMBAL_MODES = ["lock", "follow", "fpv"] as const;
+
+/** Thermal palette codes the pod accepts (code 1 is reserved by the pod). */
+export const PALETTE_CODES = [0, 2, 3, 4, 5, 6, 7] as const;
 export type GimbalMode = (typeof GIMBAL_MODES)[number];

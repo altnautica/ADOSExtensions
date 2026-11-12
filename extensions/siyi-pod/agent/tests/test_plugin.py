@@ -220,6 +220,7 @@ async def test_laser_fire_publishes_a_geolocated_target():
     plugin._on_global_position(_global_position(12.9716, 77.5946, 50.0))
     plugin._on_attitude(_attitude(yaw=0.0))
 
+    ctx.config_kv.set("laser_enabled", True)
     ctx.config_kv.set("laser_fire_nonce", 1)
     await plugin.apply_config_once()
 
@@ -322,6 +323,7 @@ async def test_skill_laser_fire_measures_range():
     plugin._on_global_position(_global_position(12.9716, 77.5946, 50.0))
     plugin._on_attitude(_attitude(yaw=0.0))
 
+    ctx.config_kv.set("laser_enabled", True)
     ctx.config_kv.set("laser_fire", True)
     await plugin.apply_config_once()
     assert plugin.state.laser_range_m == 42.0
@@ -405,6 +407,9 @@ async def test_zt30_publishes_enabled_skill_states():
     ctx = _Ctx()
     plugin = SiyiPodPlugin(transport_factory=_zt30_factory)
     await plugin.on_start(ctx)
+    ctx.config_kv.set("laser_enabled", True)
+    await plugin.apply_config_once()
+    await plugin.poll_telemetry_once()
     events = dict(ctx.events.published)
     for topic in (
         "siyi.pod.zoom",
@@ -450,6 +455,7 @@ async def test_mcp_tools_registered_and_callable():
     assert transport.photos_taken == 1
     assert transport.recording is True
 
+    ctx.config_kv.set("laser_enabled", True)
     # laser_range returns the measured range.
     lr = await ctx.tools.handlers["laser_range"]({})
     assert lr == {"ok": True, "range_m": 42.0}
@@ -538,8 +544,10 @@ async def test_a_position_that_does_not_decode_leaves_geolocation_off():
     plugin._on_global_position(broken)
     plugin._on_attitude(_attitude(yaw=0.0))
 
+    ctx.config_kv.set("laser_enabled", True)
     ctx.config_kv.set("laser_fire_nonce", 1)
     await plugin.apply_config_once()
 
+    assert plugin.state.laser_range_m == 42.0
     assert plugin._last_laser_target is None
     await plugin.on_stop(ctx)

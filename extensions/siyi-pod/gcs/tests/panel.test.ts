@@ -7,6 +7,7 @@ import {
 
 import { mountPanel } from "../src/panel";
 import { PodStateStore } from "../src/pod-state";
+import enLocale from "../../locales/en.json";
 
 async function withHarness(): Promise<PluginHarness> {
   const harness = createPluginHarness({
@@ -14,6 +15,7 @@ async function withHarness(): Promise<PluginHarness> {
     mount: () => undefined,
   });
   await harness.start();
+  harness.ctx.i18n.t = (key: string) => (enLocale as Record<string, string>)[key] ?? key;
   return harness;
 }
 
@@ -85,7 +87,7 @@ describe("console capability gating", () => {
     expect(labels).not.toContain("High gain");
     expect(labels).not.toContain("Low gain");
     expect(labels).not.toContain("Range");
-    expect(labels).not.toContain("Center");
+    expect(labels).not.toContain("Recenter");
     expect(root.querySelectorAll("input[type=range]").length).toBe(0);
     expect(root.querySelectorAll("input[type=number]").length).toBe(0);
 
@@ -135,7 +137,11 @@ describe("console commands", () => {
     photo?.click();
 
     const status = root.querySelector('[data-testid="siyi-command-status"]');
-    await vi.waitFor(() => expect(status?.textContent).toBe("operator denied"));
+    await vi.waitFor(() =>
+      expect(status?.textContent).toBe(
+        "The command was not sent: the ground station refused it.",
+      ),
+    );
 
     handle.destroy();
     root.remove();

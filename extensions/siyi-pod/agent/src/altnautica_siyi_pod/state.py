@@ -34,6 +34,12 @@ class PodState:
     palette: int | None = None
     recording: bool = False
     laser_range_m: float | None = None
+    # When the range above was measured (epoch milliseconds), so the GCS can
+    # show its age and stop presenting an old range as current.
+    laser_range_at: int | None = None
+    # Whether the operator has armed the rangefinder (the laser_enabled
+    # parameter); the laser does not fire while this is false.
+    laser_enabled: bool = False
     spot_temp_c: float | None = None
     # Link health: frames seen, and whether the pod answered the last poll. A
     # transport that is up but has stopped answering reads as not ok.

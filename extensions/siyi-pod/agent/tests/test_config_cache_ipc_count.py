@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from altnautica_siyi_pod import control
 from altnautica_siyi_pod.capability_profile import HW_ZT30
-from altnautica_siyi_pod.control import _ACTION_KEYS, _NONCE_KEYS, _STATE_KEYS
+from altnautica_siyi_pod.control import _ACTION_KEYS, _CACHED_KEYS, _NONCE_KEYS
 from altnautica_siyi_pod.plugin import SiyiPodPlugin
 from altnautica_siyi_pod.transport import MockTransport
 
@@ -72,13 +72,13 @@ async def test_state_keys_refresh_at_most_once_a_second(monkeypatch):
         now[0] += 0.25
 
     # The first tick reads the full key set.
-    assert set(per_tick[0]) == set(_STATE_KEYS) | _ONE_SHOT
+    assert set(per_tick[0]) == set(_CACHED_KEYS) | _ONE_SHOT
     # Ticks inside the refresh window poll only the one-shot keys, once each.
     for gets in per_tick[1:4]:
         assert sorted(gets) == sorted(_ONE_SHOT)
     # One second after the last refresh the state keys are read again.
-    assert set(per_tick[4]) == set(_STATE_KEYS) | _ONE_SHOT
-    assert len(per_tick[4]) == len(_STATE_KEYS) + len(_ONE_SHOT)
+    assert set(per_tick[4]) == set(_CACHED_KEYS) | _ONE_SHOT
+    assert len(per_tick[4]) == len(_CACHED_KEYS) + len(_ONE_SHOT)
     await plugin.on_stop(ctx)
 
 

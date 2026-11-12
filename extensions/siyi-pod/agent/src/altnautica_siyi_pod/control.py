@@ -40,6 +40,12 @@ _STATE_KEYS = (
     "recording",
 )
 
+# Gate keys read with the state keys but never applied to the pod.
+_GATE_KEYS = ("laser_enabled",)
+
+# Every key the 1 Hz config cache holds.
+_CACHED_KEYS = _STATE_KEYS + _GATE_KEYS
+
 # One-shot keys: an action fires once each time its integer nonce increases.
 _NONCE_KEYS = (
     "photo_nonce",
@@ -65,6 +71,13 @@ _ACTION_KEYS = (
 
 # Per-press zoom step, in absolute-zoom units.
 _ZOOM_STEP = 1.0
+
+
+class LaserDisarmed(Exception):
+    """The rangefinder was asked to fire while the operator has not armed it."""
+
+
+LASER_DISARMED_REASON = "The rangefinder is not armed; arm it in the pod settings"
 
 
 def _monotonic() -> float:
@@ -114,6 +127,7 @@ class ControlMixin:
             return
         # Declarative state keys, from the 1 Hz cache.
         state_cfg = await self._config_for_tick()
+        self._state.laser_enabled = state_cfg.get("laser_enabled") is True
         for key in _STATE_KEYS:
             value = state_cfg.get(key)
             if value is None or self._applied.get(key) == value:
@@ -151,7 +165,7 @@ class ControlMixin:
             or (now - self._state_cfg_read_at) >= _CONFIG_REFRESH_S
         ):
             fresh: dict[str, Any] = {}
-            for key in _STATE_KEYS:
+            for key in _CACHED_KEYS:
                 fresh[key] = await self._cfg(key, None)
             self._state_cfg = fresh
             self._state_cfg_read_at = now
@@ -199,8 +213,8 @@ class ControlMixin:
                 await pod.center()
             elif key == "laser_fire_nonce":
                 await self._measure_laser()
-        except PodUnsupported as exc:
-            log.info("ignoring unsupported action %s: %s", key, exc)
+        except (PodUnsupported, LaserDisarmed) as exc:
+            log.info("ignoring action %s: %s", key, exc)
         except Exception as exc:  # noqa: BLE001
             log.warning("action %s failed: %s", key, exc)
 
@@ -208,11 +222,20 @@ class ControlMixin:
         """Fire the rangefinder, mirror the range to the flight controller, and
         (when a vehicle pose is available) resolve the geolocated target the
         geolocate tool returns. Returns the measured slant range. Shared by the
-        laser-fire one-shot and the laser/geolocate tools."""
+        laser-fire one-shot and the laser/geolocate tools.
+
+        Refuses with :class:`LaserDisarmed` unless the operator has armed the
+        rangefinder (``laser_enabled``), read fresh rather than from the cache
+        so a disarm takes effect at once."""
         pod = self._pod
         assert pod is not None
+        armed = await self._cfg("laser_enabled", False) is True
+        self._state.laser_enabled = armed
+        if not armed:
+            raise LaserDisarmed(LASER_DISARMED_REASON)
         range_m = await pod.read_laser_range()
         self._state.laser_range_m = range_m
+        self._state.laser_range_at = int(time.time() * 1000)
         if self._bridge is not None:
             await self._bridge.send_distance(range_m)
         self._last_laser_target = None
@@ -258,8 +281,8 @@ class ControlMixin:
                 await self._step_zoom(_ZOOM_STEP)
             elif key == "zoom_out":
                 await self._step_zoom(-_ZOOM_STEP)
-        except PodUnsupported as exc:
-            log.info("ignoring unsupported skill %s: %s", key, exc)
+        except (PodUnsupported, LaserDisarmed) as exc:
+            log.info("ignoring skill %s: %s", key, exc)
         except Exception as exc:  # noqa: BLE001
             log.warning("skill %s failed: %s", key, exc)
 
@@ -292,7 +315,7 @@ class ControlMixin:
 
     async def _set_cfg(self, key: str, value: Any) -> None:
         # Keep the state-key cache in step with the plugin's own writes.
-        if self._state_cfg is not None and key in _STATE_KEYS:
+        if self._state_cfg is not None and key in _CACHED_KEYS:
             self._state_cfg[key] = value
         setter = getattr(self._ctx.config_kv, "set", None)
         if setter is None:
