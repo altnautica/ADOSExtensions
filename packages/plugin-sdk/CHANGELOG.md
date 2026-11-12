@@ -2,6 +2,15 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.5.3
+
+- `SampleClock` ignores a sample stamped earlier than the one before it (an
+  older report delivered late, as when a host falls back to a slower source
+  after a failed poll): it returns `null`, so the panel keeps the newer
+  reading and that reading still goes stale on time. Only a sample whose
+  stamp moved forward continues a live run. The stamp is compared with the
+  previous delivery only, so a drone clock that steps back costs one sample.
+
 ## 1.5.2
 
 - `SampleClock`, `STALE_AFTER_MS` (2000) and `agentTimestampOf` age host

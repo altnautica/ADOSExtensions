@@ -64,9 +64,66 @@ describe("SampleClock", () => {
   it("judges a feed that resumes after going stale by its stamp again", () => {
     const clock = new SampleClock();
     const now = 1_000_000;
-    clock.ingest(now, now);
-    clock.ingest(now - 10_000, now + 3000);
+    clock.ingest(now - 1000, now);
+    // A newer report, but the run went stale before it arrived.
+    expect(clock.ingest(now - 500, now + 3000)).toBe(now - 500);
     expect(clock.isStale(now + 3000)).toBe(true);
+  });
+
+  it.each([-3000, 0, 5000])(
+    "ignores a report stamped older than the last one (drone clock offset %i ms)",
+    (skewMs) => {
+      const clock = new SampleClock();
+      const stamp = (t: number) => t - 1000 - skewMs;
+      let now = 1_000_000;
+      clock.ingest(stamp(now), now);
+      now += 750;
+      clock.ingest(stamp(now), now);
+      const lastLive = now;
+      const newest = stamp(now);
+      // A failed poll: the host falls back to a slower source whose report is
+      // stamped 4 s before the last one. It must not replace the newer reading
+      // or read live.
+      now += 750;
+      expect(clock.ingest(newest - 4000, now)).toBeNull();
+      expect(clock.sampleAt).toBe(lastLive);
+      // The slower source repeats while the faster one is down; the newer
+      // reading still goes stale 2000 ms after it arrived.
+      expect(clock.ingest(newest - 4000, now + 750)).toBeNull();
+      expect(clock.isStale(lastLive + 1999)).toBe(false);
+      expect(clock.isStale(lastLive + 2000)).toBe(true);
+      // The faster source answers again before then: the run continues live.
+      const back = lastLive + 1500;
+      expect(clock.ingest(stamp(back), back)).toBe(back);
+      expect(clock.isStale(back + 1999)).toBe(false);
+    },
+  );
+
+  it("costs one sample, not the feed, when the drone clock steps back", () => {
+    const clock = new SampleClock();
+    let now = 1_000_000;
+    let ts = now - 1000;
+    clock.ingest(ts, now);
+    now += 750;
+    ts += 750;
+    clock.ingest(ts, now);
+    // The drone clock steps back a minute (a time-source correction).
+    now += 750;
+    ts -= 60_000;
+    expect(clock.ingest(ts, now)).toBeNull();
+    for (let i = 0; i < 10; i++) {
+      now += 750;
+      ts += 750;
+      expect(clock.ingest(ts, now)).toBe(now);
+      expect(clock.isStale(now)).toBe(false);
+    }
+  });
+
+  it("forgets the last stamp on reset", () => {
+    const clock = new SampleClock();
+    clock.ingest(5000, 5000);
+    clock.reset();
+    expect(clock.ingest(1000, 5100)).toBe(1000);
   });
 
   it("ignores a repeated report and never ages past arrival for a clock running ahead", () => {
