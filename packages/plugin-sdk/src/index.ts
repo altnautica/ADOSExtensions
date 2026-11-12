@@ -91,3 +91,5 @@ export {
   PARAMETER_BINDINGS,
   type ValidationResult,
 } from "./parameters";
+
+export { SampleClock, STALE_AFTER_MS, agentTimestampOf } from "./sample-clock";

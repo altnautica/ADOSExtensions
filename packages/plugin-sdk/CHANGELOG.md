@@ -2,6 +2,15 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.5.2
+
+- `SampleClock`, `STALE_AFTER_MS` (2000) and `agentTimestampOf` age host
+  state samples one way for every panel. The drone's `ts_ms` judges only the
+  first sample of a run, so an old entry delivered on mount reads stale;
+  later samples age from their arrival, so a live feed stays live when the
+  drone clock runs behind or a poll is slow. A repeated report is ignored,
+  and a feed that stops reads stale 2000 ms after its last sample.
+
 ## 1.5.1
 
 - The host's camera list (`cameras.changed`, `{cameras: [{id, name}]}`) is
