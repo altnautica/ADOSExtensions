@@ -4,6 +4,15 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.7.3]
+
+### Fixed
+
+- An older navigation block, nav state or engage state that arrives after
+  a newer one (the host falling back to a slower source after a failed
+  poll) no longer replaces the newer value, keeps the feed live or adds a
+  trend sample.
+
 ## [0.7.2]
 
 ### Fixed

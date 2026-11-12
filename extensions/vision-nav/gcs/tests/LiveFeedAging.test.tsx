@@ -124,6 +124,38 @@ describe("the host's delivery cadence", () => {
     expect(screen.queryByTestId("vn-mode-disengaged")).toBeNull();
   });
 
+  it("keeps the newer reports when reports stamped earlier arrive after them", () => {
+    const h = mount();
+    const deliver = (ts: number, older = false): void => {
+      act(() => {
+        h.emitTelemetry("navigation", {
+          ...SNAPSHOT,
+          companionState: older ? "offline" : "active",
+          ts_ms: ts,
+        });
+        h.emitEvent("nav.state", { ...NAV, active_set: older ? 2 : 1, ts_ms: ts });
+        h.emitEvent("navigation.engage", { state: older ? "engaged" : "idle", ts_ms: ts });
+      });
+    };
+    deliver(Date.now() - 1000);
+    act(() => vi.advanceTimersByTime(750));
+    const newest = Date.now() - 1000;
+    deliver(newest);
+    // A failed poll: the host falls back to a slower source whose reports
+    // are stamped 4 s before the ones shown.
+    act(() => vi.advanceTimersByTime(750));
+    deliver(newest - 4000, true);
+    expect(screen.getByTestId("vn-companion-pill").textContent).toContain("Active");
+    expect(screen.getByTestId("vn-nav-state").textContent).toContain("Set 1");
+    expect(screen.getByTestId("vn-mode-disengaged")).toBeTruthy();
+    expect(screen.queryByTestId("vn-feed-stale")).toBeNull();
+    // They do not keep the feeds live: the newer reports go stale once they
+    // are 2000 ms old, shown on the tab's next 1 s repaint.
+    act(() => vi.advanceTimersByTime(1500));
+    expect(screen.getByTestId("vn-feed-stale")).toBeTruthy();
+    expect(navStale()).toBe("true");
+  });
+
   it("reads a stopped feed stale 2000 ms after its last sample", () => {
     const h = mount();
     const deliver = (): void => {

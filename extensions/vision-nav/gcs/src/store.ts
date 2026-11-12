@@ -52,8 +52,8 @@ export function useVisionNavTelemetry(ctx: PluginContext): TelemetryFeed {
     void ctx.telemetry
       .subscribe<VisionNavTelemetry>("navigation", (next) => {
         if (cancelled || !next) return;
-        // A repeated report returns null: it neither resets the age
-        // nor adds a trend sample.
+        // A repeated report, or one stamped earlier than the last, returns
+        // null: it neither resets the age nor adds a trend sample.
         const sampledAt = clock.ingest(agentTimestampOf(next), Date.now());
         if (sampledAt === null) return;
         // Defensive normalization: the agent may publish a partial
