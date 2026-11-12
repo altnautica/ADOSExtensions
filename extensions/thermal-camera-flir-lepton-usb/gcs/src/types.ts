@@ -29,7 +29,8 @@ export interface ThermalFrame {
   /**
    * Agent time (ms since the epoch, drone clock) of the state entry this
    * payload came from, attached by the host. The overlay ages the reading
-   * from `min(ts_ms, now)` and treats a repeat as no new frame.
+   * through the plugin SDK's `SampleClock`, which judges the first entry of a
+   * run by this stamp and ignores one stamped earlier than the one before.
    */
   ts_ms?: number;
   /** Sequence number from the driver, when the payload carries one. */

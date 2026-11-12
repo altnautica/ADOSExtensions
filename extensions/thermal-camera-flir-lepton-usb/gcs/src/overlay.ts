@@ -81,12 +81,12 @@ export async function mountOverlay(
   let lastFrame: ThermalFrame | null = null;
   let config: ThermalCameraConfig = { ...DEFAULT_THERMAL_CONFIG };
   let thermalState: ThermalState | null = null;
-  // When the current reading was sampled (local clock), plus the read-back
-  // and host stamps it carried, so a repeated payload does not refresh the
-  // age. The host attaches the agent's `ts_ms` to each payload; the sample
-  // time is `min(ts_ms, now)`, so an old entry delivered on mount reads as
-  // old and a drone clock running ahead cannot keep a reading live. Without
-  // `ts_ms` the arrival time stands in.
+  // Ages the current reading. The read-back stamp (`timestampMs`, else the
+  // host's `ts_ms`) identifies a report, so a repeated payload does not
+  // refresh the age. The shared SampleClock judges the first sample of a run
+  // by the host `ts_ms`, so an old entry delivered on mount reads as old,
+  // ages later samples from their arrival, and ignores a read-back stamped
+  // earlier than the one before.
   const clock = new SampleClock();
   let spot: SpotMeterState = {
     x: DEFAULT_THERMAL_CONFIG.spotMeter.x,

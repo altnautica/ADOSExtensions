@@ -2,6 +2,12 @@
 
 All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
+## 1.4.3
+
+- An older thermal reading that arrives after a newer one (the host falling
+  back to a slower source after a failed poll) no longer replaces the newer
+  spot temperature or keeps the overlay reading live.
+
 ## 1.4.2
 
 - A live thermal feed no longer reads "frames stopped" when the drone clock

@@ -147,7 +147,7 @@ class ThermalUsbPlugin:
     """
 
     plugin_id = "com.altnautica.thermal-flir-lepton-usb"
-    version = "1.4.2"
+    version = "1.4.3"
 
     def __init__(self, backend_factory: BackendFactory | None = None) -> None:
         self._backend_factory: BackendFactory | None = backend_factory

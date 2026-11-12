@@ -120,6 +120,31 @@ describe("mountOverlay", () => {
     handle.unmount();
   });
 
+  it("keeps the newer reading when a read-back stamped earlier arrives after it", async () => {
+    vi.setSystemTime(100_000);
+    const { harness, handle } = await mounted();
+    harness.pushTelemetry("thermal", STATE);
+    harness.pushTelemetry("camera.thermal.frame", { ...FRAME, timestampMs: 98_250, ts_ms: 99_000 });
+    vi.advanceTimersByTime(750);
+    harness.pushTelemetry("camera.thermal.frame", { ...FRAME, timestampMs: 99_000, ts_ms: 99_750 });
+    expect(readoutText()).toBe("Spot 42.5 °C");
+    // A failed poll: the host falls back to a slower source whose read-back
+    // is stamped 4 s before the one shown.
+    vi.advanceTimersByTime(750);
+    harness.pushTelemetry("camera.thermal.frame", {
+      ...FRAME,
+      spot: { x: 80, y: 60, temperatureC: 12 },
+      timestampMs: 95_000,
+      ts_ms: 95_750,
+    });
+    expect(readoutText()).toBe("Spot 42.5 °C");
+    // It does not keep the feed live: the newer reading goes stale once it is
+    // 2000 ms old, shown on the overlay's next 1 s repaint.
+    vi.advanceTimersByTime(1_500);
+    expect(readoutText()).toBe("Thermal frames stopped — last reading 2 s ago");
+    handle.unmount();
+  });
+
   it("ages from the browser clock when the drone clock runs ahead", async () => {
     vi.setSystemTime(100_000);
     const { harness, handle } = await mounted();
