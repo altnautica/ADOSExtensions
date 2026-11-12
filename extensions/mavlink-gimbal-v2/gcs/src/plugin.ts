@@ -8,8 +8,11 @@
 
 import { definePlugin } from "@altnautica/plugin-sdk";
 
+import enLocale from "../../locales/en.json";
+import panelCss from "../plugin.css";
 import { watchLimits } from "./config-limits";
 import { mountPanel, type PanelHandle } from "./panel";
+import { injectStyles } from "./styles";
 import { DEFAULT_LIMITS, type GimbalState } from "./types";
 
 let panel: PanelHandle | null = null;
@@ -17,8 +20,10 @@ let rootEl: HTMLElement | null = null;
 
 definePlugin({
   id: "com.altnautica.mavlink-gimbal-v2",
-  version: "1.4.2",
+  version: "1.5.0",
+  locale: enLocale,
   async mount(ctx) {
+    injectStyles(panelCss);
     rootEl = document.getElementById("gimbal-root");
     if (!rootEl) {
       rootEl = document.createElement("div");

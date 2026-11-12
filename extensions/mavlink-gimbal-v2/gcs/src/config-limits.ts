@@ -14,6 +14,16 @@ import { DEFAULT_LIMITS, type AxisLimits } from "./types";
 
 const AXIS_KEYS = Object.keys(DEFAULT_LIMITS) as Array<keyof AxisLimits>;
 
+/** Config-schema (and agent) key for each panel limit. */
+const SCHEMA_KEYS: Record<keyof AxisLimits, string> = {
+  pitchMinDeg: "pitch_min_deg",
+  pitchMaxDeg: "pitch_max_deg",
+  yawMinDeg: "yaw_min_deg",
+  yawMaxDeg: "yaw_max_deg",
+  rollMinDeg: "roll_min_deg",
+  rollMaxDeg: "roll_max_deg",
+};
+
 /** The limits a config snapshot asks for, defaults filled in. */
 export function mergeLimits(next: unknown): AxisLimits {
   const merged: AxisLimits = { ...DEFAULT_LIMITS };
@@ -21,7 +31,8 @@ export function mergeLimits(next: unknown): AxisLimits {
   const raw = next.limits;
   if (raw === null || typeof raw !== "object") return merged;
   for (const key of AXIS_KEYS) {
-    const v: unknown = key in raw ? Reflect.get(raw, key) : undefined;
+    const schemaKey = SCHEMA_KEYS[key];
+    const v: unknown = schemaKey in raw ? Reflect.get(raw, schemaKey) : undefined;
     if (typeof v === "number" && Number.isFinite(v)) merged[key] = v;
   }
   return merged;

@@ -21,20 +21,35 @@ describe("watchLimits", () => {
     h.pushConfig({ point: { pitch_deg: -10, yaw_deg: 5 } });
     h.pushConfig({ point: false, roi: false });
     // Limits restated at their current values.
-    h.pushConfig({ limits: { ...DEFAULT_LIMITS } });
+    h.pushConfig({
+      limits: {
+        pitch_min_deg: -90,
+        pitch_max_deg: 30,
+        yaw_min_deg: -180,
+        yaw_max_deg: 180,
+        roll_min_deg: -45,
+        roll_max_deg: 45,
+      },
+    });
     // A null snapshot is ignored, not treated as "reset to defaults".
     h.pushConfig(null);
     expect(remounts).toHaveLength(0);
 
-    h.pushConfig({ limits: { pitchMinDeg: -45 } });
-    h.pushConfig({ limits: { pitchMinDeg: -45 }, point: false });
+    h.pushConfig({ limits: { pitch_min_deg: -45 } });
+    h.pushConfig({ limits: { pitch_min_deg: -45 }, point: false });
     expect(remounts).toEqual([{ ...DEFAULT_LIMITS, pitchMinDeg: -45 }]);
     await h.teardown();
   });
 
   it("ignores non-numeric limit values", () => {
-    expect(mergeLimits({ limits: { yawMaxDeg: "90", pitchMaxDeg: Number.NaN } })).toEqual(
+    expect(mergeLimits({ limits: { yaw_max_deg: "90", pitch_max_deg: Number.NaN } })).toEqual(
       DEFAULT_LIMITS,
     );
+  });
+
+  it("reads the snake_case keys the config schema and the agent use", () => {
+    expect(
+      mergeLimits({ limits: { pitch_min_deg: -60, yaw_max_deg: 90, roll_min_deg: -10 } }),
+    ).toEqual({ ...DEFAULT_LIMITS, pitchMinDeg: -60, yawMaxDeg: 90, rollMinDeg: -10 });
   });
 });

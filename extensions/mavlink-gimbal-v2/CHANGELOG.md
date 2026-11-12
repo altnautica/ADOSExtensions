@@ -2,6 +2,26 @@
 
 All notable changes to the MAVLink Gimbal v2 Controller extension.
 
+## 1.5.0
+
+- The Gimbal tab says "Gimbal not reporting" with the time since the last
+  update, and hides the angles, once the gimbal has been silent for a second
+  or sends an old sample. It used to keep showing the last angles as live.
+- Lock on target works inside the host's sandboxed frame: it is a plain
+  button, and Enter in a latitude, longitude or altitude field locks too.
+- The pitch and yaw sliders follow the gimbal's live angles while you are
+  not dragging them, so moving one axis no longer snaps the other to zero.
+- Axis limits set in the drone's config now reach the sliders.
+- The ROI status says "ROI sent" and changes to "Locked on point" or "ROI
+  released" only when the gimbal reports that mode; with no gimbal it says
+  "No gimbal connected".
+- The ROI altitude field is labelled "Altitude above home (m)", which is
+  how the gimbal reads it.
+- The tab's styles load in the host frame, the panel scrolls, and every
+  button, field and slider has a 48 px touch target.
+- All tab text comes from the locale file, and the mode reads Manual, Locked
+  on point, Following or Neutral.
+
 ## 1.4.2
 
 - The Recenter Skill's default key is `shift+e` (was `shift+c`, now the

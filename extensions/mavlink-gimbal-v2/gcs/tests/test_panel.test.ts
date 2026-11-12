@@ -2,7 +2,7 @@
  * Panel tests.
  *
  * The panel renders into a real DOM (via happy-dom) and emits commands
- * through the harness. Tests assert that the slider, the ROI form,
+ * through the harness. Tests assert that the slider, the ROI controls,
  * and the release button drive the right RPC calls and that the live
  * state readout updates when telemetry arrives.
  */
@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
 
+import en from "../../locales/en.json";
 import { mountPanel, type PanelHandle } from "../src/panel";
 import type { GimbalState } from "../src/types";
 
@@ -39,6 +40,7 @@ async function makeHarness(): Promise<{
 }> {
   const h = createPluginHarness({
     grantedCapabilities: ["command.send"],
+    locale: en,
     mount: () => undefined,
   });
   await h.start();
@@ -58,7 +60,7 @@ describe("mountPanel", () => {
     const { ctx, teardown } = await makeHarness();
     const panel = mountPanel(ctx, rootEl);
     const sample: GimbalState = {
-      timestampMs: 1000,
+      timestampMs: Date.now(),
       pitchDeg: -30.0,
       yawDeg: 45.0,
       rollDeg: 0.0,
@@ -67,7 +69,7 @@ describe("mountPanel", () => {
     panel.setState(sample);
     expect(rootEl.textContent ?? "").toContain("-30.0 deg");
     expect(rootEl.textContent ?? "").toContain("45.0 deg");
-    expect(rootEl.textContent ?? "").toContain("manual");
+    expect(rootEl.textContent ?? "").toContain("Manual");
     panel.destroy();
     await teardown();
   });
@@ -129,11 +131,12 @@ describe("mountPanel", () => {
     await teardown();
   });
 
-  it("ROI status text reflects a successful lock", async () => {
+  it("ROI status text reflects a sent lock request", async () => {
     const { ctx, teardown } = await makeHarness();
     const panel: PanelHandle = mountPanel(ctx, rootEl);
+    panel.setState({ timestampMs: Date.now(), pitchDeg: 0, yawDeg: 0, rollDeg: 0, mode: "manual" });
     await panel.submitRoi({ latDeg: 12.971, lonDeg: 77.594, altM: 50 });
-    expect(rootEl.textContent ?? "").toContain("Locked on 12.971");
+    expect(rootEl.textContent ?? "").toContain("ROI sent");
     panel.destroy();
     await teardown();
   });
@@ -163,11 +166,12 @@ describe("mountPanel", () => {
     await teardown();
   });
 
-  it("ROI status text reflects a release", async () => {
+  it("ROI status text reflects a sent release request", async () => {
     const { ctx, teardown } = await makeHarness();
     const panel: PanelHandle = mountPanel(ctx, rootEl);
+    panel.setState({ timestampMs: Date.now(), pitchDeg: 0, yawDeg: 0, rollDeg: 0, mode: "roi-lock" });
     await panel.releaseRoi();
-    expect(rootEl.textContent ?? "").toContain("ROI released");
+    expect(rootEl.textContent ?? "").toContain("Release sent");
     panel.destroy();
     await teardown();
   });

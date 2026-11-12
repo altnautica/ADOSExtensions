@@ -1,11 +1,11 @@
 {
   "name": "@altnautica/mavlink-gimbal-v2-gcs",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "private": true,
   "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
-    "build": "esbuild src/plugin.ts --bundle --format=esm --target=es2022 --outfile=plugin.bundle.js --minify",
+    "build": "esbuild src/plugin.ts --bundle --format=esm --target=es2022 --outfile=plugin.bundle.js --loader:.css=text --minify",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "lint:manifest": "node ../../../scripts/lint-manifest.mjs ../manifest.yaml"

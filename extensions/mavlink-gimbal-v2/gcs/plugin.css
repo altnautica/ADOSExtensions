@@ -1,6 +1,15 @@
 /* Gimbal control panel styles. Inherits theme variables broadcast by
    the host on plugin mount via the `theme.changed` event. Scoped class
-   names keep the panel isolated from host CSS. */
+   names keep the panel isolated from host CSS. The bundle carries this
+   file as text and injects it at mount; the host loads nothing else. */
+
+/* The host frame resets body overflow to hidden; let the panel scroll. */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow-y: auto;
+}
 
 .agm-root {
   font-family: var(--agm-font, system-ui, sans-serif);
@@ -10,6 +19,10 @@
   padding: 12px;
   height: 100%;
   overflow-y: auto;
+}
+
+.agm-root [hidden] {
+  display: none;
 }
 
 .agm-empty {
@@ -61,6 +74,20 @@
 
 .agm-slider-row input[type="range"] {
   flex: 1;
+}
+
+/* 48 px touch targets for every control. */
+.agm-root button,
+.agm-root select,
+.agm-root input {
+  min-height: 48px;
+  box-sizing: border-box;
+}
+
+.agm-root input[type="range"] {
+  height: 48px;
+  margin: 0;
+  background: transparent;
 }
 
 .agm-slider-value {
