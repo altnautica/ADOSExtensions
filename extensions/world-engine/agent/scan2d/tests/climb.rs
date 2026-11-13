@@ -286,3 +286,80 @@ fn a_shaft_descent_on_the_prior_alone_drifts() {
     let err = max_error(&descend(&mut LocalSlam::new(unmatched)), [0.0, 0.0]);
     assert!(err > 0.8, "the pose stayed within {err:.3} m");
 }
+
+/// A room with vertical walls and two boxes, so a match pins x and y.
+fn room() -> Vec<Seg> {
+    let mut w = common::rect(-5.0, -4.0, 6.0, 4.0);
+    w.extend(common::rect(1.5, 1.0, 2.3, 1.6));
+    w.extend(common::rect(-3.0, -2.5, -2.4, -1.5));
+    w
+}
+
+/// A slow descent with no measured ground velocity: a hover at 6 m, then
+/// 0.3 m/s down for 16 s while the wind carries the rig 0.1 m/s along +x,
+/// then a hover. The prior alone cannot see the drift. One
+/// `(time, truth x, pose)` per scan; the rig starts at (0, 0) facing +x.
+fn windy_descent(slam: &mut LocalSlam) -> Vec<(f64, f64, PoseOut)> {
+    const HOLD_S: f64 = 2.0;
+    const DOWN_S: f64 = 16.0;
+    let down = |t: f64| (t - HOLD_S).clamp(0.0, DOWN_S);
+    let truth_x = move |t: f64| 0.1 * down(t);
+    let mut rng = Rng::new(3);
+    let period_s = PERIOD_NS as f64 * 1e-9;
+    let n = ((2.0 * HOLD_S + DOWN_S) / period_s) as u64;
+    let mut out = Vec::with_capacity(n as usize);
+    let mut k = 0u64;
+    for i in 0..n {
+        let t = i as f64 * period_s;
+        let pose_at = |s: f64| Pose2::new(truth_x(s), 0.0, 0.0);
+        let scan: ScanInput = revolution(&room(), &pose_at, t, C1, &mut rng);
+        let end_ms = ((t + (BEAMS - 1) as f64 / BEAMS as f64 * period_s) * 1000.0) as u64;
+        while k <= end_ms {
+            let (t_ns, t_s) = (k * 1_000_000, k as f64 * 1e-3);
+            if k.is_multiple_of(5) {
+                slam.feed_imu(&ImuSample {
+                    t_ns,
+                    gyro: [0.0, 0.0, 0.0],
+                    accel: [0.0, 0.0, 9.81],
+                });
+            }
+            if k.is_multiple_of(50) {
+                let rate = if (HOLD_S..HOLD_S + DOWN_S).contains(&t_s) { -0.3 } else { 0.0 };
+                slam.feed_height(&HeightSample {
+                    t_ns,
+                    up_m: 6.0 - 0.3 * down(t_s),
+                    up_rate_mps: rate,
+                });
+            }
+            k += 1;
+        }
+        out.push((t, truth_x(t), slam.feed_scan(&scan)));
+    }
+    out
+}
+
+/// Without a measured velocity the descent rides the prior for at most
+/// `max_unmatched_climb_s`, then its scans are matched again and the pose
+/// follows the drift.
+#[test]
+fn an_unmeasured_descent_is_matched_again_after_the_time_bound() {
+    let poses = windy_descent(&mut LocalSlam::new(cfg()));
+    let (_, truth_x, last) = poses.last().unwrap();
+    assert!((last.x - truth_x).abs() < 0.15, "pose {} vs truth {truth_x}", last.x);
+    let late = poses.iter().filter(|(t, _, _)| (5.0..17.0).contains(t));
+    assert!(
+        late.clone().count() > 0 && late.clone().all(|(_, _, p)| p.score > 0.0),
+        "a scan of the descent past the time bound was not matched"
+    );
+}
+
+/// The failure it fixes: riding the prior for the first
+/// `max_unmatched_climb_m` of the descent, the pose misses the drift.
+#[test]
+fn an_unmeasured_descent_on_the_prior_alone_misses_the_drift() {
+    let mut unbounded = cfg();
+    unbounded.max_unmatched_climb_s = f64::INFINITY;
+    let poses = windy_descent(&mut LocalSlam::new(unbounded));
+    let (_, truth_x, last) = poses.last().unwrap();
+    assert!((last.x - truth_x).abs() > 0.5, "pose {} vs truth {truth_x}", last.x);
+}

@@ -105,6 +105,11 @@ pub struct Scan2dConfig {
     /// a step in height stays inside it; a transit along a shaft does not,
     /// and the prior alone drifts into the shaft's walls over its length.
     pub max_unmatched_climb_m: f64,
+    /// Without a measured ground velocity ([`crate::LocalSlam::feed_velocity`])
+    /// a climb rides the motion prior for at most this long, seconds, before
+    /// its scans are matched again: the prior alone cannot see a sideways
+    /// drift, such as the wind during a descent.
+    pub max_unmatched_climb_s: f64,
 
     /// A levelled point lower than the scan plane's height less this,
     /// metres, is a floor return of a tilted scan and is dropped (only with
@@ -167,6 +172,7 @@ impl Scan2dConfig {
             submap_height_band_m: 0.3,
             max_climb_rate_mps: 0.15,
             max_unmatched_climb_m: 3.0,
+            max_unmatched_climb_s: 2.0,
             floor_margin_m: 0.25,
             ceiling_margin_m: 0.25,
             ceiling_m: None,

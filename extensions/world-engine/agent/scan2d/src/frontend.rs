@@ -64,9 +64,12 @@ struct Unobserved {
 struct Climb {
     /// The height it began at, metres.
     from_m: f64,
-    /// It has gone past [`Scan2dConfig::max_unmatched_climb_m`]: a transit.
+    /// Its scans are matched again: it has gone past
+    /// [`Scan2dConfig::max_unmatched_climb_m`] (a transit), or past
+    /// [`Scan2dConfig::max_unmatched_climb_s`] without a measured velocity.
     transit: bool,
-    /// The last scan time it was climbing at.
+    /// The first and the last scan time it was climbing at.
+    start_ns: u64,
     last_ns: u64,
 }
 
@@ -254,10 +257,13 @@ impl LocalSlam {
     /// [`Scan2dConfig::max_unmatched_climb_m`] from where the climb began.
     /// Past that the climb is a transit (a shaft) whose walls the motion
     /// prior cannot hold the pose against, and its scans are matched until
-    /// the climb has paused for [`CLIMB_END_NS`]. A leg that climbs as it
+    /// the climb has paused for [`CLIMB_END_NS`]. Without a measured
+    /// velocity (`has_measured`) the prior cannot see a sideways drift, so
+    /// the climb is matched the same way once it has ridden the prior for
+    /// [`Scan2dConfig::max_unmatched_climb_s`]. A leg that climbs as it
     /// travels (terrain following) is matched throughout: over its length
     /// the prior drifts further than its slope shifts the outline.
-    fn skip_climbing(&mut self, t: u64, speed_mps: f64) -> bool {
+    fn skip_climbing(&mut self, t: u64, speed_mps: f64, has_measured: bool) -> bool {
         let vertical = |h: &HeightSample| h.up_rate_mps.abs() >= speed_mps;
         let Some(h) = self.height.filter(|h| self.climbing(t) && vertical(h)) else {
             if self.climb.is_some_and(|c| t.saturating_sub(c.last_ns) > CLIMB_END_NS) {
@@ -268,10 +274,14 @@ impl LocalSlam {
         let c = self.climb.get_or_insert(Climb {
             from_m: h.up_m,
             transit: false,
+            start_ns: t,
             last_ns: t,
         });
         c.last_ns = t;
-        c.transit |= (h.up_m - c.from_m).abs() > self.cfg.max_unmatched_climb_m;
+        // Saturates: an infinite bound never ends the ride.
+        let unmeasured_ns = (self.cfg.max_unmatched_climb_s * 1e9) as u64;
+        c.transit |= (h.up_m - c.from_m).abs() > self.cfg.max_unmatched_climb_m
+            || (!has_measured && t.saturating_sub(c.start_ns) > unmeasured_ns);
         !c.transit
     }
 
@@ -344,7 +354,11 @@ impl LocalSlam {
             score: 0.0,
             degeneracy: 0.0,
         };
-        if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm()) {
+        let has_measured = self
+            .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
+            .is_some();
+        if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm(), has_measured)
+        {
             self.advance(t, prior, heading);
             return out;
         }

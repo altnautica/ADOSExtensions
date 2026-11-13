@@ -418,6 +418,13 @@ All notable changes to the World Engine extension.
   within 0.25 m of a configured ceiling (`ceiling_m`, unset by default) too.
   On the ground, where the margin exceeds the height, nothing is dropped.
   2.2.0.
+- **A climb or descent without a measured ground velocity rides the motion
+  prior for at most 2 s** (`max_unmatched_climb_s`), then its scans are
+  matched again until it ends. Before, a mostly vertical climb rode the
+  prior for its first 3 m whatever its speed: a slow descent drifting in the
+  wind took 10 s to cover them, and the prior, which cannot see the drift,
+  held the pose still while the vehicle moved. With an optical-flow velocity
+  the climb rides the measured velocity as before. 2.2.0.
 
 ## [2.0.0]
 

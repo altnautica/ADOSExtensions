@@ -26,7 +26,9 @@
 //!   changes faster than [`Scan2dConfig::max_climb_rate_mps`], and faster
 //!   than the rig moves sideways, rides the motion prior, unmatched and
 //!   unmapped, for the first [`Scan2dConfig::max_unmatched_climb_m`] of the
-//!   climb (a take-off); a longer one (a shaft) is matched. A submap only
+//!   climb (a take-off), and without a measured ground velocity for at most
+//!   [`Scan2dConfig::max_unmatched_climb_s`]; past either (a shaft, a
+//!   descent drifting in the wind) it is matched. A submap only
 //!   takes scans from within [`Scan2dConfig::submap_height_band_m`] of the
 //!   height it started at, except along such a transit.
 //!   [`LocalSlam::inserted_scans`] counts the scans in the map so far.
