@@ -4,7 +4,7 @@ All notable changes to the Thermal Camera FLIR Lepton USB UVC extension.
 
 ## 1.4.4
 
-- The thermal overlay's the last report delivered again after an older one
+- In the thermal overlay, the last report delivered again after an older one
   was dropped (a failed poll falling back to a slower source) is still
   ignored, so a feed that has stopped reads stale 2000 ms after its last
   report arrived instead of staying live.
