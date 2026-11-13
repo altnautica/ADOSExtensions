@@ -16,7 +16,7 @@ All notable changes to the World Engine extension.
   `prepare` stage detail; the job still completes. Every reconstruction
   with camera frames also writes `provenance.json` with its pose source
   (`slam`, `vio` or `fc_ekf`, with `+ba` when SfM refined the poses;
-  `truth`; or `images`), preset and SfM method.
+  `truth`; or `images`), preset and SfM method. 2.2.2.
 
 - **Navigation lanes independent of capture.** With `atlas.nav_pose =
   always` (the default when an RPLIDAR device is set) the capture service
@@ -73,7 +73,7 @@ All notable changes to the World Engine extension.
   the source's floor (planar LiDAR 0.15 m horizontal and 0.30 m vertical,
   3-D LiDAR 0.05 m, VIO 0.10 m) is raised to it, since SLAM covariances do not
   grow while scan matching degrades. Every COLMAP mapper runs its bundle
-  adjustment on the GPU.
+  adjustment on the GPU. 2.2.2.
 - `atlas.pose_provider = auto` picks LiDAR odometry on a drone too when the
   rig has the configured LiDAR and IMU: there the LiDAR pose is the
   navigation source the flight controller fuses, so its own EKF would be
@@ -146,13 +146,13 @@ All notable changes to the World Engine extension.
   the GPU when there is one (an out-of-memory grid retries coarser on the
   GPU), writing `mesh.ply`, `mesh.glb`, `dense.ply` and `dense.laz`. The
   stage detail lists `device`, `voxel_m`, `attempt` and `views_capped` at
-  its top level.
+  its top level. 2.2.2.
 - **A planar LiDAR session's cloud is registered and coloured.** A planar
   LiDAR records its compact polar stream (`lidar/<id>.polar.zst`) instead of
   Cartesian point clouds, and `prepare` read only the latter, so a drone
   session with camera frames reported 0 LiDAR points and got no coloured
   cloud unless the offline scan matcher's trajectory was accepted. The
-  polar scans now register along the recorded pose track like any sweep.
+  polar scans now register along the recorded pose track like any sweep. 2.2.2.
 - **Every LiDAR pose reaches the flight controller, one poll after it is
   estimated.** The navigation pose was gated on the wall-clock time of the
   100 ms poll that handed it over, so a 10 Hz matcher's pose that arrived
