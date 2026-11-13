@@ -147,6 +147,17 @@
       "minimum": 0,
       "default": 100
     },
+    "atlas.takeoff_heading_deg": {
+      "type": [
+        "number",
+        "null"
+      ],
+      "title": "Take-off heading (deg)",
+      "description": "The heading the drone faces where it starts, degrees clockwise from true north. Set it when the flight controller takes its heading from the map indoors: the map's north is then fixed from it once and never from the flight controller. Leave empty to follow the flight controller's compass heading until take-off.",
+      "minimum": -360,
+      "maximum": 360,
+      "default": null
+    },
     "atlas.selection.min_translation_m": {
       "type": "number",
       "title": "Keyframe distance (m)",

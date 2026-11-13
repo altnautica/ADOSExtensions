@@ -395,4 +395,8 @@ pub struct PoseDescriptor {
     pub health: VioHealth,
     pub frame: super::nav::NavFrame,
     pub source: super::nav::NavPoseSource,
+    /// Where a `map_ned` pose's north comes from; absent from older
+    /// publishers and for other frames.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub north: Option<super::nav::MapNorth>,
 }

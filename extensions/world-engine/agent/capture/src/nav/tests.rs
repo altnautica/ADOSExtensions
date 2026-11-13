@@ -12,6 +12,7 @@ fn settings(nav_pose: NavPoseMode, placement: ComputePlacement) -> NavSettings {
         placement,
         budget: Budget::from_mb(64),
         pose_interval_ms: 33,
+        takeoff_heading_rad: None,
     }
 }
 
@@ -327,6 +328,66 @@ fn moving_off_the_spot_on_the_ground_fixes_the_north_too() {
     nav.on_pose(&estimate(0.3, 0.45, 0.0), None, Some(0.7), 200, 0, false)
         .unwrap();
     assert!((nav.map_yaw().unwrap() - 0.6).abs() < 1e-12, "0.54 m away: fixed");
+}
+
+/// With the flight controller's yaw taken from the map (ArduPilot
+/// `EK3_SRC1_YAW` 6) its heading on the ground is the map's own yaw plus the
+/// gyro drift integrated since the last pose. A north that follows that
+/// heading feeds the drift back as the next measurement, so it walks without
+/// bound (19° by take-off on the bench). A declared north is latched once
+/// and the FC heading never moves it.
+#[test]
+fn a_declared_north_is_latched_once_and_never_follows_the_fc_heading() {
+    let truth = 180f64.to_radians();
+    let drift_per_pose = 0.001; // rad: gyro drift between two poses
+    // The loop the FC-heading north closes: the FC yaw is the last published
+    // map yaw plus drift.
+    let walk = |s: NavSettings| {
+        let mut nav = NavMap::new(s);
+        let mut fc_yaw = truth;
+        let mut pd = None;
+        for k in 0..2_000 {
+            let jitter = 0.02 * (k % 3) as f64;
+            pd = nav.on_pose(&estimate(jitter, -jitter, 0.0), Some(0.0), Some(fc_yaw), k * 100, 0, false);
+            let r = pd.as_ref().unwrap().pose.r;
+            fc_yaw = frd_yaw(&r) + drift_per_pose;
+        }
+        (nav, pd.unwrap())
+    };
+    let (followed, pd) = walk(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    assert!(wrap_pi(followed.map_yaw().unwrap() - truth).abs() > 1.0, "the loop walks");
+    assert_eq!(pd.north, Some(MapNorth::FcHeading));
+
+    let declared = NavSettings {
+        takeoff_heading_rad: Some(truth),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    };
+    let (latched, pd) = walk(declared);
+    assert!(wrap_pi(latched.map_yaw().unwrap() - truth).abs() < 1e-9, "the north holds");
+    assert_eq!(pd.north, Some(MapNorth::Declared));
+    assert!((wrap_pi(frd_yaw(&pd.pose.r) - truth)).abs() < 1e-9);
+}
+
+#[test]
+fn a_declared_north_needs_no_fc_heading_and_places_the_first_pose() {
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    });
+    // The SLAM body is turned 0.2 rad at the first pose: the declared heading
+    // is the body's, so the SLAM x axis points 0.2 rad left of it.
+    let pd = nav
+        .on_pose(&estimate(0.0, 0.0, -0.2), None, None, 0, 0, false)
+        .expect("published without any FC heading");
+    assert!(wrap_pi(frd_yaw(&pd.pose.r) - PI / 2.0).abs() < 1e-9);
+    assert!(wrap_pi(nav.map_yaw().unwrap() - (PI / 2.0 - 0.2)).abs() < 1e-9);
+    // Ten metres along the SLAM x axis.
+    let pd = nav
+        .on_pose(&estimate(10.0, 0.0, 0.0), None, Some(0.0), 1_000, 0, false)
+        .unwrap();
+    let yaw = PI / 2.0 - 0.2;
+    assert!((pd.pose.t[0] - 10.0 * yaw.cos()).abs() < 1e-9);
+    assert!((pd.pose.t[1] - 10.0 * yaw.sin()).abs() < 1e-9);
 }
 
 /// A forest-trail-like flight on GNSS, then GNSS loss and 137 m more on the

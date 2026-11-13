@@ -62,9 +62,11 @@ async fn serve(state: &FilesState, id: &str, rel: &str, req: Request) -> Respons
     if !path.is_file() {
         return error(StatusCode::NOT_FOUND, "E_NOT_FOUND", "no such file");
     }
+    // `ServeFile` never fails: its error type is `Infallible`, and an I/O
+    // error comes back as a response.
     match ServeFile::new(path).oneshot(req).await {
         Ok(r) => r.into_response(),
-        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, "E_IO", e.to_string()),
+        Err(e) => match e {},
     }
 }
 

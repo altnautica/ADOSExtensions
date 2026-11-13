@@ -242,6 +242,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         placement: cfg.placement,
         budget,
         pose_interval_ms: cfg.pose_publish_interval_ms,
+        takeoff_heading_rad: cfg.takeoff_heading_deg.map(f64::to_radians),
     });
     tracing::info!(
         nav_pose = ?cfg.nav_pose,

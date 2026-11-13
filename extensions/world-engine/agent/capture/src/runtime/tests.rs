@@ -53,6 +53,24 @@ fn reconstruct_steps_resolve_and_never_restart_a_run() {
 }
 
 #[test]
+fn takeoff_heading_is_an_optional_angle() {
+    let load =
+        |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_TAKEOFF_HEADING_DEG, v)]));
+    assert_eq!(load(json!(180)).unwrap().takeoff_heading_deg, Some(180.0));
+    assert_eq!(load(json!(-12.5)).unwrap().takeoff_heading_deg, Some(-12.5));
+    assert_eq!(load(Value::Null).unwrap().takeoff_heading_deg, None);
+    assert_eq!(
+        AtlasRuntimeConfig::from_values("", &BTreeMap::new())
+            .unwrap()
+            .takeoff_heading_deg,
+        None
+    );
+    assert!(load(json!(400)).is_err());
+    assert!(load(json!("north")).is_err());
+    assert!(CONFIG_KEYS.contains(&KEY_TAKEOFF_HEADING_DEG));
+}
+
+#[test]
 fn no_keys_is_the_disabled_default() {
     let c = AtlasRuntimeConfig::from_values("drone-42", &BTreeMap::new()).unwrap();
     assert!(!c.enabled);

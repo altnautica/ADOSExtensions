@@ -36,16 +36,25 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         health: VioHealth::Good,
         frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,
+        north: Some(MapNorth::Declared),
     };
     let v = serde_json::to_value(&pd).unwrap();
     assert_eq!(v["health"], "good");
     assert_eq!(v["frame"], "map_ned");
     assert_eq!(v["source"], "lidar_planar");
+    assert_eq!(v["north"], "declared");
     assert_eq!(v["pose"]["R"][0], 1.0);
     assert_eq!(
         PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(),
         pd
     );
+    // An older publisher sends no north; it reads as unknown.
+    let mut old = v.clone();
+    old.as_object_mut().unwrap().remove("north");
+    let parsed: PoseDescriptor = serde_json::from_value(old).unwrap();
+    assert_eq!(parsed.north, None);
+    let none = PoseDescriptor { north: None, ..pd };
+    assert!(serde_json::to_value(&none).unwrap().get("north").is_none());
 }
 
 #[test]

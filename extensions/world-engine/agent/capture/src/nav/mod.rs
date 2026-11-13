@@ -13,17 +13,27 @@
 //! placement; the placement sets the live sweep-cloud resolution and whether
 //! the node reconstructs in flight or after landing.
 //!
-//! `map_ned` starts as the SLAM world rotated to the flight controller's
-//! compass heading, origin at the first scan. The heading follows the FC's
-//! while the vehicle still sits where the first pose was taken and is fixed
-//! once it leaves that spot: before ArduPilot has an EKF origin its heading
-//! is magnetic, and it turns onto true north over the following seconds once
-//! the origin brings the declination in (12.8° at the bench's location), so a
-//! heading latched at the first pose could leave the map that far off the
-//! EKF's own yaw. While the EKF navigates on GNSS the map is moved onto the
-//! EKF's local frame (`LOCAL_POSITION_NED`): yaw and offset fitted between
-//! the two tracks ([`align`]), frozen when GNSS goes, so a switch to external
-//! navigation finds the two frames in agreement.
+//! `map_ned` starts as the SLAM world rotated to north, origin at the first
+//! scan. Its north ([`MapNorth`]) comes from one of two places:
+//!
+//! - **Declared** (`atlas.takeoff_heading_deg` set): latched once at the first
+//!   pose from the configured heading the vehicle faces there, and never taken
+//!   from the flight controller. This is the north a flight controller may
+//!   take its yaw from (ArduPilot `EK3_SRCn_YAW` 6): with the FC's yaw coming
+//!   from the map, a north that followed the FC heading would only echo the
+//!   FC's own yaw back to it, and nothing would hold north while gyro drift
+//!   walks it on the ground.
+//! - **FC heading** (unset): the FC's attitude yaw, followed while the vehicle
+//!   still sits where the first pose was taken and fixed once it leaves that
+//!   spot: before ArduPilot has an EKF origin its heading is magnetic, and it
+//!   turns onto true north over the following seconds once the origin brings
+//!   the declination in (12.8° at the bench's location), so a heading latched
+//!   at the first pose could leave the map that far off the EKF's own yaw.
+//!
+//! While the EKF navigates on GNSS the map is moved onto the EKF's local
+//! frame (`LOCAL_POSITION_NED`): yaw and offset fitted between the two tracks
+//! ([`align`]), frozen when GNSS goes, so a switch to external navigation
+//! finds the two frames in agreement.
 
 pub mod align;
 pub mod budget;
@@ -39,7 +49,7 @@ use std::path::{Path, PathBuf};
 
 use world_engine_livemap::LiveMap;
 use world_engine_protocol::atlas::{
-    ComputePlacement, LiveOccupancy, LivePointCloud, MapStatus, NavFrame, NavPoseMode,
+    ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapStatus, NavFrame, NavPoseMode,
     NavPoseSource, PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, StreamPhase,
     StreamProgress, VioHealth,
 };
@@ -71,6 +81,9 @@ pub struct NavSettings {
     pub budget: Budget,
     /// `atlas.pose_publish_interval_ms`.
     pub pose_interval_ms: i64,
+    /// `atlas.takeoff_heading_deg` in radians: the declared north (see the
+    /// module docs); `None` follows the FC heading.
+    pub takeoff_heading_rad: Option<f64>,
 }
 
 /// What one scan produced.
@@ -134,9 +147,10 @@ pub struct NavMap {
     /// The flight controller's up height at the first nav pose: `map_ned` z is
     /// measured from it.
     fc_up0: Option<f64>,
-    /// The compass heading of the SLAM world's x axis, radians clockwise from
-    /// north: `map_ned = Rz(yaw0) · map_frd` until the GNSS fit takes over.
-    /// Taken from the flight controller's attitude yaw at each pose while the
+    /// The heading of the SLAM world's x axis, radians clockwise from north:
+    /// `map_ned = Rz(yaw0) · map_frd` until the GNSS fit takes over. Latched
+    /// at the first pose from the declared take-off heading, or else taken
+    /// from the flight controller's attitude yaw at each pose while the
     /// vehicle is on the spot of the first one, then fixed; until the first
     /// heading nothing is placed in the map.
     yaw0: Option<f64>,
@@ -204,9 +218,22 @@ impl NavMap {
     }
 
     /// `map_ned = Rz(map_yaw) · map_frd + offset`: the GNSS fit's yaw when
-    /// there is one, else the compass latch.
+    /// there is one, else the latched heading.
     pub fn map_yaw(&self) -> Option<f64> {
         self.align.fit().map(|f| f.yaw).or(self.yaw0)
+    }
+
+    /// Where the map's north comes from now; `None` before it has one.
+    pub fn north(&self) -> Option<MapNorth> {
+        if self.align.fit().is_some() {
+            Some(MapNorth::Gnss)
+        } else if self.yaw0.is_none() {
+            None
+        } else if self.settings.takeoff_heading_rad.is_some() {
+            Some(MapNorth::Declared)
+        } else {
+            Some(MapNorth::FcHeading)
+        }
     }
 
     /// Fold one provider estimate paired with the flight controller's EKF
@@ -284,11 +311,24 @@ impl NavMap {
         Some((se3::mat_mul(&rot, r), t))
     }
 
-    /// Take the map's north from the FC heading while the vehicle is on the
-    /// spot of the first heading; fix it once the vehicle has moved
-    /// [`ON_SPOT_M`] from there horizontally or in climb.
+    /// Latch the map's north at the first pose from the declared take-off
+    /// heading when there is one. Otherwise take it from the FC heading while
+    /// the vehicle is on the spot of the first heading, and fix it once the
+    /// vehicle has moved [`ON_SPOT_M`] from there horizontally or in climb.
     fn follow_heading(&mut self, r_frd: &[f64; 9], t_frd: [f64; 3], fc_heading: Option<f64>) {
         if self.left_spot {
+            return;
+        }
+        if let Some(declared) = self.settings.takeoff_heading_rad {
+            let yaw0 = wrap_pi(declared - frd_yaw(r_frd));
+            self.yaw0 = Some(yaw0);
+            self.left_spot = true;
+            tracing::info!(
+                heading_rad = declared,
+                fc_heading_rad = fc_heading,
+                yaw0_rad = yaw0,
+                "nav_map_north_declared"
+            );
             return;
         }
         if let Some(spot) = self.spot {
@@ -321,10 +361,11 @@ impl NavMap {
 
     /// Fold one provider estimate; the descriptor to publish when the lanes
     /// are on and the interval is due. `fc_heading` is the flight
-    /// controller's attitude yaw now (radians from north): the map's north
-    /// follows it while the vehicle is on the spot of the first heading (see
-    /// the module docs) and is fixed once it leaves, until the GNSS fit
-    /// replaces it. Nothing is published before the map has a north.
+    /// controller's attitude yaw now (radians from north): without a declared
+    /// take-off heading the map's north follows it while the vehicle is on
+    /// the spot of the first heading (see the module docs) and is fixed once
+    /// it leaves, until the GNSS fit replaces it. Nothing is published before
+    /// the map has a north.
     /// `now_ms` (unix) and `now_mono_ns` are the same instant; the
     /// descriptor is stamped with the unix time of the estimate's own
     /// `t_ns` (a LiDAR pose describes its scan's first return, at least a
@@ -361,6 +402,7 @@ impl NavMap {
             health: e.health,
             frame: NavFrame::MapNed,
             source: nav_source(e.source),
+            north: self.north(),
         })
     }
 

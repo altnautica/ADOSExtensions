@@ -271,6 +271,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         health: VioHealth::Degraded,
         frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,
+        north: Some(MapNorth::Gnss),
     };
     assert_eq!(
         pose_desc,

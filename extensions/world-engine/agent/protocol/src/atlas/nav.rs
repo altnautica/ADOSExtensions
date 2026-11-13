@@ -5,10 +5,11 @@
 //! Frames:
 //! - `map_ned` is north-aligned: x north, y east, z down, metres (z from the
 //!   flight controller's height above the first scan). The planar SLAM world
-//!   (body FLU at the first scan) is turned to FRD and rotated about down by
-//!   the flight controller's attitude yaw (its compass heading) at take-off
-//!   (followed while the vehicle sits where the first pose was taken), origin
-//!   at the first scan. While the FC navigates on
+//!   (body FLU at the first scan) is turned to FRD and rotated about down so
+//!   x points north, origin at the first scan. Its north ([`MapNorth`]) is
+//!   latched once from the configured take-off heading, or else taken from
+//!   the flight controller's attitude yaw at take-off (followed while the
+//!   vehicle sits where the first pose was taken). While the FC navigates on
 //!   GNSS it is moved onto the FC's `LOCAL_POSITION_NED` (yaw and offset
 //!   fitted between the SLAM track and the EKF's GNSS track, frozen when GNSS
 //!   goes). Nothing in it is published before a heading is known.
@@ -38,6 +39,23 @@ pub enum NavFrame {
     MapNed,
     /// The vehicle body, forward-right-down.
     BodyFrd,
+}
+
+/// Where the north of a `map_ned` pose comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MapNorth {
+    /// The flight controller's attitude yaw, followed while the vehicle sits
+    /// where the first pose was taken and fixed when it leaves. Before take-off
+    /// this north echoes the FC's own heading, so the FC must not take its
+    /// yaw from this map.
+    FcHeading,
+    /// Latched once at the first pose from the configured take-off heading
+    /// and never taken from the flight controller, so the FC may take its yaw
+    /// from the map.
+    Declared,
+    /// Fitted between the SLAM track and the EKF's GNSS-referenced track.
+    Gnss,
 }
 
 /// Which estimator produced a published pose.

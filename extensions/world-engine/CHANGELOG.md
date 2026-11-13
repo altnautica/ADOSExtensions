@@ -398,6 +398,18 @@ All notable changes to the World Engine extension.
   2.1.19.
 - **The point cloud's "showing … / … points" label is worded from the
   extension's strings.** 2.1.19.
+- **A declared take-off heading holds the navigation map's north.** With
+  `atlas.takeoff_heading_deg` set (the heading the drone faces where it
+  starts, degrees from true north), the map's north is latched from it once
+  at the first pose and never taken from the flight controller. Before, the
+  north followed the flight controller's heading until take-off; with the
+  flight controller taking its yaw from the map (ArduPilot `EK3_SRCn_YAW` 6)
+  that heading was the map's own yaw back plus gyro drift, so nothing held
+  north and it walked about 19° on the ground before take-off. Unset, the
+  north follows the flight controller's heading as before. The navigation
+  pose now says where its north comes from (`north`: `declared`,
+  `fc_heading` or `gnss`), so a consumer can refuse to feed the flight
+  controller a yaw that only echoes its own. 2.1.20.
 
 ## [2.0.0]
 

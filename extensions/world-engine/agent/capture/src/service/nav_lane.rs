@@ -72,8 +72,8 @@ impl Engine {
             .map(|e| e.t[2])
     }
 
-    /// The flight controller's attitude yaw (its compass heading), radians
-    /// clockwise from north: the map's north until the GNSS fit.
+    /// The flight controller's attitude yaw, radians clockwise from north:
+    /// the map's north until the GNSS fit unless a take-off heading is set.
     pub(super) fn fc_heading(&self) -> Option<f64> {
         self.nav_deps
             .fc_feed

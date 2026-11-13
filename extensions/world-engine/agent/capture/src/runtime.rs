@@ -203,6 +203,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_COMPUTE_PLACEMENT,
     KEY_MEMORY_BUDGET_MB,
     KEY_RECONSTRUCT_STEPS,
+    KEY_TAKEOFF_HEADING_DEG,
 ];
 
 pub const KEY_ENABLED: &str = "atlas.enabled";
@@ -228,6 +229,7 @@ pub const KEY_NAV_POSE: &str = "atlas.nav_pose";
 pub const KEY_COMPUTE_PLACEMENT: &str = "atlas.compute_placement";
 pub const KEY_MEMORY_BUDGET_MB: &str = "atlas.memory_budget_mb";
 pub const KEY_RECONSTRUCT_STEPS: &str = "atlas.reconstruct_steps";
+pub const KEY_TAKEOFF_HEADING_DEG: &str = "atlas.takeoff_heading_deg";
 
 /// The initial exposure lock: unlocked, walking caps.
 fn default_exposure() -> ExposureView {
@@ -277,6 +279,11 @@ pub struct AtlasRuntimeConfig {
     /// setting: a change reaches the running service without a restart (see
     /// [`AtlasRuntimeConfig::same_run`]).
     pub reconstruct_steps: Option<u64>,
+    /// `atlas.takeoff_heading_deg`: the heading the vehicle faces at its
+    /// first pose, degrees clockwise from true north. When set, the map's
+    /// north is latched from it once and never taken from the flight
+    /// controller ([`crate::nav`]).
+    pub takeoff_heading_deg: Option<f64>,
 }
 
 /// The live `atlas.reconstruct_steps`, shared between the supervisor (which
@@ -331,6 +338,7 @@ impl Default for AtlasRuntimeConfig {
             placement: ComputePlacement::default(),
             memory_budget_mb: None,
             reconstruct_steps: None,
+            takeoff_heading_deg: None,
         }
     }
 }
@@ -362,6 +370,21 @@ fn typed<T: DeserializeOwned>(
             reason: e.to_string(),
         }),
     }
+}
+
+/// `atlas.takeoff_heading_deg`: a finite angle within ±360°, or `None`
+/// when absent or null.
+fn takeoff_heading_deg(values: &BTreeMap<String, Value>) -> Result<Option<f64>, ConfigError> {
+    let Some(deg) = typed::<Option<f64>>(values, KEY_TAKEOFF_HEADING_DEG, None)? else {
+        return Ok(None);
+    };
+    if !deg.is_finite() || deg.abs() > 360.0 {
+        return Err(ConfigError {
+            key: KEY_TAKEOFF_HEADING_DEG,
+            reason: format!("expected degrees from -360 to 360, got {deg}"),
+        });
+    }
+    Ok(Some(deg))
 }
 
 /// The per-camera intrinsics overrides, refusing one whose `dist` length does
@@ -494,6 +517,7 @@ impl AtlasRuntimeConfig {
             placement: typed(values, KEY_COMPUTE_PLACEMENT, ComputePlacement::default())?,
             memory_budget_mb,
             reconstruct_steps,
+            takeoff_heading_deg: takeoff_heading_deg(values)?,
         })
     }
 
