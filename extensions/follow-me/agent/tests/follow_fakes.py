@@ -320,6 +320,10 @@ def _state_events(ctx: _Ctx) -> list[dict[str, Any]]:
     return [p for (t, p) in ctx.events.published if t == FOLLOW_STATE_TOPIC]
 
 
+def _events(ctx: _Ctx, topic: str) -> list[dict[str, Any]]:
+    return [p for (t, p) in ctx.events.published if t == topic]
+
+
 def _telemetry_config() -> dict[str, Any]:
     return {
         "active": True,

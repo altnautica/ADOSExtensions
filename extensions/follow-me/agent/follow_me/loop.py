@@ -1,5 +1,5 @@
-"""The follow loop: the command gate, lock loss and re-acquire, and the
-goals sent to the pilot. A mixin of :class:`follow_me.FollowMePlugin`.
+"""The follow loop: the command gate, the uncertain lock, and the goals sent
+to the pilot. A mixin of :class:`follow_me.FollowMePlugin`.
 
 Every tick (20 Hz) decides one of three things:
 
@@ -7,10 +7,11 @@ Every tick (20 Hz) decides one of three things:
   controller, a recent range fix and the pilot's motion lease. The subject
   filter is updated from each new box and a ``follow`` or ``orbit`` goal
   (position, velocity feed-forward, yaw, the subject and the detour ring the
-  pilot's planner searches) is sent to the pilot.
-* **coast** (``smart`` re-acquire only): the lock was lost; the goal is the
-  predicted one at half feed-forward for ``reacquire_window_s`` while looking
-  for the subject in each new batch.
+  pilot's planner searches) is sent to the pilot. While the lock is unsure
+  and ``uncertain_mode`` is ``follow``, the goal is the prediction at reduced
+  feed-forward.
+* **recover**: the lock was lost; :mod:`follow_me.recovery` predicts,
+  repositions and searches, or holds for the operator.
 * **hold**: anything else. While the lease is held a ``position`` goal at the
   vehicle's current position keeps the pilot holding there; when the skill
   goes inactive the lease is released and the pilot brakes to its own hold.
@@ -37,12 +38,12 @@ from follow_me.projection import TargetFix
 from follow_me.reacquire import (
     OVERLAP_IOU,
     PERSON,
-    Coast,
     Embedding,
     blend_template,
     box_iou,
     template_may_update,
 )
+from follow_me.recovery import SEARCH_FF_SCALE, Recovery
 from follow_me.state import (
     FOLLOW_MODE_ORBIT,
     FOLLOW_STOPPED_TOPIC,
@@ -57,11 +58,13 @@ from follow_me.state import (
     HOLD_NO_RANGE,
     HOLD_POSE_STALE,
     LOCK_LOCKED,
+    LOCK_UNCERTAIN,
     PHASE_ACQUIRING,
     PHASE_FOLLOWING,
     PHASE_HOLDING,
     PHASE_IDLE,
-    PHASE_LOST,
+    UNCERTAIN_FOLLOW,
+    UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
 )
 from follow_me.target_filter import TargetFilter, subject_max_speed_mps
@@ -134,7 +137,9 @@ class FollowLoopMixin:
     _measured_bbox: Any
     _last_fix: TargetFix | None
     _last_fix_s: float
-    _coast: Coast | None
+    _recovery: Recovery | None
+    # When the current unsure spell began, or None while the lock is sure.
+    _uncertain_since_s: float | None
     _phase: str
     # The pilot's lease id as it sent it (pilot.v1: an unsigned integer),
     # passed back unchanged to goal_send and lease_release.
@@ -151,7 +156,6 @@ class FollowLoopMixin:
     _latency_ms: int | None
     _last_gimbal_s: float
     _setpoint_times: deque[float]
-    _last_lost_track_id: int | None
     _latest_batch: Any
     _latest_batch_s: float
     _commanded_gimbal: tuple[float, float] | None
@@ -180,7 +184,8 @@ class FollowLoopMixin:
             await self._on_revoked_stop(now)
         cfg = await self._config_for_tick()
         if not cfg.active:
-            self._coast = None
+            self._recovery = None
+            self._uncertain_since_s = None
             self._active_since_s = None
             self._camera_lost = False
             await self._release_lease()
@@ -199,13 +204,13 @@ class FollowLoopMixin:
             await self._on_camera_lost(cfg, now)
             return
         self._camera_lost = False
-        if self._coast is not None:
-            await self._tick_coast(cfg, now)
+        if self._recovery is not None:
+            await self._tick_recovery(cfg, now)
             return
         await self._tick_follow(cfg, now)
 
     async def _on_camera_lost(self, cfg: FollowConfig, now: float) -> None:
-        """The follow camera's batches stopped: hold. A smart coast ends, as
+        """The follow camera's batches stopped: hold. A recovery ends, as
         there are no frames to re-acquire in, and the estimate stops where it
         is rather than carry its velocity on."""
         if not self._camera_lost:
@@ -213,7 +218,8 @@ class FollowLoopMixin:
             self._ctx.log.warning(
                 "follow_me_camera_lost", camera=self._follow_camera()
             )
-        self._coast = None
+        self._recovery = None
+        self._uncertain_since_s = None
         self._filter.stop(now)
         locked_before = self._tracker.has_lock or self._filter.initialized
         await self._hold(
@@ -237,8 +243,7 @@ class FollowLoopMixin:
 
     async def _tick_follow(self, cfg: FollowConfig, now: float) -> None:
         if not self._tracker.has_lock:
-            phase = PHASE_LOST if self._phase == PHASE_LOST else PHASE_ACQUIRING
-            await self._hold(cfg, now, phase=phase, hold_reason=HOLD_NO_LOCK)
+            await self._hold(cfg, now, phase=PHASE_ACQUIRING, hold_reason=HOLD_NO_LOCK)
             return
         lock = self._tracker.effective_lock(now)
         if lock is EffectiveLock.LOST:
@@ -246,18 +251,9 @@ class FollowLoopMixin:
             return
         target = self._tracker.locked_target(now)
         if target is None:
-            # Unsure: hold, keep the camera on the latest sighting, and stop
-            # the estimate where it is rather than carry its velocity on.
-            self._filter.stop(now)
-            await self._hold(
-                cfg,
-                now,
-                phase=PHASE_HOLDING,
-                hold_reason=HOLD_LOCK_UNCERTAIN,
-                lock_state=lock.value,
-                yaw_rad=self._sighted_bearing(now),
-            )
+            await self._tick_uncertain(cfg, now)
             return
+        self._uncertain_since_s = None
         if self._filter_track_id != target.track_id:
             # A different subject (a fresh operator designate): new track.
             self._reset_track(target.track_id)
@@ -293,11 +289,48 @@ class FollowLoopMixin:
         self._template = None
         self._measured_bbox = None
         self._last_fix = None
-        self._last_lost_track_id = None
+        self._uncertain_since_s = None
         self._latency_ms = None
         self._pending_latency_ts_ms = None
         self._ref_heading = None
         self._orbit_phase = None
+
+    async def _tick_uncertain(self, cfg: FollowConfig, now: float) -> None:
+        """An unsure lock: keep following the prediction at reduced
+        feed-forward (``uncertain_mode`` follow) or hold (``hold``). An unsure
+        spell longer than UNCERTAIN_FOLLOW_MAX_S is handled as a loss, so a
+        hold never outlasts it."""
+        if self._uncertain_since_s is None:
+            self._uncertain_since_s = now
+        if now - self._uncertain_since_s > UNCERTAIN_FOLLOW_MAX_S:
+            await self._on_lock_lost(cfg, now)
+            return
+        if cfg.uncertain_mode == UNCERTAIN_FOLLOW:
+            gate = self._gate(now)
+            if gate is not None:
+                await self._hold(
+                    cfg, now, phase=PHASE_HOLDING, hold_reason=gate, lock_state=LOCK_UNCERTAIN
+                )
+                return
+            await self._command(
+                cfg,
+                now,
+                phase=PHASE_FOLLOWING,
+                ff_scale=SEARCH_FF_SCALE,
+                lock_state=LOCK_UNCERTAIN,
+            )
+            return
+        # Hold, keep the camera on the latest sighting, and stop the estimate
+        # where it is rather than carry its velocity on.
+        self._filter.stop(now)
+        await self._hold(
+            cfg,
+            now,
+            phase=PHASE_HOLDING,
+            hold_reason=HOLD_LOCK_UNCERTAIN,
+            lock_state=LOCK_UNCERTAIN,
+            yaw_rad=self._sighted_bearing(now),
+        )
 
     def _measure_sighting(self, cfg: FollowConfig, now: float, bbox: Any) -> None:
         self._measured_bbox = bbox
@@ -421,7 +454,8 @@ class FollowLoopMixin:
             await setter("active", False)
         if self._cfg is not None:
             self._cfg = replace(self._cfg, active=False)
-        self._coast = None
+        self._recovery = None
+        self._uncertain_since_s = None
         await self._ctx.events.publish(FOLLOW_STOPPED_TOPIC, {"reason": reason})
 
     # -- commanding and holding ----------------------------------------
@@ -534,7 +568,6 @@ class FollowLoopMixin:
         phase: str,
         ff_scale: float,
         lock_state: str,
-        coast_remaining_s: float = 0.0,
         predicted_bbox: dict[str, object] | None = None,
     ) -> None:
         pred = self._filter.predicted(now)
@@ -568,7 +601,6 @@ class FollowLoopMixin:
             phase=phase,
             lock_state=lock_state,
             commanding=True,
-            coast_remaining_s=coast_remaining_s,
             predicted_bbox=predicted_bbox,
         )
 
@@ -581,19 +613,21 @@ class FollowLoopMixin:
         hold_reason: str,
         lock_state: str | None = None,
         active: bool = True,
-        coast_remaining_s: float = 0.0,
         force: bool = False,
         yaw_rad: float | None = None,
+        hold_ne: tuple[float, float] | None = None,
     ) -> None:
         if self._lease_id is not None and active and self._pose.ready(now):
             # Keep the lease alive and the vehicle where it is: the pilot
-            # holds a position goal at the current position, at the current
-            # heading or the one the caller gives.
+            # holds a position goal at the current position (or the latched
+            # hover point the caller gives, which the drifting pose estimate
+            # cannot move), at the current heading or the one the caller gives.
+            n, e = (self._pose.north_m, self._pose.east_m) if hold_ne is None else hold_ne
             await self._send_goal(
                 {
                     "kind": "position",
-                    "n": self._pose.north_m,
-                    "e": self._pose.east_m,
+                    "n": n,
+                    "e": e,
                     "d": self._pose.down_m,
                     "vn": 0.0,
                     "ve": 0.0,
@@ -615,7 +649,6 @@ class FollowLoopMixin:
             lock_state=lock_state,
             commanding=False,
             hold_reason=hold_reason,
-            coast_remaining_s=coast_remaining_s,
             force=force,
         )
 
@@ -641,6 +674,13 @@ class FollowLoopMixin:
             bearing_rad=math.atan2(de, dn),
             vehicle_yaw_rad=self._pose.yaw,
         )
+        await self._send_gimbal(now, pitch_deg, yaw_deg)
+
+    async def _send_gimbal(self, now: float, pitch_deg: float, yaw_deg: float) -> None:
+        """Point the gimbal (pitch negative = down, yaw relative to the
+        vehicle), at most every _GIMBAL_PERIOD_S."""
+        if (now - self._last_gimbal_s) < _GIMBAL_PERIOD_S:
+            return
         # Cached in the projection convention (pitch positive = down) as the
         # boresight estimate until the FC reports a real gimbal attitude.
         self._commanded_gimbal = (-pitch_deg, yaw_deg)

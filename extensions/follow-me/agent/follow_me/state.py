@@ -45,26 +45,44 @@ LOCK_LOST = "lost"
 
 # The follow phase on the wire. ``idle``: the skill is off. ``acquiring``:
 # armed, waiting for a lock and a first range fix. ``following``: commanding
-# on a live lock. ``coasting``: the lock dropped and a smart re-acquire flies
-# toward the predicted standoff while the prediction is still tight.
-# ``searching``: the same window once the prediction has spread too far to
-# draw a box. ``lost``: the subject was given up. ``holding``: locked but a
-# gate (telemetry, flight controller, range, uncertain lock) holds.
+# on a live lock. ``holding``: locked but a gate (telemetry, flight
+# controller, range, uncertain lock) holds. Once the lock is lost:
+# ``predicting``: flying toward the predicted standoff while the prediction
+# is tight. ``repositioning``: flying to a vantage point the pilot chose to
+# see the predicted position from. ``searching``: at the vantage point,
+# sweeping the camera, widening in steps. ``holding-await-operator``:
+# stopped at a latched hover point, waiting for the operator to resume,
+# re-designate or stop.
 PHASE_IDLE = "idle"
 PHASE_ACQUIRING = "acquiring"
 PHASE_FOLLOWING = "following"
-PHASE_COASTING = "coasting"
-PHASE_SEARCHING = "searching"
-PHASE_LOST = "lost"
 PHASE_HOLDING = "holding"
+PHASE_PREDICTING = "predicting"
+PHASE_REPOSITIONING = "repositioning"
+PHASE_SEARCHING = "searching"
+PHASE_AWAIT_OPERATOR = "holding-await-operator"
+# The phases in which the lock is lost and the subject is being sought.
+RECOVERY_PHASES = (PHASE_PREDICTING, PHASE_REPOSITIONING, PHASE_SEARCHING)
 
 # Re-acquire modes. ``strict`` gives the subject up on the first loss and
-# waits for the operator. ``smart`` coasts on the prediction for a window and
-# re-designates a track that matches the subject's appearance and predicted
-# position, announcing it.
+# waits for the operator. ``smart`` predicts, repositions and searches within
+# a budget and re-designates a person that matches the subject's appearance
+# and predicted position, announcing it.
 REACQUIRE_STRICT = "strict"
 REACQUIRE_SMART = "smart"
 _REACQUIRE_MODES = (REACQUIRE_STRICT, REACQUIRE_SMART)
+
+# What an uncertain lock does. ``follow``: keep following the prediction at
+# reduced feed-forward. ``hold``: hold where it is. Either way an unsure
+# spell longer than UNCERTAIN_FOLLOW_MAX_S is handled as a loss.
+UNCERTAIN_FOLLOW = "follow"
+UNCERTAIN_HOLD = "hold"
+_UNCERTAIN_MODES = (UNCERTAIN_FOLLOW, UNCERTAIN_HOLD)
+UNCERTAIN_FOLLOW_MAX_S = 3.0
+
+SEARCH_BUDGET_RANGE = (5.0, 60.0)
+SEARCH_RADIUS_RANGE = (3.0, 12.0)
+SEARCH_SPEED_RANGE = (0.5, 4.0)
 
 # Why the loop is not commanding, on the wire. ``commanding: false`` on its
 # own tells an operator that the follow is not flying the aircraft but not
@@ -74,7 +92,11 @@ _REACQUIRE_MODES = (REACQUIRE_STRICT, REACQUIRE_SMART)
 HOLD_INACTIVE = "inactive"
 HOLD_NO_LOCK = "no-lock"
 HOLD_LOCK_UNCERTAIN = "lock-uncertain"
-HOLD_LOCK_LOST = "lock-lost"
+# Holding for the operator: after a strict loss, after the search budget ran
+# out, or after a loss with predictive search switched off.
+HOLD_AWAIT_OPERATOR = "awaiting-operator"
+HOLD_SEARCH_EXHAUSTED = "search-exhausted"
+HOLD_PREDICTIVE_OFF = "predictive-search-off"
 HOLD_POSE_STALE = "pose-stale"
 HOLD_FC_STALE = "fc-stale"
 HOLD_FC_DISARMED = "fc-disarmed"
@@ -109,9 +131,18 @@ class FollowConfig:
     camera_hfov_deg: float | None = None
     mount_pitch_deg: float | None = None
     reacquire_mode: str = REACQUIRE_SMART
-    reacquire_window_s: float = 4.0
     reacquire_min_similarity: float = 0.75
     max_speed_mps: float = 6.0
+    uncertain_mode: str = UNCERTAIN_FOLLOW
+    # Turned back on at every arm, so a search switched off for one flight
+    # never carries into the next unnoticed.
+    predictive_search: bool = True
+    search_budget_s: float = 25.0
+    search_radius_m: float = 12.0
+    search_speed_mps: float = 2.0
+    # A surface writes ``current + 1`` to resume a search that is holding
+    # for the operator.
+    operator_resume_seq: int = 0
     follow_mode: str = FOLLOW_MODE_FOLLOW
     follow_angle_deg: float = 180.0
     orbit_radius_m: float = 8.0
@@ -136,6 +167,7 @@ class FollowConfig:
             return default
 
         mode = str(pick("reacquire_mode", cls.reacquire_mode)).strip().lower()
+        uncertain = str(pick("uncertain_mode", cls.uncertain_mode)).strip().lower()
         follow_mode = str(pick("follow_mode", cls.follow_mode)).strip().lower()
         direction = str(pick("orbit_direction", cls.orbit_direction)).strip().lower()
         return cls(
@@ -159,17 +191,31 @@ class FollowConfig:
             # An unrecognised mode resolves to strict: the conservative
             # behaviour that never re-designates on its own.
             reacquire_mode=mode if mode in _REACQUIRE_MODES else REACQUIRE_STRICT,
-            reacquire_window_s=_clamped(
-                pick("reacquire_window_s", cls.reacquire_window_s),
-                cls.reacquire_window_s,
-                0.5,
-                15.0,
-            ),
             reacquire_min_similarity=_clamped(
                 pick("reacquire_min_similarity", cls.reacquire_min_similarity),
                 cls.reacquire_min_similarity,
                 0.5,
                 0.99,
+            ),
+            uncertain_mode=uncertain if uncertain in _UNCERTAIN_MODES else UNCERTAIN_FOLLOW,
+            predictive_search=bool(pick("predictive_search", cls.predictive_search)),
+            search_budget_s=_clamped(
+                pick("search_budget_s", cls.search_budget_s),
+                cls.search_budget_s,
+                *SEARCH_BUDGET_RANGE,
+            ),
+            search_radius_m=_clamped(
+                pick("search_radius_m", cls.search_radius_m),
+                cls.search_radius_m,
+                *SEARCH_RADIUS_RANGE,
+            ),
+            search_speed_mps=_clamped(
+                pick("search_speed_mps", cls.search_speed_mps),
+                cls.search_speed_mps,
+                *SEARCH_SPEED_RANGE,
+            ),
+            operator_resume_seq=int(
+                _clamped(pick("operator_resume_seq", 0), 0.0, 0.0, float(2**53))
             ),
             max_speed_mps=_clamped(
                 pick("max_speed_mps", cls.max_speed_mps),
@@ -227,7 +273,7 @@ class FollowState:
     True only while active, the vehicle pose is CURRENT, the flight
     controller is armed and in a guided/offboard mode that accepts the
     setpoints, AND the loop is flying a follow (on a live lock or a smart
-    coast). ``fc_armed`` / ``fc_guided`` are reported False once the
+    recovery). ``fc_armed`` / ``fc_guided`` are reported False once the
     HEARTBEAT they came from goes stale — a remembered arm state is not an
     observed one. ``hold_reason`` names which gate is holding, so
     ``commanding: false`` is never a cause-free reading."""
@@ -255,7 +301,25 @@ class FollowState:
     agl_m: float | None = None
     agl_source: str | None = None
     reacquire_mode: str = REACQUIRE_SMART
-    coast_remaining_s: float = 0.0
+    # Seconds left of the recovery's search budget.
+    reacquire_remaining_s: float = 0.0
+    search_budget_s: float = 25.0
+    # 0-based widening step while searching, else None.
+    search_step: int | None = None
+    # {center_ne, semi_major_m, semi_minor_m, heading_deg} while recovering.
+    search_area: dict[str, object] | None = None
+    # At most 10 points 0.5 s apart while recovering.
+    predicted_path_ne: list[list[float]] | None = None
+    vantage_ne: list[float] | None = None
+    # enroute | arrived | no-vantage, as the pilot reports it.
+    vantage_state: str | None = None
+    # {ne, kind: narrow | wide}: what hides the subject from the vantage.
+    occluder: dict[str, object] | None = None
+    # The latched hover point while holding for the operator.
+    hold_ne: list[float] | None = None
+    uncertain_mode: str = UNCERTAIN_FOLLOW
+    predictive_search: bool = True
+    operator_resume_seq: int = 0
     pipeline_latency_ms: int | None = None
     track_id: int | None = None
     confidence: float | None = None
@@ -303,16 +367,26 @@ __all__ = [
     "PHASE_IDLE",
     "PHASE_ACQUIRING",
     "PHASE_FOLLOWING",
-    "PHASE_COASTING",
-    "PHASE_SEARCHING",
-    "PHASE_LOST",
     "PHASE_HOLDING",
+    "PHASE_PREDICTING",
+    "PHASE_REPOSITIONING",
+    "PHASE_SEARCHING",
+    "PHASE_AWAIT_OPERATOR",
+    "RECOVERY_PHASES",
     "REACQUIRE_STRICT",
     "REACQUIRE_SMART",
+    "UNCERTAIN_FOLLOW",
+    "UNCERTAIN_HOLD",
+    "UNCERTAIN_FOLLOW_MAX_S",
+    "SEARCH_BUDGET_RANGE",
+    "SEARCH_RADIUS_RANGE",
+    "SEARCH_SPEED_RANGE",
     "HOLD_INACTIVE",
     "HOLD_NO_LOCK",
     "HOLD_LOCK_UNCERTAIN",
-    "HOLD_LOCK_LOST",
+    "HOLD_AWAIT_OPERATOR",
+    "HOLD_SEARCH_EXHAUSTED",
+    "HOLD_PREDICTIVE_OFF",
     "HOLD_POSE_STALE",
     "HOLD_FC_STALE",
     "HOLD_FC_DISARMED",

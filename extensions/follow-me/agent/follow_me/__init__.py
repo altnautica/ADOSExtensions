@@ -16,12 +16,14 @@ stamps it with a track id + lock state on the detection stream, and this
 plugin follows that one tracked subject. A lock-state safety gate stops
 commanding the instant the tracker reports the subject uncertain or lost.
 
-On a loss the operator-chosen ``reacquire_mode`` applies. ``strict`` gives
-the subject up and waits for a new designate. ``smart`` coasts on the
-prediction for a short window and, if a person matching the subject's
-appearance appears where the subject should be, designates it through the
-engine and announces it on ``follow.reacquired``; the engine itself never
-re-locks silently.
+On a loss the operator-chosen ``reacquire_mode`` applies. ``strict`` stops
+at a latched hover point and waits for the operator. ``smart`` predicts where
+the subject went, asks the pilot for a vantage point that sees past the
+obstacles, and searches from there within a budget; a person matching the
+subject's appearance where the subject should be is designated through the
+engine and announced on ``follow.reacquired``. When the budget runs out the
+vehicle holds for the operator to resume, re-designate or stop. Neither the
+engine nor this plugin ever re-locks silently.
 
 The vision engine runs detection on a camera only while a consumer holds a
 lease on it; while the behaviour is active this plugin holds one on its follow
@@ -53,7 +55,6 @@ from follow_me.camera import (
     geometry_of,
     sensor_ts_ms,
 )
-from follow_me.coast import CoastMixin
 from follow_me.demand import DetectionLease
 from follow_me.fc_state import (
     FcClock,
@@ -64,13 +65,20 @@ from follow_me.fc_state import (
     Rangefinder,
 )
 from follow_me.loop import FollowLoopMixin, Sighting
-from follow_me.motion import LEASE_REVOKED_TOPIC, STICKS_TOPIC, Nudges
+from follow_me.motion import (
+    GOAL_STATUS_TOPIC,
+    LEASE_REVOKED_TOPIC,
+    STICKS_TOPIC,
+    Nudges,
+)
 from follow_me.ranging import Scan
+from follow_me.reacquire import Embedding, embedding_of
 from follow_me.readback import ReadbackMixin
-from follow_me.reacquire import Coast, Embedding, embedding_of
+from follow_me.recovery import Recovery, RecoveryMixin
 from follow_me.state import (
     HOLD_INACTIVE,
     PHASE_IDLE,
+    RECOVERY_PHASES,
     FollowConfig,
     FollowState,
 )
@@ -102,8 +110,13 @@ _CONFIG_KEYS = (
     "camera_hfov_deg",
     "mount_pitch_deg",
     "reacquire_mode",
-    "reacquire_window_s",
     "reacquire_min_similarity",
+    "uncertain_mode",
+    "predictive_search",
+    "search_budget_s",
+    "search_radius_m",
+    "search_speed_mps",
+    "operator_resume_seq",
     "max_speed_mps",
     "follow_mode",
     "follow_angle_deg",
@@ -131,7 +144,7 @@ def parse_scan(payload: dict[str, Any]) -> Scan | None:
     return Scan(angle_start_rad=start, angle_increment_rad=inc, ranges_m=values)
 
 
-class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
+class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin):
     """Lifecycle-hook plugin class the runner instantiates with no args."""
 
     def __init__(self) -> None:
@@ -169,7 +182,11 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._measured_bbox: Any = None
         self._last_fix: Any = None
         self._last_fix_s: float = 0.0
-        self._coast: Coast | None = None
+        self._recovery: Recovery | None = None
+        self._uncertain_since_s: float | None = None
+        # The arm-edge write of predictive_search, kept so it is not
+        # collected before it runs.
+        self._arm_reset_task: asyncio.Task | None = None
         self._phase = PHASE_IDLE
         # The pilot's motion lease, the last refusal and when it was asked.
         self._lease_id: str | None = None
@@ -185,7 +202,6 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._geom_tick_s: float | None = None
         self._pending_latency_ts_ms: int | None = None
         self._latency_ms: int | None = None
-        self._last_lost_track_id: int | None = None
         # The newest camera-filtered batch, examined for re-acquire candidates.
         self._latest_batch: DetectionBatch | None = None
         self._latest_batch_s: float = -math.inf
@@ -249,6 +265,12 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         await ctx.events.subscribe(LEASE_REVOKED_TOPIC, self._on_lease_revoked)
         await ctx.events.subscribe(STICKS_TOPIC, self._on_sticks)
         await self._subscribe_sticks(ctx)
+        # The pilot's report on a vantage goal, to the holder only. A host
+        # without it leaves the recovery searching from where it is.
+        try:
+            await ctx.events.subscribe(GOAL_STATUS_TOPIC, self._on_goal_status)
+        except Exception as exc:  # noqa: BLE001
+            ctx.log.warning("follow_me_goal_status_unavailable", reason=str(exc))
 
         # MCP tools (guarded: the host injects ctx.tools only when the
         # mcp.expose capability is granted). Read-only + stop; there is no
@@ -287,7 +309,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         if self._active_camera is not None:
             return self._active_camera
         if self._sighting is not None and (
-            self._tracker.has_lock or self._coast is not None
+            self._tracker.has_lock or self._recovery is not None
         ):
             return self._sighting.camera_id
         return None
@@ -372,7 +394,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
                 pass
             self._loop_task = None
         self._tracker.drop()
-        self._coast = None
+        self._recovery = None
         self._filter.reset()
         self._filter_track_id = None
         if self._ctx is not None:
@@ -450,10 +472,13 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
                         geometry=geometry,
                     )
                 break
-        # During a smart coast the lost track must not re-latch the gate
-        # (the engine keeps reporting it as lost); only the batches after our
-        # own re-acquire designate are fed.
-        if self._coast is not None and not self._coast.designated:
+        # While the follow predicts, repositions or searches, the lost track
+        # must not re-latch the gate (the engine keeps reporting it as lost);
+        # only the batches after our own re-acquire designate are fed. While
+        # it holds for the operator every batch is fed, so an operator
+        # designate latches.
+        rec = self._recovery
+        if rec is not None and rec.phase in RECOVERY_PHASES and not rec.designated:
             return
         # The shared gate adopts the engine's designated target and never
         # chooses one itself.

@@ -43,6 +43,9 @@ from follow_me.state import (
 SKILL_ID = "follow-me"
 STICKS_TOPIC = "flight.sticks"
 LEASE_REVOKED_TOPIC = "flight.lease.revoked"
+# The pilot's report on a vantage goal (state, chosen point, coverage,
+# occluder), forwarded to the lease holder only.
+GOAL_STATUS_TOPIC = "flight.goal.status"
 
 # A refused lease is asked for again at most this often.
 LEASE_RETRY_S = 1.0
@@ -211,6 +214,7 @@ def nudge_orbit_rate(rate_dps: float, direction: str, delta_dps: float) -> tuple
 
 
 __all__ = [
+    "GOAL_STATUS_TOPIC",
     "LEASE_RETRY_S",
     "LEASE_REVOKED_TOPIC",
     "NUDGE_WRITE_PERIOD_S",

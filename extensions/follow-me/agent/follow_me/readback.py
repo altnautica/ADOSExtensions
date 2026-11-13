@@ -9,12 +9,13 @@ from typing import Any
 from follow_me import fc_state, projection
 from follow_me.camera import CameraGeometry, configured_geometry, geometry_of
 from follow_me.loop import SETPOINT_RATE_WINDOW_S
+from follow_me.predict import predict_target, predicted_path, search_ellipse
 from follow_me.projection import CameraPose, TargetFix
 from follow_me.ranging import Scan
 from follow_me.state import (
     FOLLOW_STATE_TOPIC,
-    PHASE_COASTING,
     PHASE_SEARCHING,
+    RECOVERY_PHASES,
     FollowConfig,
     FollowState,
 )
@@ -49,6 +50,11 @@ _DISCRETE_KEYS = (
     "lease_id",
     "nudged",
     "camera_geometry_source",
+    "search_step",
+    "vantage_state",
+    "uncertain_mode",
+    "predictive_search",
+    "operator_resume_seq",
 )
 
 
@@ -84,6 +90,7 @@ class ReadbackMixin:
     _orbit_phase: float | None
     _geometry: CameraGeometry
     _latest_batch: Any
+    _recovery: Any
 
     def _setpoint_rate_hz(self, now: float) -> float:
         """Setpoints sent per second over the last SETPOINT_RATE_WINDOW_S."""
@@ -242,7 +249,6 @@ class ReadbackMixin:
         lock_state: str | None = None,
         commanding: bool = False,
         hold_reason: str | None = None,
-        coast_remaining_s: float = 0.0,
         predicted_bbox: dict[str, object] | None = None,
         force: bool = False,
     ) -> None:
@@ -259,7 +265,6 @@ class ReadbackMixin:
             lock_state=lock_state,
             commanding=commanding,
             hold_reason=hold_reason,
-            coast_remaining_s=coast_remaining_s,
             predicted_bbox=predicted_bbox,
         )
         prev = self._published.to_dict()
@@ -286,7 +291,6 @@ class ReadbackMixin:
         lock_state: str | None,
         commanding: bool,
         hold_reason: str | None,
-        coast_remaining_s: float,
         predicted_bbox: dict[str, object] | None,
     ) -> FollowState:
         state = FollowState(
@@ -301,7 +305,6 @@ class ReadbackMixin:
             fc_armed=self._fc.armed_at(now),
             fc_guided=self._fc.guided_at(now),
             hold_reason=None if commanding else hold_reason,
-            coast_remaining_s=round(coast_remaining_s, 2),
             predicted_bbox=predicted_bbox,
             pipeline_latency_ms=self._latency_ms,
             setpoint_rate_hz=self._setpoint_rate_hz(now),
@@ -327,6 +330,10 @@ class ReadbackMixin:
             state.orbit_radius_m = _r(cfg.orbit_radius_m)
             state.orbit_rate_dps = _r(cfg.orbit_rate_dps, 1)
             state.orbit_direction = cfg.orbit_direction
+            state.uncertain_mode = cfg.uncertain_mode
+            state.predictive_search = cfg.predictive_search
+            state.operator_resume_seq = cfg.operator_resume_seq
+            state.search_budget_s = cfg.search_budget_s
             if commanding:
                 # In orbit the flown geometry is the orbit radius (already
                 # published); the follow distance is not a setpoint there.
@@ -346,7 +353,8 @@ class ReadbackMixin:
             state.target_vel_ned = [round(x[2], 2), round(x[3], 2)]
             state.target_speed_mps = _r(math.hypot(x[2], x[3]))
         fix = self._last_fix
-        if phase in (PHASE_COASTING, PHASE_SEARCHING) and pred is not None:
+        self._recovery_readback(state, now, phase)
+        if phase in RECOVERY_PHASES and pred is not None:
             x, p = pred
             dn = x[0] - self._pose.north_m
             de = x[1] - self._pose.east_m
@@ -360,6 +368,35 @@ class ReadbackMixin:
             state.bearing_deg = _r(math.degrees(fix.bearing_rad) % 360.0, 1)
             state.depression_deg = _r(math.degrees(fix.depression_rad), 1)
         return state
+
+    def _recovery_readback(self, state: FollowState, now: float, phase: str) -> None:
+        """The search budget left, the predicted path and search area, the
+        pilot's vantage, and the latched hover point."""
+        rec = self._recovery
+        if rec is None:
+            return
+        if rec.vantage_ne is not None:
+            state.vantage_ne = [round(rec.vantage_ne[0], 2), round(rec.vantage_ne[1], 2)]
+        state.vantage_state = rec.vantage_state
+        state.occluder = rec.occluder
+        if rec.hold_ne is not None:
+            state.hold_ne = [rec.hold_ne[0], rec.hold_ne[1]]
+        if phase not in RECOVERY_PHASES:
+            return
+        state.reacquire_remaining_s = round(rec.remaining_s(now), 2)
+        if phase == PHASE_SEARCHING:
+            state.search_step = rec.step_index
+        p = predict_target(self._filter, now)
+        if p is None:
+            return
+        area = search_ellipse(p, rec.sigma_k)
+        state.search_area = {
+            "center_ne": [round(area.center_ne[0], 2), round(area.center_ne[1], 2)],
+            "semi_major_m": round(area.semi_major_m, 2),
+            "semi_minor_m": round(area.semi_minor_m, 2),
+            "heading_deg": round(area.heading_deg, 1),
+        }
+        state.predicted_path_ne = [[n, e] for n, e in predicted_path(self._filter, now)] or None
 
 
 __all__ = ["ReadbackMixin"]

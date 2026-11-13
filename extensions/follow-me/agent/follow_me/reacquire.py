@@ -1,22 +1,21 @@
-"""Smart re-acquire: the coast state and the candidate match.
+"""Smart re-acquire: the candidate match and the appearance template.
 
-When ``reacquire_mode`` is ``smart`` and the vision engine's lock on the
-subject is lost, the follow loop does not give up at once. For
-``reacquire_window_s`` it flies toward the predicted standoff (at reduced
-feed-forward) and checks each new detection batch for a ``person`` that both
+While a lost subject is being recovered (see :mod:`follow_me.recovery`),
+each new detection batch is checked for a ``person`` that both
 
 * looks like the subject: cosine similarity of its re-identification
-  embedding to the stored template >= ``reacquire_min_similarity``, and
+  embedding to the stored template >= ``reacquire_min_similarity``, clearly
+  ahead of any other look-alike in the gate, and
 * is where the subject should be: Mahalanobis distance from the filter's
   prediction <= 3, measurement covariance included.
 
 The best such candidate is designated with the vision engine — an explicit,
-announced ``follow.reacquired`` designate, never a silent re-lock. When the
-window expires with no match the follow is given up (``follow.lost``).
+announced ``follow.reacquired`` designate, never a silent re-lock.
 
 Without embeddings on the detection stream (no re-id model and no histogram
-fallback in the engine) no candidate can pass the appearance test, so smart
-mode coasts and then gives up exactly like strict mode, just later.
+fallback in the engine) no candidate can pass the appearance test, so the
+recovery searches and then holds for the operator exactly like strict mode,
+just later.
 """
 
 from __future__ import annotations
@@ -44,25 +43,6 @@ OVERLAP_IOU = 0.1
 PERSON = "person"
 
 Cov2 = tuple[tuple[float, float], tuple[float, float]]
-
-
-@dataclass
-class Coast:
-    """One smart re-acquire window."""
-
-    lost_track_id: int | None
-    started_s: float
-    deadline_s: float
-    # Whether a re-acquire designate was accepted by the engine, and the
-    # track it returned (the engine may omit the id).
-    designated: bool = False
-    designated_track: int | None = None
-    # Receive time of the last batch already examined, so a batch is matched
-    # once.
-    last_batch_s: float = -math.inf
-
-    def remaining_s(self, now: float) -> float:
-        return max(0.0, self.deadline_s - now)
 
 
 @dataclass(frozen=True)
@@ -205,7 +185,6 @@ __all__ = [
     "OVERLAP_IOU",
     "SOLID_LOCK_MIN_CONF",
     "Candidate",
-    "Coast",
     "Embedding",
     "best_candidate",
     "blend_template",

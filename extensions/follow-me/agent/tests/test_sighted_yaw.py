@@ -84,7 +84,7 @@ async def test_the_goal_yaw_follows_the_sighting_not_the_estimate(monkeypatch: A
 @pytest.mark.asyncio
 async def test_an_unsure_hold_faces_the_sighting_and_stops_the_estimate(monkeypatch: Any) -> None:
     clock = _install_clock(monkeypatch)
-    ctx = _Ctx(config=_CONFIG)
+    ctx = _Ctx(config={**_CONFIG, "uncertain_mode": "hold"})
     plugin = _make_plugin(ctx)
     _pose(plugin)
     await _sight(plugin, clock, _LEFT)
@@ -107,8 +107,9 @@ async def test_an_unsure_hold_faces_the_sighting_and_stops_the_estimate(monkeypa
     assert x[2:] == [0.0, 0.0]
     assert x[0] == pytest.approx(at_hold[0]) and x[1] == pytest.approx(at_hold[1])
 
-    # A sighting older than the aiming window no longer steers the hold.
-    clock.advance(3.1)
+    # A sighting older than the aiming window no longer steers the hold
+    # (still inside the unsure spell's limit, so it is still a hold).
+    clock.advance(2.8)
     _pose(plugin, yaw=1.0)
     await _sight(plugin, clock, _LEFT_MOVED, lock_state="uncertain")
     hold = ctx.flight.setpoints[-1]

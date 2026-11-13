@@ -332,10 +332,11 @@ gcs:
           group: "settings.title"
           order: 42
       # What happens when the lock on the subject is lost. Two values, so
-      # surfaces render it as a STRICT | SMART toggle. strict: hold and wait for
-      # the operator to designate again. smart: coast on the prediction for
-      # reacquire_window_s and designate a person that matches the subject's
-      # appearance and predicted position, announcing it.
+      # surfaces render it as a STRICT | SMART toggle. strict: hold at a
+      # latched point and wait for the operator. smart: predict where the
+      # subject went, fly to a vantage point the pilot chooses and search
+      # within search_budget_s, and designate a person that matches the
+      # subject's appearance and predicted position, announcing it.
       - key: reacquire_mode
         binding: plugin.config
         schema:
@@ -347,19 +348,73 @@ gcs:
           label: "settings.reacquireMode"
           group: "settings.title"
           order: 60
-      - key: reacquire_window_s
+      # What an uncertain lock does: keep following the prediction at reduced
+      # speed, or hold. Either way an unsure spell longer than 3 s is a loss.
+      - key: uncertain_mode
+        binding: plugin.config
+        schema:
+          type: string
+          enum: ["follow", "hold"]
+          default: "follow"
+        ui:
+          widget: enum
+          label: "settings.uncertainMode"
+          group: "settings.title"
+          order: 61
+      # Search for a lost subject from a vantage point. Turned back on at
+      # every arm, so switching it off lasts one flight at most.
+      - key: predictive_search
+        binding: plugin.config
+        schema:
+          type: boolean
+          default: true
+        ui:
+          widget: boolean
+          label: "settings.predictiveSearch"
+          group: "settings.title"
+          order: 62
+          visible_if: { key: reacquire_mode, equals: "smart" }
+      - key: search_budget_s
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 5
+          maximum: 60
+          step: 1
+          default: 25
+        ui:
+          widget: range
+          label: "settings.searchBudget"
+          group: "settings.title"
+          order: 63
+          visible_if: { key: reacquire_mode, equals: "smart" }
+      - key: search_radius_m
+        binding: plugin.config
+        schema:
+          type: number
+          minimum: 3
+          maximum: 12
+          step: 0.5
+          default: 12
+        ui:
+          widget: range
+          label: "settings.searchRadius"
+          group: "settings.title"
+          order: 65
+          visible_if: { key: reacquire_mode, equals: "smart" }
+      - key: search_speed_mps
         binding: plugin.config
         schema:
           type: number
           minimum: 0.5
-          maximum: 15
-          step: 0.5
-          default: 4
+          maximum: 4
+          step: 0.1
+          default: 2
         ui:
           widget: range
-          label: "settings.reacquireWindow"
+          label: "settings.searchSpeed"
           group: "settings.title"
-          order: 62
+          order: 66
           visible_if: { key: reacquire_mode, equals: "smart" }
       - key: reacquire_min_similarity
         binding: plugin.config

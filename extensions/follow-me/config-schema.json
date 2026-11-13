@@ -55,17 +55,53 @@
     "reacquire_mode": {
       "type": "string",
       "title": "Re-acquire mode",
-      "description": "What happens when the lock on the subject is lost. strict: hold and wait for the operator to designate again. smart: coast on the prediction for reacquire_window_s and designate a person matching the subject's appearance and predicted position, announcing it on follow.reacquired.",
+      "description": "What happens when the lock on the subject is lost. strict: hold at a latched point and wait for the operator. smart: predict where the subject went, fly to a vantage point the pilot chooses and search within search_budget_s, and designate a person matching the subject's appearance and predicted position, announcing it on follow.reacquired.",
       "enum": ["strict", "smart"],
       "default": "smart"
     },
-    "reacquire_window_s": {
+    "uncertain_mode": {
+      "type": "string",
+      "title": "Uncertain lock",
+      "description": "What an uncertain lock does. follow: keep following the prediction at reduced speed. hold: hold where it is. Either way an unsure spell longer than 3 s is handled as a loss.",
+      "enum": ["follow", "hold"],
+      "default": "follow"
+    },
+    "predictive_search": {
+      "type": "boolean",
+      "title": "Predictive search",
+      "description": "After a loss in smart mode, fly to a vantage point and search for the subject. Turned back on at every arm.",
+      "default": true
+    },
+    "search_budget_s": {
       "type": "number",
-      "title": "Re-acquire window (s)",
-      "description": "How long a smart re-acquire coasts on the prediction before giving the subject up.",
-      "default": 4,
+      "title": "Search time (s)",
+      "description": "How long a smart recovery predicts, repositions and searches before holding for the operator.",
+      "default": 25,
+      "minimum": 5,
+      "maximum": 60
+    },
+    "search_radius_m": {
+      "type": "number",
+      "title": "Search radius (m)",
+      "description": "The farthest a vantage point may be from where the subject was lost.",
+      "default": 12,
+      "minimum": 3,
+      "maximum": 12
+    },
+    "search_speed_mps": {
+      "type": "number",
+      "title": "Search speed (m/s)",
+      "description": "Speed limit while flying to a vantage point.",
+      "default": 2,
       "minimum": 0.5,
-      "maximum": 15
+      "maximum": 4
+    },
+    "operator_resume_seq": {
+      "type": "integer",
+      "title": "Resume search",
+      "description": "Written by an operator surface as the current value plus one to resume a search that is holding for the operator.",
+      "default": 0,
+      "minimum": 0
     },
     "reacquire_min_similarity": {
       "type": "number",

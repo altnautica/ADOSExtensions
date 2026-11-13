@@ -15,18 +15,18 @@ import follow_me
 from follow_me.state import (
     FOLLOW_LOST_TOPIC,
     FOLLOW_REACQUIRED_TOPIC,
-    HOLD_LOCK_LOST,
+    HOLD_AWAIT_OPERATOR,
     LOCK_LOCKED,
     LOCK_LOST,
-    PHASE_COASTING,
+    PHASE_AWAIT_OPERATOR,
     PHASE_FOLLOWING,
-    PHASE_LOST,
-    PHASE_SEARCHING,
+    PHASE_PREDICTING,
     FollowConfig,
 )
 from follow_fakes import (
     _Ctx,
     _distance_sensor,
+    _events,
     _level_pose,
     _arm_guided,
     _bbox_center_frame,
@@ -105,9 +105,6 @@ async def _follow_one(
     )
     await plugin._tick()
 
-
-def _events(ctx: _Ctx, topic: str) -> list[dict[str, Any]]:
-    return [p for (t, p) in ctx.events.published if t == topic]
 
 
 @pytest.mark.asyncio
@@ -213,12 +210,14 @@ async def test_strict_loss_gives_up_announces_and_holds(monkeypatch: Any) -> Non
     _feed(plugin, _person(track_id=7, lock_state=LOCK_LOST))
     await plugin._tick()
 
-    assert plugin._coast is None
     assert plugin._tracker.has_lock is False
-    assert _events(ctx, FOLLOW_LOST_TOPIC) == [{"track_id": 7, "reason": "lock_lost"}]
+    assert _events(ctx, FOLLOW_LOST_TOPIC) == [
+        {"track_id": 7, "reason": "lock_lost", "awaiting_operator": True, "hold_ne": [0.0, 0.0]}
+    ]
     state = _state_events(ctx)[-1]
-    assert state["phase"] == PHASE_LOST
-    assert state["hold_reason"] == HOLD_LOCK_LOST
+    assert state["phase"] == PHASE_AWAIT_OPERATOR
+    assert state["hold_reason"] == HOLD_AWAIT_OPERATOR
+    assert state["hold_ne"] == [0.0, 0.0]
     hold = ctx.flight.setpoints[sent]
     assert hold["kind"] == "position"
     assert (hold["vn"], hold["ve"]) == (0.0, 0.0)
@@ -243,20 +242,20 @@ async def _lose_in_smart(
 
 
 @pytest.mark.asyncio
-async def test_smart_loss_coasts_at_reduced_feed_forward(monkeypatch: Any) -> None:
+async def test_smart_loss_predicts_at_reduced_feed_forward(monkeypatch: Any) -> None:
     ctx = _Ctx(config=_follow_config(reacquire_mode="smart"))
     plugin = _make_plugin(ctx)
     plugin._active_camera = "uvc-0"
     clock = _install_clock(monkeypatch)
     await _lose_in_smart(plugin, clock)
 
-    assert plugin._coast is not None
+    assert plugin._recovery is not None
     state = _state_events(ctx)[-1]
-    assert state["phase"] in (PHASE_COASTING, PHASE_SEARCHING)
+    assert state["phase"] == PHASE_PREDICTING
     assert state["commanding"] is True
-    assert 0.0 < state["coast_remaining_s"] <= 4.0
+    assert 0.0 < state["reacquire_remaining_s"] <= 25.0
     assert not _events(ctx, FOLLOW_LOST_TOPIC)
-    # The lost track does not re-latch the gate during the coast.
+    # The lost track does not re-latch the gate during the recovery.
     _feed(plugin, _person(track_id=7, lock_state=LOCK_LOST))
     assert plugin._tracker.has_lock is False
 
@@ -293,7 +292,7 @@ async def test_smart_reacquires_a_matching_person_with_an_announced_designate(
     _fresh(plugin)
     _feed(plugin, _person(track_id=9, lock_state=LOCK_LOCKED, embedding=_EMB))
     await plugin._tick()
-    assert plugin._coast is None
+    assert plugin._recovery is None
     assert plugin._filter_track_id == 9
     assert _state_events(ctx)[-1]["phase"] == PHASE_FOLLOWING
 
@@ -332,35 +331,31 @@ async def test_smart_ignores_a_lookalike_far_from_the_prediction(
     assert ctx.vision.designate_calls == []
 
 
-@pytest.mark.asyncio
-async def test_smart_window_expiry_gives_up(monkeypatch: Any) -> None:
-    ctx = _Ctx(config=_follow_config(reacquire_mode="smart"))
-    plugin = _make_plugin(ctx)
-    plugin._active_camera = "uvc-0"
-    clock = _install_clock(monkeypatch)
-    await _lose_in_smart(plugin, clock)
-
-    clock.advance(4.1)
-    _fresh(plugin)
-    await plugin._tick()
-    assert plugin._coast is None
-    assert _events(ctx, FOLLOW_LOST_TOPIC) == [
-        {"track_id": 7, "reason": "reacquire_timeout"}
-    ]
-    assert _state_events(ctx)[-1]["phase"] == PHASE_LOST
-
-
 def test_reacquire_settings_resolve_and_clamp() -> None:
     cfg = FollowConfig.resolve(
-        {"reacquire_mode": "SMART", "reacquire_window_s": 99, "max_speed_mps": "3"},
+        {
+            "reacquire_mode": "SMART",
+            "max_speed_mps": "3",
+            "uncertain_mode": "HOLD",
+            "predictive_search": False,
+            "search_budget_s": 99,
+            "search_radius_m": 1,
+            "search_speed_mps": 9,
+            "operator_resume_seq": "4",
+        },
         {},
     )
     assert cfg.reacquire_mode == "smart"
-    assert cfg.reacquire_window_s == 15.0
     assert cfg.max_speed_mps == 3.0
-    # An unknown mode resolves to the conservative strict.
+    assert cfg.uncertain_mode == "hold" and cfg.predictive_search is False
+    assert (cfg.search_budget_s, cfg.search_radius_m, cfg.search_speed_mps) == (60.0, 3.0, 4.0)
+    assert cfg.operator_resume_seq == 4
+    # Unknown modes resolve to the conservative strict, and to following.
     assert FollowConfig.resolve({"reacquire_mode": "bogus"}, {}).reacquire_mode == "strict"
-    assert FollowConfig.resolve({}, {}).reacquire_mode == "smart"
+    assert FollowConfig.resolve({"uncertain_mode": "bogus"}, {}).uncertain_mode == "follow"
+    default = FollowConfig.resolve({}, {})
+    assert default.reacquire_mode == "smart" and default.predictive_search is True
+    assert (default.search_budget_s, default.search_radius_m, default.search_speed_mps) == (25.0, 12.0, 2.0)
     assert FollowConfig.resolve({}, {}).follow_distance_m == 6.0
 
 

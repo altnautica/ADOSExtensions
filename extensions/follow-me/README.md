@@ -116,20 +116,46 @@ precedence over the lock reasons.
 
 ### Re-acquire after occlusion
 
+An uncertain lock first: with `uncertain_mode` `follow` (the default) the
+follow keeps flying the prediction at half feed-forward; with `hold` it holds.
+Either way an unsure spell longer than 3 s is handled as a loss.
+
 `reacquire_mode` decides what a lost lock does:
 
-- **Strict** gives the subject up, announces `follow.lost`, holds, and waits
-  for the operator to designate again.
-- **Smart** (the default) coasts toward the predicted standoff at half
-  feed-forward for `reacquire_window_s`. In each new batch it looks for a
-  `person` that passes two checks:
+- **Strict** stops at a latched hover point, announces `follow.lost`, and
+  holds for the operator (`holding-await-operator`).
+- **Smart** (the default) recovers within `search_budget_s`:
+  1. `predicting`: flies toward the predicted standoff at half feed-forward
+     for up to 2 s, while the prediction has not spread by more than 1.5 m;
+  2. `repositioning`: sends the pilot a `vantage` goal (the predicted
+     position, its covariance, an ellipse scale, the standoff, and
+     `search_radius_m` around where the loss happened) at no more than
+     `search_speed_mps`; the pilot chooses a point that sees the predicted
+     position past the obstacles and reports it on `flight.goal.status`;
+  3. `searching`: at that point (or where it is, when the pilot finds none),
+     sweeps yaw and gimbal pitch across the predicted position, then asks for
+     a wider vantage, step by step.
+
+  In each new batch it looks for a `person` that passes two checks:
   - its re-identification embedding has cosine similarity of at least
-    `reacquire_min_similarity` to the stored subject template;
+    `reacquire_min_similarity` to the stored subject template, at least 0.08
+    ahead of any other person inside the gate;
   - it lies within a Mahalanobis distance of 3 from the prediction.
 
   The best match is designated with the vision engine and announced on
-  `follow.reacquired {track_id, similarity, gap_s}`. When the window expires,
-  the plugin announces `follow.lost` and holds.
+  `follow.reacquired`. When the budget runs out, or after the prediction phase
+  with `predictive_search` off, the plugin announces `follow.lost` and holds
+  for the operator.
+
+Holding for the operator keeps the motion lease and a latched hover point
+(`hold_ne`) that a drifting pose estimate cannot move. It never re-locks on its
+own. The operator resumes the search (a surface writes
+`operator_resume_seq` + 1; a fresh budget starts from the current
+prediction), designates a subject, or stops. `predictive_search` is turned
+back on at every arm.
+
+The subject template learns only from a solid lock: locked, confidence at
+least 0.6, and no other person's box overlapping the subject's.
 
 Re-acquire compares appearance embeddings. The shipped default is the
 engine's model-free colour histogram (`embedding_model` `"histogram"`). A
@@ -141,8 +167,8 @@ model id and similarity is markedly more discriminative. Embeddings from
 different models are never compared.
 
 The vision engine never re-locks silently. A smart re-acquire is an explicit,
-announced designate. Without embeddings on the detection stream, Smart coasts
-and then gives up like Strict.
+announced designate. Without embeddings on the detection stream, Smart searches
+and then holds for the operator like Strict.
 
 ## Surfaces
 
@@ -171,9 +197,9 @@ and then gives up like Strict.
 
 | Topic               | Payload                                                         |
 | ------------------- | --------------------------------------------------------------- |
-| `follow.state`      | The read-back. `phase` is one of `idle`, `acquiring`, `following`, `coasting`, `searching`, `lost`, `holding`. The other fields are listed below. |
-| `follow.reacquired` | `{track_id, similarity, gap_s}`                                 |
-| `follow.lost`       | `{track_id, reason}`, where `reason` is `lock_lost` or `reacquire_timeout`. |
+| `follow.state`      | The read-back. `phase` is one of `idle`, `acquiring`, `following`, `holding`, `predicting`, `repositioning`, `searching`, `holding-await-operator`. The other fields are listed below. |
+| `follow.reacquired` | `{track_id, similarity, gap_s, mahalanobis, phase}`; `phase` is the phase the re-lock happened in. |
+| `follow.lost`       | `{track_id, reason, awaiting_operator, hold_ne}`, where `reason` is `lock_lost` (strict), `search_exhausted` or `predictive_search_off`. |
 
 The other `follow.state` fields:
 
@@ -181,7 +207,10 @@ The other `follow.state` fields:
 - **Subject:** `target_speed_mps`, `bearing_deg`, `depression_deg`,
   `target_ned`, `target_vel_ned`, `predicted_bbox`.
 - **Height:** `agl_m`, `agl_source`.
-- **Re-acquire:** `reacquire_mode`, `coast_remaining_s`.
+- **Re-acquire:** `reacquire_mode`, `uncertain_mode`, `predictive_search`,
+  `reacquire_remaining_s`, `search_budget_s`, `search_step`, `search_area`,
+  `predicted_path_ne`, `vantage_ne`, `vantage_state`, `occluder`, `hold_ne`,
+  `operator_resume_seq`.
 - **Timing:** `pipeline_latency_ms`, `setpoint_rate_hz`.
 - **Lock:** `track_id`, `confidence`, `lock_state`.
 - **Commanding:** `commanding`, `hold_reason`.
@@ -207,7 +236,12 @@ Per-drone configuration (see `config-schema.json`):
 | `camera_hfov_deg`          | unset         | `30`–`160`  | Camera horizontal field of view, where the camera roster does not give it; unset is 87°. |
 | `mount_pitch_deg`          | unset         | `0`–`90`    | Camera downward tilt below the horizon, where the camera roster does not give it; unset is 15°. |
 | `reacquire_mode`           | `smart`       | `strict`, `smart` | What a lost lock does.                    |
-| `reacquire_window_s`       | `4`           | `0.5`–`15`  | How long a smart re-acquire coasts.             |
+| `uncertain_mode`           | `follow`      | `follow`, `hold` | What an uncertain lock does.               |
+| `predictive_search`        | `true`        | —           | Search from a vantage point; on again at every arm. |
+| `search_budget_s`          | `25`          | `5`–`60`    | How long a smart recovery lasts.                |
+| `search_radius_m`          | `12`          | `3`–`12`    | Farthest vantage point from the loss.           |
+| `search_speed_mps`         | `2`           | `0.5`–`4`   | Speed limit while repositioning.                |
+| `operator_resume_seq`      | `0`           | `≥ 0`       | Written as current + 1 to resume a search.      |
 | `reacquire_min_similarity` | `0.75`        | `0.5`–`0.99`| Appearance similarity needed to re-acquire.     |
 | `max_speed_mps`            | `6`           | `0.5`–`15`  | Cap on the velocity feed-forward.               |
 | `follow_mode`              | `follow`      | follow, orbit | Follow at an angle, or orbit the subject.     |

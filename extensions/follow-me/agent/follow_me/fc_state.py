@@ -10,6 +10,7 @@ mixin of :class:`follow_me.FollowMePlugin`.
 
 from __future__ import annotations
 
+import asyncio
 import bisect
 import math
 import time
@@ -391,6 +392,7 @@ class FcStateMixin:
     """The MAVLink handlers that keep the cached FC, pose, rangefinder and
     gimbal state."""
 
+    _ctx: Any
     _pose: Pose
     _fc: FcState
     _gimbal: GimbalState
@@ -403,6 +405,7 @@ class FcStateMixin:
         if fc_s is not None:
             self._fc_clock.note(fc_s, arrival_s)
         return fc_s
+    _arm_reset_task: asyncio.Task | None
 
     def _on_heartbeat(self, delivery: dict[str, Any]) -> None:
         msg = mavlink_frames.decode_fields(delivery)
@@ -412,9 +415,24 @@ class FcStateMixin:
         custom_mode = int(msg.get("custom_mode", 0) or 0)
         autopilot = int(msg["autopilot"])
         mav_type = int(msg.get("type", 0) or 0)
+        was_armed = self._fc.armed
         self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
         self._fc.guided = is_guided_mode(autopilot, custom_mode, mav_type)
         self._fc.heartbeat.mark(monotonic())
+        if self._fc.armed and not was_armed:
+            self._on_armed()
+
+    def _on_armed(self) -> None:
+        """Every arm turns predictive search back on, so a search switched
+        off for one flight never carries into the next unnoticed."""
+        setter = getattr(getattr(self._ctx, "config_kv", None), "set", None)
+        if setter is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        self._arm_reset_task = loop.create_task(setter("predictive_search", True))
 
     def _on_mount_orientation(self, delivery: dict[str, Any]) -> None:
         # MOUNT_ORIENTATION carries degrees: pitch negative = down, yaw
