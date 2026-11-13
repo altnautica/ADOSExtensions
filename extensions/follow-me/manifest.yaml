@@ -196,8 +196,11 @@ gcs:
         icon: "crosshair"
         order: 70
     # Native, declarative follow settings. The GCS renders these controls;
-    # the agent reads the same per-drone keys live each loop. `active` is not
-    # here — it is the skill toggle, not an operator setting.
+    # the agent reads the same per-drone keys live each loop. `active` and
+    # `operator_resume_seq` are not here: one is the skill toggle, the other a
+    # counter the hold prompt's Resume action writes (declared in
+    # config-schema.json). Neither is an operator setting, and a parameter
+    # entry would render each as a settings control.
     parameters:
       - key: follow_mode
         binding: plugin.config

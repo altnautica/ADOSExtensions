@@ -350,9 +350,10 @@ def test_reacquire_settings_resolve_and_clamp() -> None:
     assert cfg.uncertain_mode == "hold" and cfg.predictive_search is False
     assert (cfg.search_budget_s, cfg.search_radius_m, cfg.search_speed_mps) == (60.0, 3.0, 4.0)
     assert cfg.operator_resume_seq == 4
-    # Unknown modes resolve to the conservative strict, and to following.
+    # Unknown modes resolve to the conservative choices: strict, and hold.
     assert FollowConfig.resolve({"reacquire_mode": "bogus"}, {}).reacquire_mode == "strict"
-    assert FollowConfig.resolve({"uncertain_mode": "bogus"}, {}).uncertain_mode == "follow"
+    assert FollowConfig.resolve({"uncertain_mode": "bogus"}, {}).uncertain_mode == "hold"
+    assert FollowConfig.resolve({}, {}).uncertain_mode == "follow"
     default = FollowConfig.resolve({}, {})
     assert default.reacquire_mode == "smart" and default.predictive_search is True
     assert (default.search_budget_s, default.search_radius_m, default.search_speed_mps) == (25.0, 12.0, 2.0)

@@ -375,14 +375,16 @@ class ReadbackMixin:
         rec = self._recovery
         if rec is None:
             return
+        if rec.hold_ne is not None:
+            state.hold_ne = [rec.hold_ne[0], rec.hold_ne[1]]
+        if phase not in RECOVERY_PHASES:
+            # Holding for the operator: the pilot's last vantage no longer
+            # applies.
+            return
         if rec.vantage_ne is not None:
             state.vantage_ne = [round(rec.vantage_ne[0], 2), round(rec.vantage_ne[1], 2)]
         state.vantage_state = rec.vantage_state
         state.occluder = rec.occluder
-        if rec.hold_ne is not None:
-            state.hold_ne = [rec.hold_ne[0], rec.hold_ne[1]]
-        if phase not in RECOVERY_PHASES:
-            return
         state.reacquire_remaining_s = round(rec.remaining_s(now), 2)
         if phase == PHASE_SEARCHING:
             state.search_step = rec.step_index

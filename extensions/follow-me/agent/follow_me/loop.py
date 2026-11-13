@@ -63,6 +63,7 @@ from follow_me.state import (
     PHASE_FOLLOWING,
     PHASE_HOLDING,
     PHASE_IDLE,
+    REACQUIRE_SMART,
     UNCERTAIN_FOLLOW,
     UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
@@ -305,7 +306,8 @@ class FollowLoopMixin:
         if now - self._uncertain_since_s > UNCERTAIN_FOLLOW_MAX_S:
             await self._on_lock_lost(cfg, now)
             return
-        if cfg.uncertain_mode == UNCERTAIN_FOLLOW:
+        # Strict keeps its contract on an unsure lock too: hold at once.
+        if cfg.uncertain_mode == UNCERTAIN_FOLLOW and cfg.reacquire_mode == REACQUIRE_SMART:
             gate = self._gate(now)
             if gate is not None:
                 await self._hold(
@@ -616,6 +618,7 @@ class FollowLoopMixin:
         force: bool = False,
         yaw_rad: float | None = None,
         hold_ne: tuple[float, float] | None = None,
+        hold_d: float | None = None,
     ) -> None:
         if self._lease_id is not None and active and self._pose.ready(now):
             # Keep the lease alive and the vehicle where it is: the pilot
@@ -623,12 +626,13 @@ class FollowLoopMixin:
             # hover point the caller gives, which the drifting pose estimate
             # cannot move), at the current heading or the one the caller gives.
             n, e = (self._pose.north_m, self._pose.east_m) if hold_ne is None else hold_ne
+            d = self._pose.down_m if hold_d is None else hold_d
             await self._send_goal(
                 {
                     "kind": "position",
                     "n": n,
                     "e": e,
-                    "d": self._pose.down_m,
+                    "d": d,
                     "vn": 0.0,
                     "ve": 0.0,
                     "vd": 0.0,

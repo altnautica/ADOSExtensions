@@ -197,7 +197,8 @@ class FollowConfig:
                 0.5,
                 0.99,
             ),
-            uncertain_mode=uncertain if uncertain in _UNCERTAIN_MODES else UNCERTAIN_FOLLOW,
+            # An unrecognised value resolves to the conservative hold.
+            uncertain_mode=uncertain if uncertain in _UNCERTAIN_MODES else UNCERTAIN_HOLD,
             predictive_search=bool(pick("predictive_search", cls.predictive_search)),
             search_budget_s=_clamped(
                 pick("search_budget_s", cls.search_budget_s),

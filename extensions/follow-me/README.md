@@ -116,22 +116,26 @@ precedence over the lock reasons.
 
 ### Re-acquire after occlusion
 
-An uncertain lock first: with `uncertain_mode` `follow` (the default) the
-follow keeps flying the prediction at half feed-forward; with `hold` it holds.
-Either way an unsure spell longer than 3 s is handled as a loss.
+An uncertain lock first. In Smart, with `uncertain_mode` `follow` (the
+default), the follow keeps flying the prediction at half feed-forward; with
+`hold`, and always in Strict, it holds. Either way an unsure spell longer than
+3 s is handled as a loss.
 
 `reacquire_mode` decides what a lost lock does:
 
 - **Strict** stops at a latched hover point, announces `follow.lost`, and
   holds for the operator (`holding-await-operator`).
 - **Smart** (the default) recovers within `search_budget_s`:
-  1. `predicting`: flies toward the predicted standoff at half feed-forward
-     for up to 2 s, while the prediction has not spread by more than 1.5 m;
+  1. `predicting`: flies toward the predicted standoff at half feed-forward and
+     at no more than `search_speed_mps`, for up to 2 s, while the prediction
+     has not spread by more than 1.5 m;
   2. `repositioning`: sends the pilot a `vantage` goal (the predicted
      position, its covariance, an ellipse scale, the standoff, and
      `search_radius_m` around where the loss happened) at no more than
      `search_speed_mps`; the pilot chooses a point that sees the predicted
-     position past the obstacles and reports it on `flight.goal.status`;
+     position past the obstacles and reports it on `flight.goal.status`.
+     A report within 0.3 s of a new request may be about the previous one and
+     is ignored; with no report for 2 s the search starts where it is;
   3. `searching`: at that point (or where it is, when the pilot finds none),
      sweeps yaw and gimbal pitch across the predicted position, then asks for
      a wider vantage, step by step.
@@ -143,16 +147,21 @@ Either way an unsure spell longer than 3 s is handled as a loss.
   - it lies within a Mahalanobis distance of 3 from the prediction.
 
   The best match is designated with the vision engine and announced on
-  `follow.reacquired`. When the budget runs out, or after the prediction phase
-  with `predictive_search` off, the plugin announces `follow.lost` and holds
-  for the operator.
+  `follow.reacquired`. A designate the engine reports lost, or has not locked
+  within 1 s, is abandoned and matching continues. When the budget runs out,
+  or after the prediction phase with `predictive_search` off, the plugin
+  announces `follow.lost` and holds for the operator.
 
 Holding for the operator keeps the motion lease and a latched hover point
-(`hold_ne`) that a drifting pose estimate cannot move. It never re-locks on its
-own. The operator resumes the search (a surface writes
+(`hold_ne`, and its height) that a drifting pose estimate cannot move. It
+never re-locks on its own: the lost track and any abandoned re-acquire
+designate are never adopted again, even if the engine reports them locked;
+only a new operator designate (the engine gives each one a fresh track id)
+is followed. The operator resumes the search (a surface writes
 `operator_resume_seq` + 1; a fresh budget starts from the current
 prediction), designates a subject, or stops. `predictive_search` is turned
-back on at every arm.
+back on at every arm (an arm seen after a disarm, not the first armed
+heartbeat after the plugin starts).
 
 The subject template learns only from a solid lock: locked, confidence at
 least 0.6, and no other person's box overlapping the subject's.

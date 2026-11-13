@@ -347,12 +347,15 @@ class FcState:
     assert an arm state nothing has confirmed for seconds.
     """
 
-    __slots__ = ("armed", "guided", "heartbeat")
+    __slots__ = ("armed", "guided", "heartbeat", "disarm_seen")
 
     def __init__(self, max_age_s: float = _FC_MAX_AGE_S) -> None:
         self.armed = False
         self.guided = False
         self.heartbeat = FreshnessGate(max_age_s)
+        # A disarmed HEARTBEAT has been seen since the plugin started, so the
+        # next armed one is an arm, not a plugin restart mid-flight.
+        self.disarm_seen = False
 
     def is_fresh(self, now_monotonic_s: float) -> bool:
         return self.heartbeat.is_fresh(now_monotonic_s)
@@ -419,7 +422,9 @@ class FcStateMixin:
         self._fc.armed = bool(base_mode & _BASE_MODE_ARMED)
         self._fc.guided = is_guided_mode(autopilot, custom_mode, mav_type)
         self._fc.heartbeat.mark(monotonic())
-        if self._fc.armed and not was_armed:
+        if not self._fc.armed:
+            self._fc.disarm_seen = True
+        elif not was_armed and self._fc.disarm_seen:
             self._on_armed()
 
     def _on_armed(self) -> None:

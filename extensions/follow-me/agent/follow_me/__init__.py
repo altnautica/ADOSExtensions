@@ -265,8 +265,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         await ctx.events.subscribe(LEASE_REVOKED_TOPIC, self._on_lease_revoked)
         await ctx.events.subscribe(STICKS_TOPIC, self._on_sticks)
         await self._subscribe_sticks(ctx)
-        # The pilot's report on a vantage goal, to the holder only. A host
-        # without it leaves the recovery searching from where it is.
+        # The pilot's report on a vantage goal, to the holder only. Without
+        # it a reposition times out and the search sweeps from where the
+        # vehicle is.
         try:
             await ctx.events.subscribe(GOAL_STATUS_TOPIC, self._on_goal_status)
         except Exception as exc:  # noqa: BLE001
@@ -455,8 +456,10 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._latest_batch_s = now
         geometry = geometry_of(batch, configured_geometry(self._cfg))
         self._geometry = geometry
+        tracked_id: int | None = None
         for det in batch.detections or ():
             if det.track_id is not None and det.lock_state is not None:
+                tracked_id = int(det.track_id)
                 if det.bbox is not None:
                     self._sighting = Sighting(
                         track_id=int(det.track_id),
@@ -476,10 +479,14 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         # must not re-latch the gate (the engine keeps reporting it as lost);
         # only the batches after our own re-acquire designate are fed. While
         # it holds for the operator every batch is fed, so an operator
-        # designate latches.
+        # designate latches, but the tracks the recovery gave up on (the lost
+        # one, abandoned re-acquire designates) are never adopted again.
         rec = self._recovery
-        if rec is not None and rec.phase in RECOVERY_PHASES and not rec.designated:
-            return
+        if rec is not None:
+            if rec.phase in RECOVERY_PHASES and not rec.designated:
+                return
+            if tracked_id in rec.excluded_tracks:
+                return
         # The shared gate adopts the engine's designated target and never
         # chooses one itself.
         self._tracker.record(batch, now)

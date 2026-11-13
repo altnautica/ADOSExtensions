@@ -104,6 +104,8 @@ async def test_arrival_starts_the_sweep_and_widens(monkeypatch: Any) -> None:
     clock = _install_clock(monkeypatch)
     await _lose(plugin, clock)
     await _step(plugin, clock, 2.1)
+    # The pilot's first report on the new request.
+    await _step(plugin, clock, 0.35)
     plugin._on_goal_status(
         _status("arrived", vantage_ne=[1.0, 2.0], coverage=0.8, occluder_ne=[3.0, 0.0], occluder_width_m=0.6)
     )
@@ -132,6 +134,7 @@ async def test_a_wide_occluder_is_reported_as_wide(monkeypatch: Any) -> None:
     clock = _install_clock(monkeypatch)
     await _lose(plugin, clock)
     await _step(plugin, clock, 2.1)
+    await _step(plugin, clock, 0.35)
     plugin._on_goal_status(_status("enroute", occluder_ne=[3.0, 0.0], occluder_width_m=4.0))
     # Another lease's status is not ours.
     plugin._on_goal_status(_status("arrived", lease_id=99))
@@ -221,6 +224,7 @@ async def test_no_vantage_searches_from_where_it_is(monkeypatch: Any) -> None:
     clock = _install_clock(monkeypatch)
     await _lose(plugin, clock)
     await _step(plugin, clock, 2.1)
+    await _step(plugin, clock, 0.35)
     plugin._on_goal_status(_status("no-vantage"))
     await _step(plugin, clock, 0.0)
     st = _state_events(ctx)[-1]

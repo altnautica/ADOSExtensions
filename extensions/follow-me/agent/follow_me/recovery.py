@@ -28,12 +28,12 @@ operator resumes the search, designates a subject, or stops.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from ados.sdk.tracking import EffectiveLock
 
-from follow_me import setpoint
+from follow_me import fc_state, setpoint
 from follow_me.camera import configured_geometry, geometry_of, sensor_ts_ms
 from follow_me.reacquire import PERSON, best_candidate
 from follow_me.search import (
@@ -73,6 +73,17 @@ VANTAGE_GOAL = "vantage"
 # An occluder narrower than this (a trunk, a column) is ``narrow``; anything
 # wider (a wall, a corner) is ``wide``.
 NARROW_OCCLUDER_M = 1.5
+# ``goal.status`` names no goal, so for this long after a new vantage request
+# a status may still be the pilot's report on the previous one (it replans at
+# 5 Hz) and is ignored.
+STATUS_SETTLE_S = 0.3
+# With no status from the pilot for this long while repositioning (a host
+# without ``flight.goal.status``, or a pilot that stopped reporting), the
+# search starts from where the vehicle is.
+STATUS_TIMEOUT_S = 2.0
+# A re-acquire designate the engine has not locked within this long, or has
+# reported lost, is abandoned and matching resumes.
+DESIGNATE_LOCK_S = 1.0
 
 # Vantage states as the pilot reports them.
 VANTAGE_ENROUTE = "enroute"
@@ -99,6 +110,8 @@ class Recovery:
     lost_track_id: int | None
     started_s: float
     deadline_s: float
+    # When the subject was lost; a resumed search keeps the original loss.
+    lost_s: float
     # Where the recovery started: the hard bound of the search.
     anchor_ne: tuple[float, float]
     # The prediction's 1-sigma spread when the recovery began.
@@ -108,6 +121,10 @@ class Recovery:
     # The search step being flown to or swept, from the first vantage request.
     step_index: int | None = None
     step_started_s: float = 0.0
+    # When the current vantage was asked for, and when the pilot last
+    # reported on it.
+    requested_s: float = 0.0
+    status_s: float = -math.inf
     vantage_state: str | None = None
     vantage_ne: tuple[float, float] | None = None
     occluder: dict[str, object] | None = None
@@ -116,11 +133,18 @@ class Recovery:
     # track it returned (the engine may omit the id).
     designated: bool = False
     designated_track: int | None = None
+    designated_s: float = 0.0
+    # Engine tracks this recovery must never adopt: the lost one and every
+    # re-acquire designate it abandoned. The engine gives every designate a
+    # fresh id, so an operator designate is never among them.
+    excluded_tracks: set[int] = field(default_factory=set)
     # Receive time of the last batch already examined, so a batch is matched
     # once.
     last_batch_s: float = -math.inf
-    # Holding for the operator: the latched hover point and the hold reason.
+    # Holding for the operator: the latched hover point (and height) and the
+    # hold reason.
     hold_ne: tuple[float, float] | None = None
+    hold_d: float | None = None
     hold_reason: str | None = None
     # The operator_resume_seq already acted on.
     resume_seq_seen: int = 0
@@ -158,31 +182,40 @@ class RecoveryMixin:
         self._measured_bbox = None
         self._uncertain_since_s = None
         if cfg.reacquire_mode == REACQUIRE_SMART and self._filter.initialized:
-            self._start_recovery(cfg, now, track_id)
+            self._start_recovery(cfg, now, track_id, lost_s=now)
             self._ctx.log.info("follow_me_recovering", track_id=track_id)
             await self._tick_recovery(cfg, now)
             return
-        rec = self._new_recovery(cfg, now, track_id)
-        self._recovery = rec
+        rec = self._start_recovery(cfg, now, track_id, lost_s=now)
         await self._await_operator(cfg, now, rec, reason=REASON_LOCK_LOST)
 
-    def _new_recovery(self, cfg: FollowConfig, now: float, track_id: int | None) -> Recovery:
+    def _start_recovery(
+        self, cfg: FollowConfig, now: float, track_id: int | None, *, lost_s: float
+    ) -> Recovery:
+        """A fresh recovery with a full budget, from the filter as it stands."""
         budget = SearchBudget(cfg.search_budget_s, cfg.search_radius_m, cfg.search_speed_mps)
-        return Recovery(
+        rec = Recovery(
             lost_track_id=track_id,
             started_s=now,
             deadline_s=now + cfg.search_budget_s,
+            lost_s=lost_s,
             anchor_ne=(self._pose.north_m, self._pose.east_m),
             sigma_at_start_m=_sigma_now(self._filter, now),
             steps=tuple(search_steps(budget)),
             resume_seq_seen=cfg.operator_resume_seq,
         )
-
-    def _start_recovery(self, cfg: FollowConfig, now: float, track_id: int | None) -> Recovery:
-        """A fresh recovery with a full budget, from the filter as it stands."""
-        rec = self._new_recovery(cfg, now, track_id)
+        if track_id is not None:
+            rec.excluded_tracks.add(track_id)
         self._recovery = rec
         return rec
+
+    def _abandon_designate(self, rec: Recovery) -> None:
+        """Give up on a re-acquire designate: never adopt its track again."""
+        if rec.designated_track is not None:
+            rec.excluded_tracks.add(rec.designated_track)
+        rec.designated = False
+        rec.designated_track = None
+        self._tracker.drop()
 
     async def _await_operator(
         self, cfg: FollowConfig, now: float, rec: Recovery, *, reason: str
@@ -193,8 +226,12 @@ class RecoveryMixin:
         rec.phase = PHASE_AWAIT_OPERATOR
         rec.hold_reason = _HOLD_FOR_REASON[reason]
         rec.hold_ne = (self._pose.north_m, self._pose.east_m)
+        rec.hold_d = self._pose.down_m
         rec.resume_seq_seen = cfg.operator_resume_seq
-        rec.designated = False
+        # Only an operator designate ends the wait: the engine's own lost
+        # track and any re-acquire designate still in flight are dropped and
+        # never adopted.
+        self._abandon_designate(rec)
         if not rec.lost_announced:
             rec.lost_announced = True
             await self._ctx.events.publish(
@@ -219,6 +256,7 @@ class RecoveryMixin:
             hold_reason=rec.hold_reason or HOLD_AWAIT_OPERATOR,
             lock_state=LOCK_LOST,
             hold_ne=rec.hold_ne,
+            hold_d=rec.hold_d,
             force=force,
         )
 
@@ -228,18 +266,19 @@ class RecoveryMixin:
         if rec.phase == PHASE_AWAIT_OPERATOR:
             await self._tick_await_operator(cfg, now, rec)
             return
-        if (
-            rec.designated
-            and self._tracker.has_lock
-            and self._tracker.effective_lock(now) is EffectiveLock.LOCKED
-        ):
-            # The engine locked the re-acquire designate: follow it, keeping
-            # the subject filter and template.
-            self._recovery = None
-            self._filter_track_id = self._tracker.track_id
-            self._measured_bbox = None
-            await self._tick_follow(cfg, now)
-            return
+        if rec.designated:
+            lock = self._tracker.effective_lock(now) if self._tracker.has_lock else None
+            if lock is EffectiveLock.LOCKED:
+                # The engine locked the re-acquire designate: follow it,
+                # keeping the subject filter and template.
+                self._recovery = None
+                self._filter_track_id = self._tracker.track_id
+                self._measured_bbox = None
+                await self._tick_follow(cfg, now)
+                return
+            if lock is EffectiveLock.LOST or (now - rec.designated_s) > DESIGNATE_LOCK_S:
+                self._ctx.log.info("follow_me_reacquire_abandoned", track_id=rec.designated_track)
+                self._abandon_designate(rec)
         if cfg.reacquire_mode != REACQUIRE_SMART:
             # Switched to strict mid-recovery.
             await self._await_operator(cfg, now, rec, reason=REASON_LOCK_LOST)
@@ -262,8 +301,11 @@ class RecoveryMixin:
             young = (now - rec.started_s) < PREDICT_MAX_S
             spread = position_sigma(p) - rec.sigma_at_start_m
             if young and spread <= PREDICT_SIGMA_M:
+                # The prediction leg is held to the search speed, so it cannot
+                # carry the vehicle past the search radius before the first
+                # vantage request bounds it.
                 await self._command(
-                    cfg,
+                    replace(cfg, max_speed_mps=min(cfg.search_speed_mps, cfg.max_speed_mps)),
                     now,
                     phase=PHASE_PREDICTING,
                     ff_scale=SEARCH_FF_SCALE,
@@ -277,8 +319,11 @@ class RecoveryMixin:
             if not rec.steps:
                 await self._await_operator(cfg, now, rec, reason=REASON_SEARCH_EXHAUSTED)
                 return
-            self._next_vantage(rec, 0)
-        if rec.phase == PHASE_REPOSITIONING and rec.vantage_state in (VANTAGE_ARRIVED, VANTAGE_NONE):
+            self._next_vantage(rec, 0, now)
+        if rec.phase == PHASE_REPOSITIONING and (
+            rec.vantage_state in (VANTAGE_ARRIVED, VANTAGE_NONE)
+            or now - max(rec.requested_s, rec.status_s) > STATUS_TIMEOUT_S
+        ):
             rec.phase = PHASE_SEARCHING
             rec.step_started_s = now
         if rec.phase == PHASE_SEARCHING:
@@ -287,22 +332,29 @@ class RecoveryMixin:
                 if rec.step_index + 1 >= len(rec.steps):
                     await self._await_operator(cfg, now, rec, reason=REASON_SEARCH_EXHAUSTED)
                     return
-                self._next_vantage(rec, rec.step_index + 1)
+                self._next_vantage(rec, rec.step_index + 1, now)
         await self._send_vantage(cfg, now, rec, x, p)
 
     @staticmethod
-    def _next_vantage(rec: Recovery, index: int) -> None:
+    def _next_vantage(rec: Recovery, index: int, now: float) -> None:
         """Ask for the vantage of step ``index``: what the pilot said about
         the previous goal no longer applies."""
         rec.phase = PHASE_REPOSITIONING
         rec.step_index = index
+        rec.requested_s = now
+        rec.status_s = -math.inf
         rec.vantage_state = None
         rec.vantage_ne = None
         rec.occluder = None
         rec.coverage = None
 
     async def _tick_await_operator(self, cfg: FollowConfig, now: float, rec: Recovery) -> None:
-        if self._tracker.has_lock and self._tracker.effective_lock(now) is EffectiveLock.LOCKED:
+        tracked = self._tracker.track_id
+        if (
+            self._tracker.has_lock
+            and tracked not in rec.excluded_tracks
+            and self._tracker.effective_lock(now) is EffectiveLock.LOCKED
+        ):
             # The operator designated a subject: follow it from scratch.
             self._recovery = None
             self._filter_track_id = None
@@ -314,7 +366,7 @@ class RecoveryMixin:
                 # Nothing left to predict from: keep holding, keep the prompt.
                 rec.hold_reason = HOLD_NO_RANGE
             else:
-                self._start_recovery(cfg, now, rec.lost_track_id)
+                self._start_recovery(cfg, now, rec.lost_track_id, lost_s=rec.lost_s)
                 self._ctx.log.info("follow_me_search_resumed", seq=cfg.operator_resume_seq)
                 await self._tick_recovery(cfg, now)
                 return
@@ -378,6 +430,12 @@ class RecoveryMixin:
             return
         if str(payload.get("lease_id")) != str(self._lease_id):
             return
+        now = fc_state.monotonic()
+        if rec.phase != PHASE_REPOSITIONING and rec.phase != PHASE_SEARCHING:
+            return
+        if now - rec.requested_s < STATUS_SETTLE_S:
+            return
+        rec.status_s = now
         state = payload.get("state")
         if state in _VANTAGE_STATES:
             rec.vantage_state = str(state)
@@ -441,13 +499,14 @@ class RecoveryMixin:
         track = result.get("track_id")
         rec.designated = True
         rec.designated_track = int(track) if isinstance(track, int) else None
+        rec.designated_s = now
         self._filter.update(now, cand.north_m, cand.east_m, cand.covariance)
         await self._ctx.events.publish(
             FOLLOW_REACQUIRED_TOPIC,
             {
                 "track_id": rec.designated_track,
                 "similarity": round(cand.similarity, 3),
-                "gap_s": round(now - rec.started_s, 2),
+                "gap_s": round(now - rec.lost_s, 2),
                 "mahalanobis": round(cand.mahalanobis, 2),
                 "phase": rec.phase,
             },
