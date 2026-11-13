@@ -74,7 +74,8 @@ async fn a_planar_lidar_session_is_matched_in_process_and_keeps_the_depth_prior(
     let variances = prior_variances(&job_dir);
     assert!(!variances.is_empty());
     for v in variances {
-        let want = [0.03f64.powi(2), 0.03f64.powi(2), 0.25f64.powi(2)];
+        // The planar LiDAR floor: 0.15 m across, 0.30 m in height.
+        let want = [0.15f64.powi(2), 0.15f64.powi(2), 0.30f64.powi(2)];
         assert!(
             v.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-12),
             "{v:?}"

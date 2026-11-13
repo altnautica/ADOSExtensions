@@ -78,17 +78,36 @@ const PRIOR_MAX_ROT_DEG: f64 = 10.0;
 const PRIOR_MAX_DIR_DEG: f64 = 20.0;
 const PRIOR_MIN_BASELINE_M: f64 = 0.3;
 
-/// One-sigma prior position uncertainty (x, y, z metres) of a pose source
-/// when its track recorded no covariance.
-pub fn default_prior_sigma_m(source: Option<&str>) -> [f64; 3] {
+/// The least one-sigma position uncertainty (x, y, z metres) a pose source
+/// is trusted with. A recorded covariance below it is raised to it: SLAM
+/// covariances do not grow while matching degrades, and a planar LiDAR SLAM
+/// was measured at 0.12-0.46 m trajectory error with its height from the
+/// flight controller's barometer.
+pub fn prior_sigma_floor_m(source: Option<&str>) -> [f64; 3] {
     match source {
-        // A planar LiDAR fixes x and y; height comes from the camera rig alone.
-        Some("lidar2d") => [0.03, 0.03, 0.25],
-        Some("lidar") => [0.03; 3],
-        Some("vio") => [0.05; 3],
+        // A planar LiDAR fixes x and y; height comes from the barometer.
+        Some("lidar2d") => [0.15, 0.15, 0.30],
+        Some("lidar") => [0.05; 3],
+        Some("vio") => [0.10; 3],
         Some("truth") => [0.01; 3],
         // `fc_ekf`, and any source without a known accuracy.
         _ => [0.5; 3],
+    }
+}
+
+/// One-sigma prior position uncertainty of a pose source when its track
+/// recorded no covariance.
+pub fn default_prior_sigma_m(source: Option<&str>) -> [f64; 3] {
+    prior_sigma_floor_m(source)
+}
+
+/// The prior uncertainty used for one frame: its recorded sigma per axis,
+/// never below the source's floor.
+pub fn prior_sigma(recorded: Option<[f64; 3]>, source: Option<&str>) -> [f64; 3] {
+    let floor = prior_sigma_floor_m(source);
+    match recorded {
+        Some(r) => [r[0].max(floor[0]), r[1].max(floor[1]), r[2].max(floor[2])],
+        None => floor,
     }
 }
 
@@ -229,6 +248,11 @@ pub fn run(
             MIN_INLIERS,
             "--Mapper.abs_pose_min_num_inliers",
             ABS_POSE_MIN_INLIERS,
+            // Bundle adjustment on the first GPU.
+            "--Mapper.ba_use_gpu",
+            "1",
+            "--Mapper.ba_gpu_index",
+            "0",
         ]);
         // Every mapper takes the same `--Mapper.*` options (COLMAP 4.2.1 help).
         if calibrated {
@@ -273,8 +297,7 @@ pub fn run(
     } else {
         let mapper = match (use_priors, opts.hierarchical) {
             (true, _) => {
-                let default = default_prior_sigma_m(opts.prior_source);
-                let sigma = |f: &FrameRecord| f.prior_sigma_m.unwrap_or(default);
+                let sigma = |f: &FrameRecord| prior_sigma(f.prior_sigma_m, opts.prior_source);
                 if colmap::write_pose_priors(&db, &frames, &sigma)? < 3 {
                     return Err(StageError::input(
                         "fewer than three posed keyframes reached the COLMAP database",

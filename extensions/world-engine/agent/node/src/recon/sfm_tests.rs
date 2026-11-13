@@ -204,7 +204,7 @@ fn prior_variances(ran: &Ran) -> Vec<[f64; 3]> {
 }
 
 #[test]
-fn prior_sigma_follows_the_source_unless_the_track_recorded_one() {
+fn prior_sigma_follows_the_source_unless_the_track_recorded_a_wider_one() {
     let close = |a: [f64; 3], b: [f64; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-12);
     let planar = run_with(
         &frames(4, true),
@@ -216,11 +216,12 @@ fn prior_sigma_follows_the_source_unless_the_track_recorded_one() {
     let v = prior_variances(&planar);
     assert_eq!(v.len(), 4);
     assert!(
-        v.iter().all(|v| close(*v, [0.0009, 0.0009, 0.0625])),
+        v.iter().all(|v| close(*v, [0.0225, 0.0225, 0.09])),
         "{v:?}"
     );
     let mut recorded = frames(4, true);
-    recorded[2].prior_sigma_m = Some([0.2, 0.2, 0.2]);
+    recorded[1].prior_sigma_m = Some([0.2, 0.2, 0.2]);
+    recorded[2].prior_sigma_m = Some([0.8, 0.8, 0.8]);
     let ekf = run_with(
         &recorded,
         SfmOptions {
@@ -229,8 +230,37 @@ fn prior_sigma_follows_the_source_unless_the_track_recorded_one() {
         },
     );
     let v = prior_variances(&ekf);
-    assert!(close(v[0], [0.25; 3]) && close(v[2], [0.04; 3]), "{v:?}");
-    assert_eq!(default_prior_sigma_m(Some("vio")), [0.05; 3]);
+    assert!(
+        close(v[0], [0.25; 3]) && close(v[1], [0.25; 3]) && close(v[2], [0.64; 3]),
+        "{v:?}"
+    );
+    assert_eq!(default_prior_sigma_m(Some("vio")), [0.10; 3]);
+}
+
+#[test]
+fn a_planar_lidar_prior_is_never_trusted_beyond_measured_slam_error() {
+    // The bench measured planar SLAM ATE of 0.12-0.46 m; a recorded 0.05 m is clamped to the floor.
+    assert_eq!(
+        prior_sigma(Some([0.05, 0.05, 0.05]), Some("lidar2d")),
+        [0.15, 0.15, 0.30]
+    );
+    assert_eq!(
+        prior_sigma(Some([0.4, 0.2, 0.6]), Some("lidar2d")),
+        [0.4, 0.2, 0.6]
+    );
+    assert_eq!(prior_sigma(None, Some("truth")), [0.01, 0.01, 0.01]);
+    assert_eq!(default_prior_sigma_m(Some("lidar")), [0.05, 0.05, 0.05]);
+}
+
+#[test]
+fn every_mapper_bundle_adjusts_on_the_gpu() {
+    let posed = run_with(&frames(40, true), REFINE);
+    let m = posed.cmd("pose_prior_mapper").expect("prior mapper ran");
+    assert_eq!(value(m, "--Mapper.ba_use_gpu"), Some("1"));
+    assert_eq!(value(m, "--Mapper.ba_gpu_index"), Some("0"));
+    let unposed = run_with(&unposed(frames(40, true)), REFINE);
+    let m = unposed.cmd("mapper").expect("mapper ran");
+    assert_eq!(value(m, "--Mapper.ba_use_gpu"), Some("1"));
 }
 
 #[test]
