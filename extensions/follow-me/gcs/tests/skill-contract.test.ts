@@ -96,6 +96,19 @@ function extractFirstSkill(text: string): SkillBlock {
   return out;
 }
 
+/** The `schema.default` of one manifest config param, read by line scan. */
+function manifestParamDefault(text: string, key: string): string | undefined {
+  const lines = text.split("\n");
+  const start = lines.findIndex((l) => l.trim() === `- key: ${key}`);
+  if (start < 0) return undefined;
+  for (const line of lines.slice(start + 1)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("- key:")) return undefined;
+    if (trimmed.startsWith("default:")) return trimmed.slice("default:".length).trim();
+  }
+  return undefined;
+}
+
 describe("manifest skill contract", () => {
   const skill = extractFirstSkill(readFileSync(manifestPath, "utf8"));
 
@@ -129,5 +142,11 @@ describe("manifest skill contract", () => {
     // The Skill Bar toggle uses shift+f so it never collides with the
     // "Follow this target" action bound to plain f.
     expect(skill.bindingKey).toBe("shift+f");
+  });
+});
+
+describe("manifest config defaults", () => {
+  it("follows at 6 m, where a walker is still tall enough in frame to detect", () => {
+    expect(manifestParamDefault(readFileSync(manifestPath, "utf8"), "follow_distance_m")).toBe("6");
   });
 });

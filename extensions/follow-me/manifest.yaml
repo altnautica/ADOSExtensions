@@ -217,7 +217,7 @@ gcs:
           minimum: 3
           maximum: 30
           step: 0.5
-          default: 8
+          default: 6
         ui:
           widget: range
           label: "settings.followDistance"

@@ -361,6 +361,7 @@ def test_reacquire_settings_resolve_and_clamp() -> None:
     # An unknown mode resolves to the conservative strict.
     assert FollowConfig.resolve({"reacquire_mode": "bogus"}, {}).reacquire_mode == "strict"
     assert FollowConfig.resolve({}, {}).reacquire_mode == "smart"
+    assert FollowConfig.resolve({}, {}).follow_distance_m == 6.0
 
 
 def test_scan_payload_parses_only_body_frame_scans() -> None:

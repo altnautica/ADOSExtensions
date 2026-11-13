@@ -200,7 +200,7 @@ Per-drone configuration (see `config-schema.json`):
 | Key                        | Default       | Range       | Meaning                                         |
 | -------------------------- | ------------- | ----------- | ----------------------------------------------- |
 | `active`                   | `false`       | —           | Armed/disarmed (toggled by the Skill).          |
-| `follow_distance_m`        | `8`           | `3`–`30`    | Standoff distance behind the subject.           |
+| `follow_distance_m`        | `6`           | `3`–`30`    | Standoff distance behind the subject.           |
 | `follow_height_m`          | `4`           | `0`–`20`    | Follow height above the ground.                 |
 | `gimbal_point`             | `true`        | —           | Point a gimbal at the subject if present.       |
 | `designate_camera`         | `auto`        | —           | Camera the follow loop consumes; `auto` reads the designated subject's camera (any camera until one is designated). |

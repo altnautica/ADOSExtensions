@@ -225,7 +225,7 @@ export interface FollowConfig {
 
 export const DEFAULT_CONFIG: FollowConfig = {
   active: false,
-  follow_distance_m: 8,
+  follow_distance_m: 6,
   follow_height_m: 4,
   gimbal_point: true,
   designate_camera: "auto",

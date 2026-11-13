@@ -14,7 +14,7 @@
       "type": "number",
       "title": "Follow distance (m)",
       "description": "Standoff distance the drone trails the subject at, along the ground line of sight.",
-      "default": 8,
+      "default": 6,
       "minimum": 3,
       "maximum": 30
     },

@@ -95,7 +95,7 @@ class FollowConfig:
     """Resolved per-drone follow configuration."""
 
     active: bool = False
-    follow_distance_m: float = 8.0
+    follow_distance_m: float = 6.0
     follow_height_m: float = 4.0
     gimbal_point: bool = True
     # A camera-selector value: "auto" / "" resolves by requirement (the first
