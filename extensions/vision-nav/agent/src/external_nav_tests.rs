@@ -41,6 +41,7 @@ fn pose(x: f64, y: f64, yaw: f64, health: ExtnavHealth) -> PoseSample {
         t: [x, y, 0.0],
         health,
         north: Some(MapNorth::Declared),
+        sigma_xy_m: None,
     }
 }
 
@@ -97,6 +98,52 @@ fn the_map_north_is_read_from_a_map_ned_pose() {
     assert!(MapNorth::holds_yaw(Some(MapNorth::Gnss)));
     assert!(!MapNorth::holds_yaw(Some(MapNorth::FcHeading)));
     assert!(!MapNorth::holds_yaw(None));
+}
+
+#[test]
+fn the_pose_sigma_is_read_when_present() {
+    let with_sigma = |sigma: Option<Value>| {
+        let Value::Map(mut m) = payload("map_ned", "good", IDENTITY, [0.0; 3]) else {
+            unreachable!()
+        };
+        if let Some(s) = sigma {
+            m.push((Value::from("sigma_xy_m"), s));
+        }
+        parse_pose_payload(&Value::Map(m)).unwrap().sigma_xy_m
+    };
+    assert_eq!(with_sigma(Some(Value::F64(0.8))), Some(0.8));
+    // An older publisher sends none; a value that is not a finite,
+    // non-negative number reads as "does not say".
+    assert_eq!(with_sigma(None), None);
+    assert_eq!(with_sigma(Some(Value::from("wide"))), None);
+    assert_eq!(with_sigma(Some(Value::F64(f64::NAN))), None);
+    assert_eq!(with_sigma(Some(Value::F64(-1.0))), None);
+}
+
+#[test]
+fn a_pose_sigma_above_the_health_floor_widens_the_covariance_and_lowers_quality() {
+    assert_eq!(noise_for(ExtnavHealth::Good, None), (0.05, 0.02, 100));
+    let (sxy, _, q) = noise_for(ExtnavHealth::Good, Some(0.8));
+    assert!((sxy - 0.8).abs() < 1e-6 && q == 100);
+    let (sxy, _, q) = noise_for(ExtnavHealth::Degraded, Some(1.5));
+    assert!((sxy - 1.5).abs() < 1e-6 && q == 30);
+    assert_eq!(noise_for(ExtnavHealth::Lost, Some(0.1)).2, -1);
+    // Below the health's own floor the floor stands.
+    assert_eq!(noise_for(ExtnavHealth::Degraded, Some(0.05)), (0.30, 0.10, 50));
+}
+
+#[test]
+fn the_odometry_covariance_follows_the_pose_sigma() {
+    let mut b = OdometryBuilder::default();
+    let at = |x: f64| PoseSample {
+        sigma_xy_m: Some(2.0),
+        ..pose(x, 0.0, 0.0, ExtnavHealth::Degraded)
+    };
+    b.build(0, 0, &at(0.0), &fc());
+    let o = b.build(0, 100_000_000, &at(0.1), &fc()).unwrap();
+    assert_eq!(o.quality, 30);
+    assert!((o.pose_covariance[0] - 4.0).abs() < 1e-5);
+    assert!((o.pose_covariance[6] - 4.0).abs() < 1e-5);
 }
 
 #[test]

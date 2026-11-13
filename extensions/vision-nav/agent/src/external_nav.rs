@@ -108,6 +108,31 @@ impl ExtnavHealth {
     }
 }
 
+/// A pose whose own horizontal uncertainty exceeds this, metres, reports
+/// [`WIDE_POSE_QUALITY`] whatever its health.
+const WIDE_POSE_SIGMA_M: f32 = 1.0;
+/// `ODOMETRY` quality of a pose wider than [`WIDE_POSE_SIGMA_M`].
+const WIDE_POSE_QUALITY: i8 = 30;
+
+/// `(σ_xy m, σ_yaw rad, ODOMETRY quality %)` of a pose: the health's own
+/// noise, its horizontal sigma widened to the pose's `sigma_xy_m` where the
+/// publisher reports a larger one (a scan matcher riding its motion prior),
+/// and its quality lowered to [`WIDE_POSE_QUALITY`] past
+/// [`WIDE_POSE_SIGMA_M`].
+pub fn noise_for(health: ExtnavHealth, sigma_xy_m: Option<f32>) -> (f32, f32, i8) {
+    let (floor, syaw, quality) = health.noise();
+    if health == ExtnavHealth::Lost {
+        return (floor, syaw, quality);
+    }
+    let sxy = sigma_xy_m.map_or(floor, |s| floor.max(s));
+    let quality = if sxy > WIDE_POSE_SIGMA_M {
+        quality.min(WIDE_POSE_QUALITY)
+    } else {
+        quality
+    };
+    (sxy, syaw, quality)
+}
+
 /// Where a `map_ned` pose's north comes from, as the pose topic reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapNorth {
@@ -145,6 +170,9 @@ pub struct PoseSample {
     pub health: ExtnavHealth,
     /// `None` when the publisher does not say (an older one, or `map_flu`).
     pub north: Option<MapNorth>,
+    /// The publisher's horizontal one-sigma uncertainty, metres; `None`
+    /// when it does not say.
+    pub sigma_xy_m: Option<f32>,
 }
 
 impl PoseSample {
@@ -243,12 +271,17 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         Some(other) => return Err(PoseError::UnknownFrame(other.into())),
         None => return Err(PoseError::UnknownFrame("missing".into())),
     };
+    let sigma_xy_m = get(p, "sigma_xy_m")
+        .and_then(as_f64)
+        .filter(|s| s.is_finite() && *s >= 0.0)
+        .map(|s| s as f32);
     Ok(PoseSample {
         ts_ms,
         r,
         t,
         health,
         north,
+        sigma_xy_m,
     })
 }
 
@@ -376,6 +409,7 @@ struct Fix {
     ve: f64,
     vel_var: f32,
     health: ExtnavHealth,
+    sigma_xy_m: Option<f32>,
 }
 
 /// Turns pose samples into `ODOMETRY`, tracking the velocity window and
@@ -453,6 +487,7 @@ impl OdometryBuilder {
             // Difference of two positions, each with variance σ², over dt.
             vel_var: (2.0 * f64::from(sxy * sxy) / (dt * dt)) as f32,
             health: pose.health,
+            sigma_xy_m: pose.sigma_xy_m,
         };
         self.last_v = Some((fix.vn, fix.ve));
         Some(self.compose(time_usec, &fix, fc))
@@ -496,7 +531,7 @@ impl OdometryBuilder {
             .map_or((0.0, 0.0), |l| (f64::from(l.z), f64::from(l.vz)));
         let body_v = world_to_body([fix.vn, fix.ve, vd], roll, pitch, fix.yaw);
         let q = quat_from_euler(roll, pitch, fix.yaw);
-        let (sxy, syaw, quality) = fix.health.noise();
+        let (sxy, syaw, quality) = noise_for(fix.health, fix.sigma_xy_m);
         let (vxy, vyaw) = (sxy * sxy, syaw * syaw);
         let vel_var = fix.vel_var;
         Odometry {

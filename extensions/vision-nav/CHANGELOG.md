@@ -34,6 +34,18 @@ Ships after 0.8.0, which takes the [Unreleased] section.
   otherwise the flight controller's own rangefinder type), and the
   parameter card lists the rangefinder.
 
+## [0.8.0]
+
+### Changed
+
+- External navigation: the `ODOMETRY` position covariance follows the
+  pose's own horizontal uncertainty (`sigma_xy_m` on the pose topic) where
+  it is larger than the health's σ, and `quality` drops to 30 while it is
+  over 1 m. A planar scan matcher that rides its motion prior unmatched (a
+  climb, a featureless stretch) reports a σ that grows with the distance
+  the prior carries it, so the EKF trusts that pose less instead of fusing
+  it as good to 5 cm. A pose without `sigma_xy_m` keeps the health's σ.
+
 ## [0.7.5]
 
 ### Changed

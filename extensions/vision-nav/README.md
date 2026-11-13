@@ -71,7 +71,11 @@ controller as `ODOMETRY` (#331) on component 197, at up to
 - Covariance: position σ 0.05 m and yaw σ 0.02 rad while tracking is
   good, 0.30 m and 0.1 rad while degraded; z carries the horizontal
   variance because ArduPilot folds the three position variances into
-  one error. `quality` is 100 (good) or 50 (degraded).
+  one error. A pose that reports its own horizontal uncertainty
+  (`sigma_xy_m`, the World Engine planar scan matcher's while it rides
+  its motion prior unmatched) widens the position σ to it where it is
+  larger. `quality` is 100 (good) or 50 (degraded), and 30 while that
+  σ is over 1 m.
 - `reset_counter` steps when a pose lands more than 0.5 m from where the
   last velocity predicts it (from the last pose after a gap over 0.5 s or
   a loss), so steady flight at any speed is motion, not a reset.
