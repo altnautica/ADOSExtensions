@@ -34,6 +34,12 @@ TEMPLATE_ALPHA = 0.1
 # The cosine lead the best in-gate candidate needs over the runner-up. Two
 # people closer than this look alike, and neither is re-locked.
 MIN_MARGIN = 0.08
+# A fresh embedding moves the template only from a sighting at least this
+# confident, with less than this much of the subject hidden, and with no
+# other person's box overlapping the subject's by more than OVERLAP_IOU.
+SOLID_LOCK_MIN_CONF = 0.6
+MAX_OCCLUSION_HINT = 0.3
+OVERLAP_IOU = 0.1
 
 PERSON = "person"
 
@@ -114,6 +120,26 @@ def blend_template(old: Embedding | None, new: Embedding) -> Embedding:
     return old if mixed is None else Embedding(model=old.model, vec=mixed)
 
 
+def template_may_update(
+    *, lock_state: str, confidence: float, occlusion_hint: float | None, others_near: int
+) -> bool:
+    """Blend a fresh embedding into the subject template only while the lock is
+    solid: locked, confident, and no other person's box overlaps the subject's."""
+    if lock_state != "locked" or confidence < SOLID_LOCK_MIN_CONF or others_near > 0:
+        return False
+    return occlusion_hint is None or occlusion_hint < MAX_OCCLUSION_HINT
+
+
+def box_iou(a: Any, b: Any) -> float:
+    """Intersection over union of two ``x, y, width, height`` boxes."""
+    ix = max(0.0, min(a.x + a.width, b.x + b.width) - max(a.x, b.x))
+    iy = max(0.0, min(a.y + a.height, b.y + b.height) - max(a.y, b.y))
+    inter = ix * iy
+    union = a.width * a.height + b.width * b.height - inter
+    return inter / union if union > 0.0 else 0.0
+
+
+
 @dataclass(frozen=True)
 class Candidate:
     """A detection that passed both the appearance and the position gate."""
@@ -176,11 +202,15 @@ def best_candidate(
 __all__ = [
     "MAX_MAHALANOBIS",
     "MIN_MARGIN",
+    "OVERLAP_IOU",
+    "SOLID_LOCK_MIN_CONF",
     "Candidate",
     "Coast",
     "Embedding",
     "best_candidate",
     "blend_template",
+    "box_iou",
     "embedding_of",
     "similarity",
+    "template_may_update",
 ]

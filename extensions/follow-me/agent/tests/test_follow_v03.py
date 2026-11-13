@@ -402,3 +402,24 @@ async def test_on_start_wires_telemetry_embeddings_and_the_scan(monkeypatch: Any
         assert plugin._fresh_scan(follow_me.fc_state.monotonic()) is not None
     finally:
         await plugin.on_stop(ctx)
+
+
+@pytest.mark.asyncio
+async def test_template_is_not_learned_while_another_person_overlaps(monkeypatch: Any) -> None:
+    ctx = _Ctx(config=_follow_config())
+    plugin = _make_plugin(ctx)
+    plugin._active_camera = "uvc-0"
+    clock = _install_clock(monkeypatch)
+    _fresh(plugin)
+    overlapping = BoundingBox(x=318.0, y=235.0, width=10.0, height=10.0)
+    _feed(
+        plugin,
+        _person(track_id=7, lock_state=LOCK_LOCKED, embedding=_EMB),
+        _person(track_id=None, lock_state=None, bbox=overlapping, embedding=_OTHER_EMB),
+        ts_ms=int(clock.now * 1000),
+    )
+    await plugin._tick()
+    assert plugin._filter.initialized and plugin._template is None
+    clock.advance(0.05)
+    await _follow_one(plugin, clock)
+    assert plugin._template is not None

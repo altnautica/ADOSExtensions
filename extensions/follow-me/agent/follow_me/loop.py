@@ -34,7 +34,15 @@ from follow_me import fc_state, mavlink_frames, setpoint
 from follow_me.camera import DEFAULT_GEOMETRY, CameraGeometry, exposure_fc_s
 from follow_me.motion import LEASE_RETRY_S, SKILL_ID, Nudges, lease_error_reason
 from follow_me.projection import TargetFix
-from follow_me.reacquire import Coast, Embedding, blend_template
+from follow_me.reacquire import (
+    OVERLAP_IOU,
+    PERSON,
+    Coast,
+    Embedding,
+    blend_template,
+    box_iou,
+    template_may_update,
+)
 from follow_me.state import (
     FOLLOW_MODE_ORBIT,
     FOLLOW_STOPPED_TOPIC,
@@ -315,7 +323,12 @@ class FollowLoopMixin:
         if s is not None:
             if s.ts_ms > 0:
                 self._pending_latency_ts_ms = s.ts_ms
-            if s.embedding is not None:
+            if s.embedding is not None and template_may_update(
+                lock_state=LOCK_LOCKED,
+                confidence=s.confidence,
+                occlusion_hint=None,
+                others_near=self._others_near(bbox),
+            ):
                 self._template = blend_template(self._template, s.embedding)
 
     def _exposure_s(self, ts_ms: int, ts_sensor_ms: int | None) -> float | None:
@@ -323,6 +336,17 @@ class FollowLoopMixin:
         latest attitude) while that clock is not yet known."""
         return exposure_fc_s(ts_ms, ts_sensor_ms, self._fc_clock.offset_s)
 
+    def _others_near(self, bbox: Any) -> int:
+        """People in the newest batch whose box overlaps the subject's."""
+        batch = self._latest_batch
+        n = 0
+        for det in getattr(batch, "detections", None) or ():
+            other = getattr(det, "bbox", None)
+            if other is None or other is bbox or getattr(det, "class_label", None) != PERSON:
+                continue
+            if box_iou(bbox, other) > OVERLAP_IOU:
+                n += 1
+        return n
     def _sighted_bearing(self, now: float) -> float | None:
         """The bearing the latest sighting measured (through the attitude its
         frame was exposed at), while it is recent enough to aim at.

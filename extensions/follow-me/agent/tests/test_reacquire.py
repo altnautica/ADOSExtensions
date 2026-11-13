@@ -11,6 +11,7 @@ from follow_me.reacquire import (
     blend_template,
     embedding_of,
     similarity,
+    template_may_update,
 )
 
 _COV = ((0.25, 0.0), (0.0, 0.25))
@@ -91,3 +92,12 @@ def test_a_template_from_another_model_never_matches() -> None:
     template = Embedding("reid_osnet_x0_25_ados_v1", (1.0, 0.0, 0.0))
     d = _det([1.0, 0.0, 0.0], model="histogram", x=1.0)
     assert _pick([d], template, {}) is None
+
+
+def test_template_updates_only_on_a_solid_unambiguous_lock() -> None:
+    assert template_may_update(lock_state="locked", confidence=0.8, occlusion_hint=None, others_near=0)
+    assert not template_may_update(lock_state="uncertain", confidence=0.9, occlusion_hint=None, others_near=0)
+    assert not template_may_update(lock_state="locked", confidence=0.4, occlusion_hint=None, others_near=0)
+    # Another person overlapping the subject's box: the crop mixes two people.
+    assert not template_may_update(lock_state="locked", confidence=0.9, occlusion_hint=None, others_near=1)
+    assert not template_may_update(lock_state="locked", confidence=0.9, occlusion_hint=0.5, others_near=0)
