@@ -241,6 +241,8 @@ async def test_a_designate_the_engine_loses_lets_matching_continue(monkeypatch: 
     await _engine_reports(plugin, clock, 9, LOCK_LOST)
     assert len(ctx.vision.designate_calls) == 2
     assert 9 in plugin._recovery.excluded_tracks
+    # The same person within one recovery is announced once.
+    assert len(_events(ctx, FOLLOW_REACQUIRED_TOPIC)) == 1
 
 
 @pytest.mark.asyncio
@@ -256,10 +258,88 @@ async def test_a_designate_that_never_locks_lets_matching_continue(monkeypatch: 
     _fresh(plugin)
     _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
     await plugin._tick()
-    await _step(plugin, clock, 0.5)
+    await _step(plugin, clock, 2.5)
     assert plugin._recovery.designated is True
     await _step(plugin, clock, 0.6)
     assert plugin._recovery.designated is False
+
+
+@pytest.mark.asyncio
+async def test_an_unsure_designate_is_given_time_and_announced_once(monkeypatch: Any) -> None:
+    ctx = _Ctx(
+        config=_cfg(search_budget_s=25.0),
+        designate_result={"designated": True, "track_id": 9, "camera_id": "uvc-0"},
+    )
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+    clock.advance(0.3)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
+    await plugin._tick()
+    # The engine is unsure of its designate for a while: not abandoned.
+    for _ in range(25):
+        await _engine_reports(plugin, clock, 9, LOCK_UNCERTAIN)
+    assert plugin._recovery.designated is True
+    assert len(ctx.vision.designate_calls) == 1
+    # Still unsure past the limit: abandoned and matched again, but the same
+    # person is not announced a second time in this recovery.
+    for _ in range(8):
+        await _engine_reports(plugin, clock, 9, LOCK_UNCERTAIN)
+    assert len(ctx.vision.designate_calls) == 2
+    assert len(_events(ctx, FOLLOW_REACQUIRED_TOPIC)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_resume_still_never_adopts_an_abandoned_designate(monkeypatch: Any) -> None:
+    ctx = _Ctx(
+        config=_cfg(search_budget_s=5.0),
+        designate_result={"designated": True, "track_id": 9, "camera_id": "uvc-0"},
+    )
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+    clock.advance(0.3)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
+    await plugin._tick()
+    assert len(ctx.vision.designate_calls) == 1
+    # Later designates are refused, so only that first one can be in play.
+    ctx.vision._designate_result = {"designated": False}
+    await _step(plugin, clock, 4.8)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    await ctx.config_kv.set("operator_resume_seq", 1)
+    await _step(plugin, clock, 1.1)
+    await _step(plugin, clock, 5.2)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    announced = len(_events(ctx, FOLLOW_REACQUIRED_TOPIC))
+    # The engine's abandoned designate locks after the second wait began.
+    await _engine_reports(plugin, clock, 9, LOCK_LOCKED)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    assert len(_events(ctx, FOLLOW_REACQUIRED_TOPIC)) == announced
+    # The lost subject's own track stays excluded too.
+    await _engine_reports(plugin, clock, 7, LOCK_LOCKED)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+
+
+@pytest.mark.asyncio
+async def test_a_resume_does_not_match_a_batch_seen_before_it(monkeypatch: Any) -> None:
+    ctx = _Ctx(config=_cfg(search_budget_s=5.0), designate_result={"designated": False})
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+    clock.advance(0.3)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
+    await plugin._tick()
+    assert len(ctx.vision.designate_calls) == 1
+    await _step(plugin, clock, 4.8)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    await ctx.config_kv.set("operator_resume_seq", 1)
+    await _step(plugin, clock, 1.1)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_PREDICTING
+    # The sighting from before the wait is seconds old: never matched again.
+    assert len(ctx.vision.designate_calls) == 1
 
 
 @pytest.mark.asyncio

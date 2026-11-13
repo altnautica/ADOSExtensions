@@ -81,9 +81,10 @@ STATUS_SETTLE_S = 0.3
 # without ``flight.goal.status``, or a pilot that stopped reporting), the
 # search starts from where the vehicle is.
 STATUS_TIMEOUT_S = 2.0
-# A re-acquire designate the engine has not locked within this long, or has
-# reported lost, is abandoned and matching resumes.
-DESIGNATE_LOCK_S = 1.0
+# A re-acquire designate the engine reports lost is abandoned at once; one it
+# has not locked within this long (still unsure, or never reported) is
+# abandoned too, and matching resumes.
+DESIGNATE_LOCK_S = 3.0
 
 # Vantage states as the pilot reports them.
 VANTAGE_ENROUTE = "enroute"
@@ -149,6 +150,10 @@ class Recovery:
     # The operator_resume_seq already acted on.
     resume_seq_seen: int = 0
     lost_announced: bool = False
+    # The subject's re-acquire was announced in this recovery: a later
+    # designate of the same person (after an abandoned one) is not announced
+    # again.
+    reacquire_announced: bool = False
 
     def remaining_s(self, now: float) -> float:
         return max(0.0, self.deadline_s - now)
@@ -366,7 +371,11 @@ class RecoveryMixin:
                 # Nothing left to predict from: keep holding, keep the prompt.
                 rec.hold_reason = HOLD_NO_RANGE
             else:
-                self._start_recovery(cfg, now, rec.lost_track_id, lost_s=rec.lost_s)
+                fresh = self._start_recovery(cfg, now, rec.lost_track_id, lost_s=rec.lost_s)
+                # The tracks the earlier search gave up on stay given up on,
+                # and the batches it already examined are not matched again.
+                fresh.excluded_tracks |= rec.excluded_tracks
+                fresh.last_batch_s = self._latest_batch_s
                 self._ctx.log.info("follow_me_search_resumed", seq=cfg.operator_resume_seq)
                 await self._tick_recovery(cfg, now)
                 return
@@ -501,6 +510,15 @@ class RecoveryMixin:
         rec.designated_track = int(track) if isinstance(track, int) else None
         rec.designated_s = now
         self._filter.update(now, cand.north_m, cand.east_m, cand.covariance)
+        self._ctx.log.info(
+            "follow_me_reacquired",
+            track_id=rec.designated_track,
+            similarity=round(cand.similarity, 3),
+            phase=rec.phase,
+        )
+        if rec.reacquire_announced:
+            return
+        rec.reacquire_announced = True
         await self._ctx.events.publish(
             FOLLOW_REACQUIRED_TOPIC,
             {
@@ -510,12 +528,6 @@ class RecoveryMixin:
                 "mahalanobis": round(cand.mahalanobis, 2),
                 "phase": rec.phase,
             },
-        )
-        self._ctx.log.info(
-            "follow_me_reacquired",
-            track_id=rec.designated_track,
-            similarity=round(cand.similarity, 3),
-            phase=rec.phase,
         )
 
 

@@ -147,19 +147,21 @@ default), the follow keeps flying the prediction at half feed-forward; with
   - it lies within a Mahalanobis distance of 3 from the prediction.
 
   The best match is designated with the vision engine and announced on
-  `follow.reacquired`. A designate the engine reports lost, or has not locked
-  within 1 s, is abandoned and matching continues. When the budget runs out,
+  `follow.reacquired`, once per recovery. A designate the engine reports
+  lost, or has not locked within 3 s, is abandoned and matching continues
+  (on newer batches only). When the budget runs out,
   or after the prediction phase with `predictive_search` off, the plugin
   announces `follow.lost` and holds for the operator.
 
 Holding for the operator keeps the motion lease and a latched hover point
 (`hold_ne`, and its height) that a drifting pose estimate cannot move. It
 never re-locks on its own: the lost track and any abandoned re-acquire
-designate are never adopted again, even if the engine reports them locked;
-only a new operator designate (the engine gives each one a fresh track id)
-is followed. The operator resumes the search (a surface writes
-`operator_resume_seq` + 1; a fresh budget starts from the current
-prediction), designates a subject, or stops. `predictive_search` is turned
+designate are never adopted again, even if the engine reports them locked,
+and a resumed search keeps them excluded; only a new operator designate (the
+engine gives each one a fresh track id) is followed. The operator resumes the
+search (a surface writes `operator_resume_seq` + 1; a fresh budget starts from
+the current prediction and only newer detections are matched), designates a
+subject, or stops. `predictive_search` is turned
 back on at every arm (an arm seen after a disarm, not the first armed
 heartbeat after the plugin starts).
 
