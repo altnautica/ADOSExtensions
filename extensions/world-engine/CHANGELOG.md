@@ -454,6 +454,15 @@ Ships after 2.2.0, which takes the [Unreleased] section below.
   new height after a climb). Before, a pose held on the prior alone through
   a climb read as good to 5 cm to the flight controller. Estimators that
   report no σ publish none. 2.2.0.
+- **A full disk ends the recording and leaves navigation running.** When a
+  segment write failed (`ENOSPC`) while the mcap writer was starting a
+  chunk, the writer lost its output stream and its next call or its drop
+  panicked (`self.writer should never be None`); release builds abort on
+  panic, so the whole capture process exited and the scan matcher restarted
+  in a new frame. The segment writer now latches the first I/O error,
+  never shows it to the mcap writer, and fails every later write and the
+  close with it: the recording ends with the error and the navigation lanes
+  keep publishing. 2.2.0.
 
 ## [2.0.0]
 

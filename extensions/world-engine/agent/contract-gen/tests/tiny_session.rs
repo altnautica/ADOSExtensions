@@ -382,3 +382,84 @@ fn the_descriptor_set_names_every_channel_message() {
         );
     }
 }
+
+/// A segment file on a disk with `room` bytes left: writes past it fail as
+/// a full disk does.
+struct FullDisk {
+    file: std::fs::File,
+    room: u64,
+}
+
+impl std::io::Write for FullDisk {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.room == 0 {
+            return Err(std::io::ErrorKind::StorageFull.into());
+        }
+        let n = buf.len().min(self.room as usize);
+        let n = std::io::Write::write(&mut self.file, &buf[..n])?;
+        self.room -= n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.file)
+    }
+}
+
+impl std::io::Seek for FullDisk {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.file, to)
+    }
+}
+
+impl ados_capture_contract::SegmentSink for FullDisk {
+    fn sync(&mut self) -> std::io::Result<()> {
+        self.file.sync_all()
+    }
+}
+
+/// A disk that fills up mid-segment fails the writes from then on and the
+/// finish, and never panics (a panic aborts the capture process, and its
+/// navigation with it), wherever in the segment the space runs out. The 200
+/// images write about 11.9 kB before the finish; every byte of the file
+/// header and the first chunk's header is tried, where a failed write leaves
+/// the mcap writer without its stream, then the rest of the segment in steps.
+#[test]
+fn a_full_disk_fails_the_session_without_panicking() {
+    /// What one session on a disk with `room` bytes left came to.
+    fn session(room: u64) -> Result<(), String> {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = SessionWriter::create(tmp.path(), manifest(), &rig())
+            .unwrap()
+            .with_sink(Box::new(move |path: &Path| {
+                let file = std::fs::File::create(path)?;
+                Ok(Box::new(FullDisk { file, room }) as Box<dyn ados_capture_contract::SegmentSink>)
+            }));
+        let failed_at = (0..200u64)
+            .find(|&seq| {
+                w.write_proto(&topics::cam_image("cam0"), T0 + seq, &image(seq))
+                    .is_err()
+            })
+            .ok_or("no write failed")?;
+        if w
+            .write_proto(&topics::cam_image("cam0"), T0 + failed_at + 1, &image(0))
+            .is_ok()
+        {
+            return Err("a write after the failure went through".into());
+        }
+        if w.finish().is_ok() {
+            return Err("the finish succeeded".into());
+        }
+        Ok(())
+    }
+    let rooms: Vec<u64> = (0..256u64).chain((256..11_500).step_by(97)).collect();
+    let mut wrong = Vec::new();
+    for &room in &rooms {
+        match std::panic::catch_unwind(|| session(room)) {
+            Ok(Ok(())) => {}
+            Ok(Err(why)) => wrong.push(format!("room {room}: {why}")),
+            Err(_) => wrong.push(format!("room {room}: panicked")),
+        }
+    }
+    let n = rooms.len();
+    assert!(wrong.is_empty(), "{} of {n} rooms:\n{}", wrong.len(), wrong.join("\n"));
+}

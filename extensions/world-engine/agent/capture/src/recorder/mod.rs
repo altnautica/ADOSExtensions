@@ -30,7 +30,7 @@ use ados_capture_contract::foxglove::PoseInFrame;
 use ados_capture_contract::foxglove::{LocationFix, PointCloud};
 use ados_capture_contract::v1::{ClockSample, GnssRaw, ImuBatch, PoseCov, TriggerRecord};
 use ados_capture_contract::{
-    topics, Manifest, Operator, Rig, SegmentLimits, SessionHealth, SessionWriter,
+    topics, Manifest, OpenSink, Operator, Rig, SegmentLimits, SessionHealth, SessionWriter,
 };
 use ados_protocol::framebus::FrameFormat;
 use parking_lot::Mutex;
@@ -160,6 +160,9 @@ pub struct RecorderConfig {
     pub encoding: ImageEncoding,
     /// The capture-active marker, created for the life of the session.
     pub active_marker: Option<PathBuf>,
+    /// Where segment bytes go: `None` writes the segment files (tests send
+    /// them to a disk that fills up).
+    pub sink: Option<OpenSink>,
 }
 
 /// Handle to the open session.
@@ -176,8 +179,11 @@ pub struct Recorder {
 impl Recorder {
     /// Create the session directory, `.recording`, and the writer thread.
     pub fn start(cfg: RecorderConfig) -> anyhow::Result<Self> {
-        let writer =
+        let mut writer =
             SessionWriter::create(&cfg.root, cfg.manifest, &cfg.rig)?.with_limits(cfg.limits);
+        if let Some(open) = cfg.sink {
+            writer = writer.with_sink(open);
+        }
         let dir = writer.dir().to_path_buf();
         File::create(dir.join(crate::storage::RECORDING_MARKER))?;
         fs::create_dir_all(dir.join("keyframes"))?;

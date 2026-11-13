@@ -94,6 +94,7 @@ fn every_channel_is_recorded_and_segments_roll() {
         },
         encoding: ImageEncoding::Raw,
         active_marker: Some(marker.clone()),
+        sink: None,
     })
     .unwrap();
     let sdir = rec.dir().to_path_buf();
@@ -233,6 +234,7 @@ fn a_dropped_recorder_leaves_recording_but_clears_the_active_marker() {
         limits: SegmentLimits::default(),
         encoding: ImageEncoding::Raw,
         active_marker: Some(marker.clone()),
+        sink: None,
     })
     .unwrap();
     let sdir = rec.dir().to_path_buf();
@@ -250,6 +252,7 @@ fn open(dir: &Path) -> Recorder {
         limits: SegmentLimits::default(),
         encoding: ImageEncoding::Raw,
         active_marker: None,
+        sink: None,
     })
     .unwrap()
 }
@@ -313,6 +316,7 @@ fn a_jpeg_backlog_is_encoded_in_batches_and_written_in_order() {
         limits: SegmentLimits::default(),
         encoding: ImageEncoding::Jpeg,
         active_marker: None,
+        sink: None,
     })
     .unwrap();
     let sdir = rec.dir().to_path_buf();
@@ -393,5 +397,82 @@ fn the_marker_stays_fresh_while_finish_runs() {
     assert!(
         mtime > old + Duration::from_secs(500),
         "a long finish must not leave the marker stale"
+    );
+}
+
+/// A segment file on a disk with `room` bytes left: writes past it fail as
+/// a full disk does.
+struct FullDisk {
+    file: File,
+    room: u64,
+}
+
+impl std::io::Write for FullDisk {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.room == 0 {
+            return Err(std::io::ErrorKind::StorageFull.into());
+        }
+        let n = buf.len().min(self.room as usize);
+        let n = std::io::Write::write(&mut self.file, &buf[..n])?;
+        self.room -= n as u64;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        std::io::Write::flush(&mut self.file)
+    }
+}
+
+impl std::io::Seek for FullDisk {
+    fn seek(&mut self, to: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.file, to)
+    }
+}
+
+impl ados_capture_contract::SegmentSink for FullDisk {
+    fn sync(&mut self) -> std::io::Result<()> {
+        self.file.sync_all()
+    }
+}
+
+/// The disk fills up mid-session: the recording fails and stops writing,
+/// and the writer thread lives on to answer the close with the error. A
+/// panic there would abort the capture process (release builds abort on
+/// panic) and restart navigation in a new frame.
+#[test]
+fn a_full_disk_ends_the_recording_and_the_writer_answers_the_close() {
+    let dir = tempfile::tempdir().unwrap();
+    let rig = rig();
+    let rec = Recorder::start(RecorderConfig {
+        root: dir.path().to_path_buf(),
+        manifest: manifest(&rig),
+        rig: rig.clone(),
+        limits: SegmentLimits::default(),
+        encoding: ImageEncoding::Raw,
+        active_marker: None,
+        // The uniform frames compress to a few kB a segment: 1 KiB of room
+        // runs out a few compressed blocks after the file header.
+        sink: Some(Box::new(|path: &Path| {
+            let file = File::create(path)?;
+            Ok(Box::new(FullDisk { file, room: 1024 })
+                as Box<dyn ados_capture_contract::SegmentSink>)
+        })),
+    })
+    .unwrap();
+    for k in 0..400u64 {
+        rec.send(image(1_000_000_000 + k * 50_000_000, 64 * 48));
+    }
+    let s = wait_for(&rec, |s| s.error.is_some() && s.lost_after_error > 0);
+    assert!(s.error.is_some(), "the full disk failed the recording");
+    assert!(s.lost_after_error > 0, "nothing is written after the failure");
+    let op = Operator {
+        site: None,
+        floor: None,
+        rooms: vec![],
+    };
+    let closed = rec.finish(op, manifest(&rig).health);
+    let err = closed.expect_err("a session that lost its disk does not close clean");
+    assert!(
+        !err.to_string().contains("recorder thread ended"),
+        "the writer thread died: {err}"
     );
 }

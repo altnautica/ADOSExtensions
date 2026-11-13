@@ -46,7 +46,7 @@ pub use checksums::{
 pub use reader::{SessionMessage, SessionReader};
 pub use schema::*;
 pub use session_id::session_id;
-pub use writer::{SegmentLimits, SessionWriter};
+pub use writer::{OpenSink, SegmentLimits, SegmentSink, SessionWriter};
 
 /// The contract id every JSON document carries in `contract`.
 pub const CONTRACT_ID: &str = "ados.capture/1";

@@ -16,7 +16,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use mcap::records::MessageHeader;
 
@@ -43,28 +43,99 @@ impl Default for SegmentLimits {
     }
 }
 
+/// Where a segment's bytes go: a buffered file in production
+/// ([`SessionWriter::with_sink`] swaps it, to inject a full disk in tests).
+pub trait SegmentSink: Write + Seek + Send {
+    /// Make everything written so far durable.
+    fn sync(&mut self) -> std::io::Result<()>;
+}
+
+impl SegmentSink for BufWriter<File> {
+    fn sync(&mut self) -> std::io::Result<()> {
+        self.flush()?;
+        self.get_ref().sync_all()
+    }
+}
+
+/// Opens the sink of the segment file at the given path.
+pub type OpenSink = Box<dyn Fn(&Path) -> std::io::Result<Box<dyn SegmentSink>> + Send>;
+
+fn open_file(path: &Path) -> std::io::Result<Box<dyn SegmentSink>> {
+    Ok(Box::new(BufWriter::new(File::create(path)?)))
+}
+
+/// The first I/O error of a session's segment sinks, shared by the writer
+/// and every segment it opens.
+type Fault = Arc<OnceLock<(std::io::ErrorKind, String)>>;
+
+fn latch(fault: &Fault, e: &std::io::Error) {
+    let _ = fault.set((e.kind(), e.to_string()));
+}
+
 /// `Write + Seek` that records the furthest byte written.
+///
+/// After the sink's first error (a full disk) every later write, flush and
+/// seek succeeds without touching the sink, and the session writer reports
+/// the latched error instead. The mcap writer is never shown an error: one
+/// that lands part way through starting a chunk leaves it without its
+/// stream, and its drop then panics, which aborts a release build (panic =
+/// abort) and with it every lane of the process that owns the session.
 struct CountingWriter {
-    inner: BufWriter<File>,
+    inner: Box<dyn SegmentSink>,
     pos: u64,
     high: Arc<AtomicU64>,
+    fault: Fault,
+}
+
+impl CountingWriter {
+    fn advance(&mut self, n: usize) {
+        self.pos += n as u64;
+        self.high.fetch_max(self.pos, Ordering::Relaxed);
+    }
 }
 
 impl Write for CountingWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = self.inner.write(buf)?;
-        self.pos += n as u64;
-        self.high.fetch_max(self.pos, Ordering::Relaxed);
-        Ok(n)
+        if self.fault.get().is_none() {
+            match self.inner.write(buf) {
+                Ok(n) => {
+                    self.advance(n);
+                    return Ok(n);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => return Err(e),
+                Err(e) => latch(&self.fault, &e),
+            }
+        }
+        self.advance(buf.len());
+        Ok(buf.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
+        if self.fault.get().is_none() {
+            if let Err(e) = self.inner.flush() {
+                latch(&self.fault, &e);
+            }
+        }
+        Ok(())
     }
 }
 
 impl Seek for CountingWriter {
     fn seek(&mut self, to: SeekFrom) -> std::io::Result<u64> {
-        self.pos = self.inner.seek(to)?;
+        if self.fault.get().is_none() {
+            match self.inner.seek(to) {
+                Ok(p) => {
+                    self.pos = p;
+                    return Ok(p);
+                }
+                Err(e) => latch(&self.fault, &e),
+            }
+        }
+        let from = |base: u64, d: i64| base.saturating_add_signed(d);
+        self.pos = match to {
+            SeekFrom::Start(p) => p,
+            SeekFrom::Current(d) => from(self.pos, d),
+            SeekFrom::End(d) => from(self.high.load(Ordering::Relaxed), d),
+        };
         Ok(self.pos)
     }
 }
@@ -106,6 +177,8 @@ pub struct SessionWriter {
     segment: Option<OpenSegment>,
     next_index: u32,
     buf: Vec<u8>,
+    open_sink: OpenSink,
+    fault: Fault,
 }
 
 impl SessionWriter {
@@ -144,12 +217,20 @@ impl SessionWriter {
             segment: None,
             next_index: 0,
             buf: Vec::new(),
+            open_sink: Box::new(open_file),
+            fault: Fault::default(),
         })
     }
 
     /// Replace the segment roll limits.
     pub fn with_limits(mut self, limits: SegmentLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// Send segment bytes to the sinks `open` returns instead of files.
+    pub fn with_sink(mut self, open: OpenSink) -> Self {
+        self.open_sink = open;
         self
     }
 
@@ -193,6 +274,7 @@ impl SessionWriter {
         t_ns: u64,
         data: &[u8],
     ) -> Result<()> {
+        self.check()?;
         self.roll_if_due(t_ns)?;
         if self.segment.is_none() {
             self.open_segment(t_ns)?;
@@ -227,7 +309,16 @@ impl SessionWriter {
         let (add, last) = seg.step(t_ns, self.limits.max_duration_ns);
         seg.elapsed_ns = seg.elapsed_ns.saturating_add(add);
         seg.last_ns = last;
-        Ok(())
+        self.check()
+    }
+
+    /// The latched sink error: once a segment write has failed, every write
+    /// and the finish fail with it.
+    fn check(&self) -> Result<()> {
+        match self.fault.get() {
+            Some((kind, msg)) => Err(Error::Io(std::io::Error::new(*kind, msg.clone()))),
+            None => Ok(()),
+        }
     }
 
     fn roll_if_due(&mut self, t_ns: u64) -> Result<()> {
@@ -247,10 +338,13 @@ impl SessionWriter {
         let file = format!("segments/{:06}.mcap", self.next_index);
         self.next_index += 1;
         let high = Arc::new(AtomicU64::new(0));
+        let inner = (self.open_sink)(&self.dir.join(&file))
+            .inspect_err(|e| latch(&self.fault, e))?;
         let out = CountingWriter {
-            inner: BufWriter::new(File::create(self.dir.join(&file))?),
+            inner,
             pos: 0,
             high: high.clone(),
+            fault: self.fault.clone(),
         };
         let mut writer = mcap::WriteOptions::new()
             .compression(Some(mcap::Compression::Lz4))
@@ -281,7 +375,7 @@ impl SessionWriter {
             channels: HashMap::new(),
             seq: 0,
         });
-        Ok(())
+        self.check()
     }
 
     fn close_segment(&mut self) -> Result<()> {
@@ -291,7 +385,10 @@ impl SessionWriter {
         seg.writer.finish()?;
         let mut out = seg.writer.into_inner();
         out.flush()?;
-        out.inner.get_ref().sync_all()?;
+        if self.fault.get().is_none() {
+            out.inner.sync().inspect_err(|e| latch(&self.fault, e))?;
+        }
+        self.check()?;
         let bytes = fs::metadata(self.dir.join(&seg.file))?.len();
         self.manifest.segments.push(Segment {
             file: seg.file,
@@ -303,9 +400,11 @@ impl SessionWriter {
     }
 
     /// Close the open segment, write `manifest.json` and `checksums.b3`, and
-    /// return the final manifest.
+    /// return the final manifest. A session whose segment sink failed is
+    /// closed and reports the failure; it gets no manifest.
     pub fn finish(mut self) -> Result<Manifest> {
         self.close_segment()?;
+        self.check()?;
         fs::write(
             self.dir.join("manifest.json"),
             serde_json::to_vec_pretty(&self.manifest)?,
