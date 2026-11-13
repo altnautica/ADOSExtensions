@@ -5,6 +5,9 @@
 # `agent.payloads`), not inside the .adosplug, so a node fetches only the files
 # for its own arch and profile.
 #
+#   legs      list the binary legs. The aarch64-macos leg runs only when the
+#             repository variable WORLD_ENGINE_MACOS is "true"; without a macOS
+#             runner the release ships the Linux and Windows payloads alone.
 #   binaries  one leg per arch: build the release binaries against the agent
 #             SDK pinned in ADOS_AGENT_REV and hand them to the release job.
 #   release   build and test the GCS module, write each payload's source,
@@ -41,53 +44,49 @@ jobs:
     with:
       ext: world-engine
 
+  legs:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.legs.outputs.matrix }}
+    steps:
+      - id: legs
+        env:
+          MACOS: ${{ vars.WORLD_ENGINE_MACOS }}
+        # Static musl binaries run on every supported board regardless of its
+        # glibc. The node links rerun and bundled SQLite and the transport
+        # links ring, so the musl legs need a C cross-compiler: zig through
+        # cargo-zigbuild, as in rust-check.yml. basalt-ados and the Livox SDK2
+        # library build on the x86_64-linux leg only (native).
+        # On macOS, CoreML runs offload inference on the Apple GPU. ONNX
+        # Runtime is loaded dynamically at start, so it is a host
+        # prerequisite, not a payload. The macOS leg is optional (see header).
+        # The standalone reconstruction node for a Windows workstation
+        # (`world-engine-node --standalone`); the plugin-host service is
+        # unix-only, so the windows leg builds the node alone.
+        run: |
+          set -euo pipefail
+          legs='[
+            {"runner":"ubuntu-24.04-arm","arch_os":"aarch64-linux","target":"aarch64-unknown-linux-musl","zig":true,
+             "crates":"world-engine-link world-engine-capture world-engine-node","node_features":"","uv_triple":"aarch64-unknown-linux-musl"},
+            {"runner":"ubuntu-24.04","arch_os":"x86_64-linux","target":"x86_64-unknown-linux-musl","zig":true,
+             "crates":"world-engine-link world-engine-capture world-engine-node","node_features":"","native":true,"uv_triple":"x86_64-unknown-linux-musl"},
+            {"runner":"macos-14","arch_os":"aarch64-macos","target":"aarch64-apple-darwin","zig":false,
+             "crates":"world-engine-link world-engine-node","node_features":"coreml","optional":true},
+            {"runner":"windows-2022","arch_os":"x86_64-windows","target":"x86_64-pc-windows-msvc","zig":false,
+             "crates":"world-engine-node","node_features":"","exe":".exe"}
+          ]'
+          if [ "${MACOS:-}" = "true" ]; then filter='.'; else filter='map(select(.optional != true))'; fi
+          matrix="$(jq -c "{include: (${filter})}" <<<"${legs}")"
+          echo "${matrix}"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
   binaries:
-    needs: checks
+    needs: [checks, legs]
     name: Binaries (${{ matrix.arch_os }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
-      matrix:
-        include:
-          # Static musl binaries run on every supported board regardless of its
-          # glibc. The node links rerun and bundled SQLite and the transport
-          # links ring, so the musl legs need a C cross-compiler: zig through
-          # cargo-zigbuild, as in rust-check.yml.
-          - runner: ubuntu-24.04-arm
-            arch_os: aarch64-linux
-            target: aarch64-unknown-linux-musl
-            zig: true
-            crates: world-engine-link world-engine-capture world-engine-node
-            node_features: ""
-            uv_triple: aarch64-unknown-linux-musl
-          - runner: ubuntu-24.04
-            arch_os: x86_64-linux
-            target: x86_64-unknown-linux-musl
-            zig: true
-            crates: world-engine-link world-engine-capture world-engine-node
-            node_features: ""
-            # basalt-ados and the Livox SDK2 library build on this leg only.
-            native: true
-            uv_triple: x86_64-unknown-linux-musl
-          # CoreML runs offload inference on the Apple GPU. ONNX Runtime is
-          # loaded dynamically at start, so it is a host prerequisite, not a
-          # payload.
-          - runner: macos-14
-            arch_os: aarch64-macos
-            target: aarch64-apple-darwin
-            zig: false
-            crates: world-engine-link world-engine-node
-            node_features: coreml
-          # The standalone reconstruction node for a Windows workstation
-          # (`world-engine-node --standalone`); the plugin-host service is
-          # unix-only, so this leg builds the node alone.
-          - runner: windows-2022
-            arch_os: x86_64-windows
-            target: x86_64-pc-windows-msvc
-            zig: false
-            crates: world-engine-node
-            node_features: ""
-            exe: ".exe"
+      matrix: ${{ fromJSON(needs.legs.outputs.matrix) }}
     defaults:
       run:
         # Git Bash on the windows runner, so every leg runs the same scripts.
@@ -214,7 +213,7 @@ jobs:
           retention-days: 1
 
   release:
-    needs: binaries
+    needs: [legs, binaries]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -270,20 +269,27 @@ jobs:
           merge-multiple: true
 
       - name: Write the payload list
+        env:
+          LEGS: ${{ needs.legs.outputs.matrix }}
         run: |
           set -euo pipefail
           cp "${EXT_DIR}/gcs/assets/re_viewer_bg.wasm" payloads/re_viewer_bg.wasm
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
-          awk -v base="${base}" '
+          # Only the arches whose leg ran this release get rows; a skipped
+          # optional leg (aarch64-macos) ships no payload and no binaries.
+          built="$(jq -r '[.include[].arch_os] | join(",")' <<<"${LEGS}")"
+          echo "ARCH_OS=${built}" >> "$GITHUB_ENV"
+          awk -v base="${base}" -v built=",${built}," '
             /^[[:space:]]*(#|$)/ { next }
+            $3 != "-" && index(built, "," $3 ",") == 0 { next }
             { printf "%s\t%s\t%s\t%s\t%s/%s\n", $1, $2, $3, $4, base, $1 }
           ' scripts/world-engine-payloads.tsv > payloads/payloads.tsv
           cat payloads/payloads.tsv
 
       - name: Pack archive
-        # Covers every arch in agent.binaries; refuses to pack when any
-        # binaries path lacks a payload row or a listed asset is missing.
-        run: ./scripts/pack-rust.sh world-engine --payload-manifest payloads/payloads.tsv
+        # Covers every arch whose leg ran; refuses to pack when any of its
+        # binaries paths lacks a payload row or a listed asset is missing.
+        run: ./scripts/pack-rust.sh world-engine --payload-manifest payloads/payloads.tsv --arch-os "${ARCH_OS}"
 
       - name: Sign archive
         env:
