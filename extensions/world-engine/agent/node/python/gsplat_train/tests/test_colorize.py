@@ -46,3 +46,23 @@ def test_points_behind_the_camera_or_too_far_are_unseen():
     pts = np.array([[0.0, 0.0, -3.0], [0.0, 0.0, 300.0]])
     _, seen = colorize.colorize_points(pts, [_view(_split_image())], max_dist=30.0)
     assert seen.tolist() == [0, 0]
+
+
+def test_a_masked_pixel_colours_nothing():
+    mask = np.full((H, W), 255, np.uint8)
+    mask[:, : W // 2] = 0
+    view = colorize.ColorView(_view(_split_image()).K, np.eye(4), W, H, _split_image(), mask)
+    rgb, seen = colorize.colorize_points(np.array([[-0.5, 0.0, 3.0], [0.5, 0.0, 3.0]]), [view])
+    assert seen.tolist() == [0, 1] and rgb[1].tolist() == [0, 0, 255]
+
+
+def test_a_moved_camera_colours_from_its_pose():
+    # The camera 10 m up world +z, looking back down -z (a half turn about y): camera x = -world x.
+    w2c = np.eye(4)
+    w2c[:3, :3] = np.diag([-1.0, 1.0, -1.0])
+    w2c[:3, 3] = w2c[:3, :3] @ -np.array([0.0, 0.0, 10.0])
+    view = colorize.ColorView(_view(_split_image()).K, w2c, W, H, _split_image())
+    # World z = 7 is 3 m ahead; world x = +0.5 is camera x = -0.5 (the red half).
+    rgb, seen = colorize.colorize_points(np.array([[0.5, 0.0, 7.0], [-0.5, 0.0, 7.0]]), [view])
+    assert seen.tolist() == [1, 1]
+    assert rgb[0].tolist() == [255, 0, 0] and rgb[1].tolist() == [0, 0, 255]

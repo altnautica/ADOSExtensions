@@ -235,17 +235,10 @@ fn reconstruct(
             )?;
             detail["masks"] = serde_json::to_value(m)?;
         }
-        // The LiDAR cloud coloured from the frames at their prior poses; the
-        // sfm stage recolours it at the refined poses when SfM posed them.
+        // The LiDAR cloud coloured from the frames at their prior poses, on
+        // which prepare registered it (best-effort: no GPU, no coloured cloud).
         if has_lidar && summary.frames > 0 {
-            let c = train::colorize(
-                ctx.runner,
-                &dataset,
-                None,
-                &dataset.join("cloud_rgb.laz"),
-                &mut |_| {},
-            )?;
-            detail["colorize"] = serde_json::Value::Object(c);
+            detail["colorize"] = train::colorize(ctx.runner, &dataset);
         }
         Ok(detail)
     })?;
@@ -285,16 +278,12 @@ fn reconstruct(
             None => serde_json::to_value(sfm::run(ctx.runner, &dataset, &sfm_dir, &opts, p)?)?,
         };
         lidar.annotate(&mut detail)?;
-        let world = detail["world_frame"].as_bool().unwrap_or(false);
-        if world && dataset.join("cloud_rgb.laz").is_file() {
-            let c = train::colorize(
-                ctx.runner,
-                &dataset,
-                Some(&dataset.join("sparse").join("0")),
-                &dataset.join("cloud_rgb.laz"),
-                &mut |_| {},
-            )?;
-            detail["colorize"] = serde_json::Value::Object(c);
+        // The planar matcher re-registered both the frames and the cloud on
+        // its trajectory: recolour so the two agree. GLIM re-poses only the
+        // frames, and SfM refines poses the cloud was never registered on, so
+        // the prepare colouring (cloud and frames on one track) stands.
+        if detail["lidar2d"]["used"].as_bool().unwrap_or(false) {
+            detail["colorize"] = train::colorize(ctx.runner, &dataset);
         }
         Ok(detail)
     })?;
@@ -406,7 +395,7 @@ fn reconstruct(
                 generation,
                 spec: &spec,
                 tour_viewer: &ctx.tour_viewer,
-                prior: prior.as_deref(),
+                pose_source: products_stage::pose_source(&sfm_detail),
                 sfm_method: sfm_detail["method"].as_str(),
                 preset: preset.as_str(),
             },

@@ -289,28 +289,36 @@ pub fn gsplat(
     })
 }
 
-/// Colour the dataset's LiDAR cloud (`dataset/lidar_points.laz`) from its frames on the GPU
-/// (`colorize.py`): at the frames' prior poses, or at the SfM model's when `colmap` is given.
-/// Writes `out`.
-pub fn colorize(
-    runner: &dyn ToolRunner,
-    dataset: &Path,
-    colmap: Option<&Path>,
-    out: &Path,
-    progress: &mut dyn FnMut(f32),
-) -> Result<serde_json::Map<String, serde_json::Value>, StageError> {
-    let mut args: Vec<std::ffi::OsString> = vec![
+/// The LiDAR cloud coloured from the frames, under `dataset/`.
+pub const COLOURED_CLOUD_FILE: &str = "cloud_rgb.laz";
+
+/// Colour the dataset's LiDAR cloud (`dataset/lidar_points.laz`) from its frames at their
+/// `frames.json` poses on the GPU (`colorize.py`), into `dataset/cloud_rgb.laz`. Best-effort:
+/// a node without the `gsplat_train` project or a CUDA device, or a failed run, ships no
+/// coloured cloud (any earlier one is removed) and the returned detail says why
+/// (`skipped`).
+pub fn colorize(runner: &dyn ToolRunner, dataset: &Path) -> serde_json::Value {
+    let out = dataset.join(COLOURED_CLOUD_FILE);
+    let args: Vec<std::ffi::OsString> = vec![
         "--cloud".into(),
         dataset.join("lidar_points.laz").into(),
         "--dataset".into(),
         dataset.into(),
         "--out".into(),
-        out.into(),
+        out.clone().into(),
     ];
-    if let Some(c) = colmap {
-        args.extend(["--colmap".into(), c.into()]);
+    let detail = match run_script(runner, "colorize.py", args, dataset, &mut |_| {}) {
+        Ok(d) => serde_json::Value::Object(d),
+        Err(e) => {
+            tracing::warn!(error = %e, "LiDAR cloud colouring skipped");
+            serde_json::json!({ "skipped": e.message })
+        }
+    };
+    if detail.get("skipped").is_some() {
+        // A stale cloud would sit on another registration than the current one.
+        let _ = fs::remove_file(&out);
     }
-    run_script(runner, "colorize.py", args, dataset, progress)
+    detail
 }
 
 /// Monocular metric depth priors for every image (`dataset/depths/`).

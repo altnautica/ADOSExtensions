@@ -407,13 +407,7 @@ impl StandInRunner {
                 // The cloud as it came (`--out` names the output file).
                 let cloud = arg_after(inv, "--cloud").ok_or_else(|| StageError::input("cloud"))?;
                 fs::copy(cloud, &out).map_err(io)?;
-                let poses = match arg_after(inv, "--colmap") {
-                    Some(_) => "colmap",
-                    None => "frames",
-                };
-                on_line(&format!(
-                    r#"{{"event":"done","points":1,"coloured":1,"poses":"{poses}","peak_vram_mb":null}}"#
-                ));
+                on_line(r#"{"event":"done","points":1,"coloured":1,"poses":"frames","peak_vram_mb":null}"#);
             }
             "common.py" if self.missing.iter().any(|m| m == "gsplat_kernels") => {
                 return Err(StageError::tool_failed(

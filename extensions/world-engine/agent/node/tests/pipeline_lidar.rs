@@ -115,15 +115,18 @@ async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
         .count();
     assert!(mask_files > 0);
 
-    // The LiDAR cloud was coloured from the frames and shipped, and the job
-    // names its pose source.
+    // The LiDAR cloud was coloured from the frames at the poses prepare
+    // registered it on, and shipped; GLIM re-posed only the frames, so the
+    // sfm stage did not recolour it. GLIM's poses are SLAM poses.
     assert_eq!(prep["colorize"]["poses"], "frames", "{prep}");
+    assert!(sfm.get("colorize").is_none(), "{sfm}");
     assert!(job_dir.join("out/cloud_rgb.laz").is_file());
     let provenance: serde_json::Value =
         serde_json::from_slice(&std::fs::read(job_dir.join("out/provenance.json")).unwrap())
             .unwrap();
     assert_eq!(provenance["preset"], "tour", "{provenance}");
-    assert!(provenance["pose_source"].is_string(), "{provenance}");
+    assert_eq!(provenance["pose_source"], "slam", "{provenance}");
+    assert_eq!(provenance["sfm_method"], "known_poses", "{provenance}");
 
     // Brush stood in for gsplat, at full length, and said why.
     let train = &done["stages"][2]["detail"];
@@ -161,6 +164,38 @@ fn place_anchor(job_dir: &Path) -> serde_json::Value {
     let p = job_dir.join("out/scene.spz.place.json");
     let v: serde_json::Value = serde_json::from_slice(&std::fs::read(p).unwrap()).unwrap();
     v["anchor"].clone()
+}
+
+/// A preview needs no `gsplat_train`: a node without it still reconstructs a
+/// LiDAR session with camera frames, and ships no coloured cloud.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_preview_without_gsplat_train_skips_the_coloured_cloud() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = StandInRunner {
+        missing: vec!["gsplat_train".into()],
+        ..Default::default()
+    };
+    let (done, job_dir) = run_job(
+        dir.path(),
+        &runner,
+        build_session,
+        true,
+        serde_json::json!({ "preset": "preview" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(done["state"], "completed", "{done}");
+    let prep = &done["stages"][0]["detail"];
+    assert!(
+        prep["colorize"]["skipped"]
+            .as_str()
+            .unwrap()
+            .contains("gsplat_train"),
+        "{prep}"
+    );
+    assert!(!job_dir.join("dataset/cloud_rgb.laz").exists());
+    assert!(!job_dir.join("out/cloud_rgb.laz").exists());
+    assert!(job_dir.join("out/provenance.json").is_file());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

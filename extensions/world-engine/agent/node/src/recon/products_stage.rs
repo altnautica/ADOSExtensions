@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use super::prepare::{read_rooms, LIDAR_ORIGINS_FILE};
 use super::preset::PresetSpec;
 use super::products_tour::{self, Keyframe};
+use super::train::COLOURED_CLOUD_FILE;
 use super::{colmap, StageError, ToolInvocation, ToolRunner};
 use crate::products::cloud::{read_laz, read_ply_mesh, sample_surface, write_laz, PointCloud};
 use crate::products::{aisles, floorplan};
@@ -48,8 +49,8 @@ pub struct ProductsInput<'a> {
     pub generation: u32,
     pub spec: &'a PresetSpec,
     pub tour_viewer: &'a Path,
-    /// The pose prior `prepare` used (`truth`, `lidar2d`, ...); `None` without one.
-    pub prior: Option<&'a str>,
+    /// Where the camera poses came from ([`pose_source`]).
+    pub pose_source: &'a str,
     /// The SfM method that posed the frames (`pose_prior_mapper`, ...).
     pub sfm_method: Option<&'a str>,
     /// The preset name, for the provenance record.
@@ -443,7 +444,7 @@ pub fn run(
     fs::write(out.join(OUTPUTS_FILE), serde_json::to_vec_pretty(&arts)?)?;
     progress(1.0);
     let provenance = serde_json::json!({
-        "pose_source": pose_source(input.prior, input.sfm_method),
+        "pose_source": input.pose_source,
         "preset": input.preset,
         "sfm_method": input.sfm_method,
     });
@@ -454,13 +455,26 @@ pub fn run(
     Ok(arts)
 }
 
-/// Where a job's camera poses came from, as every product's provenance names it.
-pub fn pose_source(prior: Option<&str>, sfm_method: Option<&str>) -> &'static str {
-    match (prior, sfm_method) {
-        (Some("truth"), _) => "truth",
-        (Some(_), Some("pose_prior_mapper")) => "slam+ba",
-        (Some(_), _) => "slam",
+/// Where a job's camera poses came from, from its sfm stage detail, as every product's
+/// provenance names it: the source of the poses SfM started from (`prior_source`, or GLIM's
+/// trajectory when it re-posed the frames), `+ba` when SfM refined them, `truth` for the
+/// simulator's own poses, and `images` when SfM posed the frames from the images alone.
+pub fn pose_source(sfm: &serde_json::Value) -> &'static str {
+    let refined = sfm["method"].as_str() == Some("pose_prior_mapper");
+    let glim = sfm["glim"]["used"].as_bool().unwrap_or(false);
+    let source = match glim {
+        true => Some("lidar"),
+        false => sfm["prior_source"].as_str(),
+    };
+    match (source, refined) {
         (None, _) => "images",
+        (Some("truth"), _) => "truth",
+        (Some("vio"), false) => "vio",
+        (Some("vio"), true) => "vio+ba",
+        (Some("fc_ekf"), false) => "fc_ekf",
+        (Some("fc_ekf"), true) => "fc_ekf+ba",
+        (Some(_), false) => "slam",
+        (Some(_), true) => "slam+ba",
     }
 }
 
@@ -471,13 +485,13 @@ pub(super) fn copy_coloured_cloud(
     out: &Path,
     place: &dyn Fn(&str, Kind, Fmt) -> Result<String, StageError>,
 ) -> Result<Vec<ArtifactOut>, StageError> {
-    let src = job.join("dataset").join("cloud_rgb.laz");
+    let src = job.join("dataset").join(COLOURED_CLOUD_FILE);
     if !src.is_file() {
         return Ok(vec![]);
     }
-    fs::copy(&src, out.join("cloud_rgb.laz"))?;
-    let sidecar = place("cloud_rgb.laz", Kind::Pointcloud, Fmt::Laz)?;
-    Ok(vec![art("pointcloud", "cloud_rgb.laz", "laz", Some(sidecar))])
+    fs::copy(&src, out.join(COLOURED_CLOUD_FILE))?;
+    let sidecar = place(COLOURED_CLOUD_FILE, Kind::Pointcloud, Fmt::Laz)?;
+    Ok(vec![art("pointcloud", COLOURED_CLOUD_FILE, "laz", Some(sidecar))])
 }
 
 pub(super) fn art(kind: &str, file: &str, format: &str, place_json: Option<String>) -> ArtifactOut {
@@ -701,12 +715,25 @@ mod tests {
     }
 
     #[test]
-    fn pose_source_names_truth_slam_and_refined_slam() {
-        assert_eq!(pose_source(Some("truth"), Some("pose_prior_mapper")), "truth");
-        assert_eq!(pose_source(Some("lidar2d"), Some("known_poses")), "slam");
-        assert_eq!(pose_source(Some("lidar2d"), Some("pose_prior_mapper")), "slam+ba");
-        assert_eq!(pose_source(Some("lidar2d"), None), "slam");
-        assert_eq!(pose_source(None, Some("mapper")), "images");
+    fn pose_source_names_where_the_poses_came_from() {
+        use serde_json::json;
+        let src = |prior: serde_json::Value, method: &str| {
+            pose_source(&json!({ "prior_source": prior, "method": method }))
+        };
+        assert_eq!(src(json!("truth"), "pose_prior_mapper"), "truth");
+        assert_eq!(src(json!("lidar2d"), "known_poses"), "slam");
+        assert_eq!(src(json!("lidar2d"), "pose_prior_mapper"), "slam+ba");
+        assert_eq!(src(json!("lidar"), "known_poses"), "slam");
+        assert_eq!(src(json!("vio"), "pose_prior_mapper"), "vio+ba");
+        assert_eq!(src(json!("fc_ekf"), "known_poses"), "fc_ekf");
+        assert_eq!(src(json!("fc_ekf"), "pose_prior_mapper"), "fc_ekf+ba");
+        assert_eq!(src(json!(null), "mapper"), "images");
+        // GLIM re-posed a truth-recorded session: the poses are its SLAM poses.
+        let glim = json!({ "prior_source": "truth", "method": "known_poses", "glim": { "used": true } });
+        assert_eq!(pose_source(&glim), "slam");
+        // A rejected GLIM trajectory left the recorded poses.
+        let rejected = json!({ "prior_source": "vio", "method": "known_poses", "glim": { "used": false } });
+        assert_eq!(pose_source(&rejected), "vio");
     }
 
     #[test]

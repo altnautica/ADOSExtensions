@@ -123,6 +123,14 @@ async fn a_planar_lidar_session_is_matched_in_process_and_keeps_the_depth_prior(
     assert!(origins.len() >= 25);
     assert!(job_dir.join("dataset/lidar_points.laz").is_file());
     assert!(l2d["lidar_points"].as_u64().unwrap() > 500, "{sfm}");
+    // The cloud was coloured again on the matched trajectory the frames now
+    // carry too, and shipped; SfM refined those SLAM poses.
+    assert_eq!(sfm["colorize"]["poses"], "frames", "{sfm}");
+    assert!(job_dir.join("out/cloud_rgb.laz").is_file());
+    let provenance: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(job_dir.join("out/provenance.json")).unwrap())
+            .unwrap();
+    assert_eq!(provenance["pose_source"], "slam+ba", "{provenance}");
 
     // Training kept the monocular depth prior.
     let prep = &done["stages"][0]["detail"];

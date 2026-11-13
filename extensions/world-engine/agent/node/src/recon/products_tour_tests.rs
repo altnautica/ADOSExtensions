@@ -113,7 +113,7 @@ fn tour_writer_emits_esdf_and_thinned_nodes() {
         generation: 1,
         spec: &spec,
         tour_viewer: &viewer,
-        prior: None,
+        pose_source: "images",
         sfm_method: None,
         preset: "tour",
     };
