@@ -16,6 +16,7 @@ dependencies = [
   "laspy[lazrs]>=2.5",
   "pillow>=10",
   "moge @ git+https://github.com/microsoft/MoGe.git@b942f00bdc2a2a23ebb474fbe034d487e6dcceec",
+  "xatlas==0.0.9",
 ]
 
 [tool.uv]

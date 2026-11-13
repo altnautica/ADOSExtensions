@@ -366,6 +366,7 @@ dependencies = [
     { name = "plyfile" },
     { name = "torch" },
     { name = "torchvision" },
+    { name = "xatlas" },
 ]
 
 [package.dev-dependencies]
@@ -386,6 +387,7 @@ requires-dist = [
     { name = "plyfile", specifier = ">=1.0" },
     { name = "torch", specifier = ">=2.7", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchvision", specifier = ">=0.22", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "xatlas", specifier = "==0.0.9" },
 ]
 
 [package.metadata.requires-dev]
@@ -1490,6 +1492,22 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/a4/34/4dd12fc8bb7d61c91467ec3efe415ffa7d5456f799954b40c5bbaeae470e/werkzeug-3.1.9.tar.gz", hash = "sha256:55ca7c70a75689be937aa27f8ff4b018f06ff4838fc73045560bf0f5a1291060", size = 940188, upload-time = "2026-09-27T18:33:41.637Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/38/df03f564f43cec2684823f3cccae1a652ee7face1cbaa76fb223096e64d7/werkzeug-3.1.9-py3-none-any.whl", hash = "sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab", size = 228700, upload-time = "2026-09-27T18:33:39.685Z" },
+]
+
+[[package]]
+name = "xatlas"
+version = "0.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d4/fd/d6c17b531b602bf4f0e632e3ab63f72756dabb5c1a70df39c9b25e55a6b3/xatlas-0.0.9.tar.gz", hash = "sha256:9d4dbbd50c4f70e4b90b506e0b605b16fbff8a62cb46dd68f8454bde90d41448", size = 290203, upload-time = "2024-02-11T20:40:22.543Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ac/65/82e097e4f43ab15044662dd4840c60c1cd4115b1e8d69fe39e3c455a2995/xatlas-0.0.9-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:baf24a9bd9c4095bec8f374cbd066f550e0541a794d74c0d2f049b800a47c3b6", size = 236491, upload-time = "2024-02-11T20:39:31.883Z" },
+    { url = "https://files.pythonhosted.org/packages/a9/41/8f116ada3fa614e2554d462c2367604715d55bc0ddbb87d62af3bb81eadc/xatlas-0.0.9-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1a64371bd54663e9618921ada38361e063d2337fbe6330d21d21c08fb91eef38", size = 227888, upload-time = "2024-02-11T20:39:33.063Z" },
+    { url = "https://files.pythonhosted.org/packages/25/ee/09a05361c1b0a6c3dd1d10c7c801ee864ef764a508a92017c2ec48154abf/xatlas-0.0.9-cp312-cp312-musllinux_1_1_x86_64.whl", hash = "sha256:b2f712f28bc04e58595886643bffa37c01a5a49072ca12d008922cab3b04dff2", size = 745853, upload-time = "2024-02-11T20:39:34.969Z" },
+    { url = "https://files.pythonhosted.org/packages/fe/ca/0bedb1776bf13e4a1acf573974f58f45cc00cba434f747cdc1a5fa890f76/xatlas-0.0.9-cp312-cp312-win32.whl", hash = "sha256:f11f06b8a6d3fc2ee6d4c5600d2d0c0f4b88f3714a409c178453ec737101a561", size = 166547, upload-time = "2024-02-11T20:39:36.282Z" },
+    { url = "https://files.pythonhosted.org/packages/81/cd/15865e434aa83608d5215fdae859edb54c7ba3d413a0d21b5d38be13946b/xatlas-0.0.9-cp312-cp312-win_amd64.whl", hash = "sha256:e9acff729e2a93f7872d14f6f88d5cb0aba829c8ac122a77fcc5c41e4e21d9c4", size = 193813, upload-time = "2024-02-11T20:39:37.505Z" },
 ]
 
 [[package]]
