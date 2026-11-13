@@ -90,6 +90,7 @@ mod tests {
             cov: [0.0; 36],
             source: PoseSource::Lidar,
             health: VioHealth::Good,
+            sigma_xy_m: None,
         }
     }
 

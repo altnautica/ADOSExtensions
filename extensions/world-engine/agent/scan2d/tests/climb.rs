@@ -37,12 +37,12 @@ fn chamber(h: f64) -> Vec<Seg> {
     ]
 }
 
-/// Scan-plane height and climb rate at `t`.
-fn height(t: f64) -> (f64, f64) {
+/// Scan-plane height and climb rate at `t`, climbing at `rate`.
+fn height(t: f64, rate: f64) -> (f64, f64) {
     if t < GROUND_S {
         (FLOOR_H, 0.0)
-    } else if t < GROUND_S + CLIMB_S {
-        (FLOOR_H + CLIMB_RATE * (t - GROUND_S), CLIMB_RATE)
+    } else if t < GROUND_S + (TOP_H - FLOOR_H) / rate {
+        (FLOOR_H + rate * (t - GROUND_S), rate)
     } else {
         (TOP_H, 0.0)
     }
@@ -54,15 +54,26 @@ fn height(t: f64) -> (f64, f64) {
 /// period cast at the scan plane's height. The rig holds (4, 3) facing +x
 /// throughout. One `(time, pose)` per scan.
 fn take_off(slam: &mut LocalSlam, heights_from: Option<f64>) -> Vec<(f64, PoseOut)> {
+    take_off_with(slam, heights_from, true, CLIMB_RATE)
+}
+
+/// [`take_off`], with the measured ground velocity only when `flow`, and
+/// climbing at `rate` m/s.
+fn take_off_with(
+    slam: &mut LocalSlam,
+    heights_from: Option<f64>,
+    flow: bool,
+    rate: f64,
+) -> Vec<(f64, PoseOut)> {
     let mut rng = Rng::new(11);
     let pose_at = |_t: f64| Pose2::new(4.0, 3.0, 0.0);
     let period_s = PERIOD_NS as f64 * 1e-9;
-    let n = ((GROUND_S + CLIMB_S + HOVER_S) / period_s) as u64;
+    let n = ((GROUND_S + (TOP_H - FLOOR_H) / rate + HOVER_S) / period_s) as u64;
     let mut out = Vec::with_capacity(n as usize);
     let mut k = 0u64;
     for i in 0..n {
         let t = i as f64 * period_s;
-        let scan: ScanInput = revolution(&chamber(height(t).0), &pose_at, t, C1, &mut rng);
+        let scan: ScanInput = revolution(&chamber(height(t, rate).0), &pose_at, t, C1, &mut rng);
         let end_ms = ((t + (BEAMS - 1) as f64 / BEAMS as f64 * period_s) * 1000.0) as u64;
         // Every input up to the scan's last return, in 1 ms steps.
         while k <= end_ms {
@@ -74,14 +85,14 @@ fn take_off(slam: &mut LocalSlam, heights_from: Option<f64>) -> Vec<(f64, PoseOu
                     accel: [0.0, 0.0, 9.81],
                 });
             }
-            if k.is_multiple_of(20) {
+            if flow && k.is_multiple_of(20) {
                 slam.feed_velocity(&VelocitySample {
                     t_ns,
                     v: [0.03 * rng.gauss(), 0.03 * rng.gauss()],
                 });
             }
             if k.is_multiple_of(50) && heights_from.is_some_and(|h| t_s >= h) {
-                let (up_m, up_rate_mps) = height(t_s);
+                let (up_m, up_rate_mps) = height(t_s, rate);
                 slam.feed_height(&HeightSample {
                     t_ns,
                     up_m,
@@ -339,17 +350,24 @@ fn windy_descent(slam: &mut LocalSlam) -> Vec<(f64, f64, PoseOut)> {
 }
 
 /// Without a measured velocity the descent rides the prior for at most
-/// `max_unmatched_climb_s`, then its scans are matched again and the pose
-/// follows the drift.
+/// `max_unmatched_climb_s`, then its scans are matched again, band by band,
+/// and the pose follows the drift. What the ride missed (0.1 m/s for 2 s)
+/// stays in the pose, and its sigma says so.
 #[test]
 fn an_unmeasured_descent_is_matched_again_after_the_time_bound() {
     let poses = windy_descent(&mut LocalSlam::new(cfg()));
-    let (_, truth_x, last) = poses.last().unwrap();
-    assert!((last.x - truth_x).abs() < 0.15, "pose {} vs truth {truth_x}", last.x);
+    let (_, x0, p0) = poses.iter().find(|(t, _, _)| *t >= 5.0).unwrap();
+    let (_, x1, p1) = poses.last().unwrap();
+    let (moved, truth) = (p1.x - p0.x, x1 - x0);
+    assert!((moved - truth).abs() < 0.1, "the pose moved {moved:.3} m, the rig {truth:.3} m");
+    let err = (p1.x - x1).abs();
+    assert!(err < 0.3, "pose {} vs truth {x1}", p1.x);
+    assert!(err <= p1.sigma_xy_m, "{err:.3} m off and says {:.3} m", p1.sigma_xy_m);
     let late = poses.iter().filter(|(t, _, _)| (5.0..17.0).contains(t));
+    let matched = late.clone().filter(|(_, _, p)| p.score > 0.0).count();
     assert!(
-        late.clone().count() > 0 && late.clone().all(|(_, _, p)| p.score > 0.0),
-        "a scan of the descent past the time bound was not matched"
+        matched * 10 >= late.count() * 8,
+        "the descent past the time bound was not matched"
     );
 }
 
@@ -362,4 +380,76 @@ fn an_unmeasured_descent_on_the_prior_alone_misses_the_drift() {
     let poses = windy_descent(&mut LocalSlam::new(unbounded));
     let (_, truth_x, last) = poses.last().unwrap();
     assert!((last.x - truth_x).abs() > 0.5, "pose {} vs truth {truth_x}", last.x);
+}
+
+/// Without a measured velocity a 0.5 m/s climb rides the prior for
+/// `max_unmatched_climb_s`, then is matched band by band: every matched scan
+/// of the rest of the climb and of the hover is matched in a submap started
+/// within a band of its own height, never in the floor's, whose outline the
+/// leaning walls have moved.
+#[test]
+fn a_take_off_without_flow_is_matched_in_submaps_of_its_own_height() {
+    const RATE: f64 = 0.5;
+    let mut slam = LocalSlam::recording(cfg());
+    take_off_with(&mut slam, Some(0.0), false, RATE);
+    let band = slam.config().submap_height_band_m;
+    let map = slam.into_map();
+    let wrong: Vec<String> = map
+        .nodes
+        .iter()
+        .filter(|n| n.score > 0.0)
+        .filter_map(|n| {
+            let t = n.t_ns as f64 * 1e-9;
+            let (h, _) = height(t, RATE);
+            let h0 = map.submaps[n.submap].height_m?;
+            ((h - h0).abs() > band + 0.06).then(|| format!("{t:.1} s at {h:.2} m in {h0:.2} m"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "matched at another height: {wrong:?}");
+}
+
+/// Nor does a pose of that take-off claim to be better than it is: the ride
+/// coasts on the matched velocity's noise and each band's leaning walls
+/// move the match, and the sigma grows with both, keeping the error within
+/// two sigma.
+#[test]
+fn a_take_off_without_flow_reports_no_better_than_it_is() {
+    let poses = take_off_with(&mut LocalSlam::new(cfg()), Some(0.0), false, 0.5);
+    for (t, p) in &poses {
+        let err = p.x.hypot(p.y);
+        assert!(
+            err <= 2.0 * p.sigma_xy_m,
+            "at {t:.1} s the pose is {err:.3} m off and says {:.3} m",
+            p.sigma_xy_m
+        );
+    }
+}
+
+/// The pose says how far it can be trusted: matched on the floor it is good
+/// to 0.05 m; while the take-off's climb rides the motion prior its sigma
+/// only grows; matched in the hover's submap, which the prior placed, it
+/// keeps the sigma of that submap's start.
+#[test]
+fn sigma_grows_while_the_prior_rides_and_holds_in_the_submap_it_placed() {
+    let poses = take_off(&mut LocalSlam::new(cfg()), Some(0.0));
+    let floor: Vec<f64> = poses
+        .iter()
+        .filter(|(t, p)| *t < GROUND_S && p.score > 0.0)
+        .map(|(_, p)| p.sigma_xy_m)
+        .collect();
+    assert!(!floor.is_empty() && floor.iter().all(|&s| s == 0.05), "floor: {floor:?}");
+    let riding: Vec<f64> = poses
+        .iter()
+        .filter(|(_, p)| p.score == 0.0)
+        .map(|(_, p)| p.sigma_xy_m)
+        .collect();
+    assert!(riding.windows(2).all(|w| w[1] >= w[0]), "monotone while riding: {riding:?}");
+    let placed = *riding.last().expect("a ridden scan");
+    assert!(placed > 0.05, "never grew: {riding:?}");
+    let hover: Vec<f64> = poses
+        .iter()
+        .filter(|(t, p)| *t > GROUND_S + CLIMB_S && p.score > 0.0)
+        .map(|(_, p)| p.sigma_xy_m)
+        .collect();
+    assert!(!hover.is_empty() && hover.iter().all(|&s| s == placed), "hover: {hover:?}");
 }

@@ -234,6 +234,7 @@ fn run(
             cov: nominal_cov(health),
             source: PoseSource::Lidar,
             health,
+            sigma_xy_m: Some(out.sigma_xy_m),
         });
         counters.queued_scans.fetch_sub(1, Ordering::Release);
         counters.scans_processed.fetch_add(1, Ordering::Release);

@@ -182,6 +182,7 @@ impl ActiveSession {
             limits: env.limits,
             encoding: env.encoding,
             active_marker: env.active_marker,
+            sink: None,
         })
         .map_err(|e| refuse(codes::RECORDER, e.to_string()))?;
         Ok(Self {

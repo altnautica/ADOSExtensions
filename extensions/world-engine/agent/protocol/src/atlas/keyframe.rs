@@ -399,4 +399,10 @@ pub struct PoseDescriptor {
     /// publishers and for other frames.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub north: Option<super::nav::MapNorth>,
+    /// The pose's horizontal one-sigma uncertainty, metres, as its
+    /// estimator reports it (a planar scan matcher's grows while it rides
+    /// its motion prior unmatched); absent from older publishers and from
+    /// estimators that report none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sigma_xy_m: Option<f64>,
 }

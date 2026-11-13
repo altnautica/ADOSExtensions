@@ -20,7 +20,7 @@
 use std::collections::HashSet;
 
 use crate::config::Scan2dConfig;
-use crate::frontend::{LocalMap, PoseOut};
+use crate::frontend::{LocalMap, PoseOut, SIGMA_MATCHED_M};
 use crate::graph::{solve, Edge};
 use crate::grid::Pyramid;
 use nalgebra::{Matrix2, Matrix3, SymmetricEigen};
@@ -283,6 +283,8 @@ pub fn optimize(map: &LocalMap, cfg: &Scan2dConfig) -> Trajectory {
                     pitch: nd.pitch,
                     score: nd.score,
                     degeneracy: nd.degeneracy,
+                    // Every node is in the optimised graph.
+                    sigma_xy_m: SIGMA_MATCHED_M,
                 }
             })
             .collect(),

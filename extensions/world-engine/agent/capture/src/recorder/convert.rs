@@ -228,6 +228,7 @@ mod tests {
             cov: crate::pose::diagonal_cov(0.1, 0.01),
             source: PoseSource::Vio,
             health: VioHealth::Degraded,
+            sigma_xy_m: None,
         };
         let (p, c) = pose(&e, 1_500_000_000);
         let pose = p.pose.unwrap();

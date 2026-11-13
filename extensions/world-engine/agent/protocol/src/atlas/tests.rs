@@ -272,6 +272,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,
         north: Some(MapNorth::Gnss),
+        sigma_xy_m: Some(0.4),
     };
     assert_eq!(
         pose_desc,

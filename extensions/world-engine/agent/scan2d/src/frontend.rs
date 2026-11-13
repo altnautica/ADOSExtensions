@@ -48,6 +48,14 @@ const BIAS_MAX_ROTATION_SIGMA_RAD: f64 = 0.1 * std::f64::consts::PI / 180.0;
 /// timing, which grow with the rate; at a bias's 0.1 degree/s they would
 /// swamp it.
 const BIAS_MAX_TURN_RATE: f64 = 20.0 * std::f64::consts::PI / 180.0;
+/// Horizontal one-sigma uncertainty of a matched pose, metres
+/// ([`PoseOut::sigma_xy_m`]).
+pub(crate) const SIGMA_MATCHED_M: f64 = 0.05;
+/// While scans ride the motion prior the uncertainty grows by this fraction
+/// of the distance the prior carries the pose.
+const SIGMA_GROWTH_PER_M: f64 = 0.5;
+/// The uncertainty stops growing here, metres.
+const SIGMA_MAX_M: f64 = 5.0;
 
 /// The translation directions the last match left unconstrained.
 #[derive(Debug, Clone, Copy)]
@@ -64,10 +72,14 @@ struct Unobserved {
 struct Climb {
     /// The height it began at, metres.
     from_m: f64,
-    /// Its scans are matched again: it has gone past
-    /// [`Scan2dConfig::max_unmatched_climb_m`] (a transit), or past
-    /// [`Scan2dConfig::max_unmatched_climb_s`] without a measured velocity.
+    /// Its scans are matched again in the submap of the height it began at:
+    /// it has gone past [`Scan2dConfig::max_unmatched_climb_m`] (a transit,
+    /// whose shaft walls draw the same outline at every height).
     transit: bool,
+    /// Its scans are matched again band by band, each height in a submap of
+    /// its own: it has ridden the prior for
+    /// [`Scan2dConfig::max_unmatched_climb_s`] without a measured velocity.
+    unmeasured: bool,
     /// The first and the last scan time it was climbing at.
     start_ns: u64,
     last_ns: u64,
@@ -75,8 +87,11 @@ struct Climb {
 
 /// The height of the scan plane, up, and its rate. The submap bands and
 /// the climb rule use only its changes; floor rejection
-/// ([`crate::scan::Motion::agl_m`]) reads it as the height above the
-/// take-off floor, which the flight controller's EKF height is.
+/// ([`crate::scan::Motion::agl_m`]) reads it as the height above the floor.
+/// The capture service feeds the flight controller's EKF height, whose
+/// origin is near the take-off floor and which leaves out the LiDAR's mount
+/// height: the floor margin is then larger by that height, which drops low
+/// returns from matching, never adds a false wall.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeightSample {
     /// Nanoseconds, the same clock as the scans.
@@ -105,6 +120,15 @@ pub struct PoseOut {
     /// Translation `eig_min / eig_max` of the scan's point-to-feature
     /// constraints ([`crate::matcher::degeneracy`]); small in corridors.
     pub degeneracy: f64,
+    /// Horizontal one-sigma uncertainty, metres. While scans ride the motion
+    /// prior unmatched it grows by half the distance the prior carries the
+    /// pose (speed times interval), and while a climb without a measured
+    /// velocity is matched band by band by half the height climbed; up to
+    /// 5.0. A matched scan is otherwise as good as the submap it matched in:
+    /// 0.05 in a submap started at a matched pose, the start pose's own
+    /// sigma in one the prior placed (the submap of a new height after a
+    /// climb), never less than 0.05.
+    pub sigma_xy_m: f64,
 }
 
 /// Everything local SLAM built, for the offline back end.
@@ -142,6 +166,8 @@ pub struct LocalSlam {
     height: Option<HeightSample>,
     /// The climb in progress ([`Self::skip_climbing`]).
     climb: Option<Climb>,
+    /// The last pose's [`PoseOut::sigma_xy_m`].
+    sigma_xy_m: f64,
 }
 
 impl LocalSlam {
@@ -172,6 +198,7 @@ impl LocalSlam {
             inserted: 0,
             height: None,
             climb: None,
+            sigma_xy_m: SIGMA_MATCHED_M,
         }
     }
 
@@ -259,8 +286,10 @@ impl LocalSlam {
     /// prior cannot hold the pose against, and its scans are matched until
     /// the climb has paused for [`CLIMB_END_NS`]. Without a measured
     /// velocity (`has_measured`) the prior cannot see a sideways drift, so
-    /// the climb is matched the same way once it has ridden the prior for
-    /// [`Scan2dConfig::max_unmatched_climb_s`]. A leg that climbs as it
+    /// once the climb has ridden the prior for
+    /// [`Scan2dConfig::max_unmatched_climb_s`] its scans are matched too,
+    /// band by band in submaps of their own height
+    /// ([`Self::leave_other_height`] still applies). A leg that climbs as it
     /// travels (terrain following) is matched throughout: over its length
     /// the prior drifts further than its slope shifts the outline.
     fn skip_climbing(&mut self, t: u64, speed_mps: f64, has_measured: bool) -> bool {
@@ -274,15 +303,16 @@ impl LocalSlam {
         let c = self.climb.get_or_insert(Climb {
             from_m: h.up_m,
             transit: false,
+            unmeasured: false,
             start_ns: t,
             last_ns: t,
         });
         c.last_ns = t;
+        c.transit |= (h.up_m - c.from_m).abs() > self.cfg.max_unmatched_climb_m;
         // Saturates: an infinite bound never ends the ride.
         let unmeasured_ns = (self.cfg.max_unmatched_climb_s * 1e9) as u64;
-        c.transit |= (h.up_m - c.from_m).abs() > self.cfg.max_unmatched_climb_m
-            || (!has_measured && t.saturating_sub(c.start_ns) > unmeasured_ns);
-        !c.transit
+        c.unmeasured |= !has_measured && t.saturating_sub(c.start_ns) > unmeasured_ns;
+        !(c.transit || c.unmeasured)
     }
 
     /// A measured ground velocity of the IMU frame (an optical-flow sensor
@@ -353,18 +383,36 @@ impl LocalSlam {
             pitch,
             score: 0.0,
             degeneracy: 0.0,
+            sigma_xy_m: SIGMA_MATCHED_M,
         };
+        // Riding the prior: it carried the pose `speed × dt` since the last
+        // scan without a match to check it.
+        let dt_s = self.last.map_or(0.0, |(t1, _, _)| t.saturating_sub(t1) as f64 * 1e-9);
+        let riding_sigma =
+            (self.sigma_xy_m + SIGMA_GROWTH_PER_M * prior_vel.norm() * dt_s).min(SIGMA_MAX_M);
         let has_measured = self
             .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
             .is_some();
         if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm(), has_measured)
         {
             self.advance(t, prior, heading);
+            self.sigma_xy_m = riding_sigma;
+            out.sigma_xy_m = riding_sigma;
             return out;
         }
+        // Matched through a climb it could not ride (no measured velocity),
+        // band by band: a wall that leans moves the outline with height, so
+        // the match may move with each metre climbed.
+        let climb_growth = match (self.climb, self.height) {
+            (Some(c), Some(h)) if c.unmeasured && !c.transit && self.climbing(t) => {
+                SIGMA_GROWTH_PER_M * h.up_rate_mps.abs() * dt_s
+            }
+            _ => 0.0,
+        };
+        let climbed_sigma = (self.sigma_xy_m + climb_growth).min(SIGMA_MAX_M);
         self.leave_other_height();
         if self.active.is_empty() {
-            self.start_submap(prior);
+            self.start_submap(prior, riding_sigma.max(climbed_sigma));
         }
         let (id, sm) = &self.active[0];
         let mut pose = prior;
@@ -424,9 +472,19 @@ impl LocalSlam {
             pose = sm.pose * in_submap;
             out.score = r.score;
             out.degeneracy = deg;
+            // Matched against the submap: as good as the submap's own pose,
+            // or, climbing, as the climb has made it.
+            out.sigma_xy_m = sm.anchor_sigma_m.max(SIGMA_MATCHED_M);
+            if climb_growth > 0.0 {
+                out.sigma_xy_m = out.sigma_xy_m.max(climbed_sigma);
+            }
+        } else {
+            // A new submap's first scan is placed by the prior, unchecked.
+            out.sigma_xy_m = riding_sigma.max(climbed_sigma);
         }
         let home = *id;
         (out.x, out.y, out.yaw) = (pose.x, pose.y, pose.th);
+        self.sigma_xy_m = out.sigma_xy_m;
         // A new submap takes its first scan whatever the motion filter says,
         // so the next scan has something to match against.
         let insert = self.should_insert(t, pose) || self.active[0].1.scans() == 0;
@@ -536,14 +594,14 @@ impl LocalSlam {
             _ => false,
         };
         if start {
-            self.start_submap(pose);
+            self.start_submap(pose, self.sigma_xy_m);
         }
     }
 
-    fn start_submap(&mut self, pose: Pose2) {
+    fn start_submap(&mut self, pose: Pose2, sigma_m: f64) {
         let height = self.height.map(|h| h.up_m);
         self.active
-            .push((self.next_id, Submap::new(pose, height, &self.cfg)));
+            .push((self.next_id, Submap::new(pose, height, sigma_m, &self.cfg)));
         self.next_id += 1;
     }
 

@@ -25,6 +25,7 @@ fn estimate(x: f64, y: f64, yaw: f64) -> PoseEstimate {
         cov: [0.0; 36],
         source: PoseSource::Lidar,
         health: VioHealth::Good,
+        sigma_xy_m: None,
     }
 }
 
@@ -92,6 +93,21 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
         )
         .unwrap();
     assert_eq!(up.pose.t[2], -2.5, "climbing 2.5 m is FRD z -2.5");
+}
+
+/// The estimator's horizontal uncertainty rides on the published pose, and
+/// an estimator that reports none publishes none.
+#[test]
+fn the_pose_carries_the_estimators_horizontal_sigma() {
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let mut e = at(estimate(0.0, 0.0, 0.0), 0);
+    e.sigma_xy_m = Some(0.65);
+    let pd = nav.on_pose(&e, Some(0.0), Some(0.0), 0, 0, false).unwrap();
+    assert_eq!(pd.sigma_xy_m, Some(0.65));
+    let pd = nav
+        .on_pose(&at(estimate(0.0, 0.0, 0.0), 1_000), Some(0.0), Some(0.0), 1_000, 0, false)
+        .unwrap();
+    assert_eq!(pd.sigma_xy_m, None);
 }
 
 /// The descriptor carries the time the pose describes, not the time it is

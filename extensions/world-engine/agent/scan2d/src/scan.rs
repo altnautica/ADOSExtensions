@@ -23,9 +23,12 @@ pub struct Motion {
     pub yaw_rate: f64,
     /// Velocity in the levelled LiDAR frame at `t_ns`, m/s.
     pub velocity: [f64; 2],
-    /// Height of the scan plane above the take-off floor, metres, when known.
-    /// A tilted scan's beams that reach the floor (or the configured
-    /// ceiling) are dropped by their levelled height.
+    /// Height above the floor, metres, when known: the
+    /// [`crate::HeightSample::up_m`] fed, which from the capture service is
+    /// the flight controller's EKF height (origin near the take-off floor,
+    /// without the LiDAR's mount height). A tilted scan's beams that reach
+    /// the floor (or the configured ceiling) are dropped by their levelled
+    /// height.
     pub agl_m: Option<f64>,
 }
 

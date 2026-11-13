@@ -14,16 +14,25 @@ pub struct Submap {
     /// The scan plane's height when the submap started
     /// ([`crate::LocalSlam::feed_height`]); `None` with no height fed.
     pub height_m: Option<f64>,
+    /// Horizontal one-sigma uncertainty of [`Self::pose`], metres: a scan
+    /// matched into the submap is placed no better than the submap is.
+    pub(crate) anchor_sigma_m: f64,
     pub(crate) grid: Grid,
     /// Sensor positions of the inserted scans, submap frame.
     stations: Vec<[f64; 2]>,
 }
 
 impl Submap {
-    pub(crate) fn new(pose: Pose2, height_m: Option<f64>, cfg: &Scan2dConfig) -> Submap {
+    pub(crate) fn new(
+        pose: Pose2,
+        height_m: Option<f64>,
+        anchor_sigma_m: f64,
+        cfg: &Scan2dConfig,
+    ) -> Submap {
         Submap {
             pose,
             height_m,
+            anchor_sigma_m,
             grid: Grid::new(cfg),
             stations: Vec::new(),
         }

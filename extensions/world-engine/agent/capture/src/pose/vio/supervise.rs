@@ -63,6 +63,7 @@ pub fn to_estimate(st: &ChildState, t_imu_body: &[f64; 16], health: VioHealth) -
         cov: st.cov.unwrap_or_else(|| nominal_cov(health)),
         source: PoseSource::Vio,
         health,
+        sigma_xy_m: None,
     }
 }
 

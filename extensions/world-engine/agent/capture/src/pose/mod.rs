@@ -64,6 +64,10 @@ pub struct PoseEstimate {
     pub cov: [f64; POSE_COV_LEN],
     pub source: PoseSource,
     pub health: VioHealth,
+    /// The estimator's own horizontal one-sigma uncertainty, metres, where
+    /// it reports one (the planar scan matcher: it grows while the matcher
+    /// rides its motion prior). Published as the pose's `sigma_xy_m`.
+    pub sigma_xy_m: Option<f64>,
 }
 
 /// Producer-side quality signals the HUD shows beside the pose.
@@ -225,6 +229,10 @@ pub fn interpolate(poses: &VecDeque<PoseEstimate>, t_ns: u64) -> Option<PoseEsti
         cov,
         source: b.source,
         health: worse(a.health, b.health),
+        sigma_xy_m: match (a.sigma_xy_m, b.sigma_xy_m) {
+            (Some(x), Some(y)) => Some(x.max(y)),
+            (x, y) => x.or(y),
+        },
     })
 }
 

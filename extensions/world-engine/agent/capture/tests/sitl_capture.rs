@@ -175,6 +175,7 @@ async fn a_two_camera_sim_session_records_and_validates() {
             cov: diagonal_cov(0.05, 0.01),
             source: PoseSource::Replay,
             health: VioHealth::Good,
+            sigma_xy_m: None,
         })
         .collect();
     let sensors = Arc::new(Mutex::new(SensorState::default()));

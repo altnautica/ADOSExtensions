@@ -37,24 +37,33 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,
         north: Some(MapNorth::Declared),
+        sigma_xy_m: Some(0.35),
     };
     let v = serde_json::to_value(&pd).unwrap();
     assert_eq!(v["health"], "good");
     assert_eq!(v["frame"], "map_ned");
     assert_eq!(v["source"], "lidar_planar");
     assert_eq!(v["north"], "declared");
+    assert_eq!(v["sigma_xy_m"], 0.35);
     assert_eq!(v["pose"]["R"][0], 1.0);
     assert_eq!(
         PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(),
         pd
     );
-    // An older publisher sends no north; it reads as unknown.
+    // An older publisher sends no north and no sigma; they read as unknown.
     let mut old = v.clone();
     old.as_object_mut().unwrap().remove("north");
+    old.as_object_mut().unwrap().remove("sigma_xy_m");
     let parsed: PoseDescriptor = serde_json::from_value(old).unwrap();
     assert_eq!(parsed.north, None);
-    let none = PoseDescriptor { north: None, ..pd };
-    assert!(serde_json::to_value(&none).unwrap().get("north").is_none());
+    assert_eq!(parsed.sigma_xy_m, None);
+    let none = PoseDescriptor {
+        north: None,
+        sigma_xy_m: None,
+        ..pd
+    };
+    let v = serde_json::to_value(&none).unwrap();
+    assert!(v.get("north").is_none() && v.get("sigma_xy_m").is_none());
 }
 
 #[test]

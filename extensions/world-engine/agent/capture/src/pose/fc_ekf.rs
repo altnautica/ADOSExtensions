@@ -332,6 +332,7 @@ fn pair_estimate(g: &mut FeedInner, p: &LocalPositionNed) -> Option<PoseEstimate
         cov: g.cov.unwrap_or_else(|| super::diagonal_cov(1.0, 0.05)),
         source: PoseSource::FcEkf,
         health: VioHealth::Good,
+        sigma_xy_m: None,
     })
 }
 

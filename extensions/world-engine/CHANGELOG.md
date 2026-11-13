@@ -437,11 +437,23 @@ Ships after 2.2.0, which takes the [Unreleased] section below.
   2.2.0.
 - **A climb or descent without a measured ground velocity rides the motion
   prior for at most 2 s** (`max_unmatched_climb_s`), then its scans are
-  matched again until it ends. Before, a mostly vertical climb rode the
-  prior for its first 3 m whatever its speed: a slow descent drifting in the
-  wind took 10 s to cover them, and the prior, which cannot see the drift,
-  held the pose still while the vehicle moved. With an optical-flow velocity
-  the climb rides the measured velocity as before. 2.2.0.
+  matched again, band by band in submaps of their own height, until it ends.
+  Before, a mostly vertical climb rode the prior for its first 3 m whatever
+  its speed: a slow descent drifting in the wind took 10 s to cover them,
+  and the prior, which cannot see the drift, held the pose still while the
+  vehicle moved. With an optical-flow velocity the climb rides the measured
+  velocity as before. 2.2.0.
+- **The navigation pose carries its horizontal uncertainty**
+  (`sigma_xy_m`, metres). While the planar scan matcher's scans ride the
+  motion prior unmatched (a climb, too few points) the σ grows by half the
+  distance the prior carries the pose, and while a climb without a measured
+  velocity is matched band by band it grows by half the height climbed (a
+  leaning wall moves the outline with height); up to 5 m. A matched scan is
+  otherwise as good as the submap it matched in: 0.05 m in one started at a
+  matched pose, the start pose's σ in one the prior placed (the submap of a
+  new height after a climb). Before, a pose held on the prior alone through
+  a climb read as good to 5 cm to the flight controller. Estimators that
+  report no σ publish none. 2.2.0.
 
 ## [2.0.0]
 

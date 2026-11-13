@@ -402,6 +402,7 @@ impl NavMap {
             frame: NavFrame::MapNed,
             source: nav_source(e.source),
             north: self.north(),
+            sigma_xy_m: e.sigma_xy_m,
         })
     }
 

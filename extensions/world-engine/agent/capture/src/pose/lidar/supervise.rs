@@ -129,6 +129,7 @@ pub fn apply_line(track: &PoseTrack, t_body_lidar: &[f64; 16], seen: u32, line: 
         cov: nominal_cov(health),
         source: PoseSource::Lidar,
         health,
+        sigma_xy_m: None,
     });
     true
 }

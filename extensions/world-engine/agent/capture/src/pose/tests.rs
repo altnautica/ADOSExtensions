@@ -14,6 +14,7 @@ fn est(t_ns: u64, yaw: f64, x: f64) -> PoseEstimate {
         cov: diagonal_cov(0.1, 0.01),
         source: PoseSource::Vio,
         health: VioHealth::Good,
+        sigma_xy_m: None,
     }
 }
 
@@ -53,10 +54,12 @@ fn health_and_covariance_take_the_worse_side() {
     let mut b = est(2_000, 0.0, 1.0);
     b.health = VioHealth::Degraded;
     b.cov = diagonal_cov(0.5, 0.01);
+    b.sigma_xy_m = Some(0.4);
     let p = ReplayPose::new(vec![est(1_000, 0.0, 0.0), b]);
     let m = p.pose_at(1_500).unwrap();
     assert_eq!(m.health, VioHealth::Degraded);
     assert!((m.cov[0] - 0.25).abs() < 1e-12);
+    assert_eq!(m.sigma_xy_m, Some(0.4));
 }
 
 #[test]

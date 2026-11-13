@@ -344,6 +344,7 @@ fn health_and_frames_follow_the_matcher() {
         pitch: 0.0,
         score: 0.7,
         degeneracy: 0.3,
+        sigma_xy_m: 0.05,
     };
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS - 1, 0.05), VioHealth::Lost);
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS, 0.05), VioHealth::Good);

@@ -147,6 +147,7 @@ fn every_channel_is_recorded_and_segments_roll() {
                 cov: diagonal_cov(0.1, 0.01),
                 source: PoseSource::Vio,
                 health: VioHealth::Good,
+                sigma_xy_m: None,
             },
             t,
         );
