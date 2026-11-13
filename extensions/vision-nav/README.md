@@ -133,12 +133,16 @@ is a new boot), is disarmed, and GPS is not primary.
   follows the flight controller's heading (it waits for a pose to tell),
   a fallback set that is not
   GPS (`POSXY 3`, with `gps_primary`) or optical flow (`VELXY 5`,
-  without), or `COMPASS_AUTODEC` on with `EK3_MAG_EF_LIM` 0 (the compass
+  without), flow velocity in either set with `FLOW_TYPE` 0, or
+  `COMPASS_AUTODEC` on with `EK3_MAG_EF_LIM` 0 (the compass
   library's declination update, made when the EKF first has a position,
-  would then step the EKF yaw).
+  would then step the EKF yaw). With a flow sensor configured and the
+  external-nav set's `VELXY` not 5, it passes with a note recommending
+  flow velocity: SLAM-only velocity stays a valid choice on dark floors.
 - `viso_delay`: waits while `VISO_DELAY_MS` is more than 50 ms from the
   median age of a pose when its `ODOMETRY` is sent (telemetry
-  `navigation.poseAgeMs`).
+  `navigation.poseAgeMs`), and while poses are older than the 250 ms
+  EKF3 can place in time, which no `VISO_DELAY_MS` covers.
 
 ## Obstacle feed
 

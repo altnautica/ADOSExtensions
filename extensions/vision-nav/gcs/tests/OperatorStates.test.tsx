@@ -521,4 +521,11 @@ describe("ArduPilot parameter card", () => {
     expect(card).toContain("External navigation");
     expect(card).toContain("Obstacle feed");
   });
+
+  it("does not require one rangefinder backend: it depends on how the rangefinder is wired", () => {
+    const manifest = readFileSync(MANIFEST, "utf8");
+    const entry = manifest.split(/- param: "RNGFND1_TYPE"\n/)[1]!.split(/\n    - param:/)[0]!;
+    expect(entry).not.toMatch(/^\s*value:/m);
+    expect(entry).toContain("10");
+  });
 });

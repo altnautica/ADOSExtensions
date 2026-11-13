@@ -283,17 +283,16 @@ fn fc_params_external_nav_set_fuses_the_flow_sensor() {
     assert_eq!(
         check(&ignored, "fc_params"),
         (
-            Severity::Pending,
+            Severity::Ok,
             "FLOW_TYPE is 5 but EK3_SRC1_VELXY is 0: the external-nav set ignores the \
-             optical-flow sensor; set EK3_SRC1_VELXY 5 so the EKF takes its velocity from the \
-             flow between poses."
+             optical-flow sensor. SLAM-only velocity is allowed; EK3_SRC1_VELXY 5 lets the EKF \
+             take its velocity from the flow between poses."
         )
     );
-    assert!(!ignored.armable);
-    // No flow sensor: position only passes, flow velocity blocks.
-    let mut no_sensor = with_param("EK3_SRC1_VELXY", 0.0);
-    no_sensor.params.insert("FLOW_TYPE".into(), 0.0);
-    assert_eq!(check(&eval(no_sensor), "fc_params"), (Severity::Ok, ""));
+    assert!(
+        ignored.armable,
+        "SLAM-only is the operator's choice: a warning, not a hold"
+    );
     assert_eq!(
         check(&eval(with_param("FLOW_TYPE", 0.0)), "fc_params"),
         (
@@ -302,6 +301,24 @@ fn fc_params_external_nav_set_fuses_the_flow_sensor() {
              velocity; set FLOW_TYPE for the flow sensor, or EK3_SRC1_VELXY 0."
         )
     );
+}
+
+/// GNSS-denied, the fallback set flies on flow velocity: it needs a flow
+/// sensor configured.
+#[test]
+fn fc_params_fallback_flow_velocity_needs_a_flow_sensor() {
+    let mut no_sensor = with_param("EK3_SRC1_VELXY", 0.0);
+    no_sensor.params.insert("FLOW_TYPE".into(), 0.0);
+    let r = eval(no_sensor);
+    assert_eq!(
+        check(&r, "fc_params"),
+        (
+            Severity::Blocking,
+            "EK3_SRC2_VELXY is 5 (optical flow) but FLOW_TYPE is 0: the fallback set would get \
+             no velocity; set FLOW_TYPE for the flow sensor."
+        )
+    );
+    assert!(!r.armable);
 }
 
 #[test]
@@ -366,8 +383,8 @@ fn viso_delay_flags_poses_older_than_the_ekf_window() {
         (
             Severity::Pending,
             "Poses are 452 ms old when sent, older than the 250 ms the flight controller's EKF \
-             can place in time: it fuses them late and the vehicle sways. Cut the companion's \
-             load or LiDAR processing time; set VISO_DELAY_MS to 250 meanwhile."
+             can place in time: it fuses them late and the vehicle sways. VISO_DELAY_MS cannot \
+             cover the difference; cut the companion's load or LiDAR processing time."
         )
     );
     let mut at_cap = with_param("VISO_DELAY_MS", 250.0);

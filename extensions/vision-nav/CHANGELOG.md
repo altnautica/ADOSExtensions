@@ -2,7 +2,9 @@
 
 All notable changes to the Vision Navigation extension.
 
-## [Unreleased]
+## [0.8.1] - Unreleased
+
+Ships after 0.8.0, which takes the [Unreleased] section.
 
 ### Changed
 
@@ -16,17 +18,21 @@ All notable changes to the Vision Navigation extension.
   `VISO_DELAY_MS` manifest note and the module docs now describe it as the
   typical age at arrival, not the least.
 - External navigation fuses the optical-flow sensor. With `FLOW_TYPE` set,
-  the `fc_params` pre-arm row asks for flow velocity in the external-nav
-  source set (`EK3_SRC1_VELXY 5`, pending until it is), and blocks flow
-  velocity without a flow sensor. EKF3 fuses flow beside the external
-  position in one set; the flow velocity is measured rather than
-  differenced from late poses, so the EKF holds velocity between poses. In
-  a SITL loop with poses as late as a loaded companion sends them (about
-  5 Hz, 150 to 900 ms old), flow velocity cut the velocity tracking error
-  from 0.84 to 0.50 m/s RMS and the worst cross-track from 2.7 to 1.2 m.
-  `FLOW_TYPE` is read with the other parameters, the manifest asks for
-  `RNGFND1_TYPE 10` (the EKF scales flow by the height above the ground)
-  and `EK3_SRC1_VELXY 5`, and the parameter card lists the rangefinder.
+  the `fc_params` pre-arm row recommends flow velocity in the external-nav
+  source set (`EK3_SRC1_VELXY 5`) without holding the arm: SLAM-only
+  velocity stays a valid choice where the floor is too dark for flow. Flow
+  velocity without a flow sensor blocks, and so does a GNSS-denied
+  fallback set on flow (`EK3_SRC2_VELXY 5`) with `FLOW_TYPE` 0. EKF3 fuses
+  flow beside the external position in one set; the flow velocity is
+  measured rather than differenced from late poses, so the EKF holds
+  velocity between poses. In a SITL loop with poses as late as a loaded
+  companion sends them (about 5 Hz, 150 to 900 ms old), flow velocity cut
+  the velocity tracking error from 0.84 to 0.50 m/s RMS and the worst
+  cross-track from 2.7 to 1.2 m. `FLOW_TYPE` is read with the other
+  parameters, the manifest asks for `EK3_SRC1_VELXY 5` and a downward
+  rangefinder (`RNGFND1_TYPE` 10 for a MAVLink flow-and-range module,
+  otherwise the flight controller's own rangefinder type), and the
+  parameter card lists the rangefinder.
 
 ## [0.7.5]
 

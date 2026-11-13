@@ -297,6 +297,15 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
             ),
         );
     }
+    if !i.gps_primary && flow == 0 {
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{f}_VELXY is 5 (optical flow) but FLOW_TYPE is 0: the fallback set \
+                 would get no velocity; set FLOW_TYPE for the flow sensor."
+            ),
+        );
+    }
     // With COMPASS_AUTODEC on, the compass library sets its declination the
     // first time the EKF has a position, after the yaw alignment. EKF3 takes
     // the declination from its own table at the origin instead while
@@ -311,14 +320,15 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
     }
     // Flow velocity is measured, not differenced from late poses: with it
     // in the external-nav set the EKF holds velocity between poses, and a
-    // late pose moves the position less.
+    // late pose moves the position less. SLAM-only velocity stays the
+    // operator's choice (a dark floor starves the flow), so this warns.
     if flow != 0 && velxy != 5 {
-        return PreArmCheck::pending(
+        return PreArmCheck::ok(
             ID,
             format!(
                 "FLOW_TYPE is {flow} but EK3_SRC{e}_VELXY is {velxy}: the external-nav set \
-                 ignores the optical-flow sensor; set EK3_SRC{e}_VELXY 5 so the EKF takes its \
-                 velocity from the flow between poses."
+                 ignores the optical-flow sensor. SLAM-only velocity is allowed; \
+                 EK3_SRC{e}_VELXY 5 lets the EKF take its velocity from the flow between poses."
             ),
         );
     }
@@ -334,8 +344,8 @@ fn viso_delay_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
             format!(
                 "Poses are {m} ms old when sent, older than the {cap} ms the flight \
                  controller's EKF can place in time: it fuses them late and the vehicle \
-                 sways. Cut the companion's load or LiDAR processing time; set \
-                 VISO_DELAY_MS to {cap} meanwhile."
+                 sways. VISO_DELAY_MS cannot cover the difference; cut the companion's load \
+                 or LiDAR processing time."
             ),
         );
     }
