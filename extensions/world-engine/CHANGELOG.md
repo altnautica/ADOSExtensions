@@ -138,6 +138,15 @@ All notable changes to the World Engine extension.
 
 ### Fixed
 
+- **TSDF meshing no longer aborts on newer GPUs.** Fusion shared a process
+  with the splat renderer, and Open3D's cached CUDA allocator aborted the
+  mesh stage ("Block ... should have been recorded") at the first fused
+  view. The splat's rendered depth now goes to a depth set
+  (`mesh/depthset-splat/`), and `fuse.py` fuses it in its own process, on
+  the GPU when there is one (an out-of-memory grid retries coarser on the
+  GPU), writing `mesh.ply`, `mesh.glb`, `dense.ply` and `dense.laz`. The
+  stage detail lists `device`, `voxel_m`, `attempt` and `views_capped` at
+  its top level.
 - **A planar LiDAR session's cloud is registered and coloured.** A planar
   LiDAR records its compact polar stream (`lidar/<id>.polar.zst`) instead of
   Cartesian point clouds, and `prepare` read only the latter, so a drone
