@@ -7,9 +7,15 @@
  * iframe does NOT re-implement them. The tab renders only what a native
  * control can't: the static plugin facts and the honest live read-back the
  * agent publishes (phase, lock state, commanding flag, range with its
- * uncertainty and cues, height source, re-acquire state, latency). The
- * re-acquire mode itself is a native parameter (rendered as a Strict | Smart
- * toggle); the tab shows the mode in effect.
+ * uncertainty and cues, height source, the search for a lost subject,
+ * latency). The re-acquire mode itself is a native parameter (rendered as a
+ * Strict | Smart toggle); the tab shows the mode in effect.
+ *
+ * While the follow holds for the operator after a loss, the tab asks what to
+ * do and offers the actions: resume the search (writes the next
+ * `operator_resume_seq`), return home, land, or stop following. Each goes
+ * through `ctx.command.send`, so the host asks the operator to confirm the
+ * vehicle commands. Re-designating is the cockpit's click-a-subject flow.
  *
  * Before the first report, and once the latest report is FOLLOW_STALE_MS
  * old, every live value reads as a dash under a status line that says why
@@ -35,6 +41,7 @@ import {
 } from "./style";
 import {
   DEFAULT_CONFIG,
+  RECOVERY_PHASES,
   holdReasonLabelKey,
   isStaleHold,
   modeSummary,
@@ -45,6 +52,9 @@ import {
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
 const DASH = "—";
+
+/** The host command that writes this plugin's own per-drone config. */
+const CONFIG_WRITE = "plugin.config.write";
 
 export interface FollowMeTabProps {
   ctx: PluginContext;
@@ -124,12 +134,99 @@ export function FollowMeTab({
 
       <SpecsSection t={t} config={config} cameraNames={cameraNames} />
 
+      {!stale && reading.state?.phase === "holding-await-operator" ? (
+        <AwaitPrompt t={t} ctx={ctx} follow={reading.state} />
+      ) : null}
+
       <MetricsSection
         t={t}
         follow={stale ? null : reading.state}
         status={status}
       />
     </div>
+  );
+}
+
+/** The hold-for-the-operator prompt: why the follow stopped, and what the
+ * operator can do about it. Nothing is sent until a button is pressed. */
+function AwaitPrompt({
+  t,
+  ctx,
+  follow,
+}: {
+  t: Translate;
+  ctx: PluginContext;
+  follow: FollowState;
+}): JSX.Element {
+  const [error, setError] = useState<string | null>(null);
+  const send = (command: string, args: unknown): void => {
+    setError(null);
+    ctx.command.send(command, args).catch((e: unknown) => {
+      setError(t("prompt.notSent", { reason: e instanceof Error ? e.message : String(e) }));
+    });
+  };
+  const reason = follow.holdReason ?? "awaiting-operator";
+  // With no prediction left there is nothing to resume from.
+  const canResume = reason !== "no-range";
+  const button: CSSProperties = {
+    font: "inherit",
+    fontSize: "0.8rem",
+    padding: "0.3rem 0.6rem",
+    borderRadius: "0.35rem",
+    border: "1px solid var(--fm-border, rgba(255,255,255,0.15))",
+    background: "var(--fm-surface, rgba(255,255,255,0.06))",
+    color: "inherit",
+    cursor: "pointer",
+  };
+  return (
+    <section
+      style={{ ...card, borderColor: "var(--fm-error, #ef4444)" }}
+      data-testid="fm-prompt"
+      role="alert"
+    >
+      <h3 style={{ ...sectionTitle, color: "var(--fm-error, #ef4444)" }} data-testid="fm-prompt-title">
+        {t("prompt.title")}
+      </h3>
+      <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem" }} data-testid="fm-prompt-body">
+        {t(`prompt.body.${reason}`)}
+      </p>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem" }}>
+        {canResume ? (
+          <button
+            type="button"
+            style={button}
+            data-testid="fm-prompt-resume"
+            onClick={() =>
+              send(CONFIG_WRITE, { key: "operator_resume_seq", value: follow.operatorResumeSeq + 1 })
+            }
+          >
+            {t("prompt.action.resume")}
+          </button>
+        ) : null}
+        <button type="button" style={button} data-testid="fm-prompt-rth" onClick={() => send("rtl", {})}>
+          {t("prompt.action.rth")}
+        </button>
+        <button type="button" style={button} data-testid="fm-prompt-land" onClick={() => send("land", {})}>
+          {t("prompt.action.land")}
+        </button>
+        <button
+          type="button"
+          style={button}
+          data-testid="fm-prompt-stop"
+          onClick={() => send(CONFIG_WRITE, { key: "active", value: false })}
+        >
+          {t("prompt.action.stop")}
+        </button>
+      </div>
+      <p style={{ margin: "0.5rem 0 0", fontSize: "0.7rem", ...mutedLabel }} data-testid="fm-prompt-redesignate">
+        {t("prompt.action.redesignate")}
+      </p>
+      {error ? (
+        <p style={{ margin: "0.4rem 0 0", fontSize: "0.75rem", color: "var(--fm-error, #ef4444)" }} data-testid="fm-prompt-error">
+          {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -162,6 +259,16 @@ function SpecsSection({
       <SpecRow
         label={t("settings.reacquireMode")}
         value={t(`reacquire.${config.reacquire_mode}`)}
+      />
+      <SpecRow
+        label={t("settings.uncertainMode")}
+        value={t(`uncertain_mode.${config.uncertain_mode}`)}
+        testId="fm-uncertain-mode"
+      />
+      <SpecRow
+        label={t("settings.predictiveSearch")}
+        value={config.predictive_search ? t("specs.on") : t("specs.off")}
+        testId="fm-predictive-search"
       />
       <SpecRow label={t("specs.fcMode")} value={t("specs.fcModeValue")} />
       <SpecRow label={t("specs.resource")} value={t("specs.resourceValue")} />
@@ -215,11 +322,35 @@ function MetricsSection({
         value={f ? t(`reacquire.${f.reacquireMode}`) : DASH}
         testId="fm-reacquire-mode"
       />
-      {f && (f.phase === "coasting" || f.phase === "searching") ? (
+      {f && RECOVERY_PHASES.includes(f.phase) ? (
         <MetricRow
-          label={t("metrics.coastRemaining")}
-          value={t("unit.s", { value: f.coastRemainingS.toFixed(1) })}
-          testId="fm-coast-remaining"
+          label={t("metrics.searchRemaining")}
+          value={t("unit.secondsOf", {
+            value: f.reacquireRemainingS.toFixed(1),
+            total: Math.round(f.searchBudgetS),
+          })}
+          testId="fm-search-remaining"
+        />
+      ) : null}
+      {f?.phase === "searching" && f.searchStep != null ? (
+        <MetricRow
+          label={t("metrics.searchStep")}
+          value={String(f.searchStep + 1)}
+          testId="fm-search-step"
+        />
+      ) : null}
+      {f && RECOVERY_PHASES.includes(f.phase) && f.vantageState ? (
+        <MetricRow
+          label={t("metrics.vantage")}
+          value={t(`vantage.${f.vantageState}`)}
+          testId="fm-vantage"
+        />
+      ) : null}
+      {f && RECOVERY_PHASES.includes(f.phase) && f.occluder ? (
+        <MetricRow
+          label={t("metrics.occluder")}
+          value={t(`occluder.${f.occluder.kind}`)}
+          testId="fm-occluder"
         />
       ) : null}
       <div style={labelRow}>

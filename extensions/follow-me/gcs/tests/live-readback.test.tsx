@@ -382,7 +382,7 @@ describe("words through the locale", () => {
       "unit.mps",
       "unit.ms",
       "unit.hz",
-      "unit.s",
+      "unit.secondsOf",
       "unit.dps",
       "unit.deg",
       "unit.rangeSigma",
@@ -397,6 +397,13 @@ describe("tone and style", () => {
   it("draws holding as a warning and acquiring in the track tone", () => {
     expect(phaseColor("holding")).toContain("--hud-warn");
     expect(phaseColor("acquiring")).toContain("--hud-track");
+  });
+
+  it("draws the search in the coast tone and the wait for the operator as critical", () => {
+    for (const phase of ["predicting", "repositioning", "searching"] as const) {
+      expect(phaseColor(phase), phase).toContain("--hud-coast");
+    }
+    expect(phaseColor("holding-await-operator")).toContain("--fm-error");
   });
 
   it("uses the host UI font and muted labels on every row", () => {

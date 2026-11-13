@@ -150,3 +150,32 @@ describe("manifest config defaults", () => {
     expect(manifestParamDefault(readFileSync(manifestPath, "utf8"), "follow_distance_m")).toBe("6");
   });
 });
+
+describe("manifest 0.5 release", () => {
+  const text = readFileSync(manifestPath, "utf8");
+  const keys = [...text.matchAll(/^\s+- key: (\S+)$/gm)].map((m) => m[1]);
+
+  it("declares the 0.5 recovery settings and no reacquire window", () => {
+    expect(keys).toEqual(
+      expect.arrayContaining([
+        "uncertain_mode",
+        "predictive_search",
+        "search_budget_s",
+        "search_radius_m",
+        "search_speed_mps",
+      ]),
+    );
+    expect(keys).not.toContain("reacquire_window_s");
+    expect(/^version: "([^"]+)"/m.exec(text)?.[1]).toBe("0.5.0");
+  });
+
+  it("needs the agent with the pilot's vantage goal", () => {
+    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.110.0");
+  });
+
+  it("may send commands, for the hold prompt's actions", () => {
+    const gcs = text.slice(text.indexOf("\ngcs:"));
+    const perms = gcs.slice(0, gcs.indexOf("contributes:"));
+    expect(perms).toContain("- id: command.send");
+  });
+});

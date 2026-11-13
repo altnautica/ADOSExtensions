@@ -35,10 +35,11 @@ export function phaseColor(phase: FollowPhase): string {
   switch (phase) {
     case "following":
       return "var(--hud-track, #FF5A1F)";
-    case "coasting":
+    case "predicting":
+    case "repositioning":
     case "searching":
       return "var(--hud-coast, #f59e0b)";
-    case "lost":
+    case "holding-await-operator":
       return "var(--fm-error, #ef4444)";
     case "holding":
       return "var(--hud-warn, #f59e0b)";

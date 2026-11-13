@@ -14,6 +14,7 @@ import {
   normalizeFollowMode,
   normalizeOrbitDirection,
   normalizeReacquireMode,
+  normalizeUncertainMode,
   type FollowConfig,
 } from "./types";
 
@@ -35,11 +36,21 @@ export function normalizeConfig(raw: unknown): FollowConfig {
       r.reacquire_mode === undefined
         ? DEFAULT_CONFIG.reacquire_mode
         : normalizeReacquireMode(r.reacquire_mode),
-    reacquire_window_s: numberOr(r.reacquire_window_s, DEFAULT_CONFIG.reacquire_window_s),
     reacquire_min_similarity: numberOr(
       r.reacquire_min_similarity,
       DEFAULT_CONFIG.reacquire_min_similarity,
     ),
+    uncertain_mode:
+      r.uncertain_mode === undefined
+        ? DEFAULT_CONFIG.uncertain_mode
+        : normalizeUncertainMode(r.uncertain_mode),
+    predictive_search:
+      r.predictive_search === undefined
+        ? DEFAULT_CONFIG.predictive_search
+        : r.predictive_search === true,
+    search_budget_s: numberOr(r.search_budget_s, DEFAULT_CONFIG.search_budget_s),
+    search_radius_m: numberOr(r.search_radius_m, DEFAULT_CONFIG.search_radius_m),
+    search_speed_mps: numberOr(r.search_speed_mps, DEFAULT_CONFIG.search_speed_mps),
     max_speed_mps: numberOr(r.max_speed_mps, DEFAULT_CONFIG.max_speed_mps),
     follow_mode: normalizeFollowMode(r.follow_mode),
     follow_angle_deg: numberOr(r.follow_angle_deg, DEFAULT_CONFIG.follow_angle_deg),

@@ -190,19 +190,25 @@ and then holds for the operator like Strict.
   in the host's cockpit overlay and pick **Follow this target** (hotkey `f`)
   or **Stop following** (hotkey `x`).
 - **Native settings** (`contributes.parameters`): distance, height, gimbal
-  point, camera, field of view, mount pitch, the re-acquire mode (a
-  two-value enum that hosts render as a Strict | Smart toggle), the
-  re-acquire window and similarity, the speed cap and the detector model.
-  The field of view and mount pitch apply only where the camera roster does
-  not give them.
+  point, camera, field of view, mount pitch, the re-acquire mode (a two-value
+  enum that hosts render as a Strict | Smart toggle), the uncertain-lock
+  mode, predictive search, the search time, radius and speed, the re-acquire
+  similarity, the speed cap and the detector model. The field of view and
+  mount pitch apply only where the camera roster does not give them.
 - **Node-detail tab** (`node.detail.tab`, drone profile): Specs and a live
   read-back covering:
   - phase and lock;
   - range ± σ and the cues it came from;
   - height and its source;
   - subject speed;
-  - re-acquire mode and window;
+  - re-acquire mode and, while recovering, the search time left, the search
+    step, the vantage point and what hides the subject;
   - detection-to-goal latency and goal rate.
+
+  While the follow holds for the operator the tab shows why and offers
+  **Resume search** (writes `operator_resume_seq` + 1), **Return home**,
+  **Land** and **Stop following** through `command.send`; the host asks the
+  operator to confirm the vehicle commands.
 
 ## Events
 

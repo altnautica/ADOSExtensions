@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.4.9"
+version: "0.5.0"
 description: "Lock onto an operator-designated subject and follow it at a distance and an angle (behind, side or lead) or orbit it, flown by the agent's pilot with obstacle avoidance. A flight Skill in the cockpit skill picker, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a set
@@ -26,11 +26,17 @@ description_long: |
   which holds, and the skill switches off.
 
   A lock-state safety gate stops commanding when the tracker reports the
-  subject uncertain or lost. On a loss the re-acquire mode decides: Strict
-  holds and waits for the operator to designate again; Smart coasts on the
-  prediction for a few seconds and, if a person matching the subject's
-  appearance appears where the subject should be, designates it and
-  announces the re-acquire. The engine never re-locks silently.
+  subject uncertain or lost. On an unsure lock Smart keeps following the
+  prediction at reduced speed for up to 3 s (or holds, as set); Strict holds.
+  On a loss the re-acquire mode decides. Strict stops at a latched hover
+  point and waits for the operator. Smart predicts where the subject went,
+  asks the pilot for a vantage point that sees past the obstacles within a
+  set radius of the loss, and sweeps the camera from there, widening step by
+  step within a search time; a person who looks like the subject where the
+  subject should be is designated and the re-acquire announced. When the
+  search runs out the vehicle holds where it is and asks the operator to
+  resume the search, designate again, return home, land or stop. Neither the
+  engine nor the follow ever re-locks silently.
 
   Requires the agent's pilot (a multirotor, or a VTOL in hover). Works with
   a forward or downward camera; points a gimbal at the subject when one is
@@ -43,6 +49,8 @@ features:
   - "Terrain-following height from a downward rangefinder, barometric fallback"
   - "Range from the feet ray, the box height and an optional planar lidar, fused by uncertainty"
   - "Strict or Smart re-acquire after an occlusion, operator selectable"
+  - "Predictive search: the pilot repositions to a vantage point that sees past the obstacle, then the camera sweeps"
+  - "Holds for the operator when the search runs out: resume, designate again, return home, land or stop"
   - "Lock-state safety gate: stops commanding on uncertain or lost"
   - "Optional gimbal point-at-subject when a gimbal is present"
   - "Live read-back: phase, lock, range with uncertainty, height source, latency"
@@ -65,9 +73,9 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  # The pilot's motion lease, goals and stick feed (flight.motion) arrive in
-  # 0.109.0.
-  ados_version: ">=0.109.0"
+  # The pilot's vantage goal and its goal status (flight.goal.status) arrive
+  # in 0.110.0.
+  ados_version: ">=0.110.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 
@@ -83,7 +91,9 @@ agent:
     - id: vision.track.designate
     - id: mavlink.read
     - id: mavlink.write
-    # The pilot's motion lease: goals, the stick nudge feed and revocation.
+    # The pilot's motion lease: goals (follow, orbit, position, vantage), the
+    # stick nudge feed and revocation. It also covers the pilot's status on a
+    # vantage goal (flight.goal.status), forwarded to the lease holder only.
     - id: flight.motion
     - id: event.publish
     # The optional planar scan the world-engine extension shares
@@ -128,6 +138,10 @@ gcs:
   permissions:
     - id: ui.slot.flight-skill
     - id: ui.slot.node-detail-tab
+    # The tab's hold prompt: resume the search and stop following write this
+    # plugin's own config (plugin.config.write); return home and land are
+    # vehicle commands the host asks the operator to confirm.
+    - id: command.send
   contributes:
     skills:
       - id: follow-me
@@ -306,9 +320,6 @@ gcs:
           label: "settings.gimbalPoint"
           group: "settings.title"
           order: 30
-      # The follow camera's geometry for an agent that does not report it on
-      # the detection batches. The agent's camera roster wins when present;
-      # unset falls back to the built-in reference camera (87°, 15° down).
       - key: camera_hfov_deg
         binding: plugin.config
         schema:
@@ -316,12 +327,16 @@ gcs:
           minimum: 30
           maximum: 160
           step: 1
+          default: 70
         ui:
           widget: number
           label: "settings.cameraHfov"
           group: "settings.title"
           order: 40
-      # Downward tilt below the horizon; 90 is straight down.
+      # Fixed downward tilt of the designate camera below the horizon. A
+      # forward camera needs a positive tilt for the image-to-ground
+      # projection to intersect; 90 is straight down. The default is a modest
+      # forward-down angle so a fresh install can resolve a ground point.
       - key: mount_pitch_deg
         binding: plugin.config
         schema:
@@ -329,8 +344,9 @@ gcs:
           minimum: 0
           maximum: 90
           step: 1
+          default: 30
         ui:
-          widget: number
+          widget: range
           label: "settings.mountPitch"
           group: "settings.title"
           order: 42

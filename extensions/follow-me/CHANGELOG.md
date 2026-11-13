@@ -4,6 +4,54 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.5.0] - Unreleased
+
+Needs ADOS agent 0.110.0 or later, for the pilot's vantage goal and its
+goal status.
+
+### Changed
+
+- A lost subject is recovered instead of coasted on. In Smart mode the
+  follow predicts where the subject went (`predicting`), asks the pilot for a
+  vantage point that sees past the obstacle within `search_radius_m` of the
+  loss (`repositioning`), and sweeps the camera from there, widening step by
+  step (`searching`), all within `search_budget_s`. When the search runs out,
+  in Strict mode at once, and with predictive search off after the
+  prediction, the vehicle holds at a latched point and waits for the
+  operator (`holding-await-operator`). The `coasting` and `lost` phases are
+  gone.
+- The default standoff is 6 m (was 8), where a walking person is still tall
+  enough in the frame to detect.
+- An unsure lock keeps following the prediction at reduced speed in Smart
+  mode (`uncertain_mode` `follow`, the default) or holds (`hold`, and always
+  in Strict); an unsure spell longer than 3 s is handled as a loss.
+- The subject's appearance template only learns from a solid lock, and two
+  people inside the search gate who look alike are never re-locked.
+- `follow.reacquired` carries `mahalanobis` and the `phase` it happened in,
+  and is sent once per recovery. `follow.lost` carries the reason
+  (`lock_lost`, `search_exhausted` or `predictive_search_off`),
+  `awaiting_operator` and the hover point `hold_ne`.
+- The `follow.state` read-back replaces `coast_remaining_s` with
+  `reacquire_remaining_s`. The hold reason `lock-lost` is replaced by
+  `awaiting-operator`, `search-exhausted` and `predictive-search-off`.
+
+### Added
+
+- Settings `uncertain_mode`, `predictive_search` (turned back on at every
+  arm), `search_budget_s`, `search_radius_m` and `search_speed_mps`, and the
+  `operator_resume_seq` key a surface writes to resume a search.
+- `follow.state` fields `search_budget_s`, `search_step`, `search_area`,
+  `predicted_path_ne`, `vantage_ne`, `vantage_state`, `occluder`, `hold_ne`,
+  `uncertain_mode`, `predictive_search` and `operator_resume_seq`.
+- The follow tab shows the search (time left, step, vantage point, what hides
+  the subject) and, while the follow waits, a prompt to resume the search,
+  return home, land or stop following, or to click the subject to follow it
+  again.
+
+### Removed
+
+- The `reacquire_window_s` setting.
+
 ## [0.4.9] - 2026-11-14
 
 ### Added
@@ -44,7 +92,6 @@ uses independent semantic versioning per extension.
   mapped onto that clock, otherwise the mapped host stamp. A simulator
   frame whose host stamp is its late arrival is no longer projected through
   the attitude 0.1-0.3 s after its exposure.
-
 ## [0.4.8] - 2026-11-12
 
 ### Fixed

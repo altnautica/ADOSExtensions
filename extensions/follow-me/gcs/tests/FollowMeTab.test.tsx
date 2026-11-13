@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-import { createPluginHarness } from "@altnautica/plugin-sdk/harness";
+import { createPluginHarness, type PluginHarness } from "@altnautica/plugin-sdk/harness";
 
 import { FollowMeTab } from "../src/FollowMeTab";
 import enLocale from "../../locales/en.json";
@@ -38,14 +38,14 @@ const commandingFollow: FollowState = {
 };
 
 describe("FollowMeTab", () => {
-  it("shows the phase, the re-acquire mode, range with uncertainty and the coast window", () => {
+  it("shows the phase, the re-acquire mode, range with uncertainty and the search", () => {
     const h = harnessCtx();
     render(
       <FollowMeTab
         ctx={h.ctx}
         followOverride={{
           ...commandingFollow,
-          phase: "coasting",
+          phase: "searching",
           lockState: "lost",
           reacquireMode: "smart",
           rangeM: 10.2,
@@ -53,7 +53,11 @@ describe("FollowMeTab", () => {
           rangeCues: [{ kind: "ground", rangeM: 10.1, sigmaM: 0.7 }],
           aglM: 4.1,
           aglSource: "rng",
-          coastRemainingS: 2.5,
+          reacquireRemainingS: 18.4,
+          searchBudgetS: 25,
+          searchStep: 1,
+          vantageState: "arrived",
+          occluder: { ne: [11, -1], kind: "narrow" },
           pipelineLatencyMs: 85,
           setpointRateHz: 20,
           cameraHfovDeg: 120,
@@ -62,24 +66,113 @@ describe("FollowMeTab", () => {
         }}
       />,
     );
-    expect(screen.getByTestId("fm-phase").textContent).toBe("Coasting");
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Searching");
     expect(screen.getByTestId("fm-reacquire-mode").textContent).toBe("Smart");
     expect(screen.getByTestId("fm-range").textContent).toBe("10.2 ± 0.6 m");
     expect(screen.getByTestId("fm-range-cues").textContent).toBe("Ground");
     expect(screen.getByTestId("fm-agl").textContent).toBe("4.1 m · Rangefinder");
-    expect(screen.getByTestId("fm-coast-remaining").textContent).toBe("2.5 s");
+    expect(screen.getByTestId("fm-search-remaining").textContent).toBe("18.4 of 25 s");
+    expect(screen.getByTestId("fm-search-step").textContent).toBe("2");
+    expect(screen.getByTestId("fm-vantage").textContent).toBe("Arrived");
+    expect(screen.getByTestId("fm-occluder").textContent).toBe("A narrow obstacle (tree, column)");
     expect(screen.getByTestId("fm-latency").textContent).toBe("85 ms");
     expect(screen.getByTestId("fm-setpoint-rate").textContent).toBe("20.0 Hz");
     expect(screen.getByTestId("fm-camera-geometry").textContent).toBe(
       "120° · -90° · Settings",
     );
+    expect(screen.queryByTestId("fm-prompt")).toBeNull();
   });
 
-  it("hides the coast window outside a coast", () => {
+  it("shows the search budget while predicting and repositioning, without a step", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{ ...commandingFollow, phase: "repositioning", reacquireRemainingS: 21, searchBudgetS: 25, vantageState: "enroute" }}
+      />,
+    );
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Repositioning");
+    expect(screen.getByTestId("fm-search-remaining").textContent).toBe("21.0 of 25 s");
+    expect(screen.getByTestId("fm-vantage").textContent).toBe("On the way");
+    expect(screen.queryByTestId("fm-search-step")).toBeNull();
+    expect(screen.queryByTestId("fm-occluder")).toBeNull();
+  });
+
+  it("hides the search outside a recovery", () => {
     const h = harnessCtx();
     render(<FollowMeTab ctx={h.ctx} followOverride={commandingFollow} />);
     expect(screen.getByTestId("fm-phase").textContent).toBe("Following");
-    expect(screen.queryByTestId("fm-coast-remaining")).toBeNull();
+    expect(screen.queryByTestId("fm-search-remaining")).toBeNull();
+    expect(screen.queryByTestId("fm-vantage")).toBeNull();
+  });
+
+  const waiting: FollowState = {
+    ...EMPTY_FOLLOW_STATE,
+    active: true,
+    phase: "holding-await-operator",
+    lockState: "lost",
+    holdReason: "search-exhausted",
+    holdNe: [7.9, 2.4],
+    reacquireMode: "smart",
+    operatorResumeSeq: 2,
+    fcArmed: true,
+    fcGuided: true,
+  };
+
+  it("asks the operator what to do while waiting, with the reason", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={waiting} />);
+    expect(screen.getByTestId("fm-phase").textContent).toBe("Holding, waiting for you");
+    expect(screen.getByTestId("fm-prompt-title").textContent).toBe(
+      "Target lost: holding, waiting for instructions",
+    );
+    expect(screen.getByTestId("fm-prompt-body").textContent).toBe(
+      "The search ran out of time without finding the subject.",
+    );
+    expect(screen.getByTestId("fm-prompt-redesignate").textContent).toContain("click the subject");
+    for (const id of ["resume", "rth", "land", "stop"]) {
+      expect(screen.getByTestId(`fm-prompt-${id}`)).toBeTruthy();
+    }
+    // Showing the prompt sends nothing.
+    expect(h.calls.find((c) => c.method === "command.send")).toBeUndefined();
+  });
+
+  const sent = (h: PluginHarness) =>
+    h.calls.filter((c) => c.method === "command.send").map((c) => c.args);
+
+  it("resumes the search by writing the next resume number", async () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={waiting} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("fm-prompt-resume"));
+    });
+    expect(sent(h)).toEqual([
+      { command: "plugin.config.write", args: { key: "operator_resume_seq", value: 3 } },
+    ]);
+  });
+
+  it("stops the follow, returns home or lands on the operator's word", async () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={waiting} />);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("fm-prompt-stop"));
+      fireEvent.click(screen.getByTestId("fm-prompt-rth"));
+      fireEvent.click(screen.getByTestId("fm-prompt-land"));
+    });
+    expect(sent(h)).toEqual([
+      { command: "plugin.config.write", args: { key: "active", value: false } },
+      { command: "rtl", args: {} },
+      { command: "land", args: {} },
+    ]);
+  });
+
+  it("offers no resume when nothing is left to search from", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...waiting, holdReason: "no-range" }} />);
+    expect(screen.getByTestId("fm-prompt-body").textContent).toBe(
+      "There is no prediction left to search from. Designate the subject again.",
+    );
+    expect(screen.queryByTestId("fm-prompt-resume")).toBeNull();
   });
 
   it("renders specs and live metrics with the generic detector", () => {
@@ -182,8 +275,15 @@ describe("FollowMeTab", () => {
     expect(screen.getByTestId("fm-settings-hint")).toBeTruthy();
     expect(screen.queryByTestId("fm-settings")).toBeNull();
     expect(screen.queryByTestId("fm-follow-distance")).toBeNull();
-    // No config write command is ever issued from the tab.
+    // Outside the hold prompt the tab sends nothing.
     const write = h.calls.find((c) => c.method === "command.send");
     expect(write).toBeUndefined();
+  });
+
+  it("shows the recovery settings in effect", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={idleFollow} />);
+    expect(screen.getByTestId("fm-uncertain-mode").textContent).toBe("Keep following");
+    expect(screen.getByTestId("fm-predictive-search").textContent).toBe("On");
   });
 });

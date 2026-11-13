@@ -37,14 +37,17 @@ describe("normalizeFollowState", () => {
       fcArmed: true,
       fcGuided: true,
       holdReason: null,
-      // A payload with no reacquire_mode reads as strict, never smart.
+      // A payload with no reacquire_mode reads as strict, never smart; with no
+      // uncertain_mode as hold; with no predictive_search as off.
       reacquireMode: "strict",
+      uncertainMode: "hold",
+      predictiveSearch: false,
     });
   });
 
   it("maps phase, range cues, AGL, re-acquire, latency and setpoint rate", () => {
     const s = normalizeFollowState({
-      phase: "coasting",
+      phase: "searching",
       range_m: 10.2,
       range_sigma_m: 0.3,
       range_cues: [
@@ -55,20 +58,83 @@ describe("normalizeFollowState", () => {
       agl_m: 4.1,
       agl_source: "rng",
       reacquire_mode: "smart",
-      coast_remaining_s: 2.5,
+      reacquire_remaining_s: 18.4,
       pipeline_latency_ms: 85,
       setpoint_rate_hz: 20,
       confidence: 0.97,
     });
-    expect(s.phase).toBe("coasting");
+    expect(s.phase).toBe("searching");
     expect(s.rangeSigmaM).toBe(0.3);
     expect(s.rangeCues).toEqual([{ kind: "ground", rangeM: 10.1, sigmaM: 0.4 }]);
     expect(s.aglSource).toBe("rng");
     expect(s.reacquireMode).toBe("smart");
-    expect(s.coastRemainingS).toBe(2.5);
+    expect(s.reacquireRemainingS).toBe(18.4);
     expect(s.pipelineLatencyMs).toBe(85);
     expect(s.setpointRateHz).toBe(20);
     expect(s.confidence).toBe(0.97);
+  });
+
+  it("normalizes the 0.5 recovery fields and phases", () => {
+    const t = createPluginHarness({
+      mount: () => undefined,
+      locale: enLocale as Record<string, string>,
+    }).ctx.i18n.t;
+    const s = normalizeFollowState({
+      active: true,
+      phase: "holding-await-operator",
+      hold_reason: "search-exhausted",
+      hold_ne: [1, 2],
+      reacquire_remaining_s: 0,
+      predictive_search: true,
+      uncertain_mode: "follow",
+    });
+    expect(s.phase).toBe("holding-await-operator");
+    expect(s.holdNe).toEqual([1, 2]);
+    expect(t(holdReasonLabelKey(s.holdReason!))).toBe("Search found no match");
+    expect(s.predictiveSearch).toBe(true);
+    expect(s.uncertainMode).toBe("follow");
+  });
+
+  it("maps the search, vantage and occluder fields", () => {
+    const s = normalizeFollowState({
+      phase: "searching",
+      search_budget_s: 25,
+      search_step: 1,
+      search_area: { center_ne: [12.1, -3], semi_major_m: 3.2, semi_minor_m: 1.4, heading_deg: 41 },
+      predicted_path_ne: [[10, -2], [10.6, -2.4], [1, "x"]],
+      vantage_ne: [8, 2.5],
+      vantage_state: "enroute",
+      occluder: { ne: [11, -1], kind: "narrow" },
+      operator_resume_seq: 3,
+    });
+    expect(s.searchBudgetS).toBe(25);
+    expect(s.searchStep).toBe(1);
+    expect(s.searchArea).toEqual({ centerNe: [12.1, -3], semiMajorM: 3.2, semiMinorM: 1.4, headingDeg: 41 });
+    expect(s.predictedPathNe).toEqual([[10, -2], [10.6, -2.4]]);
+    expect(s.vantageNe).toEqual([8, 2.5]);
+    expect(s.vantageState).toBe("enroute");
+    expect(s.occluder).toEqual({ ne: [11, -1], kind: "narrow" });
+    expect(s.operatorResumeSeq).toBe(3);
+  });
+
+  it("drops unknown recovery words and reads unknown modes conservatively", () => {
+    const s = normalizeFollowState({
+      vantage_state: "bogus",
+      occluder: { ne: [1, 2], kind: "bogus" },
+      uncertain_mode: "bogus",
+      predictive_search: "yes" as never,
+      hold_ne: [1],
+    });
+    expect(s.vantageState).toBeNull();
+    expect(s.occluder).toBeNull();
+    expect(s.uncertainMode).toBe("hold");
+    expect(s.predictiveSearch).toBe(false);
+    expect(s.holdNe).toBeNull();
+  });
+
+  it("no longer knows the retired coasting and lost phases", () => {
+    expect(normalizeFollowState({ phase: "coasting" }).phase).toBe("idle");
+    expect(normalizeFollowState({ phase: "lost" }).phase).toBe("idle");
   });
 
   it("reads an unknown phase as idle and an unknown mode as strict", () => {
@@ -125,7 +191,9 @@ describe("hold reasons", () => {
     "inactive",
     "no-lock",
     "lock-uncertain",
-    "lock-lost",
+    "awaiting-operator",
+    "search-exhausted",
+    "predictive-search-off",
     "pose-stale",
     "fc-stale",
     "fc-disarmed",
@@ -134,6 +202,10 @@ describe("hold reasons", () => {
     "lease-refused",
     "camera-lost",
   ] as const;
+
+  it("drops the retired lock-lost reason", () => {
+    expect(normalizeFollowState({ hold_reason: "lock-lost" }).holdReason).toBeNull();
+  });
 
   it("has a locale label for every reason the agent can publish", () => {
     // A reason with no label renders as a bare key on a status surface.
@@ -150,12 +222,25 @@ describe("hold reasons", () => {
       "phase.idle",
       "phase.acquiring",
       "phase.following",
-      "phase.coasting",
-      "phase.searching",
-      "phase.lost",
       "phase.holding",
+      "phase.predicting",
+      "phase.repositioning",
+      "phase.searching",
+      "phase.holding-await-operator",
       "reacquire.strict",
       "reacquire.smart",
+      "uncertain_mode.follow",
+      "uncertain_mode.hold",
+      "vantage.enroute",
+      "vantage.arrived",
+      "vantage.no-vantage",
+      "occluder.narrow",
+      "occluder.wide",
+      "prompt.title",
+      "prompt.body.awaiting-operator",
+      "prompt.body.search-exhausted",
+      "prompt.body.predictive-search-off",
+      "prompt.body.no-range",
       "cue.ground",
       "cue.box_height",
       "cue.lidar",
@@ -164,6 +249,9 @@ describe("hold reasons", () => {
     ];
     for (const key of keys) {
       expect((enLocale as Record<string, string>)[key], key).toBeTruthy();
+    }
+    for (const retired of ["phase.coasting", "phase.lost", "metrics.coastRemaining", "hold.lockLost"]) {
+      expect((enLocale as Record<string, string>)[retired], retired).toBeUndefined();
     }
   });
 
@@ -196,6 +284,22 @@ describe("normalizeConfig", () => {
 
   it("coerces a numeric string", () => {
     expect(normalizeConfig({ follow_distance_m: "12" }).follow_distance_m).toBe(12);
+  });
+
+  it("reads the recovery settings and has no re-acquire window", () => {
+    const d = normalizeConfig({});
+    expect(d.uncertain_mode).toBe("follow");
+    expect(d.predictive_search).toBe(true);
+    expect([d.search_budget_s, d.search_radius_m, d.search_speed_mps]).toEqual([25, 12, 2]);
+    expect("reacquire_window_s" in d).toBe(false);
+    const c = normalizeConfig({
+      uncertain_mode: "bogus",
+      predictive_search: false,
+      search_budget_s: "40",
+    });
+    expect(c.uncertain_mode).toBe("hold");
+    expect(c.predictive_search).toBe(false);
+    expect(c.search_budget_s).toBe(40);
   });
 });
 

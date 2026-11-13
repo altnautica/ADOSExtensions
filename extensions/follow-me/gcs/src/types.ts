@@ -11,28 +11,61 @@
 /** Lock state words shared with the agent + vision contract. */
 export type LockState = "locked" | "uncertain" | "lost";
 
-/** The follow phase the agent publishes. */
+/** The follow phase the agent publishes. Once the lock is lost the follow
+ * predicts, repositions to a vantage point and searches, then holds for the
+ * operator. */
 export type FollowPhase =
   | "idle"
   | "acquiring"
   | "following"
-  | "coasting"
+  | "holding"
+  | "predicting"
+  | "repositioning"
   | "searching"
-  | "lost"
-  | "holding";
+  | "holding-await-operator";
 
 const PHASES: readonly FollowPhase[] = [
   "idle",
   "acquiring",
   "following",
-  "coasting",
-  "searching",
-  "lost",
   "holding",
+  "predicting",
+  "repositioning",
+  "searching",
+  "holding-await-operator",
+];
+
+/** The phases in which the follow is looking for a lost subject. */
+export const RECOVERY_PHASES: readonly FollowPhase[] = [
+  "predicting",
+  "repositioning",
+  "searching",
 ];
 
 /** What the follow does when the lock on the subject is lost. */
 export type ReacquireMode = "strict" | "smart";
+
+/** What an uncertain lock does: keep following the prediction, or hold. */
+export type UncertainMode = "follow" | "hold";
+
+/** The pilot's report on the vantage point it was asked for. */
+export type VantageState = "enroute" | "arrived" | "no-vantage";
+
+/** What hides the subject from the vantage point: a trunk or column
+ * (`narrow`), or a wall or corner (`wide`). */
+export interface Occluder {
+  ne: [number, number];
+  kind: "narrow" | "wide";
+}
+
+/** The predicted subject's spread, as an ellipse on the ground. */
+export interface SearchArea {
+  centerNe: [number, number];
+  semiMajorM: number;
+  semiMinorM: number;
+  /** Bearing of the major axis from north. */
+  headingDeg: number;
+}
 
 /** Where the height above ground came from: the downward rangefinder or the
  * barometric height. */
@@ -64,7 +97,9 @@ export type HoldReason =
   | "inactive"
   | "no-lock"
   | "lock-uncertain"
-  | "lock-lost"
+  | "awaiting-operator"
+  | "search-exhausted"
+  | "predictive-search-off"
   | "pose-stale"
   | "fc-stale"
   | "fc-disarmed"
@@ -77,7 +112,9 @@ const HOLD_REASONS: readonly HoldReason[] = [
   "inactive",
   "no-lock",
   "lock-uncertain",
-  "lock-lost",
+  "awaiting-operator",
+  "search-exhausted",
+  "predictive-search-off",
   "pose-stale",
   "fc-stale",
   "fc-disarmed",
@@ -130,8 +167,24 @@ export interface FollowState {
   distanceSetpointM: number | null;
   heightSetpointM: number | null;
   reacquireMode: ReacquireMode;
-  /** Seconds left in a smart re-acquire window; 0 outside one. */
-  coastRemainingS: number;
+  uncertainMode: UncertainMode;
+  /** Whether a smart loss searches from a vantage point. */
+  predictiveSearch: boolean;
+  /** Seconds left of the recovery's search budget; 0 outside a recovery. */
+  reacquireRemainingS: number;
+  searchBudgetS: number;
+  /** 0-based widening step while searching, else null. */
+  searchStep: number | null;
+  searchArea: SearchArea | null;
+  /** At most 10 points 0.5 s apart while recovering, else null. */
+  predictedPathNe: [number, number][] | null;
+  vantageNe: [number, number] | null;
+  vantageState: VantageState | null;
+  occluder: Occluder | null;
+  /** The latched hover point while holding for the operator. */
+  holdNe: [number, number] | null;
+  /** The resume number the follow has seen; a surface writes this + 1. */
+  operatorResumeSeq: number;
   /** Detection frame to goal send, milliseconds. */
   pipelineLatencyMs: number | null;
   /** Pilot goals sent per second over the last 2 s. */
@@ -182,7 +235,23 @@ export interface RawFollowState {
   distance_setpoint_m?: number | null;
   height_setpoint_m?: number | null;
   reacquire_mode?: ReacquireMode | string;
-  coast_remaining_s?: number;
+  uncertain_mode?: string;
+  predictive_search?: boolean;
+  reacquire_remaining_s?: number;
+  search_budget_s?: number;
+  search_step?: number | null;
+  search_area?: {
+    center_ne?: unknown;
+    semi_major_m?: number;
+    semi_minor_m?: number;
+    heading_deg?: number;
+  } | null;
+  predicted_path_ne?: unknown[] | null;
+  vantage_ne?: unknown;
+  vantage_state?: string | null;
+  occluder?: { ne?: unknown; kind?: string } | null;
+  hold_ne?: unknown;
+  operator_resume_seq?: number;
   pipeline_latency_ms?: number | null;
   setpoint_rate_hz?: number;
   commanding?: boolean;
@@ -212,8 +281,12 @@ export interface FollowConfig {
   gimbal_point: boolean;
   designate_camera: string;
   reacquire_mode: ReacquireMode;
-  reacquire_window_s: number;
   reacquire_min_similarity: number;
+  uncertain_mode: UncertainMode;
+  predictive_search: boolean;
+  search_budget_s: number;
+  search_radius_m: number;
+  search_speed_mps: number;
   max_speed_mps: number;
   follow_mode: FollowMode;
   follow_angle_deg: number;
@@ -230,8 +303,12 @@ export const DEFAULT_CONFIG: FollowConfig = {
   gimbal_point: true,
   designate_camera: "auto",
   reacquire_mode: "smart",
-  reacquire_window_s: 4,
   reacquire_min_similarity: 0.75,
+  uncertain_mode: "follow",
+  predictive_search: true,
+  search_budget_s: 25,
+  search_radius_m: 12,
+  search_speed_mps: 2,
   max_speed_mps: 6,
   follow_mode: "follow",
   follow_angle_deg: 180,
@@ -257,7 +334,18 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   distanceSetpointM: null,
   heightSetpointM: null,
   reacquireMode: "smart",
-  coastRemainingS: 0,
+  uncertainMode: "follow",
+  predictiveSearch: true,
+  reacquireRemainingS: 0,
+  searchBudgetS: 25,
+  searchStep: null,
+  searchArea: null,
+  predictedPathNe: null,
+  vantageNe: null,
+  vantageState: null,
+  occluder: null,
+  holdNe: null,
+  operatorResumeSeq: 0,
   pipelineLatencyMs: null,
   setpointRateHz: 0,
   commanding: false,
@@ -300,7 +388,23 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     distanceSetpointM: num(raw.distance_setpoint_m),
     heightSetpointM: num(raw.height_setpoint_m),
     reacquireMode: normalizeReacquireMode(raw.reacquire_mode),
-    coastRemainingS: num(raw.coast_remaining_s) ?? 0,
+    uncertainMode: normalizeUncertainMode(raw.uncertain_mode),
+    predictiveSearch: raw.predictive_search === true,
+    reacquireRemainingS: num(raw.reacquire_remaining_s) ?? 0,
+    searchBudgetS: num(raw.search_budget_s) ?? EMPTY_FOLLOW_STATE.searchBudgetS,
+    searchStep: num(raw.search_step),
+    searchArea: normalizeSearchArea(raw.search_area),
+    predictedPathNe: normalizePath(raw.predicted_path_ne),
+    vantageNe: pair(raw.vantage_ne),
+    vantageState:
+      raw.vantage_state === "enroute" ||
+      raw.vantage_state === "arrived" ||
+      raw.vantage_state === "no-vantage"
+        ? raw.vantage_state
+        : null,
+    occluder: normalizeOccluder(raw.occluder),
+    holdNe: pair(raw.hold_ne),
+    operatorResumeSeq: num(raw.operator_resume_seq) ?? 0,
     pipelineLatencyMs: num(raw.pipeline_latency_ms),
     setpointRateHz: num(raw.setpoint_rate_hz) ?? 0,
     commanding: raw.commanding === true,
@@ -371,8 +475,41 @@ export function normalizeReacquireMode(v: unknown): ReacquireMode {
   return v === "smart" ? "smart" : "strict";
 }
 
+/** Follow only when the value is exactly "follow": an unknown mode reads as
+ * the conservative hold (the agent's rule). */
+export function normalizeUncertainMode(v: unknown): UncertainMode {
+  return v === "follow" ? "follow" : "hold";
+}
+
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function pair(v: unknown): [number, number] | null {
+  if (!Array.isArray(v) || v.length !== 2) return null;
+  const [a, b] = [num(v[0]), num(v[1])];
+  return a === null || b === null ? null : [a, b];
+}
+
+function normalizePath(v: unknown): [number, number][] | null {
+  if (!Array.isArray(v)) return null;
+  const out = v.map(pair).filter((p): p is [number, number] => p !== null);
+  return out.length > 0 ? out : null;
+}
+
+function normalizeSearchArea(v: RawFollowState["search_area"]): SearchArea | null {
+  const center = pair(v?.center_ne);
+  const major = num(v?.semi_major_m);
+  const minor = num(v?.semi_minor_m);
+  const heading = num(v?.heading_deg);
+  if (center === null || major === null || minor === null || heading === null) return null;
+  return { centerNe: center, semiMajorM: major, semiMinorM: minor, headingDeg: heading };
+}
+
+function normalizeOccluder(v: RawFollowState["occluder"]): Occluder | null {
+  const ne = pair(v?.ne);
+  if (ne === null || (v?.kind !== "narrow" && v?.kind !== "wide")) return null;
+  return { ne, kind: v.kind };
 }
 
 function normalizeCues(v: RawFollowState["range_cues"]): RangeCue[] {

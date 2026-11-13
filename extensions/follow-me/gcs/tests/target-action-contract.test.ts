@@ -118,8 +118,9 @@ describe("the private video overlay is removed (host owns it now)", () => {
     expect(manifest).not.toContain("slot: video.overlay");
   });
 
-  it("drops the now-unused video-overlay and command.send permissions", () => {
+  it("drops the now-unused video-overlay permission", () => {
+    // command.send is declared again, for the tab's hold prompt (asserted in
+    // skill-contract).
     expect(manifest).not.toContain("ui.slot.video-overlay");
-    expect(manifest).not.toContain("command.send");
   });
 });
