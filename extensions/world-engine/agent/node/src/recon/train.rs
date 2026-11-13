@@ -311,7 +311,7 @@ pub fn colorize(runner: &dyn ToolRunner, dataset: &Path) -> serde_json::Value {
         Ok(d) => serde_json::Value::Object(d),
         Err(e) => {
             tracing::warn!(error = %e, "LiDAR cloud colouring skipped");
-            serde_json::json!({ "skipped": e.message })
+            serde_json::json!({ "skipped": e.message, "code": e.code, "tool": e.tool })
         }
     };
     if detail.get("skipped").is_some() {

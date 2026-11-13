@@ -186,13 +186,9 @@ async fn a_preview_without_gsplat_train_skips_the_coloured_cloud() {
     .unwrap();
     assert_eq!(done["state"], "completed", "{done}");
     let prep = &done["stages"][0]["detail"];
-    assert!(
-        prep["colorize"]["skipped"]
-            .as_str()
-            .unwrap()
-            .contains("gsplat_train"),
-        "{prep}"
-    );
+    assert_eq!(prep["colorize"]["code"], "E_TOOL_MISSING", "{prep}");
+    assert_eq!(prep["colorize"]["tool"], "gsplat_train", "{prep}");
+    assert!(prep["colorize"]["skipped"].is_string(), "{prep}");
     assert!(!job_dir.join("dataset/cloud_rgb.laz").exists());
     assert!(!job_dir.join("out/cloud_rgb.laz").exists());
     assert!(job_dir.join("out/provenance.json").is_file());
