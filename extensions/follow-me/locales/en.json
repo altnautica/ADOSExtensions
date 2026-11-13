@@ -79,7 +79,7 @@
   "occluder.narrow": "A narrow obstacle (tree, column)",
   "occluder.wide": "A wide obstacle (wall, corner)",
   "prompt.title": "Target lost: holding, waiting for instructions",
-  "prompt.body.awaiting-operator": "Follow is in Strict mode, so it stopped where the subject was lost and holds there.",
+  "prompt.body.awaiting-operator": "The follow stopped where the subject was lost and holds there.",
   "prompt.body.search-exhausted": "The search ran out of time without finding the subject.",
   "prompt.body.predictive-search-off": "Predictive search is off, so the follow did not search for the subject.",
   "prompt.body.no-range": "There is no prediction left to search from. Designate the subject again.",

@@ -262,10 +262,20 @@ class TargetFilter:
 
     def mahalanobis(self, t: float, north: float, east: float, r: Cov2) -> float | None:
         """Mahalanobis distance of a position measurement from the search
-        prediction at ``t``, including the measurement's own covariance."""
+        prediction at ``t``, including the measurement's own covariance. A
+        point further from the last estimate than the subject can have gone
+        (plus the measurement's own 3 sigma) is infinitely far: the bounded
+        spread is centred on the prediction, which runs along the track, so
+        on its own it would still admit points beyond reach ahead of it."""
         pred = self.search_predicted(t)
-        if pred is None:
+        if pred is None or self._x is None:
             return None
+        reach = self._reach_m(t)
+        if reach is not None:
+            r_sigma = position_sigma([list(r[0]), list(r[1])])
+            gone = math.hypot(north - self._x[0], east - self._x[1])
+            if gone > reach + 3.0 * r_sigma:
+                return math.inf
         x, p = pred
         s = [
             [p[0][0] + r[0][0], p[0][1] + r[0][1]],

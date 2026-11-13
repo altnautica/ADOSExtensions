@@ -164,6 +164,8 @@ class FollowLoopMixin:
     _geometry: CameraGeometry
     _active_since_s: float | None
     _camera_lost: bool
+    _subject_motion: Any
+    _outpaced_since_s: float | None
 
     async def _follow_loop(self) -> None:
         while True:
@@ -295,6 +297,8 @@ class FollowLoopMixin:
         self._pending_latency_ts_ms = None
         self._ref_heading = None
         self._orbit_phase = None
+        self._subject_motion.clear()
+        self._outpaced_since_s = None
 
     async def _tick_uncertain(self, cfg: FollowConfig, now: float) -> None:
         """An unsure lock: keep following the prediction at reduced
@@ -347,12 +351,13 @@ class FollowLoopMixin:
             return
         if s is not None:
             self._filter.max_speed_mps = subject_max_speed_mps(s.class_label)
-        self._filter.update(
-            s.received_s if s else now,
-            self._pose.north_m + fix.offset_north_m,
-            self._pose.east_m + fix.offset_east_m,
-            fix.covariance(),
-        )
+        north = self._pose.north_m + fix.offset_north_m
+        east = self._pose.east_m + fix.offset_east_m
+        t_fix = s.received_s if s else now
+        self._filter.update(t_fix, north, east, fix.covariance())
+        # The measured motion, unclamped by the filter's speed cap, for the
+        # faster-than-the-limit check.
+        self._subject_motion.record(t_fix, north, east, fix.range_m)
         self._last_fix = fix
         self._last_fix_s = now
         if s is not None:

@@ -162,10 +162,10 @@ class Recovery:
     # The operator_resume_seq already acted on.
     resume_seq_seen: int = 0
     lost_announced: bool = False
-    # The subject's re-acquire was announced in this recovery: a later
-    # designate of the same person (after an abandoned one) is not announced
-    # again.
-    reacquire_announced: bool = False
+    # The appearance and position scores of the candidate behind the
+    # current re-acquire designate, announced when the engine locks it.
+    designated_similarity: float = 0.0
+    designated_mahalanobis: float = 0.0
 
     def remaining_s(self, now: float) -> float:
         return max(0.0, self.deadline_s - now)
@@ -293,10 +293,23 @@ class RecoveryMixin:
         if rec.designated:
             lock = self._tracker.effective_lock(now) if self._tracker.has_lock else None
             if lock is EffectiveLock.LOCKED:
-                # The engine locked the re-acquire designate: follow it,
-                # keeping the subject filter and template.
+                # The engine locked the re-acquire designate: announce the
+                # re-lock on the track it locked, and follow it, keeping the
+                # subject filter and template.
+                track = self._tracker.track_id
+                await self._ctx.events.publish(
+                    FOLLOW_REACQUIRED_TOPIC,
+                    {
+                        "track_id": track,
+                        "similarity": round(rec.designated_similarity, 3),
+                        "gap_s": round(now - rec.lost_s, 2),
+                        "mahalanobis": round(rec.designated_mahalanobis, 2),
+                        "phase": rec.phase,
+                    },
+                )
+                self._ctx.log.info("follow_me_reacquired", track_id=track, phase=rec.phase)
                 self._recovery = None
-                self._filter_track_id = self._tracker.track_id
+                self._filter_track_id = track
                 self._measured_bbox = None
                 await self._tick_follow(cfg, now)
                 return
@@ -581,34 +594,32 @@ class RecoveryMixin:
                 confidence=float(det.confidence),
             )
         except Exception as exc:  # noqa: BLE001
+            # The engine may have applied it before the request failed (a
+            # timeout): treat it as a designate of our own whose track is
+            # unknown, so its lock is a re-acquire, announced, and not taken
+            # for an operator designate.
             self._ctx.log.warning("follow_me_reacquire_designate_failed", error=str(exc))
+            self._mark_designated(rec, None, cand, now)
             return
         if not (isinstance(result, dict) and result.get("designated")):
             return
         track = result.get("track_id")
-        rec.designated = True
-        rec.designated_track = int(track) if isinstance(track, int) else None
-        rec.designated_s = now
+        self._mark_designated(rec, int(track) if isinstance(track, int) else None, cand, now)
         self._filter.update(now, cand.north_m, cand.east_m, cand.covariance)
         self._ctx.log.info(
-            "follow_me_reacquired",
+            "follow_me_reacquire_designated",
             track_id=rec.designated_track,
             similarity=round(cand.similarity, 3),
             phase=rec.phase,
         )
-        if rec.reacquire_announced:
-            return
-        rec.reacquire_announced = True
-        await self._ctx.events.publish(
-            FOLLOW_REACQUIRED_TOPIC,
-            {
-                "track_id": rec.designated_track,
-                "similarity": round(cand.similarity, 3),
-                "gap_s": round(now - rec.lost_s, 2),
-                "mahalanobis": round(cand.mahalanobis, 2),
-                "phase": rec.phase,
-            },
-        )
+
+    @staticmethod
+    def _mark_designated(rec: Recovery, track: int | None, cand: Any, now: float) -> None:
+        rec.designated = True
+        rec.designated_track = track
+        rec.designated_s = now
+        rec.designated_similarity = cand.similarity
+        rec.designated_mahalanobis = cand.mahalanobis
 
 
 def _sigma_now(filt: Any, now: float) -> float:

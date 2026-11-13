@@ -27,8 +27,9 @@ goal status.
   in Strict); an unsure spell longer than 3 s is handled as a loss.
 - The subject's appearance template only learns from a solid lock, and two
   people inside the search gate who look alike are never re-locked.
-- `follow.reacquired` carries `mahalanobis` and the `phase` it happened in,
-  and is sent once per recovery. `follow.lost` carries the reason
+- `follow.reacquired` is announced when the engine locks a re-acquire
+  designate, naming the locked track, and carries `mahalanobis` and the
+  `phase` it happened in. `follow.lost` carries the reason
   (`lock_lost`, `search_exhausted` or `predictive_search_off`),
   `awaiting_operator` and the hover point `hold_ne`.
 - The `follow.state` read-back replaces `coast_remaining_s` with
@@ -42,6 +43,8 @@ goal status.
   and Resume after a long wait searches around the last estimate instead of
   holding with `no-range`.
 - An operator designate is followed at once, also in the middle of a search.
+  A re-acquire designate whose request failed is still the search's own, so
+  its lock is announced and never taken for an operator designate.
 - The last search step sweeps all the way round. A vantage the vehicle cannot
   settle at still gets its sweep, after hovering within 1.5 m of it for 2 s
   or once the flight there is 3 s overdue.
@@ -54,14 +57,16 @@ goal status.
 - `follow.state` fields `search_budget_s`, `search_step`, `search_area`,
   `predicted_path_ne`, `vantage_ne`, `vantage_state`, `occluder`, `hold_ne`,
   `uncertain_mode`, `predictive_search`, `operator_resume_seq`, and
-  `outpaced` with `speed_limit_mps` (the subject has been faster than the
-  follow's speed limit for 2 s; the follow tab shows it).
+  `outpaced` with `speed_limit_mps`: the subject has been measured faster
+  than the limit in force (the lower of `max_speed_mps` and the pilot's
+  2 m/s cap without GNSS, judged from `GPS_RAW_INT` and the vision-nav
+  `nav.state`) for 2 s; the follow tab shows it.
 - The vantage goal carries `hypotheses_ne`: where the subject was last seen
   and 3 m back along its track, for the pilot to cover besides the
   prediction.
-- An EKF position reset is detected in `LOCAL_POSITION_NED`, and the subject
-  estimate, the search anchor, the vantage point and a latched hover point
-  move with the frame.
+- An EKF position reset is detected in `LOCAL_POSITION_NED` (samples at most
+  0.3 s apart), and the subject estimate, the search anchor, the vantage
+  point and a latched hover point move with the frame.
 - The follow tab shows the search (time left, step, vantage point, what hides
   the subject) and, while the follow waits, a prompt to resume the search,
   return home, land or stop following, or to click the subject to follow it

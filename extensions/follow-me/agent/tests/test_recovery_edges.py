@@ -6,7 +6,6 @@ limit."""
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import pytest
@@ -34,7 +33,7 @@ from follow_me.state import (
     RECOVERY_PHASES,
 )
 from follow_me.target_filter import TargetFilter, position_sigma
-from test_follow_v03 import _EMB, _OTHER_EMB, _feed, _follow_one, _fresh, _person
+from test_follow_v03 import _EMB, _OTHER_EMB, _feed, _fresh, _person
 from test_recovery import _cfg, _lose, _plugin, _status, _step
 
 _R = ((0.25, 0.0), (0.0, 0.25))
@@ -330,29 +329,3 @@ async def test_an_ekf_position_reset_shifts_the_subject_and_the_hold_point(monke
     await plugin._tick()
     sp = ctx.flight.setpoints[-1]
     assert (sp["n"], sp["e"], sp["d"]) == pytest.approx((5.0, 3.0, -21.0))
-
-
-# -- a subject faster than the limit ------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_subject_faster_than_the_cap_is_reported(monkeypatch: Any) -> None:
-    ctx = _Ctx(config=_cfg(max_speed_mps=1.0))
-    plugin = _plugin(ctx)
-    clock = _install_clock(monkeypatch)
-    await _follow_one(plugin, clock)
-    st = _state_events(ctx)[-1]
-    assert st["outpaced"] is False and st["speed_limit_mps"] == 1.0
-    plugin._filter._x[2] = 2.0  # the estimate says 2 m/s
-    cfg = plugin._cfg
-    await plugin._publish_state(cfg, now=clock.now, active=True, phase=PHASE_FOLLOWING, commanding=True)
-    assert _state_events(ctx)[-1]["outpaced"] is False
-    clock.advance(2.1)
-    await plugin._publish_state(cfg, now=clock.now, active=True, phase=PHASE_FOLLOWING, commanding=True)
-    assert _state_events(ctx)[-1]["outpaced"] is True
-    plugin._filter._x[2] = 0.5
-    plugin._filter._x[3] = 0.0
-    clock.advance(0.2)
-    await plugin._publish_state(cfg, now=clock.now, active=True, phase=PHASE_FOLLOWING, commanding=True)
-    assert _state_events(ctx)[-1]["outpaced"] is False
-    assert math.isfinite(_state_events(ctx)[-1]["speed_limit_mps"])

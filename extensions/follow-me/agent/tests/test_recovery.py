@@ -182,14 +182,16 @@ async def test_only_the_same_person_is_relocked_and_it_is_announced(monkeypatch:
     _fresh(plugin)
     _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
     await plugin._tick()
-    (ev,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
-    assert ev["track_id"] == 9 and ev["phase"] == PHASE_PREDICTING and "mahalanobis" in ev
+    assert len(ctx.vision.designate_calls) == 1
+    assert _events(ctx, FOLLOW_REACQUIRED_TOPIC) == []
     clock.advance(0.05)
     _fresh(plugin)
     _feed(plugin, _person(track_id=9, lock_state=LOCK_LOCKED, embedding=_EMB))
     await plugin._tick()
     assert _state_events(ctx)[-1]["phase"] == PHASE_FOLLOWING
     assert plugin._recovery is None and plugin._filter_track_id == 9
+    (ev,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
+    assert ev["track_id"] == 9 and ev["phase"] == PHASE_PREDICTING and "mahalanobis" in ev
 
 
 @pytest.mark.asyncio

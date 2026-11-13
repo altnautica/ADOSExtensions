@@ -264,6 +264,12 @@ describe("hold reasons", () => {
     }
   });
 
+  it("words the wait for the operator without assuming the mode", () => {
+    // The same hold reason follows a Smart loss before any range fix.
+    const body = (enLocale as Record<string, string>)["prompt.body.awaiting-operator"];
+    expect(body).not.toMatch(/strict|smart/i);
+  });
+
   it("flags only the telemetry faults as stale", () => {
     // A disarmed controller is a normal pre-flight state and must not be
     // coloured as a fault; telemetry that stopped arriving must be.

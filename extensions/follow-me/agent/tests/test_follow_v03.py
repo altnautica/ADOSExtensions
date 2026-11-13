@@ -281,13 +281,11 @@ async def test_smart_reacquires_a_matching_person_with_an_announced_designate(
 
     assert len(ctx.vision.designate_calls) == 1
     assert ctx.vision.designate_calls[0]["class_label"] == "person"
-    (event,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
-    assert event["track_id"] == 9
-    assert event["similarity"] == pytest.approx(1.0)
-    assert event["gap_s"] == pytest.approx(0.5)
+    # Nothing is announced until the engine locks the designate.
+    assert _events(ctx, FOLLOW_REACQUIRED_TOPIC) == []
 
     # The engine locks the designate; the follow resumes on track 9 with the
-    # same subject filter.
+    # same subject filter, and the re-lock is announced.
     clock.advance(0.05)
     _fresh(plugin)
     _feed(plugin, _person(track_id=9, lock_state=LOCK_LOCKED, embedding=_EMB))
@@ -295,6 +293,10 @@ async def test_smart_reacquires_a_matching_person_with_an_announced_designate(
     assert plugin._recovery is None
     assert plugin._filter_track_id == 9
     assert _state_events(ctx)[-1]["phase"] == PHASE_FOLLOWING
+    (event,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
+    assert event["track_id"] == 9
+    assert event["similarity"] == pytest.approx(1.0)
+    assert event["gap_s"] == pytest.approx(0.55)
 
 
 @pytest.mark.asyncio

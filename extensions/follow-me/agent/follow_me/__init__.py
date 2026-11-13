@@ -76,6 +76,7 @@ from follow_me.ranging import Scan
 from follow_me.reacquire import Embedding, embedding_of
 from follow_me.readback import ReadbackMixin
 from follow_me.recovery import Recovery, RecoveryMixin
+from follow_me.speed_limit import NAV_STATE_TOPIC, NavFeed, SubjectMotion
 from follow_me.state import (
     HOLD_INACTIVE,
     PHASE_IDLE,
@@ -186,6 +187,10 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._recovery: Recovery | None = None
         self._uncertain_since_s: float | None = None
         self._outpaced_since_s: float | None = None
+        # What says which speed limit is in force, and the subject's measured
+        # motion (see follow_me.speed_limit).
+        self._nav_feed = NavFeed()
+        self._subject_motion = SubjectMotion()
         # The arm-edge write of predictive_search, kept so it is not
         # collected before it runs.
         self._arm_reset_task: asyncio.Task | None = None
@@ -248,6 +253,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         await ctx.mavlink.subscribe("DISTANCE_SENSOR", self._on_distance_sensor)
         await ctx.mavlink.subscribe("GLOBAL_POSITION_INT", self._on_global_position)
         await ctx.mavlink.subscribe("HEARTBEAT", self._on_heartbeat)
+        # The GPS fix: without a 3-D fix the pilot flies at its GNSS-denied
+        # cap, the limit a subject is judged faster than.
+        await ctx.mavlink.subscribe("GPS_RAW_INT", self._on_gps_raw)
         # The gimbal's reported boresight attitude, so the image-to-ground
         # projection uses where the gimbal actually points.
         await ctx.mavlink.subscribe("MOUNT_ORIENTATION", self._on_mount_orientation)
@@ -274,6 +282,13 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
             await ctx.events.subscribe(GOAL_STATUS_TOPIC, self._on_goal_status)
         except Exception as exc:  # noqa: BLE001
             ctx.log.warning("follow_me_goal_status_unavailable", reason=str(exc))
+        # The vision-nav extension's navigation state: while it reports its
+        # external-navigation mode the pilot may be flying at its GNSS-denied
+        # cap. Optional; without it the GPS fix alone decides.
+        try:
+            await ctx.events.subscribe(NAV_STATE_TOPIC, self._on_nav_state)
+        except Exception as exc:  # noqa: BLE001
+            ctx.log.info("follow_me_nav_state_unavailable", reason=str(exc))
 
         # MCP tools (guarded: the host injects ctx.tools only when the
         # mcp.expose capability is granted). Read-only + stop; there is no
@@ -344,6 +359,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         if scan is not None:
             self._scan = scan
             self._scan_at = fc_state.monotonic()
+
+    def _on_nav_state(self, payload: dict[str, Any]) -> None:
+        self._nav_feed.on_nav_state(payload, fc_state.monotonic())
 
     # -- camera binding + MCP tools -----------------------------------
 

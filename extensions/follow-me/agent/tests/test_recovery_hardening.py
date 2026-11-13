@@ -241,8 +241,8 @@ async def test_a_designate_the_engine_loses_lets_matching_continue(monkeypatch: 
     await _engine_reports(plugin, clock, 9, LOCK_LOST)
     assert len(ctx.vision.designate_calls) == 2
     assert 9 in plugin._recovery.excluded_tracks
-    # The same person within one recovery is announced once.
-    assert len(_events(ctx, FOLLOW_REACQUIRED_TOPIC)) == 1
+    # Nothing has locked, so nothing is announced.
+    assert _events(ctx, FOLLOW_REACQUIRED_TOPIC) == []
 
 
 @pytest.mark.asyncio
@@ -265,7 +265,9 @@ async def test_a_designate_that_never_locks_lets_matching_continue(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_an_unsure_designate_is_given_time_and_announced_once(monkeypatch: Any) -> None:
+async def test_an_unsure_designate_is_given_time_and_not_announced_without_a_lock(
+    monkeypatch: Any,
+) -> None:
     ctx = _Ctx(
         config=_cfg(search_budget_s=25.0),
         designate_result={"designated": True, "track_id": 9, "camera_id": "uvc-0"},
@@ -282,12 +284,61 @@ async def test_an_unsure_designate_is_given_time_and_announced_once(monkeypatch:
         await _engine_reports(plugin, clock, 9, LOCK_UNCERTAIN)
     assert plugin._recovery.designated is True
     assert len(ctx.vision.designate_calls) == 1
-    # Still unsure past the limit: abandoned and matched again, but the same
-    # person is not announced a second time in this recovery.
+    # Still unsure past the limit: abandoned and matched again. No lock, so
+    # no announcement.
     for _ in range(8):
         await _engine_reports(plugin, clock, 9, LOCK_UNCERTAIN)
     assert len(ctx.vision.designate_calls) == 2
-    assert len(_events(ctx, FOLLOW_REACQUIRED_TOPIC)) == 1
+    assert _events(ctx, FOLLOW_REACQUIRED_TOPIC) == []
+
+
+@pytest.mark.asyncio
+async def test_a_designate_whose_request_failed_still_relocks_announced(monkeypatch: Any) -> None:
+    ctx = _Ctx(config=_cfg())
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+
+    async def _timeout(*_a: Any, **_k: Any) -> Any:
+        raise TimeoutError("request timed out")
+
+    ctx.vision.designate_track = _timeout  # type: ignore[method-assign]
+    clock.advance(0.3)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
+    await plugin._tick()
+    # The engine applied it anyway (fresh id 9) and locks it: that is this
+    # recovery's re-lock, announced, on the same subject filter.
+    filt = plugin._filter
+    await _engine_reports(plugin, clock, 9, LOCK_LOCKED)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_FOLLOWING
+    (ev,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
+    assert ev["track_id"] == 9
+    assert plugin._filter is filt and plugin._filter.initialized
+
+
+@pytest.mark.asyncio
+async def test_the_person_actually_relocked_is_announced(monkeypatch: Any) -> None:
+    ids = iter([9, 11])
+    ctx = _Ctx(config=_cfg(search_budget_s=25.0))
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+
+    async def _designate(*_a: Any, **_k: Any) -> Any:
+        return {"designated": True, "track_id": next(ids), "camera_id": "uvc-0"}
+
+    ctx.vision.designate_track = _designate  # type: ignore[method-assign]
+    clock.advance(0.3)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
+    await plugin._tick()
+    # The engine loses designate 9 at once (and the same batch designates 11).
+    await _engine_reports(plugin, clock, 9, LOCK_LOST)
+    await _engine_reports(plugin, clock, 11, LOCK_LOCKED)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_FOLLOWING
+    (ev,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
+    assert ev["track_id"] == 11
 
 
 @pytest.mark.asyncio
@@ -359,6 +410,7 @@ async def test_gap_counts_from_the_loss_after_a_resume(monkeypatch: Any) -> None
     _fresh(plugin)
     _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
     await plugin._tick()
+    await _engine_reports(plugin, clock, 9, LOCK_LOCKED)
     (ev,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
     assert ev["gap_s"] > 6.0
 

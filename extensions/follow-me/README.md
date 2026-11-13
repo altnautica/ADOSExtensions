@@ -158,14 +158,18 @@ default), the follow keeps flying the prediction at half feed-forward; with
   - its re-identification embedding has cosine similarity of at least
     `reacquire_min_similarity` to the stored subject template, at least 0.08
     ahead of any other person inside the gate;
-  - it lies within a Mahalanobis distance of 3 from the prediction.
+  - it lies within a Mahalanobis distance of 3 from the prediction, and no
+    further from the last estimate than the subject can have gone.
 
-  The best match is designated with the vision engine and announced on
-  `follow.reacquired`, once per recovery. A designate the engine reports
+  The best match is designated with the vision engine. `follow.reacquired`
+  is announced when the engine locks that designate, naming the track it
+  locked. A designate whose request failed is still treated as the search's
+  own (the engine may have applied it), so its lock is announced too and is
+  never taken for an operator designate. A designate the engine reports
   lost, or has not locked within 3 s, is abandoned and matching continues
-  (on newer batches only). When the budget runs out,
-  or after the prediction phase with `predictive_search` off, the plugin
-  announces `follow.lost` and holds for the operator.
+  (on newer batches only). When the budget runs out, or after the prediction
+  phase with `predictive_search` off, the plugin announces `follow.lost` and
+  holds for the operator.
 
 Holding for the operator keeps the motion lease and a latched hover point
 (`hold_ne`, and its height) that a drifting pose estimate cannot move. It
@@ -181,14 +185,21 @@ every arm (an arm seen after a disarm, not the first armed heartbeat after
 the plugin starts).
 
 An EKF position reset (a `LOCAL_POSITION_NED` step more than 1 m from where
-the reported velocity carried the vehicle since the previous sample, as on a
-switch between GNSS and external navigation) moves the subject estimate, the
-search anchor, the vantage point and a latched hover point with the frame, so
-they stay put in the world.
+the reported velocity carried the vehicle since the previous sample, with
+samples at most 0.3 s apart, as on a switch between GNSS and external
+navigation) moves the subject estimate, the search anchor, the vantage point
+and a latched hover point with the frame, so they stay put in the world.
 
-`outpaced` turns true once the estimated subject speed has been above the
-follow's `max_speed_mps` (published as `speed_limit_mps`) for 2 s: the subject
-is pulling away and will probably be lost.
+`outpaced` turns true once the subject has been measured faster than the
+limit in force for 2 s: its displacement over the last 2 s of fixes (not the
+subject filter's estimate, which caps a person at 3 m/s) above the limit, or
+the range opening while the vehicle already flies at the limit. The limit,
+published as `speed_limit_mps`, is `max_speed_mps`, or the pilot's 2 m/s
+GNSS-denied cap when lower: the pilot's cap is not forwarded to plugins, so
+it is rebuilt with the pilot's fail-closed rule from the feeds a plugin can
+read: capped without a fresh 3-D fix in `GPS_RAW_INT`, and while a fresh
+`nav.state` from the vision-nav extension reports its external-navigation
+mode.
 
 The subject template learns only from a solid lock: locked, confidence at
 least 0.6, and no other person's box overlapping the subject's.

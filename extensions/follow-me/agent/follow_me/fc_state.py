@@ -394,10 +394,11 @@ class GimbalState:
 # A LOCAL_POSITION_NED step this far (3-D) from where the reported velocity
 # carried the vehicle since the previous sample is a jump of the frame (an
 # EKF position reset, as on a switch between GNSS and external navigation),
-# not flight. Samples further apart than the gap limit cannot tell the two
-# apart and are not judged.
+# not flight. Samples further apart than the gap limit are not judged: over a
+# longer gap a hard turn alone leaves more than the threshold between the
+# path and the average of the two velocities.
 FRAME_RESET_M = 1.0
-_FRAME_RESET_MAX_GAP_S = 1.0
+_FRAME_RESET_MAX_GAP_S = 0.3
 
 
 class FrameResetDetector:
@@ -442,6 +443,7 @@ class FcStateMixin:
     _fc_clock: FcClock
     _arm_reset_task: asyncio.Task | None
     _frame_reset: FrameResetDetector
+    _nav_feed: Any
 
     def _note_fc_time(self, msg: dict[str, Any], arrival_s: float) -> float | None:
         """Feed a message's ``time_boot_ms`` to the FC clock; its FC time."""
@@ -538,6 +540,14 @@ class FcStateMixin:
                     "follow_me_frame_reset", dn=jump[0], de=jump[1], dd=jump[2]
                 )
             self._on_frame_shift(*jump)
+
+    def _on_gps_raw(self, delivery: dict[str, Any]) -> None:
+        # The fix type tells whether the pilot flies at its GNSS-denied cap
+        # (see :mod:`follow_me.speed_limit`).
+        msg = mavlink_frames.decode_fields(delivery)
+        if msg is None:
+            return
+        self._nav_feed.on_gps_fix(int(msg.get("fix_type", 0) or 0), monotonic())
 
     def _on_global_position(self, delivery: dict[str, Any]) -> None:
         # Display and barometric-AGL fallback only. lat/lon are 1e7 integer

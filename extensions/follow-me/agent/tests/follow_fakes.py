@@ -209,6 +209,12 @@ def _mount_orientation(pitch_deg: float, yaw_deg: float) -> dict[str, Any]:
     return _delivery(mavlink2.MAVLink_mount_orientation_message(0, 0.0, pitch_deg, yaw_deg, 0.0))
 
 
+def _gps_raw(fix_type: int) -> dict[str, Any]:
+    return _delivery(
+        mavlink2.MAVLink_gps_raw_int_message(0, fix_type, 0, 0, 0, 100, 100, 0, 0, 12)
+    )
+
+
 def _local_position(
     n: float, e: float, d: float, vn: float = 0.0, ve: float = 0.0, *, t_ms: int = 0
 ) -> dict[str, Any]:
