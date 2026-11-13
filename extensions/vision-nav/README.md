@@ -58,8 +58,12 @@ controller as `ODOMETRY` (#331) on component 197, at up to
   (the pose's `north` is `declared`, from the World Engine extension's
   `atlas.takeoff_heading_deg`, or `gnss`); then `EK3_SRC1_YAW 6` takes yaw
   from the pose. The external-nav set takes no velocity from the pose
-  (`EK3_SRC1_VELXY 0`): ArduPilot ignores the `ODOMETRY` velocity
-  covariance.
+  (never `EK3_SRC1_VELXY 6`: ArduPilot ignores the `ODOMETRY` velocity
+  covariance); with an optical-flow sensor (`FLOW_TYPE` set) it takes
+  the flow's velocity (`EK3_SRC1_VELXY 5`), measured rather than
+  differenced from late poses, and without one none (`0`). EKF3 fuses
+  flow beside the external position in one set
+  (`AP_NavEKF3_OptFlowFusion.cpp` `SelectFlowFusion`).
 - x, y and yaw come from the pose; z and vertical speed from the
   flight controller's `LOCAL_POSITION_NED`, roll and pitch from its
   `ATTITUDE`. Velocity is the pose difference over the last 100 ms, in

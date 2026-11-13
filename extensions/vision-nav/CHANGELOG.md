@@ -4,6 +4,30 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+### Changed
+
+- External navigation: the `viso_delay` pre-arm row says when poses are
+  older than the 250 ms ArduPilot's EKF3 can place in time. EKF3 fuses every
+  pose at its arrival minus `VISO_DELAY_MS`, and that delay is capped at
+  250 ms, so older poses are fused late by the difference: at 2 m/s a
+  450 ms pose against a 135 ms delay puts the fix 0.6 m behind, which the
+  position loop turns into a slow sway. The row asks for a faster pose
+  pipeline instead of a delay the flight controller cannot take. The
+  `VISO_DELAY_MS` manifest note and the module docs now describe it as the
+  typical age at arrival, not the least.
+- External navigation fuses the optical-flow sensor. With `FLOW_TYPE` set,
+  the `fc_params` pre-arm row asks for flow velocity in the external-nav
+  source set (`EK3_SRC1_VELXY 5`, pending until it is), and blocks flow
+  velocity without a flow sensor. EKF3 fuses flow beside the external
+  position in one set; the flow velocity is measured rather than
+  differenced from late poses, so the EKF holds velocity between poses. In
+  a SITL loop with poses as late as a loaded companion sends them (about
+  5 Hz, 150 to 900 ms old), flow velocity cut the velocity tracking error
+  from 0.84 to 0.50 m/s RMS and the worst cross-track from 2.7 to 1.2 m.
+  `FLOW_TYPE` is read with the other parameters, the manifest asks for
+  `RNGFND1_TYPE 10` (the EKF scales flow by the height above the ground)
+  and `EK3_SRC1_VELXY 5`, and the parameter card lists the rangefinder.
+
 ## [0.7.5]
 
 ### Changed

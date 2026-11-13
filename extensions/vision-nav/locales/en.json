@@ -226,8 +226,9 @@
       },
       "rows": {
         "FLOW_TYPE": "Optical flow sensor backend (5 = MAVLink).",
+        "RNGFND1_TYPE": "Downward rangefinder backend (10 = MAVLink); flow is scaled by the height above the ground.",
         "EK3_SRC1_POSXY": "Source set 1 horizontal position (6 = external nav).",
-        "EK3_SRC1_VELXY": "Source set 1 horizontal velocity (0 with external nav: the pose's velocity is not trusted).",
+        "EK3_SRC1_VELXY": "Source set 1 horizontal velocity (5 = optical flow with external nav; never 6: the pose's velocity is not trusted).",
         "EK3_SRC1_YAW": "Source set 1 yaw (1 = compass; 6 = external nav, only with a declared map north).",
         "EK3_SRC2_POSXY": "Source set 2 horizontal position.",
         "EK3_SRC2_VELXY": "Source set 2 horizontal velocity (5 = optical flow for the fallback set).",

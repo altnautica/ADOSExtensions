@@ -88,6 +88,7 @@ const EXTNAV_FIXED_PARAMS: &[&str] = &[
     "AHRS_ORIGIN_LAT",
     "AHRS_ORIGIN_LON",
     "EK3_MAG_EF_LIM",
+    "FLOW_TYPE",
 ];
 
 /// The flight-controller parameters the external-nav pre-arm checks read:
@@ -211,10 +212,12 @@ mod tests {
             ..ExternalNavConfig::default()
         };
         let ids = extnav_fc_params(&cfg);
-        assert_eq!(ids.len(), 12);
+        assert_eq!(ids.len(), 13);
         for id in [
             "VISO_TYPE",
+            "FLOW_TYPE",
             "EK3_SRC1_POSXY",
+            "EK3_SRC1_VELXY",
             "EK3_SRC1_YAW",
             "EK3_SRC2_POSXY",
             "EK3_SRC2_VELXY",

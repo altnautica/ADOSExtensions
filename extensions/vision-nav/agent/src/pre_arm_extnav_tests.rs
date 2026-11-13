@@ -19,8 +19,8 @@ fn inputs(extnav: Option<ExtnavPreArmInputs>) -> PreArmInputs {
 }
 
 /// A GNSS-denied flight controller set up as the manifest asks: the origin
-/// set at boot from AHRS_ORIGIN, position-only external nav, compass yaw,
-/// flow fallback.
+/// set at boot from AHRS_ORIGIN, external-nav position with optical-flow
+/// velocity, compass yaw, flow fallback.
 fn good_params() -> BTreeMap<String, f32> {
     [
         ("VISO_TYPE", 1.0),
@@ -30,11 +30,12 @@ fn good_params() -> BTreeMap<String, f32> {
         ("AHRS_ORIGIN_LAT", ORIGIN[0] as f32),
         ("AHRS_ORIGIN_LON", ORIGIN[1] as f32),
         ("EK3_SRC1_POSXY", 6.0),
-        ("EK3_SRC1_VELXY", 0.0),
+        ("EK3_SRC1_VELXY", 5.0),
         ("EK3_SRC1_YAW", 1.0),
         ("EK3_SRC2_POSXY", 0.0),
         ("EK3_SRC2_VELXY", 5.0),
         ("EK3_MAG_EF_LIM", 50.0),
+        ("FLOW_TYPE", 5.0),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v))
@@ -217,7 +218,7 @@ fn fc_params_wait_for_every_value() {
         check(&r, "fc_params"),
         (
             Severity::Pending,
-            "Reading flight controller parameters (11 of 12)."
+            "Reading flight controller parameters (12 of 13)."
         )
     );
     assert!(!r.armable);
@@ -260,14 +261,46 @@ fn fc_params_ext_nav_velocity_blocks() {
         (
             Severity::Blocking,
             "EK3_SRC1_VELXY is 6: the EKF would trust the pose's velocity far beyond its \
-             accuracy; set 0 (position only)."
+             accuracy; set 5 (optical flow)."
         )
     );
     assert!(!r.armable);
-    // Velocity from another sensor in the external-nav set is not ours to judge.
+    let mut no_flow = with_param("EK3_SRC1_VELXY", 6.0);
+    no_flow.params.insert("FLOW_TYPE".into(), 0.0);
     assert_eq!(
-        check(&eval(with_param("EK3_SRC1_VELXY", 5.0)), "fc_params"),
-        (Severity::Ok, "")
+        check(&eval(no_flow), "fc_params").1,
+        "EK3_SRC1_VELXY is 6: the EKF would trust the pose's velocity far beyond its \
+         accuracy; set 0 (position only)."
+    );
+}
+
+/// A configured flow sensor belongs in the external-nav set: its velocity
+/// is measured, not differenced from late poses.
+#[test]
+fn fc_params_external_nav_set_fuses_the_flow_sensor() {
+    assert_eq!(check(&eval(ready()), "fc_params"), (Severity::Ok, ""));
+    let ignored = eval(with_param("EK3_SRC1_VELXY", 0.0));
+    assert_eq!(
+        check(&ignored, "fc_params"),
+        (
+            Severity::Pending,
+            "FLOW_TYPE is 5 but EK3_SRC1_VELXY is 0: the external-nav set ignores the \
+             optical-flow sensor; set EK3_SRC1_VELXY 5 so the EKF takes its velocity from the \
+             flow between poses."
+        )
+    );
+    assert!(!ignored.armable);
+    // No flow sensor: position only passes, flow velocity blocks.
+    let mut no_sensor = with_param("EK3_SRC1_VELXY", 0.0);
+    no_sensor.params.insert("FLOW_TYPE".into(), 0.0);
+    assert_eq!(check(&eval(no_sensor), "fc_params"), (Severity::Ok, ""));
+    assert_eq!(
+        check(&eval(with_param("FLOW_TYPE", 0.0)), "fc_params"),
+        (
+            Severity::Blocking,
+            "EK3_SRC1_VELXY is 5 (optical flow) but FLOW_TYPE is 0: the EKF would get no \
+             velocity; set FLOW_TYPE for the flow sensor, or EK3_SRC1_VELXY 0."
+        )
     );
 }
 
@@ -318,6 +351,28 @@ fn viso_delay_follows_the_measured_pose_age() {
     };
     assert_eq!(check(&eval(unknown), "viso_delay"), (Severity::Ok, ""));
     assert_eq!(check(&eval(ready()), "viso_delay"), (Severity::Ok, ""));
+}
+
+/// Poses older than the EKF can place get a message about the pipeline,
+/// not a delay the flight controller cannot take.
+#[test]
+fn viso_delay_flags_poses_older_than_the_ekf_window() {
+    let late = ExtnavPreArmInputs {
+        pose_age_ms: Some(452.0),
+        ..ready()
+    };
+    assert_eq!(
+        check(&eval(late), "viso_delay"),
+        (
+            Severity::Pending,
+            "Poses are 452 ms old when sent, older than the 250 ms the flight controller's EKF \
+             can place in time: it fuses them late and the vehicle sways. Cut the companion's \
+             load or LiDAR processing time; set VISO_DELAY_MS to 250 meanwhile."
+        )
+    );
+    let mut at_cap = with_param("VISO_DELAY_MS", 250.0);
+    at_cap.pose_age_ms = Some(452.0);
+    assert_eq!(check(&eval(at_cap), "viso_delay").0, Severity::Pending);
 }
 
 /// The compass library's late declination update reaches EKF3 only when it

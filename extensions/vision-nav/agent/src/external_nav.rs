@@ -25,9 +25,14 @@
 //! pose's first return) on the flight controller's clock, and the velocity
 //! is differenced over those instants, so the stamps no longer carry the
 //! varying delay of the scan, the matcher and the topic. ArduPilot's jitter
-//! correction maps the stamps onto its clock by the least delay seen;
-//! `VISO_DELAY_MS` must cover that least delay (for a 10 Hz LiDAR, at least
-//! the 100 ms revolution) for the EKF to fuse each pose at its own time.
+//! correction maps each stamp onto its clock as the stamp plus the least
+//! delay seen; EKF3 subtracts `VISO_DELAY_MS` and fuses the pose no earlier
+//! than its IMU buffer reaches back, `VISO_DELAY_MS` (at most 250 ms) before
+//! now. Together the EKF places every pose at its arrival
+//! minus `VISO_DELAY_MS`: set it to the typical age at arrival (the
+//! `viso_delay` pre-arm row's median) and keep the age short and steady,
+//! since each millisecond off is a position error of speed times that
+//! millisecond, and a pose older than 250 ms cannot be placed at all.
 //!
 //! Covariance: ArduPilot reduces the pose covariance to one error,
 //! `sqrt(c[0] + c[6] + c[11])` for position and `sqrt(c[15] + c[18] +

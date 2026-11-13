@@ -10,7 +10,8 @@
 //!   spins the vehicle), nor a boot-time origin far from `origin_lla`.
 //! * `fc_params`: the flight controller's external-nav parameters
 //!   ([`extnav_fc_params`]) are read and consistent with this mode: the
-//!   external-nav set takes position but not velocity from the pose, and
+//!   external-nav set takes position but not velocity from the pose, takes
+//!   its velocity from the optical-flow sensor when one is configured, and
 //!   takes its yaw from the pose only when the map's north is held
 //!   independently of the flight controller ([`MapNorth::holds_yaw`]).
 //! * `viso_delay`: `VISO_DELAY_MS` matches how old poses are when sent.
@@ -28,6 +29,11 @@ use crate::pre_arm::PreArmCheck;
 pub const ORIGIN_MISMATCH_M: f64 = 1000.0;
 /// `VISO_DELAY_MS` further than this from the measured pose age is pending.
 pub const VISO_DELAY_TOLERANCE_MS: f32 = 50.0;
+/// The oldest external-navigation sample ArduPilot's EKF3 can place in time:
+/// it sizes its IMU buffer from `VISO_DELAY_MS` capped at 250 ms and fuses an
+/// older sample at the buffer's oldest instant (`AP_NavEKF3_core.cpp`
+/// `setup_core`, `AP_NavEKF3_Measurements.cpp` `writeExtNavData`).
+pub const EKF_MAX_EXTNAV_DELAY_MS: f32 = 250.0;
 /// `AHRS_OPTIONS` bit 4: set the EKF origin at boot from `AHRS_ORIGIN_*`.
 const AHRS_OPTION_RECORDED_ORIGIN: i64 = 16;
 
@@ -232,12 +238,27 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
     // 1 m/s in fast manoeuvres, and over-trusted it tips the EKF's attitude
     // and accel bias until the position innovations fail their gates.
     let velxy = v(&format!("EK3_SRC{e}_VELXY"));
+    let flow = v("FLOW_TYPE");
     if velxy == 6 {
+        let fix = if flow != 0 {
+            "5 (optical flow)"
+        } else {
+            "0 (position only)"
+        };
         return PreArmCheck::blocking(
             ID,
             format!(
                 "EK3_SRC{e}_VELXY is 6: the EKF would trust the pose's velocity far beyond its \
-                 accuracy; set 0 (position only)."
+                 accuracy; set {fix}."
+            ),
+        );
+    }
+    if velxy == 5 && flow == 0 {
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{e}_VELXY is 5 (optical flow) but FLOW_TYPE is 0: the EKF would get no \
+                 velocity; set FLOW_TYPE for the flow sensor, or EK3_SRC{e}_VELXY 0."
             ),
         );
     }
@@ -288,11 +309,36 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
              EK3_MAG_EF_LIM above 0 (default 50) or COMPASS_AUTODEC 0 with the site's COMPASS_DEC.",
         );
     }
+    // Flow velocity is measured, not differenced from late poses: with it
+    // in the external-nav set the EKF holds velocity between poses, and a
+    // late pose moves the position less.
+    if flow != 0 && velxy != 5 {
+        return PreArmCheck::pending(
+            ID,
+            format!(
+                "FLOW_TYPE is {flow} but EK3_SRC{e}_VELXY is {velxy}: the external-nav set \
+                 ignores the optical-flow sensor; set EK3_SRC{e}_VELXY 5 so the EKF takes its \
+                 velocity from the flow between poses."
+            ),
+        );
+    }
     PreArmCheck::ok(ID, "")
 }
 
 fn viso_delay_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
     const ID: &str = "viso_delay";
+    if let Some(m) = i.pose_age_ms.filter(|m| *m > EKF_MAX_EXTNAV_DELAY_MS) {
+        let (m, cap) = (m.round() as i64, EKF_MAX_EXTNAV_DELAY_MS as i64);
+        return PreArmCheck::pending(
+            ID,
+            format!(
+                "Poses are {m} ms old when sent, older than the {cap} ms the flight \
+                 controller's EKF can place in time: it fuses them late and the vehicle \
+                 sways. Cut the companion's load or LiDAR processing time; set \
+                 VISO_DELAY_MS to {cap} meanwhile."
+            ),
+        );
+    }
     if let (Some(p), Some(m)) = (i.param("VISO_DELAY_MS"), i.pose_age_ms) {
         if (p - m).abs() > VISO_DELAY_TOLERANCE_MS {
             let (p, m) = (p.round() as i64, m.round() as i64);

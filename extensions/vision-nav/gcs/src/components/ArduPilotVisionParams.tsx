@@ -8,7 +8,7 @@ import { ParamCard, type ParamGroup } from "./ParamCard";
  * and flow-tuning parameters the optical-flow modes read.
  */
 const GROUPS: ParamGroup[] = [
-  { id: "drivers", rows: ["FLOW_TYPE"] },
+  { id: "drivers", rows: ["FLOW_TYPE", "RNGFND1_TYPE"] },
   {
     id: "sourceSets",
     rows: [
