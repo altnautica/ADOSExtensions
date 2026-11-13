@@ -72,10 +72,24 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
     assert_eq!(pd.frame, NavFrame::MapNed);
 
     assert!(nav
-        .on_pose(&at(estimate(1.0, 2.0, 0.0), 1_010), Some(10.0), None, 1_020, 0, false)
+        .on_pose(
+            &at(estimate(1.0, 2.0, 0.0), 1_010),
+            Some(10.0),
+            None,
+            1_020,
+            0,
+            false
+        )
         .is_none());
     let up = nav
-        .on_pose(&at(estimate(1.0, 2.0, 0.0), 1_034), Some(12.5), None, 1_034, 0, false)
+        .on_pose(
+            &at(estimate(1.0, 2.0, 0.0), 1_034),
+            Some(12.5),
+            None,
+            1_034,
+            0,
+            false,
+        )
         .unwrap();
     assert_eq!(up.pose.t[2], -2.5, "climbing 2.5 m is FRD z -2.5");
 }
@@ -115,7 +129,10 @@ fn a_10_hz_provider_publishes_every_pose_at_a_100_ms_interval() {
     let mut now_ms = 1_000_000;
     let mut published = 0;
     for k in 0..50 {
-        let e = at(estimate(0.0, 0.0, 0.0), 1_000 + k * 100 + jitter_ms[k as usize % 10]);
+        let e = at(
+            estimate(0.0, 0.0, 0.0),
+            1_000 + k * 100 + jitter_ms[k as usize % 10],
+        );
         now_ms += poll_step_ms[k as usize % 10];
         let now_mono_ns = e.t_ns + 120_000_000;
         if nav
@@ -141,13 +158,24 @@ fn a_30_hz_provider_is_thinned_to_the_interval() {
         let mut e = estimate(0.0, 0.0, 0.0);
         e.t_ns = 1_000_000_000 + k * 1_000_000_000 / 30;
         if nav
-            .on_pose(&e, Some(0.0), Some(0.0), 1_000 + k as i64 * 33, e.t_ns, false)
+            .on_pose(
+                &e,
+                Some(0.0),
+                Some(0.0),
+                1_000 + k as i64 * 33,
+                e.t_ns,
+                false,
+            )
             .is_some()
         {
             published.push(e.t_ns);
         }
     }
-    assert!((29..=31).contains(&published.len()), "{} of 90", published.len());
+    assert!(
+        (29..=31).contains(&published.len()),
+        "{} of 90",
+        published.len()
+    );
     assert!(
         published.windows(2).all(|w| w[1] - w[0] >= 50_000_000),
         "{published:?}"
@@ -162,7 +190,16 @@ fn a_measurement_time_that_goes_backwards_publishes() {
         pose_interval_ms: 100,
         ..settings(NavPoseMode::Always, ComputePlacement::Hybrid)
     });
-    let mut pose = |t_ms| nav.on_pose(&at(estimate(0.0, 0.0, 0.0), t_ms), Some(0.0), Some(0.0), 0, 0, false);
+    let mut pose = |t_ms| {
+        nav.on_pose(
+            &at(estimate(0.0, 0.0, 0.0), t_ms),
+            Some(0.0),
+            Some(0.0),
+            0,
+            0,
+            false,
+        )
+    };
     assert!(pose(5_000).is_some());
     assert!(pose(5_010).is_none());
     assert!(pose(20).is_some(), "the reset publishes");
@@ -325,7 +362,14 @@ fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
     );
     // One metre forward in SLAM is one metre east in map_ned.
     let pd = nav
-        .on_pose(&at(estimate(1.0, 0.0, 0.0), 1_000), None, Some(0.3), 1_000, 0, false)
+        .on_pose(
+            &at(estimate(1.0, 0.0, 0.0), 1_000),
+            None,
+            Some(0.3),
+            1_000,
+            0,
+            false,
+        )
         .unwrap();
     assert!(
         pd.pose.t[0].abs() < 1e-12 && (pd.pose.t[1] - 1.0).abs() < 1e-12,
@@ -369,16 +413,40 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
     for k in 0..=20 {
         let heading = truth - decl * (1.0 - k as f64 / 20.0);
         let jitter = 0.02 * (k % 3) as f64;
-        nav.on_pose(&at(estimate(jitter, -jitter, 0.0), k * 100), Some(0.0), Some(heading), k * 100, 0, false)
-            .unwrap();
+        nav.on_pose(
+            &at(estimate(jitter, -jitter, 0.0), k * 100),
+            Some(0.0),
+            Some(heading),
+            k * 100,
+            0,
+            false,
+        )
+        .unwrap();
     }
-    assert!((nav.map_yaw().unwrap() - truth).abs() < 1e-9, "the settled heading");
+    assert!(
+        (nav.map_yaw().unwrap() - truth).abs() < 1e-9,
+        "the settled heading"
+    );
     // Take-off: a climb past ON_SPOT_M fixes the north, and a later compass
     // swing in flight no longer moves it.
-    nav.on_pose(&at(estimate(0.0, 0.0, 0.0), 2_100), Some(ON_SPOT_M + 0.1), Some(truth), 2_100, 0, false)
-        .unwrap();
+    nav.on_pose(
+        &at(estimate(0.0, 0.0, 0.0), 2_100),
+        Some(ON_SPOT_M + 0.1),
+        Some(truth),
+        2_100,
+        0,
+        false,
+    )
+    .unwrap();
     let pd = nav
-        .on_pose(&at(estimate(10.0, 0.0, 0.0), 2_200), Some(3.0), Some(truth + 0.1), 2_200, 0, false)
+        .on_pose(
+            &at(estimate(10.0, 0.0, 0.0), 2_200),
+            Some(3.0),
+            Some(truth + 0.1),
+            2_200,
+            0,
+            false,
+        )
         .unwrap();
     assert!((nav.map_yaw().unwrap() - truth).abs() < 1e-9);
     // Ten metres forward in SLAM is ten metres south (heading 180°).
@@ -388,8 +456,15 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
         pd.pose.t
     );
     // Back over the take-off spot, the north stays fixed.
-    nav.on_pose(&at(estimate(0.0, 0.0, 0.0), 2_300), Some(0.0), Some(truth - 0.2), 2_300, 0, false)
-        .unwrap();
+    nav.on_pose(
+        &at(estimate(0.0, 0.0, 0.0), 2_300),
+        Some(0.0),
+        Some(truth - 0.2),
+        2_300,
+        0,
+        false,
+    )
+    .unwrap();
     assert!((nav.map_yaw().unwrap() - truth).abs() < 1e-9);
 }
 
@@ -398,12 +473,32 @@ fn moving_off_the_spot_on_the_ground_fixes_the_north_too() {
     let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
     nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.5), 0, 0, false)
         .unwrap();
-    nav.on_pose(&at(estimate(0.3, 0.0, 0.0), 100), None, Some(0.6), 100, 0, false)
-        .unwrap();
-    assert!((nav.map_yaw().unwrap() - 0.6).abs() < 1e-12, "0.3 m is still on the spot");
-    nav.on_pose(&at(estimate(0.3, 0.45, 0.0), 200), None, Some(0.7), 200, 0, false)
-        .unwrap();
-    assert!((nav.map_yaw().unwrap() - 0.6).abs() < 1e-12, "0.54 m away: fixed");
+    nav.on_pose(
+        &at(estimate(0.3, 0.0, 0.0), 100),
+        None,
+        Some(0.6),
+        100,
+        0,
+        false,
+    )
+    .unwrap();
+    assert!(
+        (nav.map_yaw().unwrap() - 0.6).abs() < 1e-12,
+        "0.3 m is still on the spot"
+    );
+    nav.on_pose(
+        &at(estimate(0.3, 0.45, 0.0), 200),
+        None,
+        Some(0.7),
+        200,
+        0,
+        false,
+    )
+    .unwrap();
+    assert!(
+        (nav.map_yaw().unwrap() - 0.6).abs() < 1e-12,
+        "0.54 m away: fixed"
+    );
 }
 
 /// With the flight controller's yaw taken from the map (ArduPilot
@@ -416,22 +511,32 @@ fn moving_off_the_spot_on_the_ground_fixes_the_north_too() {
 fn a_declared_north_is_latched_once_and_never_follows_the_fc_heading() {
     let truth = 180f64.to_radians();
     let drift_per_pose = 0.001; // rad: gyro drift between two poses
-    // The loop the FC-heading north closes: the FC yaw is the last published
-    // map yaw plus drift.
+                                // The loop the FC-heading north closes: the FC yaw is the last published
+                                // map yaw plus drift.
     let walk = |s: NavSettings| {
         let mut nav = NavMap::new(s);
         let mut fc_yaw = truth;
         let mut pd = None;
         for k in 0..2_000 {
             let jitter = 0.02 * (k % 3) as f64;
-            pd = nav.on_pose(&at(estimate(jitter, -jitter, 0.0), k * 100), Some(0.0), Some(fc_yaw), k * 100, 0, false);
+            pd = nav.on_pose(
+                &at(estimate(jitter, -jitter, 0.0), k * 100),
+                Some(0.0),
+                Some(fc_yaw),
+                k * 100,
+                0,
+                false,
+            );
             let r = pd.as_ref().unwrap().pose.r;
             fc_yaw = frd_yaw(&r) + drift_per_pose;
         }
         (nav, pd.unwrap())
     };
     let (followed, pd) = walk(settings(NavPoseMode::Always, ComputePlacement::Onboard));
-    assert!(wrap_pi(followed.map_yaw().unwrap() - truth).abs() > 1.0, "the loop walks");
+    assert!(
+        wrap_pi(followed.map_yaw().unwrap() - truth).abs() > 1.0,
+        "the loop walks"
+    );
     assert_eq!(pd.north, Some(MapNorth::FcHeading));
 
     let declared = NavSettings {
@@ -439,7 +544,10 @@ fn a_declared_north_is_latched_once_and_never_follows_the_fc_heading() {
         ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
     };
     let (latched, pd) = walk(declared);
-    assert!(wrap_pi(latched.map_yaw().unwrap() - truth).abs() < 1e-9, "the north holds");
+    assert!(
+        wrap_pi(latched.map_yaw().unwrap() - truth).abs() < 1e-9,
+        "the north holds"
+    );
     assert_eq!(pd.north, Some(MapNorth::Declared));
     assert!((wrap_pi(frd_yaw(&pd.pose.r) - truth)).abs() < 1e-9);
 }
@@ -459,7 +567,14 @@ fn a_declared_north_needs_no_fc_heading_and_places_the_first_pose() {
     assert!(wrap_pi(nav.map_yaw().unwrap() - (PI / 2.0 - 0.2)).abs() < 1e-9);
     // Ten metres along the SLAM x axis.
     let pd = nav
-        .on_pose(&at(estimate(10.0, 0.0, 0.0), 1_000), None, Some(0.0), 1_000, 0, false)
+        .on_pose(
+            &at(estimate(10.0, 0.0, 0.0), 1_000),
+            None,
+            Some(0.0),
+            1_000,
+            0,
+            false,
+        )
         .unwrap();
     let yaw = PI / 2.0 - 0.2;
     assert!((pd.pose.t[0] - 10.0 * yaw.cos()).abs() < 1e-9);
@@ -544,7 +659,9 @@ fn a_3_degree_compass_error_stays_under_a_metre_137_m_past_gnss_loss() {
     // The GNSS wander at the loss (0.42 m here) is the EKF's own error too.
     let at_switch = err(k_loss, published[k_loss]);
     assert!(at_switch < 0.6, "{at_switch:.2} m jump at the switch");
-    let worst = (k_loss..=k137).map(|k| err(k, published[k])).fold(0.0, f64::max);
+    let worst = (k_loss..=k137)
+        .map(|k| err(k, published[k]))
+        .fold(0.0, f64::max);
     assert!(
         worst < 1.0,
         "{worst:.2} m within 137 m of the loss (fit {:.3}°, baseline {:.1} m)",
@@ -553,11 +670,17 @@ fn a_3_degree_compass_error_stays_under_a_metre_137_m_past_gnss_loss() {
     );
     // The compass-latched map at the first scan alone, for scale: the fault
     // this guards.
-    let compass = err(k137, align::rot2(h0 + compass_err, {
-        let e = slam(k137);
-        [e.t[0], -e.t[1]]
-    }));
-    assert!(compass > 6.0, "the compass latch alone is {compass:.2} m off");
+    let compass = err(
+        k137,
+        align::rot2(h0 + compass_err, {
+            let e = slam(k137);
+            [e.t[0], -e.t[1]]
+        }),
+    );
+    assert!(
+        compass > 6.0,
+        "the compass latch alone is {compass:.2} m off"
+    );
     let fit_err = wrap_pi(fit.yaw - h0).to_degrees();
     assert!(fit_err.abs() < 0.4, "fit off by {fit_err:.3}°");
 }
