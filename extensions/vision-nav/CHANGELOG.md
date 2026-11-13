@@ -2,9 +2,7 @@
 
 All notable changes to the Vision Navigation extension.
 
-## [0.8.1] - Unreleased
-
-Ships after 0.8.0, which takes the [Unreleased] section.
+## [0.8.0]
 
 ### Changed
 
@@ -33,11 +31,6 @@ Ships after 0.8.0, which takes the [Unreleased] section.
   rangefinder (`RNGFND1_TYPE` 10 for a MAVLink flow-and-range module,
   otherwise the flight controller's own rangefinder type), and the
   parameter card lists the rangefinder.
-
-## [0.8.0]
-
-### Changed
-
 - External navigation: the `ODOMETRY` position covariance follows the
   pose's own horizontal uncertainty (`sigma_xy_m` on the pose topic) where
   it is larger than the health's σ, and `quality` drops to 30 while it is

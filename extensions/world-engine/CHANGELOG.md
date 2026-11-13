@@ -2,23 +2,6 @@
 
 All notable changes to the World Engine extension.
 
-## [2.2.1] - Unreleased
-
-Ships after 2.2.0, which takes the [Unreleased] section below.
-
-### Fixed
-
-- **Every LiDAR pose reaches the flight controller, one poll after it is
-  estimated.** The navigation pose was gated on the wall-clock time of the
-  100 ms poll that handed it over, so a 10 Hz matcher's pose that arrived
-  99 ms after the last was dropped (4-7.6 Hz published, gaps of 200-400 ms)
-  and each pose waited up to a poll for publication. The pose lane now polls
-  every 10 ms and gates on the estimate's own measurement time:
-  `atlas.pose_publish_interval_ms` keeps the published rate on average, and a
-  pose up to half an interval early is published, so a provider at exactly
-  the interval loses none. A measurement time that goes backwards (provider
-  reset) publishes at once.
-
 ## [Unreleased]
 
 ### Added
@@ -136,6 +119,17 @@ Ships after 2.2.0, which takes the [Unreleased] section below.
   maximum range (`masks.py --lidar-max-range`).
 
 ### Fixed
+
+- **Every LiDAR pose reaches the flight controller, one poll after it is
+  estimated.** The navigation pose was gated on the wall-clock time of the
+  100 ms poll that handed it over, so a 10 Hz matcher's pose that arrived
+  99 ms after the last was dropped (4-7.6 Hz published, gaps of 200-400 ms)
+  and each pose waited up to a poll for publication. The pose lane now polls
+  every 10 ms and gates on the estimate's own measurement time:
+  `atlas.pose_publish_interval_ms` keeps the published rate on average, and a
+  pose up to half an interval early is published, so a provider at exactly
+  the interval loses none. A measurement time that goes backwards (provider
+  reset) publishes at once. 2.2.0.
 
 - **The exported splat's floater filter finishes on a large outdoor site.**
   The filter voxelised the scene at a fixed 5 cm, and its run time grows with
