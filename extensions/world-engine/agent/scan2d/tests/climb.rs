@@ -453,3 +453,59 @@ fn sigma_grows_while_the_prior_rides_and_holds_in_the_submap_it_placed() {
         .collect();
     assert!(!hover.is_empty() && hover.iter().all(|&s| s == placed), "hover: {hover:?}");
 }
+
+/// A 90° pivot at 70°/s in a 4 m aisle with racking posts, hovering at
+/// 2.5 m with the height fed (so the floor margin applies): the matched
+/// heading follows the pivot and holds within 1° after it. A guard for the
+/// fast yaw at a cross aisle; it passes on the matcher before and after the
+/// floor rejection and the climb time bound alike.
+#[test]
+fn a_fast_pivot_at_hover_height_keeps_the_heading() {
+    const RATE: f64 = 70.0 * std::f64::consts::PI / 180.0;
+    const START_S: f64 = 2.0;
+    let pivot_s = std::f64::consts::FRAC_PI_2 / RATE;
+    let yaw = |t: f64| RATE * (t - START_S).clamp(0.0, pivot_s);
+    let rate = |t: f64| if (START_S..START_S + pivot_s).contains(&t) { RATE } else { 0.0 };
+    let mut world = common::rect(-20.0, -2.0, 20.0, 2.0);
+    for x in [-9.0, -5.0, -1.5, 3.0, 7.0, 11.0] {
+        world.extend(common::rect(x, 1.6, x + 0.3, 2.0));
+        world.extend(common::rect(x + 1.0, -2.0, x + 1.3, -1.6));
+    }
+    let mut slam = LocalSlam::new(cfg());
+    let mut rng = Rng::new(5);
+    let period_s = PERIOD_NS as f64 * 1e-9;
+    let n = ((START_S + pivot_s + 3.0) / period_s) as u64;
+    let mut k = 0u64;
+    let mut worst_after = 0.0f64;
+    for i in 0..n {
+        let t = i as f64 * period_s;
+        let pose_at = |s: f64| Pose2::new(0.0, 0.0, yaw(s));
+        let scan: ScanInput = revolution(&world, &pose_at, t, C1, &mut rng);
+        let end_ms = ((t + (BEAMS - 1) as f64 / BEAMS as f64 * period_s) * 1000.0) as u64;
+        while k <= end_ms {
+            let (t_ns, t_s) = (k * 1_000_000, k as f64 * 1e-3);
+            if k.is_multiple_of(5) {
+                slam.feed_imu(&ImuSample {
+                    t_ns,
+                    gyro: [0.0, 0.0, rate(t_s)],
+                    accel: [0.0, 0.0, 9.81],
+                });
+            }
+            if k.is_multiple_of(50) {
+                slam.feed_height(&HeightSample {
+                    t_ns,
+                    up_m: 2.5,
+                    up_rate_mps: 0.0,
+                });
+            }
+            k += 1;
+        }
+        let p = slam.feed_scan(&scan);
+        if t > START_S + pivot_s + 0.5 {
+            let d = p.yaw - yaw(t);
+            let err = d.sin().atan2(d.cos()).abs().to_degrees();
+            worst_after = worst_after.max(err);
+        }
+    }
+    assert!(worst_after < 1.0, "heading off by {worst_after:.2}° after the pivot");
+}
