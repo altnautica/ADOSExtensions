@@ -143,7 +143,7 @@
     "atlas.pose_publish_interval_ms": {
       "type": "integer",
       "title": "Pose publish interval (ms)",
-      "description": "Minimum interval between published navigation poses (33 for 30 Hz). The pose cannot publish faster than its provider estimates.",
+      "description": "Interval between published navigation poses in their own measurement time (33 for 30 Hz), kept on average; a pose up to half an interval early is published. The pose cannot publish faster than its provider estimates.",
       "minimum": 0,
       "default": 100
     },

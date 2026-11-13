@@ -217,9 +217,9 @@ impl Engine {
         self.fc_imu_prev = Some(cur);
     }
 
-    /// The pose interval: the FC attitude stand-in while there is no
-    /// `RAW_IMU`, publish the newest pose when due, then place the scans the
-    /// new poses settled.
+    /// The pose lane's poll ([`super::NAV_POLL`]): the FC attitude stand-in
+    /// while there is no `RAW_IMU`, publish the newest pose when due, then
+    /// place the scans the new poses settled.
     pub(super) async fn on_nav_tick(&mut self) {
         self.feed_fc_attitude();
         if let Some(pd) = self.drain_poses() {

@@ -52,6 +52,11 @@ use crate::vehicle::VehicleFeed;
 
 /// The loop's tick: pose drain and state refresh.
 pub const TICK: Duration = Duration::from_millis(100);
+/// The pose lane's poll, independent of `atlas.pose_publish_interval_ms`
+/// (which only thins the poses, on their own measurement time): a pose
+/// waits at most one poll for publication, and the flight controller fuses
+/// it that much older.
+pub const NAV_POLL: Duration = Duration::from_millis(10);
 /// Ticks between health records, HUD pages and capture-state publishes.
 const SLOW_TICKS: u32 = 10;
 
@@ -250,7 +255,6 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         budget_mb = budget.total_mb(),
         "atlas_nav_lanes"
     );
-    let nav_period = Duration::from_millis(cfg.pose_publish_interval_ms.clamp(10, 1000) as u64);
     let mut engine = Engine {
         keyframes: CaptureSession::new(cfg.capture.clone()),
         exposure: cfg.exposure.clone(),
@@ -316,8 +320,8 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     });
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The pose lane drains the provider at its own publish interval.
-    let mut nav_tick = tokio::time::interval(nav_period);
+    // The pose lane drains the provider as soon as an estimate lands.
+    let mut nav_tick = tokio::time::interval(NAV_POLL);
     nav_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     engine.publish_status().await;
     // A configured lock is applied once per run; unlocked leaves the cameras

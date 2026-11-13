@@ -111,7 +111,7 @@ Per-node plugin configuration (`config-schema.json`):
 | `atlas.selection.*` | Keyframe selection thresholds |
 | `atlas.intrinsics.*` | Camera intrinsics |
 | `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02) |
-| `atlas.pose_publish_interval_ms` | Minimum interval between published navigation poses, in ms (100; 33 for 30 Hz, bounded by the provider's own rate) |
+| `atlas.pose_publish_interval_ms` | Interval between published navigation poses in the poses' own measurement time, in ms (100; 33 for 30 Hz, bounded by the provider's own rate). Kept on average; a pose up to half an interval early is published, so a provider at exactly the interval loses none. Poses are polled every 10 ms and published as soon as the gate allows |
 | `atlas.takeoff_heading_deg` | The heading the vehicle faces where it starts, degrees clockwise from true north. Set, the navigation map's north is latched from it once at the first pose and never taken from the flight controller (pose `north: declared`), so the flight controller may take its yaw from the map (ArduPilot `EK3_SRCn_YAW` 6). Unset (default), the north follows the flight controller's heading until take-off (`north: fc_heading`), which must then not be the EKF's yaw source |
 | `offload.enabled` | Perception offload: `auto`, `on` or `off` |
 | `offload.compute_node_addr` | Compute node pinned as `host:port` for both the Atlas forwarder and the offload session; empty discovers one on the LAN over mDNS |

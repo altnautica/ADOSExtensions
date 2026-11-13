@@ -2,8 +2,9 @@
 //! while the pose provider runs (`atlas.nav_pose = always`, or only with a
 //! session open for `capture`) the capture service publishes
 //!
-//! - `plugin.world-engine.pose` in the north-aligned `map_ned` at most every
-//!   `atlas.pose_publish_interval_ms` (no faster than the provider estimates);
+//! - `plugin.world-engine.pose` in the north-aligned `map_ned`, one every
+//!   `atlas.pose_publish_interval_ms` of the poses' own measurement time
+//!   (no faster than the provider estimates; see [`NavMap::on_pose`]);
 //! - `plugin.world-engine.scan`, each LiDAR scan binned in the body frame;
 //! - `plugin.world-engine.occupancy` live tiles and
 //!   `plugin.world-engine.pointcloud` sweep-cloud deltas, 1 Hz;
@@ -143,7 +144,9 @@ fn nav_source(s: PoseSource) -> NavPoseSource {
 pub struct NavMap {
     settings: NavSettings,
     map: LiveMap,
-    last_pub_ms: Option<i64>,
+    /// The measurement time (`t_ns`) of the last published pose and the time
+    /// the next one is due.
+    last_pub: Option<(u64, u64)>,
     /// The flight controller's up height at the first nav pose: `map_ned` z is
     /// measured from it.
     fc_up0: Option<f64>,
@@ -196,7 +199,7 @@ impl NavMap {
         Self {
             map: LiveMap::new(settings.placement.live_voxel_m(), settings.budget.sweep()),
             settings,
-            last_pub_ms: None,
+            last_pub: None,
             fc_up0: None,
             yaw0: None,
             spot: None,
@@ -360,7 +363,7 @@ impl NavMap {
     }
 
     /// Fold one provider estimate; the descriptor to publish when the lanes
-    /// are on and the interval is due. `fc_heading` is the flight
+    /// are on and the pose is due (`pose_due`). `fc_heading` is the flight
     /// controller's attitude yaw now (radians from north): without a declared
     /// take-off heading the map's north follows it while the vehicle is on
     /// the spot of the first heading (see the module docs) and is fixed once
@@ -388,13 +391,9 @@ impl NavMap {
         if !self.active(session_open) {
             return None;
         }
-        let due = self
-            .last_pub_ms
-            .is_none_or(|last| now_ms < last || now_ms - last >= self.settings.pose_interval_ms);
-        if !due {
+        if !self.pose_due(e.t_ns) {
             return None;
         }
-        self.last_pub_ms = Some(now_ms);
         Some(PoseDescriptor {
             pose: Pose { r, t, cov: None },
             anchor: None,
@@ -404,6 +403,29 @@ impl NavMap {
             source: nav_source(e.source),
             north: self.north(),
         })
+    }
+
+    /// Whether the pose measured at `t_ns` is published, on the provider's
+    /// own clock rather than the time a poll hands it over. Poses are due one
+    /// interval apart on average; one up to half an interval early is
+    /// published, so a provider at exactly the interval, whose measurement
+    /// times jitter a few ms either side of it, loses none, and no two are
+    /// published within half an interval. A time that goes backwards (the
+    /// provider reset) publishes and restarts the schedule.
+    fn pose_due(&mut self, t_ns: u64) -> bool {
+        let interval_ns = self.settings.pose_interval_ms.max(0) as u64 * 1_000_000;
+        let next_ns = match self.last_pub {
+            None => t_ns + interval_ns,
+            Some((last_ns, _)) if t_ns < last_ns => t_ns + interval_ns,
+            Some((_, next_ns)) if t_ns + interval_ns / 2 >= next_ns => {
+                // Kept on the schedule, re-anchored after a gap so the poses
+                // that follow it are not let through in a burst.
+                (next_ns + interval_ns).max(t_ns + interval_ns)
+            }
+            Some(_) => return false,
+        };
+        self.last_pub = Some((t_ns, next_ns));
+        true
     }
 
     /// Fold one LiDAR scan: the body-frame scan and the placed polar record
