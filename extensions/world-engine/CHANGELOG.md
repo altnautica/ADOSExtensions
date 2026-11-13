@@ -6,6 +6,13 @@ All notable changes to the World Engine extension.
 
 ### Added
 
+- **Coloured LiDAR cloud.** A reconstruction of a session with LiDAR and
+  camera frames adds `cloud_rgb.laz`, the LiDAR points coloured from the
+  frames on the GPU (at the frames' prior poses, then at the SfM-refined
+  poses when SfM placed the model in the world frame), and every job writes
+  `provenance.json` naming its pose source (`slam`, `slam+ba`, `truth` or
+  `images`), preset and SfM method.
+
 - **Navigation lanes independent of capture.** With `atlas.nav_pose =
   always` (the default when an RPLIDAR device is set) the capture service
   publishes the navigation pose in the north-aligned `map_ned` (the SLAM

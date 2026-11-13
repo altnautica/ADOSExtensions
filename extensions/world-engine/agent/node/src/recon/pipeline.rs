@@ -235,6 +235,18 @@ fn reconstruct(
             )?;
             detail["masks"] = serde_json::to_value(m)?;
         }
+        // The LiDAR cloud coloured from the frames at their prior poses; the
+        // sfm stage recolours it at the refined poses when SfM posed them.
+        if has_lidar && summary.frames > 0 {
+            let c = train::colorize(
+                ctx.runner,
+                &dataset,
+                None,
+                &dataset.join("cloud_rgb.laz"),
+                &mut |_| {},
+            )?;
+            detail["colorize"] = serde_json::Value::Object(c);
+        }
         Ok(detail)
     })?;
     let prior = prep["pose_prior"].as_str().map(str::to_string);
@@ -273,6 +285,17 @@ fn reconstruct(
             None => serde_json::to_value(sfm::run(ctx.runner, &dataset, &sfm_dir, &opts, p)?)?,
         };
         lidar.annotate(&mut detail)?;
+        let world = detail["world_frame"].as_bool().unwrap_or(false);
+        if world && dataset.join("cloud_rgb.laz").is_file() {
+            let c = train::colorize(
+                ctx.runner,
+                &dataset,
+                Some(&dataset.join("sparse").join("0")),
+                &dataset.join("cloud_rgb.laz"),
+                &mut |_| {},
+            )?;
+            detail["colorize"] = serde_json::Value::Object(c);
+        }
         Ok(detail)
     })?;
     let world_frame = sfm_detail["world_frame"].as_bool().unwrap_or(false);
@@ -383,6 +406,9 @@ fn reconstruct(
                 generation,
                 spec: &spec,
                 tour_viewer: &ctx.tour_viewer,
+                prior: prior.as_deref(),
+                sfm_method: sfm_detail["method"].as_str(),
+                preset: preset.as_str(),
             },
             p,
         )?;

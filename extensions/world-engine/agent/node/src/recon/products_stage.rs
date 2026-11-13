@@ -48,6 +48,12 @@ pub struct ProductsInput<'a> {
     pub generation: u32,
     pub spec: &'a PresetSpec,
     pub tour_viewer: &'a Path,
+    /// The pose prior `prepare` used (`truth`, `lidar2d`, ...); `None` without one.
+    pub prior: Option<&'a str>,
+    /// The SfM method that posed the frames (`pose_prior_mapper`, ...).
+    pub sfm_method: Option<&'a str>,
+    /// The preset name, for the provenance record.
+    pub preset: &'a str,
 }
 
 /// The file name of the deliverables list.
@@ -343,6 +349,7 @@ pub fn run(
             Err(e) => tracing::warn!(error = %e, "esdf skipped"),
         }
     }
+    arts.extend(copy_coloured_cloud(job, &out, &place)?);
     progress(0.5);
 
     // Indoor products.
@@ -435,7 +442,42 @@ pub fn run(
     }
     fs::write(out.join(OUTPUTS_FILE), serde_json::to_vec_pretty(&arts)?)?;
     progress(1.0);
+    let provenance = serde_json::json!({
+        "pose_source": pose_source(input.prior, input.sfm_method),
+        "preset": input.preset,
+        "sfm_method": input.sfm_method,
+    });
+    fs::write(
+        out.join("provenance.json"),
+        serde_json::to_vec_pretty(&provenance)?,
+    )?;
     Ok(arts)
+}
+
+/// Where a job's camera poses came from, as every product's provenance names it.
+pub fn pose_source(prior: Option<&str>, sfm_method: Option<&str>) -> &'static str {
+    match (prior, sfm_method) {
+        (Some("truth"), _) => "truth",
+        (Some(_), Some("pose_prior_mapper")) => "slam+ba",
+        (Some(_), _) => "slam",
+        (None, _) => "images",
+    }
+}
+
+/// `dataset/cloud_rgb.laz` (the LiDAR cloud coloured on the GPU) copied into `out/` as a
+/// point-cloud artifact.
+pub(super) fn copy_coloured_cloud(
+    job: &Path,
+    out: &Path,
+    place: &dyn Fn(&str, Kind, Fmt) -> Result<String, StageError>,
+) -> Result<Vec<ArtifactOut>, StageError> {
+    let src = job.join("dataset").join("cloud_rgb.laz");
+    if !src.is_file() {
+        return Ok(vec![]);
+    }
+    fs::copy(&src, out.join("cloud_rgb.laz"))?;
+    let sidecar = place("cloud_rgb.laz", Kind::Pointcloud, Fmt::Laz)?;
+    Ok(vec![art("pointcloud", "cloud_rgb.laz", "laz", Some(sidecar))])
 }
 
 pub(super) fn art(kind: &str, file: &str, format: &str, place_json: Option<String>) -> ArtifactOut {
@@ -656,5 +698,28 @@ mod tests {
             floater_voxel_m(&[k(0.0, 0.0, 2.0), k(230.0, 260.0, 2.0)]),
             0.356
         );
+    }
+
+    #[test]
+    fn pose_source_names_truth_slam_and_refined_slam() {
+        assert_eq!(pose_source(Some("truth"), Some("pose_prior_mapper")), "truth");
+        assert_eq!(pose_source(Some("lidar2d"), Some("known_poses")), "slam");
+        assert_eq!(pose_source(Some("lidar2d"), Some("pose_prior_mapper")), "slam+ba");
+        assert_eq!(pose_source(Some("lidar2d"), None), "slam");
+        assert_eq!(pose_source(None, Some("mapper")), "images");
+    }
+
+    #[test]
+    fn a_coloured_cloud_in_the_dataset_becomes_an_artifact_with_a_sidecar() {
+        let dir = tempfile::tempdir().unwrap();
+        let job = dir.path();
+        std::fs::create_dir_all(job.join("dataset")).unwrap();
+        std::fs::write(job.join("dataset").join("cloud_rgb.laz"), b"LASF").unwrap();
+        let out = job.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let arts = copy_coloured_cloud(job, &out, &|f, _k, _fmt| Ok(format!("{f}.place.json"))).unwrap();
+        assert_eq!(arts.len(), 1);
+        assert_eq!(arts[0].file, "cloud_rgb.laz");
+        assert!(out.join("cloud_rgb.laz").is_file());
     }
 }

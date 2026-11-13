@@ -113,6 +113,9 @@ fn tour_writer_emits_esdf_and_thinned_nodes() {
         generation: 1,
         spec: &spec,
         tour_viewer: &viewer,
+        prior: None,
+        sfm_method: None,
+        preset: "tour",
     };
     let kf = keyframes(&job);
     assert_eq!(kf.len(), 20, "one keyframe per capture instant");

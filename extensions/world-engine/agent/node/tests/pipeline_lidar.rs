@@ -115,6 +115,16 @@ async fn a_lidar_tour_masks_mirrors_and_falls_back_to_brush() {
         .count();
     assert!(mask_files > 0);
 
+    // The LiDAR cloud was coloured from the frames and shipped, and the job
+    // names its pose source.
+    assert_eq!(prep["colorize"]["poses"], "frames", "{prep}");
+    assert!(job_dir.join("out/cloud_rgb.laz").is_file());
+    let provenance: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(job_dir.join("out/provenance.json")).unwrap())
+            .unwrap();
+    assert_eq!(provenance["preset"], "tour", "{provenance}");
+    assert!(provenance["pose_source"].is_string(), "{provenance}");
+
     // Brush stood in for gsplat, at full length, and said why.
     let train = &done["stages"][2]["detail"];
     assert_eq!(train["trainer"], "brush");

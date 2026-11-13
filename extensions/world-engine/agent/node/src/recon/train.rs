@@ -289,6 +289,30 @@ pub fn gsplat(
     })
 }
 
+/// Colour the dataset's LiDAR cloud (`dataset/lidar_points.laz`) from its frames on the GPU
+/// (`colorize.py`): at the frames' prior poses, or at the SfM model's when `colmap` is given.
+/// Writes `out`.
+pub fn colorize(
+    runner: &dyn ToolRunner,
+    dataset: &Path,
+    colmap: Option<&Path>,
+    out: &Path,
+    progress: &mut dyn FnMut(f32),
+) -> Result<serde_json::Map<String, serde_json::Value>, StageError> {
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "--cloud".into(),
+        dataset.join("lidar_points.laz").into(),
+        "--dataset".into(),
+        dataset.into(),
+        "--out".into(),
+        out.into(),
+    ];
+    if let Some(c) = colmap {
+        args.extend(["--colmap".into(), c.into()]);
+    }
+    run_script(runner, "colorize.py", args, dataset, progress)
+}
+
 /// Monocular metric depth priors for every image (`dataset/depths/`).
 pub fn depth_priors(
     runner: &dyn ToolRunner,
