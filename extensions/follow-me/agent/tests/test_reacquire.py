@@ -65,7 +65,7 @@ def test_template_moves_slowly_and_resets_on_model_change() -> None:
 def test_best_candidate_needs_appearance_and_position() -> None:
     template = Embedding("osnet", (1.0, 0.0, 0.0))
     same = _det([1.0, 0.0, 0.0], x=1.0)
-    near_same = _det([0.9, 0.1, 0.0], x=2.0)
+    near_same = _det([0.8, 0.45, 0.0], x=2.0)
     different = _det([0.0, 1.0, 0.0], x=3.0)
     car = _det([1.0, 0.0, 0.0], label="car", x=4.0)
     far = _det([1.0, 0.0, 0.0], x=5.0)
@@ -74,3 +74,20 @@ def test_best_candidate_needs_appearance_and_position() -> None:
     assert _pick([different, car, far], template, {5.0: 4.0}) is None
     # No template (no embeddings ever seen): nothing can be re-acquired.
     assert _pick([same], None, {}) is None
+
+
+def test_two_lookalikes_inside_the_gate_are_not_relocked() -> None:
+    template = Embedding("osnet", (1.0, 0.0, 0.0))
+    a = _det([1.0, 0.0, 0.0], x=1.0)
+    b = _det([0.99, 0.14, 0.0], x=2.0)
+    assert _pick([a, b], template, {}) is None
+    # A clearly better match among the in-gate people still re-locks.
+    c = _det([0.8, 0.45, 0.0], x=3.0)
+    pick = _pick([a, c], template, {})
+    assert pick is not None and pick.detection is a
+
+
+def test_a_template_from_another_model_never_matches() -> None:
+    template = Embedding("reid_osnet_x0_25_ados_v1", (1.0, 0.0, 0.0))
+    d = _det([1.0, 0.0, 0.0], model="histogram", x=1.0)
+    assert _pick([d], template, {}) is None

@@ -31,6 +31,9 @@ MAX_MAHALANOBIS = 3.0
 # How much a fresh embedding of the locked subject moves the template. Slow,
 # so a few frames of partial occlusion do not drag it toward the occluder.
 TEMPLATE_ALPHA = 0.1
+# The cosine lead the best in-gate candidate needs over the runner-up. Two
+# people closer than this look alike, and neither is re-locked.
+MIN_MARGIN = 0.08
 
 PERSON = "person"
 
@@ -130,16 +133,18 @@ def best_candidate(
     min_similarity: float,
     measure: Callable[[Any], tuple[float, float, Cov2] | None],
     gate: Callable[[float, float, Cov2], float | None],
+    min_margin: float = MIN_MARGIN,
 ) -> Candidate | None:
     """The most similar ``person`` detection inside both gates, or ``None``.
 
     ``measure(bbox)`` resolves a box to an absolute north/east position and
     its covariance; ``gate(n, e, cov)`` is the Mahalanobis distance from the
-    prediction.
+    prediction. When the runner-up inside both gates is within ``min_margin``
+    cosine of the best, the match is ambiguous and there is none.
     """
     if template is None:
         return None
-    best: Candidate | None = None
+    found: list[Candidate] = []
     for det in detections:
         if getattr(det, "class_label", None) != PERSON:
             continue
@@ -159,13 +164,18 @@ def best_candidate(
         d = gate(north, east, cov)
         if d is None or d > MAX_MAHALANOBIS:
             continue
-        if best is None or sim > best.similarity:
-            best = Candidate(det, sim, d, north, east, cov)
-    return best
+        found.append(Candidate(det, sim, d, north, east, cov))
+    if not found:
+        return None
+    found.sort(key=lambda c: c.similarity, reverse=True)
+    if len(found) >= 2 and found[0].similarity - found[1].similarity < min_margin:
+        return None
+    return found[0]
 
 
 __all__ = [
     "MAX_MAHALANOBIS",
+    "MIN_MARGIN",
     "Candidate",
     "Coast",
     "Embedding",
