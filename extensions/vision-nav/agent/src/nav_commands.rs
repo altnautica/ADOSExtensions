@@ -91,13 +91,14 @@ const EXTNAV_FIXED_PARAMS: &[&str] = &[
 ];
 
 /// The flight-controller parameters the external-nav pre-arm checks read:
-/// the fixed set plus `EK3_SRC{e}_POSXY`/`_YAW` of the external-nav set and
-/// `EK3_SRC{f}_POSXY`/`_VELXY` of the fallback set.
+/// the fixed set plus `EK3_SRC{e}_POSXY`/`_VELXY`/`_YAW` of the external-nav
+/// set and `EK3_SRC{f}_POSXY`/`_VELXY` of the fallback set.
 pub fn extnav_fc_params(cfg: &ExternalNavConfig) -> Vec<String> {
     let (e, f) = (cfg.extnav_set, cfg.fallback_set);
     let mut ids: Vec<String> = EXTNAV_FIXED_PARAMS.iter().map(|s| s.to_string()).collect();
     for id in [
         format!("EK3_SRC{e}_POSXY"),
+        format!("EK3_SRC{e}_VELXY"),
         format!("EK3_SRC{e}_YAW"),
         format!("EK3_SRC{f}_POSXY"),
         format!("EK3_SRC{f}_VELXY"),
@@ -210,7 +211,7 @@ mod tests {
             ..ExternalNavConfig::default()
         };
         let ids = extnav_fc_params(&cfg);
-        assert_eq!(ids.len(), 11);
+        assert_eq!(ids.len(), 12);
         for id in [
             "VISO_TYPE",
             "EK3_SRC1_POSXY",

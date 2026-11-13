@@ -400,7 +400,7 @@ describe("NavigationTab", () => {
                 id: "fc_params",
                 severity: "blocking",
                 detail:
-                  "EK3_SRC1_YAW is 6: the EKF would take north from the SLAM map; use 1 (compass).",
+                  "EK3_SRC1_YAW is 6 but the map's north follows the flight controller's heading; set the pose provider's take-off heading, or use 1 (compass).",
               },
               {
                 id: "viso_delay",

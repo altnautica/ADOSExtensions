@@ -40,6 +40,7 @@ fn pose(x: f64, y: f64, yaw: f64, health: ExtnavHealth) -> PoseSample {
         r: yaw_matrix(yaw),
         t: [x, y, 0.0],
         health,
+        north: Some(MapNorth::Declared),
     }
 }
 
@@ -74,6 +75,28 @@ fn map_ned_payload_passes_through() {
     assert_eq!(p.health, ExtnavHealth::Good);
     assert_eq!(p.ts_ms, 1234);
     assert!((p.yaw() - 0.5).abs() < 1e-12);
+    // This payload does not say where its north comes from.
+    assert_eq!(p.north, None);
+}
+
+#[test]
+fn the_map_north_is_read_from_a_map_ned_pose() {
+    let with_north = |north: &str| {
+        let Value::Map(mut m) = payload("map_ned", "good", IDENTITY, [0.0; 3]) else {
+            unreachable!()
+        };
+        m.push((Value::from("north"), Value::from(north)));
+        parse_pose_payload(&Value::Map(m)).unwrap().north
+    };
+    assert_eq!(with_north("declared"), Some(MapNorth::Declared));
+    assert_eq!(with_north("gnss"), Some(MapNorth::Gnss));
+    assert_eq!(with_north("fc_heading"), Some(MapNorth::FcHeading));
+    // A word this build does not know reads as "does not say".
+    assert_eq!(with_north("magnetic"), None);
+    assert!(MapNorth::holds_yaw(Some(MapNorth::Declared)));
+    assert!(MapNorth::holds_yaw(Some(MapNorth::Gnss)));
+    assert!(!MapNorth::holds_yaw(Some(MapNorth::FcHeading)));
+    assert!(!MapNorth::holds_yaw(None));
 }
 
 #[test]

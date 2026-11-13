@@ -1,7 +1,7 @@
 schema_version: 2
 id: com.altnautica.vision-nav
 name: "ADOS Vision Navigation"
-version: "0.7.4"
+version: "0.7.5"
 description: "GPS-denied navigation. Optical flow from a downward camera, or an external pose (for example a lidar SLAM) sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A downward camera and the flight controller's gyro feed a 30 Hz angular-flow measurement over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -47,7 +47,13 @@ required_fc_parameters:
       note: "External navigation: accept ODOMETRY over MAVLink"
     - param: "EK3_SRC1_POSXY"
       value: "6"
-      note: "External navigation: the external-nav source set (with EK3_SRC1_VELXY 6 and EK3_SRC1_YAW 1, compass)"
+      note: "External navigation: the external-nav source set takes position from the pose"
+    - param: "EK3_SRC1_VELXY"
+      value: "0"
+      note: "External navigation: no velocity from the pose. ArduPilot ignores the ODOMETRY velocity covariance, and a pose-difference velocity is far worse than VISO_VEL_M_NSE claims in fast manoeuvres; 6 blocks the pre-arm."
+    - param: "EK3_SRC1_YAW"
+      value: "1"
+      note: "External navigation: compass yaw. 6 (yaw from the pose) only when the pose provider declares a north it holds itself (the World Engine extension's atlas.takeoff_heading_deg); a map north that follows the flight controller's heading blocks the pre-arm."
     - param: "VISO_DELAY_MS"
       note: "External navigation: the least age of a pose when its ODOMETRY reaches the flight controller (ODOMETRY carries the time the pose describes; a 10 Hz planar lidar pose is at least one 100 ms revolution old)"
     - param: "AHRS_OPTIONS"

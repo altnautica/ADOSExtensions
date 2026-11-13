@@ -57,7 +57,7 @@ dependencies = [
 
 [[package]]
 name = "ados-config"
-version = "0.109.27"
+version = "0.109.103"
 dependencies = [
  "ados-macpin",
  "ados-protocol",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "ados-protocol"
-version = "0.109.27"
+version = "0.109.103"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sdk"
-version = "0.109.27"
+version = "0.109.103"
 dependencies = [
  "ados-protocol",
  "async-trait",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "ados-sensorbus"
-version = "0.109.27"
+version = "0.109.103"
 dependencies = [
  "ados-protocol",
  "jsonschema 0.18.3",
@@ -182,14 +182,14 @@ dependencies = [
 
 [[package]]
 name = "ados-vision"
-version = "0.109.27"
+version = "0.109.103"
 dependencies = [
  "ados-protocol",
 ]
 
 [[package]]
 name = "ados-vision-engine"
-version = "0.109.27"
+version = "0.109.103"
 dependencies = [
  "ados-config",
  "ados-protocol",
@@ -7556,7 +7556,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vision-nav"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "ados-protocol",
  "ados-sdk",

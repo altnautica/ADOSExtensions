@@ -19,7 +19,8 @@ fn inputs(extnav: Option<ExtnavPreArmInputs>) -> PreArmInputs {
 }
 
 /// A GNSS-denied flight controller set up as the manifest asks: the origin
-/// set at boot from AHRS_ORIGIN, compass yaw, flow fallback.
+/// set at boot from AHRS_ORIGIN, position-only external nav, compass yaw,
+/// flow fallback.
 fn good_params() -> BTreeMap<String, f32> {
     [
         ("VISO_TYPE", 1.0),
@@ -29,6 +30,7 @@ fn good_params() -> BTreeMap<String, f32> {
         ("AHRS_ORIGIN_LAT", ORIGIN[0] as f32),
         ("AHRS_ORIGIN_LON", ORIGIN[1] as f32),
         ("EK3_SRC1_POSXY", 6.0),
+        ("EK3_SRC1_VELXY", 0.0),
         ("EK3_SRC1_YAW", 1.0),
         ("EK3_SRC2_POSXY", 0.0),
         ("EK3_SRC2_VELXY", 5.0),
@@ -44,6 +46,7 @@ fn ready() -> ExtnavPreArmInputs {
         source_denied: false,
         pose_error: None,
         health: Some(ExtnavHealth::Good),
+        north: Some(MapNorth::FcHeading),
         origin_seen: true,
         origin_by_plugin: false,
         gps_primary: false,
@@ -214,20 +217,57 @@ fn fc_params_wait_for_every_value() {
         check(&r, "fc_params"),
         (
             Severity::Pending,
-            "Reading flight controller parameters (10 of 11)."
+            "Reading flight controller parameters (11 of 12)."
         )
     );
     assert!(!r.armable);
 }
 
 #[test]
-fn fc_params_ekf_yaw_from_the_map_blocks() {
+fn fc_params_ekf_yaw_from_a_map_that_follows_the_fc_blocks() {
     let r = eval(with_param("EK3_SRC1_YAW", 6.0));
     let (sev, detail) = check(&r, "fc_params");
     assert_eq!(sev, Severity::Blocking);
     assert_eq!(
         detail,
-        "EK3_SRC1_YAW is 6: the EKF would take north from the SLAM map; use 1 (compass)."
+        "EK3_SRC1_YAW is 6 but the map's north follows the flight controller's heading; set the \
+         pose provider's take-off heading, or use 1 (compass)."
+    );
+    // An older publisher that does not say where its north comes from.
+    let mut silent = with_param("EK3_SRC1_YAW", 6.0);
+    silent.north = None;
+    assert_eq!(check(&eval(silent), "fc_params").0, Severity::Blocking);
+    // No fresh pose yet: wait for one.
+    let mut waiting = with_param("EK3_SRC1_YAW", 6.0);
+    (waiting.north, waiting.health) = (None, None);
+    assert_eq!(check(&eval(waiting), "fc_params").0, Severity::Pending);
+}
+
+#[test]
+fn fc_params_ekf_yaw_from_a_map_with_its_own_north_passes() {
+    for north in [MapNorth::Declared, MapNorth::Gnss] {
+        let mut i = with_param("EK3_SRC1_YAW", 6.0);
+        i.north = Some(north);
+        assert_eq!(check(&eval(i), "fc_params"), (Severity::Ok, ""), "{north:?}");
+    }
+}
+
+#[test]
+fn fc_params_ext_nav_velocity_blocks() {
+    let r = eval(with_param("EK3_SRC1_VELXY", 6.0));
+    assert_eq!(
+        check(&r, "fc_params"),
+        (
+            Severity::Blocking,
+            "EK3_SRC1_VELXY is 6: the EKF would trust the pose's velocity far beyond its \
+             accuracy; set 0 (position only)."
+        )
+    );
+    assert!(!r.armable);
+    // Velocity from another sensor in the external-nav set is not ours to judge.
+    assert_eq!(
+        check(&eval(with_param("EK3_SRC1_VELXY", 5.0)), "fc_params"),
+        (Severity::Ok, "")
     );
 }
 

@@ -52,9 +52,14 @@ controller as `ODOMETRY` (#331) on component 197, at up to
 - `frame_id` `MAV_FRAME_LOCAL_FRD`, `child_frame_id` `MAV_FRAME_BODY_FRD`.
   The pose arrives in `map_ned` (north-aligned, the axes of the flight
   controller's `LOCAL_POSITION_NED`; a `map_flu` pose is converted with
-  `y = -y`, `z = -z`, `yaw = -yaw`). The EKF yaw stays on the compass
-  (`EK3_SRC1_YAW 1`): `VISO_TYPE 1` aligns only the external position to
-  the EKF's, not its yaw.
+  `y = -y`, `z = -z`, `yaw = -yaw`). `VISO_TYPE 1` aligns only the
+  external position to the EKF's, not its yaw, so the EKF yaw stays on
+  the compass (`EK3_SRC1_YAW 1`) unless the pose's map holds its own north
+  (the pose's `north` is `declared`, from the World Engine extension's
+  `atlas.takeoff_heading_deg`, or `gnss`); then `EK3_SRC1_YAW 6` takes yaw
+  from the pose. The external-nav set takes no velocity from the pose
+  (`EK3_SRC1_VELXY 0`): ArduPilot ignores the `ODOMETRY` velocity
+  covariance.
 - x, y and yaw come from the pose; z and vertical speed from the
   flight controller's `LOCAL_POSITION_NED`, roll and pitch from its
   `ATTITUDE`. Velocity is the pose difference over the last 100 ms, in
@@ -118,8 +123,11 @@ is a new boot), is disarmed, and GPS is not primary.
 - `fc_params`: reads `VISO_TYPE`, `VISO_DELAY_MS`, `COMPASS_AUTODEC`,
   `AHRS_OPTIONS`, `AHRS_ORIGIN_LAT/LON`, `EK3_MAG_EF_LIM` and the
   source-set parameters (every 10 s while any is missing), then blocks on
-  `VISO_TYPE` other than 1, an external-nav set whose `POSXY` is not 6 or
-  whose `YAW` is 6 (north from the SLAM map), a fallback set that is not
+  `VISO_TYPE` other than 1, an external-nav set whose `POSXY` is not 6,
+  whose `VELXY` is 6 (the pose-difference velocity fused as good to
+  `VISO_VEL_M_NSE`), or whose `YAW` is 6 while the pose's map north
+  follows the flight controller's heading (it waits for a pose to tell),
+  a fallback set that is not
   GPS (`POSXY 3`, with `gps_primary`) or optical flow (`VELXY 5`,
   without), or `COMPASS_AUTODEC` on with `EK3_MAG_EF_LIM` 0 (the compass
   library's declination update, made when the EKF first has a position,

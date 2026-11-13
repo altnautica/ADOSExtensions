@@ -64,7 +64,7 @@
         "extnav_set": {
           "type": "integer",
           "title": "External-nav source set",
-          "description": "EKF source set (EK3_SRCn) whose position and yaw source is ExternalNav.",
+          "description": "EKF source set (EK3_SRCn) whose position source is ExternalNav.",
           "default": 1,
           "minimum": 1,
           "maximum": 3

@@ -143,7 +143,7 @@
     {
       "id": "com.altnautica.vision-nav",
       "name": "ADOS Vision Navigation",
-      "version": "0.7.4",
+      "version": "0.7.5",
       "description": "GPS-denied navigation. Optical flow from a downward camera, or an external pose (for example a lidar SLAM) sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+.",
       "category": null,
       "supported_boards": [

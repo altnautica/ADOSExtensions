@@ -4,6 +4,23 @@ All notable changes to the Vision Navigation extension.
 
 ## [Unreleased]
 
+## [0.7.5]
+
+### Changed
+
+- External navigation: the pre-arm blocks `EK3_SRCn_VELXY` 6 on the
+  external-nav source set. ArduPilot ignores the `ODOMETRY` velocity
+  covariance and fuses the velocity as good to `VISO_VEL_M_NSE` (0.1 m/s by
+  default), while the velocity sent is a difference of poses that a planar
+  lidar SLAM leaves about 1 m/s off in fast manoeuvres; over-trusted, it
+  tipped the EKF's attitude until its variance failsafe landed the drone.
+  Set 0 (position only). The parameter is now read with the others.
+- External navigation: `EK3_SRCn_YAW` 6 (yaw from the pose) passes the
+  pre-arm when the pose says its map's north is declared or fitted to GNSS
+  (the pose's `north`), and still blocks when that north follows the flight
+  controller's own heading, where it would only echo the EKF's yaw back.
+  Before a pose arrives the check waits.
+
 ## [0.7.4]
 
 ### Fixed

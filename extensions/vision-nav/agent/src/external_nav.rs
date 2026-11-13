@@ -1,15 +1,16 @@
 //! External navigation: a shared pose topic to `ODOMETRY` (#331).
 //!
 //! The pose descriptor carries `R` (row-major 3x3) and `t` of the body
-//! FRD frame in the map frame, the tracker `health`, and its `frame`.
-//! `map_ned` (north-aligned: the world-engine map rotated to the flight
-//! controller's compass heading, so its axes are those of the FC's
-//! `LOCAL_POSITION_NED`) is used as is; `map_flu` (the planar SLAM world: body
-//! FLU at the first scan) is converted with `x = x, y = -y, z = -z,
-//! yaw = -yaw`. Sent as `MAV_FRAME_LOCAL_FRD` with the EKF yaw from the
-//! compass: `VISO_TYPE` 1 (MAVLink) aligns only the external-navigation
-//! position to the EKF's, not its yaw, so the pose frame must already be
-//! north-aligned, which `map_ned` is.
+//! FRD frame in the map frame, the tracker `health`, its `frame` and, for
+//! `map_ned`, its `north` (where the map's north comes from). `map_ned`
+//! (north-aligned, so its axes are those of the FC's `LOCAL_POSITION_NED`)
+//! is used as is; `map_flu` (the planar SLAM world: body FLU at the first
+//! scan) is converted with `x = x, y = -y, z = -z, yaw = -yaw`. Sent as
+//! `MAV_FRAME_LOCAL_FRD`: `VISO_TYPE` 1 (MAVLink) aligns only the
+//! external-navigation position to the EKF's, not its yaw, so the pose frame
+//! must already be north-aligned, which `map_ned` is. The EKF may take its
+//! yaw from the pose (`EK3_SRCn_YAW` 6) only when that north does not come
+//! from the flight controller's own heading ([`MapNorth`]).
 //!
 //! `ODOMETRY` goes out on component 197 with `frame_id = MAV_FRAME_LOCAL_FRD`
 //! and `child_frame_id = MAV_FRAME_BODY_FRD`, the only pair ArduPilot
@@ -102,6 +103,34 @@ impl ExtnavHealth {
     }
 }
 
+/// Where a `map_ned` pose's north comes from, as the pose topic reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapNorth {
+    /// The flight controller's heading until take-off: it echoes the FC's own
+    /// yaw, so it cannot be the EKF's yaw source.
+    FcHeading,
+    /// Latched once from a declared take-off heading.
+    Declared,
+    /// Fitted against the EKF's GNSS-referenced track.
+    Gnss,
+}
+
+impl MapNorth {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "fc_heading" => MapNorth::FcHeading,
+            "declared" => MapNorth::Declared,
+            "gnss" => MapNorth::Gnss,
+            _ => return None,
+        })
+    }
+
+    /// Whether the EKF may take its yaw from a map with this north.
+    pub fn holds_yaw(north: Option<Self>) -> bool {
+        matches!(north, Some(MapNorth::Declared | MapNorth::Gnss))
+    }
+}
+
 /// One pose in map FRD.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PoseSample {
@@ -109,6 +138,8 @@ pub struct PoseSample {
     pub r: [f64; 9],
     pub t: [f64; 3],
     pub health: ExtnavHealth,
+    /// `None` when the publisher does not say (an older one, or `map_flu`).
+    pub north: Option<MapNorth>,
 }
 
 impl PoseSample {
@@ -194,9 +225,16 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         None => return Err(PoseError::Malformed("health")),
     };
     let ts_ms = get(p, "ts_ms").and_then(Value::as_i64).unwrap_or(0);
-    let (r, t) = match get(p, "frame").and_then(Value::as_str) {
-        Some("map_ned") => (r, t),
-        Some("map_flu") => flu_to_frd(&r, &t),
+    let (r, t, north) = match get(p, "frame").and_then(Value::as_str) {
+        Some("map_ned") => (
+            r,
+            t,
+            get(p, "north").and_then(Value::as_str).and_then(MapNorth::parse),
+        ),
+        Some("map_flu") => {
+            let (r, t) = flu_to_frd(&r, &t);
+            (r, t, None)
+        }
         Some(other) => return Err(PoseError::UnknownFrame(other.into())),
         None => return Err(PoseError::UnknownFrame("missing".into())),
     };
@@ -205,6 +243,7 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         r,
         t,
         health,
+        north,
     })
 }
 

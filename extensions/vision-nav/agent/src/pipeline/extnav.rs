@@ -222,6 +222,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                     source_denied: task.shared.pose_denied.load(Ordering::Relaxed),
                     pose_error: view.error.clone(),
                     health,
+                    north: view.fresh.and_then(|(p, _)| p.north),
                     origin_seen: fc.origin_seen,
                     origin_by_plugin: origin.origin_by_plugin(),
                     gps_primary: task.cfg.gps_primary,

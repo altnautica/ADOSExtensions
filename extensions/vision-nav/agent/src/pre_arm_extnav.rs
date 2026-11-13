@@ -9,13 +9,16 @@
 //!   learning on (that origin steps the earth field into a gyro bias and
 //!   spins the vehicle), nor a boot-time origin far from `origin_lla`.
 //! * `fc_params`: the flight controller's external-nav parameters
-//!   ([`extnav_fc_params`]) are read and consistent with this mode.
+//!   ([`extnav_fc_params`]) are read and consistent with this mode: the
+//!   external-nav set takes position but not velocity from the pose, and
+//!   takes its yaw from the pose only when the map's north is held
+//!   independently of the flight controller ([`MapNorth::holds_yaw`]).
 //! * `viso_delay`: `VISO_DELAY_MS` matches how old poses are when sent.
 //! * `obstacle_feed` (when the obstacle feed is enabled): scans arrive.
 
 use std::collections::BTreeMap;
 
-use crate::external_nav::ExtnavHealth;
+use crate::external_nav::{ExtnavHealth, MapNorth};
 use crate::nav_commands::extnav_fc_params;
 use crate::nav_config::ExternalNavConfig;
 use crate::pre_arm::PreArmCheck;
@@ -45,6 +48,9 @@ pub struct ExtnavPreArmInputs {
     pub pose_error: Option<String>,
     /// Health of the fresh pose; `None` when there is none.
     pub health: Option<ExtnavHealth>,
+    /// Where the fresh pose's map north comes from; `None` when there is no
+    /// fresh pose or it does not say.
+    pub north: Option<MapNorth>,
     /// The flight controller has reported an EKF origin this boot.
     pub origin_seen: bool,
     /// That origin followed a `SET_GPS_GLOBAL_ORIGIN` the plugin sent.
@@ -220,14 +226,35 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
             ),
         );
     }
-    // The map's north is the yaw it was built with, and that yaw follows the
-    // EKF's: taking the EKF yaw back from the map closes a loop with nothing
-    // holding north, so the external-nav set keeps the compass.
-    if v(&format!("EK3_SRC{e}_YAW")) == 6 {
+    // ArduPilot drops the ODOMETRY velocity covariance and fuses the velocity
+    // as good to VISO_VEL_M_NSE (0.1 m/s by default). This velocity is a
+    // difference of poses: a planar SLAM's lags and overshoots truth by about
+    // 1 m/s in fast manoeuvres, and over-trusted it tips the EKF's attitude
+    // and accel bias until the position innovations fail their gates.
+    let velxy = v(&format!("EK3_SRC{e}_VELXY"));
+    if velxy == 6 {
         return PreArmCheck::blocking(
             ID,
             format!(
-                "EK3_SRC{e}_YAW is 6: the EKF would take north from the SLAM map; use 1 (compass)."
+                "EK3_SRC{e}_VELXY is 6: the EKF would trust the pose's velocity far beyond its \
+                 accuracy; set 0 (position only)."
+            ),
+        );
+    }
+    // A map whose north follows the flight controller's heading only echoes
+    // the EKF's own yaw back to it: nothing would hold north.
+    if v(&format!("EK3_SRC{e}_YAW")) == 6 && !MapNorth::holds_yaw(i.north) {
+        if i.health.is_none() {
+            return PreArmCheck::pending(
+                ID,
+                format!("EK3_SRC{e}_YAW is 6: awaiting a pose to learn where the map's north comes from."),
+            );
+        }
+        return PreArmCheck::blocking(
+            ID,
+            format!(
+                "EK3_SRC{e}_YAW is 6 but the map's north follows the flight controller's heading; \
+                 set the pose provider's take-off heading, or use 1 (compass)."
             ),
         );
     }
