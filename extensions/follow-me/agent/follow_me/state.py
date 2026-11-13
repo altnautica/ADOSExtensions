@@ -79,6 +79,9 @@ UNCERTAIN_FOLLOW = "follow"
 UNCERTAIN_HOLD = "hold"
 _UNCERTAIN_MODES = (UNCERTAIN_FOLLOW, UNCERTAIN_HOLD)
 UNCERTAIN_FOLLOW_MAX_S = 3.0
+# The subject counts as faster than the follow can fly once its estimated
+# speed has been above the speed limit for this long.
+OUTPACED_AFTER_S = 2.0
 
 SEARCH_BUDGET_RANGE = (5.0, 60.0)
 SEARCH_RADIUS_RANGE = (3.0, 12.0)
@@ -340,6 +343,10 @@ class FollowState:
     camera_hfov_deg: float | None = None
     camera_mount_pitch_deg: float | None = None
     camera_geometry_source: str | None = None
+    # The estimated subject speed has been above ``speed_limit_mps`` (the
+    # follow's ``max_speed_mps``) for OUTPACED_AFTER_S: it is pulling away.
+    outpaced: bool = False
+    speed_limit_mps: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -379,6 +386,7 @@ __all__ = [
     "UNCERTAIN_FOLLOW",
     "UNCERTAIN_HOLD",
     "UNCERTAIN_FOLLOW_MAX_S",
+    "OUTPACED_AFTER_S",
     "SEARCH_BUDGET_RANGE",
     "SEARCH_RADIUS_RANGE",
     "SEARCH_SPEED_RANGE",

@@ -34,6 +34,17 @@ goal status.
 - The `follow.state` read-back replaces `coast_remaining_s` with
   `reacquire_remaining_s`. The hold reason `lock-lost` is replaced by
   `awaiting-operator`, `search-exhausted` and `predictive-search-off`.
+- The subject's predicted spread, used for the re-lock position check, the
+  search area and the vantage request, is bounded by how far the subject can
+  have gone at its speed cap, so a long gap no longer admits anyone in a wide
+  circle. The whole configured search time (up to 60 s) is searched: the
+  prediction lasts 70 s, the widest step repeats until the budget is spent,
+  and Resume after a long wait searches around the last estimate instead of
+  holding with `no-range`.
+- An operator designate is followed at once, also in the middle of a search.
+- The last search step sweeps all the way round. A vantage the vehicle cannot
+  settle at still gets its sweep, after hovering within 1.5 m of it for 2 s
+  or once the flight there is 3 s overdue.
 
 ### Added
 
@@ -42,7 +53,15 @@ goal status.
   `operator_resume_seq` key a surface writes to resume a search.
 - `follow.state` fields `search_budget_s`, `search_step`, `search_area`,
   `predicted_path_ne`, `vantage_ne`, `vantage_state`, `occluder`, `hold_ne`,
-  `uncertain_mode`, `predictive_search` and `operator_resume_seq`.
+  `uncertain_mode`, `predictive_search`, `operator_resume_seq`, and
+  `outpaced` with `speed_limit_mps` (the subject has been faster than the
+  follow's speed limit for 2 s; the follow tab shows it).
+- The vantage goal carries `hypotheses_ne`: where the subject was last seen
+  and 3 m back along its track, for the pilot to cover besides the
+  prediction.
+- An EKF position reset is detected in `LOCAL_POSITION_NED`, and the subject
+  estimate, the search anchor, the vantage point and a latched hover point
+  move with the frame.
 - The follow tab shows the search (time left, step, vantage point, what hides
   the subject) and, while the follow waits, a prompt to resume the search,
   return home, land or stop following, or to click the subject to follow it

@@ -391,6 +391,45 @@ class GimbalState:
         self.present = False
 
 
+# A LOCAL_POSITION_NED step this far (3-D) from where the reported velocity
+# carried the vehicle since the previous sample is a jump of the frame (an
+# EKF position reset, as on a switch between GNSS and external navigation),
+# not flight. Samples further apart than the gap limit cannot tell the two
+# apart and are not judged.
+FRAME_RESET_M = 1.0
+_FRAME_RESET_MAX_GAP_S = 1.0
+
+
+class FrameResetDetector:
+    """Finds jumps of the local frame in the LOCAL_POSITION_NED stream, by
+    the FC's own boot-time stamp."""
+
+    __slots__ = ("_last",)
+
+    def __init__(self) -> None:
+        self._last: tuple[int, float, float, float, float, float, float] | None = None
+
+    def step(
+        self, t_ms: int, n: float, e: float, d: float, vn: float, ve: float, vd: float
+    ) -> tuple[float, float, float] | None:
+        """The jump ``(dn, de, dd)`` this sample shows, or ``None``."""
+        last = self._last
+        self._last = (t_ms, n, e, d, vn, ve, vd)
+        if last is None or t_ms <= last[0]:
+            return None
+        dt = (t_ms - last[0]) / 1000.0
+        if dt > _FRAME_RESET_MAX_GAP_S:
+            return None
+        jump = (
+            n - (last[1] + (last[4] + vn) / 2.0 * dt),
+            e - (last[2] + (last[5] + ve) / 2.0 * dt),
+            d - (last[3] + (last[6] + vd) / 2.0 * dt),
+        )
+        if math.sqrt(sum(c * c for c in jump)) <= FRAME_RESET_M:
+            return None
+        return jump
+
+
 class FcStateMixin:
     """The MAVLink handlers that keep the cached FC, pose, rangefinder and
     gimbal state."""
@@ -401,6 +440,8 @@ class FcStateMixin:
     _gimbal: GimbalState
     _rangefinder: Rangefinder
     _fc_clock: FcClock
+    _arm_reset_task: asyncio.Task | None
+    _frame_reset: FrameResetDetector
 
     def _note_fc_time(self, msg: dict[str, Any], arrival_s: float) -> float | None:
         """Feed a message's ``time_boot_ms`` to the FC clock; its FC time."""
@@ -408,7 +449,6 @@ class FcStateMixin:
         if fc_s is not None:
             self._fc_clock.note(fc_s, arrival_s)
         return fc_s
-    _arm_reset_task: asyncio.Task | None
 
     def _on_heartbeat(self, delivery: dict[str, Any]) -> None:
         msg = mavlink_frames.decode_fields(delivery)
@@ -480,6 +520,24 @@ class FcStateMixin:
         now = monotonic()
         self._note_fc_time(msg, now)
         self._pose.position.mark(now)
+        jump = self._frame_reset.step(
+            int(msg.get("time_boot_ms", 0) or 0),
+            self._pose.north_m,
+            self._pose.east_m,
+            self._pose.down_m,
+            self._pose.vn_mps,
+            self._pose.ve_mps,
+            self._pose.vd_mps,
+        )
+        if jump is not None:
+            # Everything held in the local frame (the subject estimate, the
+            # search anchor, a latched hover point) moves with it, so it
+            # stays put in the world.
+            if self._ctx is not None:
+                self._ctx.log.warning(
+                    "follow_me_frame_reset", dn=jump[0], de=jump[1], dd=jump[2]
+                )
+            self._on_frame_shift(*jump)
 
     def _on_global_position(self, delivery: dict[str, Any]) -> None:
         # Display and barometric-AGL fallback only. lat/lon are 1e7 integer

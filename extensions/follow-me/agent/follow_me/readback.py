@@ -14,6 +14,7 @@ from follow_me.projection import CameraPose, TargetFix
 from follow_me.ranging import Scan
 from follow_me.state import (
     FOLLOW_STATE_TOPIC,
+    OUTPACED_AFTER_S,
     PHASE_SEARCHING,
     RECOVERY_PHASES,
     FollowConfig,
@@ -55,6 +56,7 @@ _DISCRETE_KEYS = (
     "uncertain_mode",
     "predictive_search",
     "operator_resume_seq",
+    "outpaced",
 )
 
 
@@ -91,6 +93,8 @@ class ReadbackMixin:
     _geometry: CameraGeometry
     _latest_batch: Any
     _recovery: Any
+    # Since when the subject estimate has been faster than the speed limit.
+    _outpaced_since_s: float | None
 
     def _setpoint_rate_hz(self, now: float) -> float:
         """Setpoints sent per second over the last SETPOINT_RATE_WINDOW_S."""
@@ -347,11 +351,21 @@ class ReadbackMixin:
             state.agl_m = _r(agl)
             state.agl_source = source
         pred = self._filter.predicted(now) if self._filter.initialized else None
+        speed: float | None = None
         if pred is not None:
             x, p = pred
             state.target_ned = [round(x[0], 2), round(x[1], 2)]
             state.target_vel_ned = [round(x[2], 2), round(x[3], 2)]
-            state.target_speed_mps = _r(math.hypot(x[2], x[3]))
+            speed = math.hypot(x[2], x[3])
+            state.target_speed_mps = _r(speed)
+        if cfg is not None:
+            state.speed_limit_mps = cfg.max_speed_mps
+            if speed is not None and speed > cfg.max_speed_mps:
+                if self._outpaced_since_s is None:
+                    self._outpaced_since_s = now
+                state.outpaced = now - self._outpaced_since_s >= OUTPACED_AFTER_S
+            else:
+                self._outpaced_since_s = None
         fix = self._last_fix
         self._recovery_readback(state, now, phase)
         if phase in RECOVERY_PHASES and pred is not None:

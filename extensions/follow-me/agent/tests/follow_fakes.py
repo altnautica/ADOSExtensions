@@ -210,10 +210,10 @@ def _mount_orientation(pitch_deg: float, yaw_deg: float) -> dict[str, Any]:
 
 
 def _local_position(
-    n: float, e: float, d: float, vn: float = 0.0, ve: float = 0.0
+    n: float, e: float, d: float, vn: float = 0.0, ve: float = 0.0, *, t_ms: int = 0
 ) -> dict[str, Any]:
     return _delivery(
-        mavlink2.MAVLink_local_position_ned_message(0, n, e, d, vn, ve, 0.0)
+        mavlink2.MAVLink_local_position_ned_message(t_ms, n, e, d, vn, ve, 0.0)
     )
 
 

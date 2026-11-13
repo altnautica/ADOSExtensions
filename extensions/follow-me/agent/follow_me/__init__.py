@@ -60,6 +60,7 @@ from follow_me.fc_state import (
     FcClock,
     FcState,
     FcStateMixin,
+    FrameResetDetector,
     GimbalState,
     Pose,
     Rangefinder,
@@ -78,7 +79,6 @@ from follow_me.recovery import Recovery, RecoveryMixin
 from follow_me.state import (
     HOLD_INACTIVE,
     PHASE_IDLE,
-    RECOVERY_PHASES,
     FollowConfig,
     FollowState,
 )
@@ -150,6 +150,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
     def __init__(self) -> None:
         self._ctx: Any = None
         self._pose = Pose()
+        self._frame_reset = FrameResetDetector()
         self._fc = FcState()
         self._gimbal = GimbalState()
         self._rangefinder = Rangefinder()
@@ -184,6 +185,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._last_fix_s: float = 0.0
         self._recovery: Recovery | None = None
         self._uncertain_since_s: float | None = None
+        self._outpaced_since_s: float | None = None
         # The arm-edge write of predictive_search, kept so it is not
         # collected before it runs.
         self._arm_reset_task: asyncio.Task | None = None
@@ -475,18 +477,14 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
                         geometry=geometry,
                     )
                 break
-        # While the follow predicts, repositions or searches, the lost track
-        # must not re-latch the gate (the engine keeps reporting it as lost);
-        # only the batches after our own re-acquire designate are fed. While
-        # it holds for the operator every batch is fed, so an operator
-        # designate latches, but the tracks the recovery gave up on (the lost
-        # one, abandoned re-acquire designates) are never adopted again.
+        # During a recovery the tracks it gave up on (the lost one, which the
+        # engine keeps reporting as lost, and abandoned re-acquire
+        # designates) never re-latch the gate. Every other track does: the
+        # recovery's own re-acquire designate, or an operator designate,
+        # which ends the recovery whatever phase it is in.
         rec = self._recovery
-        if rec is not None:
-            if rec.phase in RECOVERY_PHASES and not rec.designated:
-                return
-            if tracked_id in rec.excluded_tracks:
-                return
+        if rec is not None and tracked_id in rec.excluded_tracks:
+            return
         # The shared gate adopts the engine's designated target and never
         # chooses one itself.
         self._tracker.record(batch, now)

@@ -382,6 +382,11 @@ function MetricsSection({
         value={f ? yesNo(f.commanding) : DASH}
         testId="fm-commanding"
       />
+      {f?.outpaced ? (
+        <div style={{ ...labelRow, color: "var(--hud-warn, #f59e0b)" }} data-testid="fm-outpaced">
+          {t("metrics.outpaced", { limit: f.speedLimitMps ?? DASH })}
+        </div>
+      ) : null}
       {f && !f.commanding && f.holdReason !== null ? (
         // "Not commanding" on its own reads the same whether the aircraft is
         // sitting disarmed on the ground or its telemetry died mid-follow.

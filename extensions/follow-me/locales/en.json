@@ -119,6 +119,7 @@
   "hold.cameraLost": "Camera lost",
   "metrics.followMode": "Mode",
   "metrics.nudged": "Nudged with sticks",
+  "metrics.outpaced": "Subject faster than the {limit} m/s limit",
   "metrics.lease": "Pilot lease",
   "metrics.orbitRadius": "Orbit radius",
   "status.waiting": "Waiting for the drone's follow report",

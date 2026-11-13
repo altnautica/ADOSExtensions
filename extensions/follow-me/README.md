@@ -130,15 +130,29 @@ default), the follow keeps flying the prediction at half feed-forward; with
      at no more than `search_speed_mps`, for up to 2 s, while the prediction
      has not spread by more than 1.5 m;
   2. `repositioning`: sends the pilot a `vantage` goal (the predicted
-     position, its covariance, an ellipse scale, the standoff, and
-     `search_radius_m` around where the loss happened) at no more than
-     `search_speed_mps`; the pilot chooses a point that sees the predicted
-     position past the obstacles and reports it on `flight.goal.status`.
-     A report within 0.3 s of a new request may be about the previous one and
-     is ignored; with no report for 2 s the search starts where it is;
+     position, its covariance, an ellipse scale, the standoff,
+     `search_radius_m` around where the loss happened, and two more places to
+     cover: where the subject was last seen, in case it stopped, and 3 m back
+     along its track, in case it turned back) at no more than
+     `search_speed_mps`; the pilot chooses a point that sees them past the
+     obstacles and reports it on `flight.goal.status`. A report within 0.3 s
+     of a new request may be about the previous one and is ignored. The sweep
+     starts where the vehicle is when the pilot stops reporting for 2 s, when
+     the vehicle has been within 1.5 m of the vantage for 2 s, or when the
+     flight there has taken 3 s longer than the distance at the search speed
+     (gusts, a fence, a pilot that keeps replanning);
   3. `searching`: at that point (or where it is, when the pilot finds none),
      sweeps yaw and gimbal pitch across the predicted position, then asks for
-     a wider vantage, step by step.
+     a wider vantage, step by step. The last step sweeps all the way round,
+     and repeats until the budget is spent.
+
+  The prediction's spread is bounded by how far the subject can have gone
+  (its class speed cap, 3 m/s for a person, times the time since it was last
+  seen, plus that sighting's own spread), so the position check and the
+  search area stay meaningful in a long gap. The constant-velocity
+  extrapolation stops 70 s after the last sighting, past the longest budget;
+  after that a search (a Resume after a long wait, for one) looks around the
+  last estimate with the bounded spread.
 
   In each new batch it looks for a `person` that passes two checks:
   - its re-identification embedding has cosine similarity of at least
@@ -158,12 +172,23 @@ Holding for the operator keeps the motion lease and a latched hover point
 never re-locks on its own: the lost track and any abandoned re-acquire
 designate are never adopted again, even if the engine reports them locked,
 and a resumed search keeps them excluded; only a new operator designate (the
-engine gives each one a fresh track id) is followed. The operator resumes the
-search (a surface writes `operator_resume_seq` + 1; a fresh budget starts from
-the current prediction and only newer detections are matched), designates a
-subject, or stops. `predictive_search` is turned
-back on at every arm (an arm seen after a disarm, not the first armed
-heartbeat after the plugin starts).
+engine gives each one a fresh track id) is followed, and it is followed at
+once, in the middle of a search too. The operator resumes the search (a
+surface writes `operator_resume_seq` + 1; a fresh budget, around the current
+prediction or the last estimate, and only newer detections are matched),
+designates a subject, or stops. `predictive_search` is turned back on at
+every arm (an arm seen after a disarm, not the first armed heartbeat after
+the plugin starts).
+
+An EKF position reset (a `LOCAL_POSITION_NED` step more than 1 m from where
+the reported velocity carried the vehicle since the previous sample, as on a
+switch between GNSS and external navigation) moves the subject estimate, the
+search anchor, the vantage point and a latched hover point with the frame, so
+they stay put in the world.
+
+`outpaced` turns true once the estimated subject speed has been above the
+follow's `max_speed_mps` (published as `speed_limit_mps`) for 2 s: the subject
+is pulling away and will probably be lost.
 
 The subject template learns only from a solid lock: locked, confidence at
 least 0.6, and no other person's box overlapping the subject's.
@@ -238,6 +263,7 @@ The other `follow.state` fields:
 - **Pilot:** `lease_id`, `nudged`.
 - **Camera:** `camera_hfov_deg`, `camera_mount_pitch_deg` (negative below the
   nose), `camera_geometry_source` (`roster`, `settings` or `default`).
+- **Speed:** `outpaced`, `speed_limit_mps`.
 
 ## Configuration
 

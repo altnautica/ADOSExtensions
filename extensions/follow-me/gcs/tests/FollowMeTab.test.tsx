@@ -106,6 +106,23 @@ describe("FollowMeTab", () => {
     expect(screen.queryByTestId("fm-vantage")).toBeNull();
   });
 
+  it("says when the subject is faster than the follow can fly", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{ ...commandingFollow, outpaced: true, speedLimitMps: 2 }}
+      />,
+    );
+    expect(screen.getByTestId("fm-outpaced").textContent).toBe("Subject faster than the 2 m/s limit");
+  });
+
+  it("shows no speed warning while the follow keeps up", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...commandingFollow, speedLimitMps: 6 }} />);
+    expect(screen.queryByTestId("fm-outpaced")).toBeNull();
+  });
+
   const waiting: FollowState = {
     ...EMPTY_FOLLOW_STATE,
     active: true,

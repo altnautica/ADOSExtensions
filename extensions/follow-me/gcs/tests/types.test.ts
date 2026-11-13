@@ -137,6 +137,15 @@ describe("normalizeFollowState", () => {
     expect(normalizeFollowState({ phase: "lost" }).phase).toBe("idle");
   });
 
+  it("reads the outpaced flag and the speed limit", () => {
+    const s = normalizeFollowState({ outpaced: true, speed_limit_mps: 2 });
+    expect(s.outpaced).toBe(true);
+    expect(s.speedLimitMps).toBe(2);
+    const n = normalizeFollowState({ outpaced: "yes" as never });
+    expect(n.outpaced).toBe(false);
+    expect(n.speedLimitMps).toBeNull();
+  });
+
   it("reads an unknown phase as idle and an unknown mode as strict", () => {
     const s = normalizeFollowState({ phase: "bogus", reacquire_mode: "bogus" });
     expect(s.phase).toBe("idle");

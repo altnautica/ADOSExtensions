@@ -1,6 +1,8 @@
 """The widening search at a vantage point: steps of growing ellipse scale,
 each a yaw sweep across the predicted position and a pair of gimbal pitches,
-and the yaw at a moment within a step."""
+the last one all the way round; the yaw at a moment within a step; and the
+places besides the prediction the subject may be (it stopped, or it turned
+back)."""
 
 from __future__ import annotations
 
@@ -18,6 +20,13 @@ _SPAN_GROWTH_DEG = 15.0
 # Gimbal pitches (negative = down) looked through within each step: near
 # ground first, then nearer the vehicle.
 _GIMBAL_PITCHES_DEG = (-15.0, -30.0)
+# The last step looks all the way round: a subject who turned back is often
+# behind the camera.
+_ALL_ROUND_DEG = (-180.0, -90.0, 0.0, 90.0, 180.0)
+# The turn-back hypothesis: this far behind the last estimate, against its
+# direction of travel. Below the speed floor there is no direction.
+TURN_BACK_M = 3.0
+_MOVING_MPS = 0.2
 
 
 @dataclass(frozen=True)
@@ -38,7 +47,8 @@ class SearchStep:
 
 
 def search_steps(budget: SearchBudget) -> list[SearchStep]:
-    """The steps that fit the budget, widening each time."""
+    """The steps that fit the budget, widening each time; the last one sweeps
+    all the way round."""
     steps: list[SearchStep] = []
     used = 0.0
     for k in range(MAX_STEPS):
@@ -56,7 +66,24 @@ def search_steps(budget: SearchBudget) -> list[SearchStep]:
             )
         )
         used += dwell
+    if steps:
+        last = steps[-1]
+        steps[-1] = SearchStep(
+            last.index, last.sigma_k, _ALL_ROUND_DEG, last.gimbal_pitch_deg, last.dwell_s
+        )
     return steps
+
+
+def search_hypotheses(last: tuple[float, float, float, float]) -> list[tuple[float, float]]:
+    """Where else the subject may be, from its last estimate ``(n, e, vn,
+    ve)``: where it was last seen (it stopped), and 3 m back along its track
+    (it turned back). A subject that was standing still gives only the
+    first."""
+    n, e, vn, ve = last
+    speed = math.hypot(vn, ve)
+    if speed < _MOVING_MPS:
+        return [(n, e)]
+    return [(n, e), (n - TURN_BACK_M * vn / speed, e - TURN_BACK_M * ve / speed)]
 
 
 def sweep_yaw(step: SearchStep, base_yaw_rad: float, t_in_step_s: float) -> float:
@@ -77,4 +104,13 @@ def sweep_pitch(step: SearchStep, t_in_step_s: float) -> float:
     return pitches[int(f * len(pitches))]
 
 
-__all__ = ["MAX_STEPS", "SearchBudget", "SearchStep", "search_steps", "sweep_pitch", "sweep_yaw"]
+__all__ = [
+    "MAX_STEPS",
+    "TURN_BACK_M",
+    "SearchBudget",
+    "SearchStep",
+    "search_hypotheses",
+    "search_steps",
+    "sweep_pitch",
+    "sweep_yaw",
+]

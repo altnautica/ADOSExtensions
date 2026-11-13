@@ -30,7 +30,7 @@ class PredictedTarget:
 
 
 def predict_target(filt: TargetFilter, t: float) -> PredictedTarget | None:
-    pred = filt.predicted(t)
+    pred = filt.search_predicted(t)
     if pred is None:
         return None
     x, p = pred

@@ -39,6 +39,7 @@ from follow_me.reacquire import PERSON, best_candidate
 from follow_me.search import (
     SearchBudget,
     SearchStep,
+    search_hypotheses,
     search_steps,
     sweep_pitch,
     sweep_yaw,
@@ -85,6 +86,13 @@ STATUS_TIMEOUT_S = 2.0
 # has not locked within this long (still unsure, or never reported) is
 # abandoned too, and matching resumes.
 DESIGNATE_LOCK_S = 3.0
+# A vantage the vehicle cannot settle at (gusts, a fence, a pilot that keeps
+# replanning) still gets its sweep: once the vehicle has been within
+# NEAR_VANTAGE_M of it for NEAR_VANTAGE_S, or the flight there has taken
+# REPOSITION_SLACK_S longer than the distance at the search speed.
+NEAR_VANTAGE_M = 1.5
+NEAR_VANTAGE_S = 2.0
+REPOSITION_SLACK_S = 3.0
 
 # Vantage states as the pilot reports them.
 VANTAGE_ENROUTE = "enroute"
@@ -128,6 +136,10 @@ class Recovery:
     status_s: float = -math.inf
     vantage_state: str | None = None
     vantage_ne: tuple[float, float] | None = None
+    # When the pilot first named the vantage point for this request, and
+    # when the vehicle came within NEAR_VANTAGE_M of it.
+    vantage_seen_s: float | None = None
+    near_since_s: float | None = None
     occluder: dict[str, object] | None = None
     coverage: float | None = None
     # Whether a re-acquire designate was accepted by the engine, and the
@@ -271,6 +283,13 @@ class RecoveryMixin:
         if rec.phase == PHASE_AWAIT_OPERATOR:
             await self._tick_await_operator(cfg, now, rec)
             return
+        if self._operator_designated(now, rec):
+            # The operator picked a subject mid-search: follow it from
+            # scratch, with a new filter and template.
+            self._recovery = None
+            self._filter_track_id = None
+            await self._tick_follow(cfg, now)
+            return
         if rec.designated:
             lock = self._tracker.effective_lock(now) if self._tracker.has_lock else None
             if lock is EffectiveLock.LOCKED:
@@ -297,7 +316,9 @@ class RecoveryMixin:
             return
         if not rec.designated:
             await self._try_reacquire(cfg, now, rec)
-        pred = self._filter.predicted(now)
+        # Past the filter's horizon the search goes on around the last
+        # estimate, with the spread the subject's speed allows.
+        pred = self._filter.search_predicted(now)
         if pred is None:
             await self._await_operator(cfg, now, rec, reason=REASON_SEARCH_EXHAUSTED)
             return
@@ -305,7 +326,9 @@ class RecoveryMixin:
         if rec.phase == PHASE_PREDICTING:
             young = (now - rec.started_s) < PREDICT_MAX_S
             spread = position_sigma(p) - rec.sigma_at_start_m
-            if young and spread <= PREDICT_SIGMA_M:
+            # With nothing left to extrapolate there is no leg to fly.
+            moving = self._filter.predicted(now) is not None
+            if young and moving and spread <= PREDICT_SIGMA_M:
                 # The prediction leg is held to the search speed, so it cannot
                 # carry the vehicle past the search radius before the first
                 # vantage request bounds it.
@@ -325,20 +348,69 @@ class RecoveryMixin:
                 await self._await_operator(cfg, now, rec, reason=REASON_SEARCH_EXHAUSTED)
                 return
             self._next_vantage(rec, 0, now)
-        if rec.phase == PHASE_REPOSITIONING and (
-            rec.vantage_state in (VANTAGE_ARRIVED, VANTAGE_NONE)
-            or now - max(rec.requested_s, rec.status_s) > STATUS_TIMEOUT_S
-        ):
+        if rec.phase == PHASE_REPOSITIONING and self._reposition_done(cfg, now, rec):
             rec.phase = PHASE_SEARCHING
             rec.step_started_s = now
         if rec.phase == PHASE_SEARCHING:
             assert rec.step_index is not None
             if (now - rec.step_started_s) >= rec.steps[rec.step_index].dwell_s:
                 if rec.step_index + 1 >= len(rec.steps):
-                    await self._await_operator(cfg, now, rec, reason=REASON_SEARCH_EXHAUSTED)
-                    return
-                self._next_vantage(rec, rec.step_index + 1, now)
+                    # The widest step goes round again until the budget is
+                    # spent: the whole configured time is searched.
+                    rec.step_started_s = now
+                else:
+                    self._next_vantage(rec, rec.step_index + 1, now)
         await self._send_vantage(cfg, now, rec, x, p)
+
+    def _operator_designated(self, now: float, rec: Recovery) -> bool:
+        """A lock on a track that is neither one this recovery gave up on nor
+        its own re-acquire designate: the operator designated a subject."""
+        if not self._tracker.has_lock:
+            return False
+        tracked = self._tracker.track_id
+        if tracked in rec.excluded_tracks:
+            return False
+        if rec.designated and (rec.designated_track is None or tracked == rec.designated_track):
+            return False
+        return self._tracker.effective_lock(now) is EffectiveLock.LOCKED
+
+    def _reposition_done(self, cfg: FollowConfig, now: float, rec: Recovery) -> bool:
+        """Whether to sweep from here: the pilot says it arrived or found no
+        vantage, it has stopped reporting, the vehicle has hovered near the
+        vantage for a while, or the flight there is overdue."""
+        if rec.vantage_state in (VANTAGE_ARRIVED, VANTAGE_NONE):
+            return True
+        if now - max(rec.requested_s, rec.status_s) > STATUS_TIMEOUT_S:
+            return True
+        if rec.vantage_ne is None or rec.vantage_seen_s is None:
+            return False
+        dist = math.hypot(
+            rec.vantage_ne[0] - self._pose.north_m, rec.vantage_ne[1] - self._pose.east_m
+        )
+        if dist <= NEAR_VANTAGE_M:
+            if rec.near_since_s is None:
+                rec.near_since_s = now
+            if now - rec.near_since_s >= NEAR_VANTAGE_S:
+                return True
+        else:
+            rec.near_since_s = None
+        speed = max(0.1, min(cfg.search_speed_mps, cfg.max_speed_mps))
+        return now - rec.vantage_seen_s > dist / speed + REPOSITION_SLACK_S
+
+    def _on_frame_shift(self, dn: float, de: float, dd: float) -> None:
+        """The local frame jumped (an EKF position reset): move every point
+        held in it by the same step, so each stays put in the world."""
+        self._filter.shift(dn, de)
+        rec = self._recovery
+        if rec is None:
+            return
+        rec.anchor_ne = (rec.anchor_ne[0] + dn, rec.anchor_ne[1] + de)
+        if rec.hold_ne is not None:
+            rec.hold_ne = (rec.hold_ne[0] + dn, rec.hold_ne[1] + de)
+        if rec.hold_d is not None:
+            rec.hold_d += dd
+        if rec.vantage_ne is not None:
+            rec.vantage_ne = (rec.vantage_ne[0] + dn, rec.vantage_ne[1] + de)
 
     @staticmethod
     def _next_vantage(rec: Recovery, index: int, now: float) -> None:
@@ -350,16 +422,13 @@ class RecoveryMixin:
         rec.status_s = -math.inf
         rec.vantage_state = None
         rec.vantage_ne = None
+        rec.vantage_seen_s = None
+        rec.near_since_s = None
         rec.occluder = None
         rec.coverage = None
 
     async def _tick_await_operator(self, cfg: FollowConfig, now: float, rec: Recovery) -> None:
-        tracked = self._tracker.track_id
-        if (
-            self._tracker.has_lock
-            and tracked not in rec.excluded_tracks
-            and self._tracker.effective_lock(now) is EffectiveLock.LOCKED
-        ):
+        if self._operator_designated(now, rec):
             # The operator designated a subject: follow it from scratch.
             self._recovery = None
             self._filter_track_id = None
@@ -367,8 +436,9 @@ class RecoveryMixin:
             return
         if cfg.operator_resume_seq > rec.resume_seq_seen:
             rec.resume_seq_seen = cfg.operator_resume_seq
-            if self._filter.predicted(now) is None:
-                # Nothing left to predict from: keep holding, keep the prompt.
+            if self._filter.search_predicted(now) is None:
+                # Nothing to search around (no estimate was ever made): keep
+                # holding, keep the prompt.
                 rec.hold_reason = HOLD_NO_RANGE
             else:
                 fresh = self._start_recovery(cfg, now, rec.lost_track_id, lost_s=rec.lost_s)
@@ -424,6 +494,10 @@ class RecoveryMixin:
                     "standoff_m": cfg.follow_distance_m,
                     "max_radius_m": cfg.search_radius_m,
                     "anchor_ne": [rec.anchor_ne[0], rec.anchor_ne[1]],
+                    # Besides the prediction: where the subject was last seen
+                    # (it stopped) and a little back along its track (it
+                    # turned back). The pilot counts them like ellipse samples.
+                    "hypotheses_ne": [[n, e] for n, e in self._hypotheses()],
                 },
             },
             now,
@@ -431,6 +505,10 @@ class RecoveryMixin:
         await self._publish_state(
             cfg, now=now, active=True, phase=rec.phase, lock_state=LOCK_LOST, commanding=True
         )
+
+    def _hypotheses(self) -> list[tuple[float, float]]:
+        last = self._filter.last_estimate()
+        return [] if last is None else search_hypotheses(last)
 
     def _on_goal_status(self, payload: dict[str, Any]) -> None:
         """The pilot's report on the vantage goal (``flight.goal.status``)."""
@@ -449,6 +527,8 @@ class RecoveryMixin:
         if state in _VANTAGE_STATES:
             rec.vantage_state = str(state)
         rec.vantage_ne = _pair(payload.get("vantage_ne"))
+        if rec.vantage_ne is not None and rec.vantage_seen_s is None:
+            rec.vantage_seen_s = now
         cov = payload.get("coverage")
         rec.coverage = float(cov) if isinstance(cov, (int, float)) else None
         occ = _pair(payload.get("occluder_ne"))
@@ -532,7 +612,7 @@ class RecoveryMixin:
 
 
 def _sigma_now(filt: Any, now: float) -> float:
-    pred = filt.predicted(now)
+    pred = filt.search_predicted(now)
     return 0.0 if pred is None else position_sigma(pred[1])
 
 

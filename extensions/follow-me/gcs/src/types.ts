@@ -217,6 +217,10 @@ export interface FollowState {
   /** Where that geometry came from: the camera roster, the settings or the
    * built-in default. */
   cameraGeometrySource?: CameraGeometrySource | null;
+  /** The subject has been faster than the follow's speed limit for 2 s. */
+  outpaced: boolean;
+  /** The speed limit the subject's speed is compared with, m/s. */
+  speedLimitMps: number | null;
 }
 
 /** The agent emits snake_case keys; normalize to the camelCase shape. */
@@ -271,6 +275,8 @@ export interface RawFollowState {
   camera_hfov_deg?: number | null;
   camera_mount_pitch_deg?: number | null;
   camera_geometry_source?: CameraGeometrySource | string | null;
+  outpaced?: boolean;
+  speed_limit_mps?: number | null;
 }
 
 /** The per-drone config the tab reads through ctx.config. */
@@ -363,6 +369,8 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   cameraHfovDeg: null,
   cameraMountPitchDeg: null,
   cameraGeometrySource: null,
+  outpaced: false,
+  speedLimitMps: null,
 };
 
 /** Map the agent's snake_case read-back onto the camelCase FollowState. */
@@ -431,6 +439,8 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
       raw.camera_geometry_source === "default"
         ? raw.camera_geometry_source
         : null,
+    outpaced: raw.outpaced === true,
+    speedLimitMps: num(raw.speed_limit_mps),
   };
 }
 

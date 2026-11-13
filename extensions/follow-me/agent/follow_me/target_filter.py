@@ -22,9 +22,12 @@ ACCEL_SIGMA_MPS2 = 1.5
 # Velocity sigma a fresh track starts with: a person can be moving at up to
 # a run when first seen.
 _INIT_VEL_SIGMA_MPS = 3.0
-# Predictions further than this past the last update are refused; the caller
-# treats the track as gone.
-MAX_PREDICT_S = 30.0
+# The constant-velocity extrapolation is refused this far past the last
+# update: long enough for the longest search (60 s) plus the tracker's coast
+# and an unsure spell before the loss. Past it, a search still has the last
+# estimate with a spread bounded by how far the subject can have gone (see
+# :meth:`TargetFilter.search_predicted`).
+MAX_PREDICT_S = 70.0
 
 # The fastest a followed subject of each detector class is taken to move,
 # m/s. A person's cap is a steady run: a velocity estimate above it comes from
@@ -123,6 +126,8 @@ class TargetFilter:
         # The time the state is propagated to, and the last measurement.
         self._t: float = 0.0
         self._t_meas: float = 0.0
+        # The 1-sigma position spread just after the last measurement.
+        self._sigma_meas: float = 0.0
         self.max_speed_mps: float | None = None
 
     @property
@@ -134,11 +139,31 @@ class TargetFilter:
         """When the last measurement was fused."""
         return self._t_meas
 
+    @property
+    def last_sigma_m(self) -> float:
+        """The 1-sigma position spread just after the last measurement."""
+        return self._sigma_meas
+
+    def last_estimate(self) -> tuple[float, float, float, float] | None:
+        """The state ``(n, e, vn, ve)`` as last fused (or stopped), not
+        propagated."""
+        if self._x is None:
+            return None
+        return (self._x[0], self._x[1], self._x[2], self._x[3])
+
+    def shift(self, dn: float, de: float) -> None:
+        """Move the estimate by a jump of the local frame (an EKF position
+        reset), so it stays where the subject is in the world."""
+        if self._x is not None:
+            self._x[0] += dn
+            self._x[1] += de
+
     def reset(self) -> None:
         self._x = None
         self._p = _zeros(4, 4)
         self._t = 0.0
         self._t_meas = 0.0
+        self._sigma_meas = 0.0
 
     def stop(self, t: float) -> None:
         """Stop the estimate where it is predicted at ``t``, with no velocity.
@@ -181,17 +206,64 @@ class TargetFilter:
         p = _add(_mul(_mul(f, self._p), _t(f)), _process_noise(dt))
         return x, p
 
+    def _reach_m(self, t: float) -> float | None:
+        """How far from the last estimate the subject can be at ``t`` (3
+        sigma): the class speed cap times the time since the last sighting,
+        plus that sighting's own 3 sigma. ``None`` without a cap."""
+        cap = self.max_speed_mps
+        if cap is None or cap <= 0.0:
+            return None
+        return cap * max(0.0, t - self._t_meas) + 3.0 * self._sigma_meas
+
+    def _bounded(self, t: float, p: Mat) -> Mat:
+        """``p`` with its position spread no wider than the reachable
+        distance. A constant-velocity spread grows with the cube of time;
+        past a few seconds it admits anyone in a wide circle, which a subject
+        moving at its speed cap cannot have left."""
+        reach = self._reach_m(t)
+        s3 = 3.0 * position_sigma(p)
+        if reach is None or s3 <= reach or s3 <= 0.0:
+            return p
+        k = reach / s3
+        d = (k, k, 1.0, 1.0)
+        return [[p[i][j] * d[i] * d[j] for j in range(4)] for i in range(4)]
+
     def predicted(self, t: float) -> tuple[list[float], Mat] | None:
         """``(state, covariance)`` propagated to ``t``, or ``None`` before the
-        first update or past :data:`MAX_PREDICT_S`."""
+        first update or past :data:`MAX_PREDICT_S`. The position spread is
+        bounded by the distance the subject can have covered."""
         if self._x is None or (t - self._t) > MAX_PREDICT_S:
             return None
-        return self._propagate(t)
+        x, p = self._propagate(t)
+        return x, self._bounded(t, p)
+
+    def search_predicted(self, t: float) -> tuple[list[float], Mat] | None:
+        """What a search uses at ``t``: the prediction while there is one;
+        past :data:`MAX_PREDICT_S`, the last estimate standing still with a
+        spread of the reachable distance. ``None`` before the first update,
+        or past the horizon for a subject with no speed cap."""
+        pred = self.predicted(t)
+        if pred is not None or self._x is None:
+            return pred
+        reach = self._reach_m(t)
+        if reach is None:
+            return None
+        var = (reach / 3.0) ** 2
+        cap2 = (self.max_speed_mps or 0.0) ** 2
+        return (
+            [self._x[0], self._x[1], 0.0, 0.0],
+            [
+                [var, 0.0, 0.0, 0.0],
+                [0.0, var, 0.0, 0.0],
+                [0.0, 0.0, cap2, 0.0],
+                [0.0, 0.0, 0.0, cap2],
+            ],
+        )
 
     def mahalanobis(self, t: float, north: float, east: float, r: Cov2) -> float | None:
-        """Mahalanobis distance of a position measurement from the prediction
-        at ``t``, including the measurement's own covariance."""
-        pred = self.predicted(t)
+        """Mahalanobis distance of a position measurement from the search
+        prediction at ``t``, including the measurement's own covariance."""
+        pred = self.search_predicted(t)
         if pred is None:
             return None
         x, p = pred
@@ -223,6 +295,7 @@ class TargetFilter:
             ]
             self._t = t
             self._t_meas = t
+            self._sigma_meas = position_sigma(self._p)
             return
         x, p = self._propagate(t)
         hp = _mul(_H, p)
@@ -242,6 +315,7 @@ class TargetFilter:
         self._cap_speed()
         self._t = max(self._t, t)
         self._t_meas = max(self._t_meas, t)
+        self._sigma_meas = position_sigma(self._p)
 
 
 def position_sigma(p: Mat) -> float:
