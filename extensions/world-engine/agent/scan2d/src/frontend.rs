@@ -70,8 +70,10 @@ struct Climb {
     last_ns: u64,
 }
 
-/// The height of the scan plane, up, in any fixed vertical datum (the
-/// flight controller's EKF height), and its rate: only changes count.
+/// The height of the scan plane, up, and its rate. The submap bands and
+/// the climb rule use only its changes; floor rejection
+/// ([`crate::scan::Motion::agl_m`]) reads it as the height above the
+/// take-off floor, which the flight controller's EKF height is.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeightSample {
     /// Nanoseconds, the same clock as the scans.
@@ -326,6 +328,10 @@ impl LocalSlam {
             pitch,
             yaw_rate,
             velocity,
+            agl_m: self
+                .height
+                .filter(|h| t.abs_diff(h.t_ns) <= MAX_HEIGHT_AGE_NS)
+                .map(|h| h.up_m),
         };
         let scan = Scan2d::from_cloud(input, &self.cfg, &motion);
         let mut out = PoseOut {

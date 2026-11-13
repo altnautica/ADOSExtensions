@@ -23,6 +23,10 @@ pub struct Motion {
     pub yaw_rate: f64,
     /// Velocity in the levelled LiDAR frame at `t_ns`, m/s.
     pub velocity: [f64; 2],
+    /// Height of the scan plane above the take-off floor, metres, when known.
+    /// A tilted scan's beams that reach the floor (or the configured
+    /// ceiling) are dropped by their levelled height.
+    pub agl_m: Option<f64>,
 }
 
 /// A levelled scan expressed in the LiDAR frame at its first point's time.
@@ -35,12 +39,28 @@ pub struct Scan2d {
 
 impl Scan2d {
     /// Drop points outside the range limits or inside a blocked sector,
-    /// level them by roll and pitch, then move every point into the frame at
-    /// `t_ns`: a point seen `t` after the first was seen from a sensor already
-    /// turned by `yaw_rate·t` and moved by `velocity·t`.
+    /// level them by roll and pitch, drop the floor and ceiling returns of a
+    /// tilted scan when the height is known
+    /// ([`Scan2dConfig::floor_margin_m`]), then move every point into the
+    /// frame at `t_ns`: a point seen `t` after the first was seen from a
+    /// sensor already turned by `yaw_rate·t` and moved by `velocity·t`.
     pub fn from_cloud(scan: &ScanInput, cfg: &Scan2dConfig, m: &Motion) -> Scan2d {
         let (sr, cr) = m.roll.sin_cos();
         let (sp, cp) = m.pitch.sin_cos();
+        // Levelled heights below `low` hit the floor, above `high` the
+        // ceiling. A margin larger than the height (on the ground, or a
+        // datum a little off the floor) drops nothing.
+        let low = m
+            .agl_m
+            .map(|h| -(h - cfg.floor_margin_m))
+            .filter(|&l| l < 0.0)
+            .unwrap_or(f64::NEG_INFINITY);
+        let high = m
+            .agl_m
+            .zip(cfg.ceiling_m)
+            .map(|(h, c)| c - h - cfg.ceiling_margin_m)
+            .filter(|&u| u > 0.0)
+            .unwrap_or(f64::INFINITY);
         let mut out = Scan2d {
             t_ns: scan.t_ns,
             points: Vec::with_capacity(scan.points.len()),
@@ -55,10 +75,14 @@ impl Scan2d {
             if is_blocked(y.atan2(x).to_degrees(), &cfg.blocked_azimuth_deg) {
                 continue;
             }
-            // Ry(pitch)·Rx(roll), keeping x and y.
+            // Ry(pitch)·Rx(roll).
             let yl = cr * y - sr * z;
-            let zl = sr * y + cr * z;
-            let xl = cp * x + sp * zl;
+            let zr = sr * y + cr * z;
+            let xl = cp * x + sp * zr;
+            let zl = cp * zr - sp * x;
+            if zl < low || zl > high {
+                continue;
+            }
             let dt_ns = scan.t_offset_ns.get(i).copied().unwrap_or(0);
             let dt = dt_ns as f64 * 1e-9;
             let (s, c) = (m.yaw_rate * dt).sin_cos();

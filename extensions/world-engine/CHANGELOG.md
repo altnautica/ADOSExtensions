@@ -410,6 +410,14 @@ All notable changes to the World Engine extension.
   pose now says where its north comes from (`north`: `declared`,
   `fc_heading` or `gnss`), so a consumer can refuse to feed the flight
   controller a yaw that only echoes its own. 2.1.20.
+- **A tilted planar scan drops its floor returns.** Pitched 25° at 3 m, a
+  12 m planar LiDAR's forward beams reach the floor about 7 m ahead; levelled,
+  those returns drew a false wall across the scan and pulled the match. With
+  the height fed, a levelled return lower than the height less 0.25 m
+  (`floor_margin_m`, which also absorbs an uneven floor) is dropped, and one
+  within 0.25 m of a configured ceiling (`ceiling_m`, unset by default) too.
+  On the ground, where the margin exceeds the height, nothing is dropped.
+  2.2.0.
 
 ## [2.0.0]
 

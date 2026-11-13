@@ -105,6 +105,18 @@ pub struct Scan2dConfig {
     /// a step in height stays inside it; a transit along a shaft does not,
     /// and the prior alone drifts into the shaft's walls over its length.
     pub max_unmatched_climb_m: f64,
+
+    /// A levelled point lower than the scan plane's height less this,
+    /// metres, is a floor return of a tilted scan and is dropped (only with
+    /// the height known, [`crate::scan::Motion::agl_m`]). The height is the
+    /// one above the take-off floor, so the margin also absorbs floor
+    /// unevenness.
+    pub floor_margin_m: f64,
+    /// A levelled point higher than this below [`Self::ceiling_m`] is a
+    /// ceiling return and is dropped.
+    pub ceiling_margin_m: f64,
+    /// Ceiling height above the take-off floor, metres, where one is known.
+    pub ceiling_m: Option<f64>,
 }
 
 impl Scan2dConfig {
@@ -155,6 +167,9 @@ impl Scan2dConfig {
             submap_height_band_m: 0.3,
             max_climb_rate_mps: 0.15,
             max_unmatched_climb_m: 3.0,
+            floor_margin_m: 0.25,
+            ceiling_margin_m: 0.25,
+            ceiling_m: None,
         }
     }
 }
