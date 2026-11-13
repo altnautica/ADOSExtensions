@@ -68,6 +68,12 @@ All notable changes to the World Engine extension.
 
 ### Changed
 
+- **SfM pose priors and bundle adjustment.** A frame's pose prior is never
+  trusted beyond its source's measured accuracy: a recorded covariance below
+  the source's floor (planar LiDAR 0.15 m horizontal and 0.30 m vertical,
+  3-D LiDAR 0.05 m, VIO 0.10 m) is raised to it, since SLAM covariances do not
+  grow while scan matching degrades. Every COLMAP mapper runs its bundle
+  adjustment on the GPU.
 - `atlas.pose_provider = auto` picks LiDAR odometry on a drone too when the
   rig has the configured LiDAR and IMU: there the LiDAR pose is the
   navigation source the flight controller fuses, so its own EKF would be
@@ -116,7 +122,7 @@ All notable changes to the World Engine extension.
   local SLAM, loop search, pose graph). Its body trajectory goes to
   `lidar2d/trajectory.tum` with `lidar2d/summary.json`, is aligned onto a
   recorded pose track when there is one, re-poses the keyframes as `lidar2d`
-  priors (0.03 m across, 0.25 m in height) for the pose-prior mapper (never
+  priors (0.15 m across, 0.30 m in height) for the pose-prior mapper (never
   fixed poses), and re-registers the sweeps and scan origins. The sfm stage
   detail carries `lidar2d` and `prior_source`. GLIM and its submit-time check
   apply to 3D (solid-state or spinning) LiDAR rigs only, and a planar rig
@@ -132,6 +138,12 @@ All notable changes to the World Engine extension.
 
 ### Fixed
 
+- **A planar LiDAR session's cloud is registered and coloured.** A planar
+  LiDAR records its compact polar stream (`lidar/<id>.polar.zst`) instead of
+  Cartesian point clouds, and `prepare` read only the latter, so a drone
+  session with camera frames reported 0 LiDAR points and got no coloured
+  cloud unless the offline scan matcher's trajectory was accepted. The
+  polar scans now register along the recorded pose track like any sweep.
 - **Every LiDAR pose reaches the flight controller, one poll after it is
   estimated.** The navigation pose was gated on the wall-clock time of the
   100 ms poll that handed it over, so a 10 Hz matcher's pose that arrived
