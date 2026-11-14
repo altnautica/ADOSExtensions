@@ -210,14 +210,15 @@ def test_fuse_runs_on_cuda_after_the_parent_used_torch_cuda(tmp_path):
 
 @pytest.mark.skipif(not _cuda(), reason="needs torch and a CUDA GPU")
 def test_a_gpu_retry_after_a_real_cuda_out_of_memory_completes_on_cuda(tmp_path, monkeypatch):
-    # The parent holds all but ~256 MiB of the GPU, and a 0.05 mm voxel with no block cap puts every pixel
+    # The parent holds all but ~1 GiB of the GPU (a fresh CUDA context plus Open3D needs a few hundred MiB),
+    # and a 0.05 mm voxel with no block cap puts every pixel
     # of every view in its own block, so attempt 1 runs out of GPU memory for real. Attempt 2 (1000x
     # coarser) fits in what is left, but only in a fresh CUDA context: in the same process Open3D fails
     # with "invalid device ordinal" after the OOM.
     import torch
 
     free, _ = torch.cuda.mem_get_info()
-    hog = torch.empty(max(free - (256 << 20), 0), dtype=torch.uint8, device="cuda")
+    hog = torch.empty(max(free - (1 << 30), 0), dtype=torch.uint8, device="cuda")
     _wall_depthset(tmp_path / "ds")
     monkeypatch.setattr(fuse, "COARSER", (1.0, 1000.0))
     try:
