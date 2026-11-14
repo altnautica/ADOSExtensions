@@ -145,8 +145,8 @@ fn a_turn_running_on_past_an_imu_gap_is_unchecked_while_off() {
 }
 
 /// The IMU drops out from 2.0 s to 2.3 s with no turn: the scan it has not
-/// reached and the two whose turn the next sample bridges with a guess are
-/// unchecked; the rest are checked.
+/// reached and the scans after it stay unchecked until enough of them agree
+/// with the map on one heading; the rest are checked.
 #[test]
 fn a_gap_in_the_imu_leaves_the_next_scan_unchecked() {
     let pose_at = pivot(0.0, 0.0, 0.0);
@@ -167,5 +167,5 @@ fn a_gap_in_the_imu_leaves_the_next_scan_unchecked() {
             flagged.push(k);
         }
     }
-    assert_eq!(flagged, vec![21, 22, 23], "only the scans across the gap");
+    assert_eq!(flagged, vec![21, 22, 23, 24], "only the scans across the gap and its re-confirm");
 }

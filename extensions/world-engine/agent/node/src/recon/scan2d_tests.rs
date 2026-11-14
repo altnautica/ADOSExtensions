@@ -13,6 +13,7 @@ fn pose(t_ns: u64, x: f64, y: f64, yaw: f64, roll: f64, pitch: f64) -> PoseOut {
         degeneracy: 0.5,
         sigma_xy_m: 0.05,
         heading_ok: true,
+        heading_unconfirmed: false,
     }
 }
 

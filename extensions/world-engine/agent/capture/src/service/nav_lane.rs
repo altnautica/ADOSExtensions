@@ -251,7 +251,13 @@ impl Engine {
             }
             self.imu_feed_degraded = degraded;
         }
-        fc_imu::hold_poses_to_feed(poses, degraded);
+        let raw_since = self.fc_nav.raw_since_ns();
+        if let Some(t) = raw_since {
+            // The matcher started a new map at the first RAW_IMU sample
+            // (the stand-in's could not hold a heading): anchor it afresh.
+            self.nav.restart_heading_at(t);
+        }
+        fc_imu::hold_poses_to_feed(poses, degraded, raw_since);
     }
 
     /// At most every [`NAV_FEED_LOG_EVERY`], with the FC as the IMU: the IMU
@@ -319,7 +325,13 @@ impl Engine {
             return None;
         }
         let now = crate::clock::mono_ns();
-        let reason = self.fc_nav.degraded(now);
+        // The feed first; with it measuring, a heading its gap left
+        // unmeasured that the matcher has yet to re-confirm.
+        let reason = self.fc_nav.degraded(now).or(self
+            .pose
+            .quality()
+            .heading_unconfirmed
+            .then_some(ImuFeedReason::HeadingUnconfirmed));
         Some(ImuFeedStatus {
             state: reason.map_or(ImuFeedState::Ok, ImuFeedReason::state),
             reason,

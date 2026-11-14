@@ -147,6 +147,8 @@ pub struct FeedState {
     /// Host ns of the newest IMU sample handed on; 0 before the first.
     newest_imu_ns: AtomicU64,
     raw_imu: AtomicBool,
+    /// Host ns of the first `RAW_IMU` sample; 0 before it.
+    raw_since_ns: AtomicU64,
     flow: AtomicBool,
     /// Host ns of the `RAW_IMU` samples of the last [`RATE_WINDOW_NS`] up to
     /// the newest, oldest first.
@@ -169,9 +171,17 @@ impl FeedState {
             times.pop_front();
         }
         drop(times);
+        if !self.raw_imu.load(Ordering::Acquire) {
+            self.raw_since_ns.store(t_ns, Ordering::Release);
+        }
         if !self.raw_imu.swap(true, Ordering::AcqRel) {
             tracing::info!("nav_imu_source_raw_imu");
         }
+    }
+
+    /// Host ns of the first `RAW_IMU` sample; `None` before it.
+    pub fn raw_since_ns(&self) -> Option<u64> {
+        Some(self.raw_since_ns.load(Ordering::Acquire)).filter(|&t| t > 0)
     }
 
     fn raw_times(&self) -> std::sync::MutexGuard<'_, VecDeque<u64>> {
@@ -235,7 +245,15 @@ impl FeedState {
 ///   sources.
 /// - On a live but starved `RAW_IMU`, the heading is measured, coarsely: a
 ///   pose the matcher reports good is degraded.
-pub fn hold_poses_to_feed(poses: &mut [crate::pose::PoseEstimate], reason: Option<ImuFeedReason>) {
+/// - A pose from before the first `RAW_IMU` sample (`raw_since_ns`) is
+///   lost whenever it is drained: its heading rode the stand-in, and the
+///   matcher starts a new map at that sample
+///   ([`PoseProvider::heading_unmeasured`]).
+pub fn hold_poses_to_feed(
+    poses: &mut [crate::pose::PoseEstimate],
+    reason: Option<ImuFeedReason>,
+    raw_since_ns: Option<u64>,
+) {
     match reason.map(ImuFeedReason::state) {
         Some(ImuFeedState::Lost) => poses.iter_mut().for_each(|e| e.health = VioHealth::Lost),
         Some(_) => poses
@@ -244,14 +262,24 @@ pub fn hold_poses_to_feed(poses: &mut [crate::pose::PoseEstimate], reason: Optio
             .for_each(|e| e.health = VioHealth::Degraded),
         None => {}
     }
+    poses
+        .iter_mut()
+        .filter(|e| raw_since_ns.is_none_or(|s| e.t_ns < s))
+        .for_each(|e| e.health = VioHealth::Lost);
 }
 
 /// The FC feed's sink for one run's `pose`: each EKF height, and with the
 /// FC as the matcher's IMU (`fc_is_imu`) each `RAW_IMU` sample ([`from_raw`])
 /// and each flow velocity, all as [`FC_IMU_ID`]'s, the moment they arrive.
+/// Before the first `RAW_IMU` sample the matcher is told its heading went
+/// unmeasured: the attitude stand-in carried the FC's fused yaw, not a
+/// measured turn.
 pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>) -> NavSink {
     Arc::new(move |s| match s {
         NavSample::Imu { t_ns, imu, attitude } if fc_is_imu => {
+            if !state.raw_imu() {
+                pose.heading_unmeasured();
+            }
             let attitude = attitude.map(|(t, r)| (t, enu_flu(&r)));
             let samples = vec![from_raw(t_ns, &imu, attitude)];
             pose.feed_imu(FC_IMU_ID, &ImuBatch { samples });
@@ -382,16 +410,21 @@ mod tests {
                 sigma_xy_m: None,
             })
         };
-        let held = |reason| {
+        // The poses are at host 0; RAW_IMU began at `since`.
+        let held_since = |reason, since| {
             let mut p = poses();
-            hold_poses_to_feed(&mut p, reason);
+            hold_poses_to_feed(&mut p, reason, since);
             p.map(|e| e.health)
         };
+        let held = |reason| held_since(reason, Some(0));
         use VioHealth::*;
         assert_eq!(held(Some(ImuFeedReason::AttitudeStandIn)), [Lost, Lost, Lost]);
         assert_eq!(held(Some(ImuFeedReason::Stalled)), [Lost, Lost, Lost]);
         assert_eq!(held(Some(ImuFeedReason::Starved)), [Degraded, Degraded, Lost]);
         assert_eq!(held(None), [Good, Degraded, Lost]);
+        // A pose from before the first RAW_IMU sample rode the stand-in.
+        assert_eq!(held_since(None, Some(1)), [Lost, Lost, Lost]);
+        assert_eq!(held_since(None, None), [Lost, Lost, Lost]);
     }
 
     #[test]

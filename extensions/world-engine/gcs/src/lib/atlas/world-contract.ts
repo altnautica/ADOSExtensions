@@ -193,11 +193,12 @@ export interface MapStatus {
   stream: { state: "off" | "connecting" | "live" | "degraded"; bytes_per_s: number };
   /** The flight controller IMU feed of a planar LiDAR pose that takes the FC
    * as its IMU; null otherwise (absent from older devices). Lost (the pose
-   * too) on the attitude stand-in or a stalled RAW_IMU, degraded on a starved
-   * one. */
+   * too) on the attitude stand-in, a stalled RAW_IMU, or a heading a gap in
+   * it left unmeasured that the matcher has yet to re-confirm; degraded on a
+   * starved one. */
   imu_feed?: {
     state: "ok" | "degraded" | "lost";
-    reason: "attitude_stand_in" | "stalled" | "starved" | null;
+    reason: "attitude_stand_in" | "stalled" | "starved" | "heading_unconfirmed" | null;
     /** RAW_IMU samples over the last second; null before RAW_IMU. */
     rate_hz: number | null;
   } | null;

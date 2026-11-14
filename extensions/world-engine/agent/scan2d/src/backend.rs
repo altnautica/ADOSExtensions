@@ -33,7 +33,7 @@ use crate::scan::Scan2d;
 use crate::submap::Submap;
 
 /// Pyramid levels for loop search (windows of 1 to 64 cells).
-const PYRAMID_DEPTH: usize = 7;
+pub(crate) const PYRAMID_DEPTH: usize = 7;
 /// Loop matching scores only scan points that land, at the prior, within
 /// this distance of a position the submap's own scans were taken from.
 const OBSERVED_RADIUS_M: f64 = 4.0;
@@ -286,6 +286,7 @@ pub fn optimize(map: &LocalMap, cfg: &Scan2dConfig) -> Trajectory {
                     // Every node is in the optimised graph.
                     sigma_xy_m: SIGMA_MATCHED_M,
                     heading_ok: true,
+                    heading_unconfirmed: false,
                 }
             })
             .collect(),

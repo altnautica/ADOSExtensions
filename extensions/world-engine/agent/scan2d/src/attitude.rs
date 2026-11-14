@@ -88,6 +88,8 @@ pub struct Attitude {
     /// Time of the sample that ended the latest gap wider than
     /// [`MAX_SAMPLE_GAP_NS`] (or the first sample).
     gap_end_ns: Option<u64>,
+    /// Length of that gap, ns (0 for the first sample).
+    gap_ns: u64,
 }
 
 impl Attitude {
@@ -109,6 +111,7 @@ impl Attitude {
             history: VecDeque::new(),
             bias_z: 0.0,
             gap_end_ns: None,
+            gap_ns: 0,
         }
     }
 
@@ -120,6 +123,12 @@ impl Attitude {
     /// Time of the newest sample, `None` before any.
     pub fn newest_ns(&self) -> Option<u64> {
         self.last_t_ns
+    }
+
+    /// Length of the latest gap wider than [`MAX_SAMPLE_GAP_NS`], ns: the
+    /// time over which the rotation went unmeasured.
+    pub fn last_gap_ns(&self) -> u64 {
+        self.gap_ns
     }
 
     /// Whether the samples measured the rotation from `t0_ns` on: no gap
@@ -152,6 +161,7 @@ impl Attitude {
         let dt_ns = s.t_ns - last;
         if dt_ns > MAX_SAMPLE_GAP_NS {
             self.gap_end_ns = Some(s.t_ns);
+            self.gap_ns = dt_ns;
         }
         let dt = dt_ns as f64 * 1e-9;
         if dt > MAX_GAP_S {

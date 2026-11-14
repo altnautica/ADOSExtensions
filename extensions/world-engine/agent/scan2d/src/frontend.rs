@@ -3,13 +3,16 @@
 //! threading.
 
 use std::collections::VecDeque;
+use std::f64::consts::PI;
 
 use nalgebra::{Matrix2, Rotation2, Vector2};
 
 use crate::attitude::{Attitude, ImuSample, VelocitySample};
 use crate::config::Scan2dConfig;
+use crate::backend::PYRAMID_DEPTH;
+use crate::grid::Pyramid;
 use crate::matcher::{
-    constraint_information, correlative, degeneracy, keep_constrained, refine,
+    branch_and_bound, constraint_information, correlative, degeneracy, keep_constrained, refine,
     rotation_information, unconstrained_directions, Prior, Window,
 };
 use crate::pose::{wrap, Pose2};
@@ -69,13 +72,35 @@ const HEADING_JUMP_RAD: f64 = 2.0 * std::f64::consts::PI / 180.0;
 const HEADING_RATE_SLACK_S: f64 = 0.03;
 const HEADING_WINDOW_NS: u64 = 1_000_000_000;
 /// After a gap in the IMU (a turn across it is a guess, see
-/// [`Attitude::measured_since`]) the heading stays unchecked until a matched
-/// scan's own best heading lies within this of the gyro-held one (1
-/// degree), ...
+/// [`Attitude::measured_since`]), the
+/// heading is unconfirmed ([`PoseOut::heading_unconfirmed`]) until
+/// [`CONFIRM_SCANS`] scans in a row find the same heading against the map
+/// the scans saw before it: each scan's best heading by a search over every
+/// turn the gap could have hidden, agreeing within this of the first's
+/// (each against the gyro-held heading, so the gyro carries them between
+/// scans; 1 degree), ...
 const HEADING_CONFIRM_RAD: f64 = std::f64::consts::PI / 180.0;
 /// ... while the heading turns slower than this, rad/s (20 degrees/s;
 /// through a faster turn the scan's motion and the clocks blur its heading).
 const HEADING_CONFIRM_MAX_TURN_RATE: f64 = 20.0 * std::f64::consts::PI / 180.0;
+/// Consecutive scans that must agree before the heading is confirmed.
+const CONFIRM_SCANS: usize = 3;
+/// The fastest yaw an unmeasured stretch is taken to hide, rad/s (180
+/// degrees/s): the search spans this times the stretch, plus
+/// [`CONFIRM_MARGIN_RAD`], up to the whole circle.
+const MAX_UNMEASURED_YAW_RATE: f64 = std::f64::consts::PI;
+const CONFIRM_MARGIN_RAD: f64 = 5.0 * std::f64::consts::PI / 180.0;
+/// How far the position may have moved off its prior while unconfirmed,
+/// metres (the search's half-width): a scan matched at a heading off by the
+/// turn the gap hid drags the position with it.
+const CONFIRM_LINEAR_M: f64 = 3.0;
+/// A heading is a candidate only when it scores at least
+/// [`Scan2dConfig::loop_min_score`] and no heading more than
+/// [`CONFIRM_RIVAL_RAD`] from it within the search scores within this of
+/// it: a room whose outline repeats under a turn (a rectangle under half a
+/// turn) leaves the heading ambiguous, and it stays unconfirmed.
+const CONFIRM_SCORE_MARGIN: f64 = 0.1;
+const CONFIRM_RIVAL_RAD: f64 = 10.0 * std::f64::consts::PI / 180.0;
 
 /// The translation directions the last match left unconstrained.
 #[derive(Debug, Clone, Copy)]
@@ -152,14 +177,20 @@ pub struct PoseOut {
     /// Whether the integrated gyro vouches for the heading. False when the
     /// IMU had not reached the scan (its stream stalled or is starved: the
     /// heading is held at the newest sample's, the scan matched for its
-    /// position only and kept out of the map), after a gap in the IMU until
-    /// a scan's own best heading confirms the gyro's within 1 degree (the
-    /// match holds to the gyro's heading, so a turn lost in the gap stays
-    /// lost), or when the matched heading moved against the gyro's by more
-    /// than 2 degrees (plus 0.03 s times the turn rate) within a second: a
-    /// jump the gyro did not see. With no IMU fed at all there is no gyro to
-    /// hold it to, and it is true.
+    /// position only and kept out of the map), while
+    /// [`Self::heading_unconfirmed`], or when the matched heading moved
+    /// against the gyro's by more than 2 degrees (plus 0.03 s times the turn
+    /// rate) within a second: a jump the gyro did not see. With no IMU fed at
+    /// all there is no gyro to hold it to, and it is true.
     pub heading_ok: bool,
+    /// The heading went unmeasured (a gap in the IMU) and the scans have not
+    /// yet
+    /// re-confirmed it against the map: [`CONFIRM_SCANS`] scans in a row
+    /// found one heading, unambiguously, over every turn the gap could have
+    /// hidden. Until then the heading may be off by any turn the gap hid,
+    /// and is no navigation heading. Confirming re-seeds the heading to the
+    /// one the scans found.
+    pub heading_unconfirmed: bool,
 }
 
 /// Everything local SLAM built, for the offline back end.
@@ -202,9 +233,21 @@ pub struct LocalSlam {
     /// `(t_ns, map heading − gyro heading, |turn rate|)` of the scans of the
     /// last [`HEADING_WINDOW_NS`] the gyro measured, oldest first.
     gyro_offsets: VecDeque<(u64, f64, f64)>,
-    /// Set by a gap in the IMU, cleared once a matched scan confirms the
+    /// Set by a gap in the IMU, cleared once the scans re-confirm the
     /// heading ([`HEADING_CONFIRM_RAD`]).
     heading_suspect: bool,
+    /// How long the heading went unmeasured since it was last confirmed,
+    /// ns; saturating.
+    unmeasured_ns: u64,
+    /// The re-confirming scans so far: each one's best map heading against
+    /// the gyro-held one, radians.
+    confirm_offsets: Vec<f64>,
+    /// The pyramid of the submap the re-confirmation searches, by submap
+    /// id; the submap takes no scans while the heading is suspect.
+    confirm_pyramid: Option<(usize, Pyramid)>,
+    /// The first submap id started since the heading went suspect: those
+    /// hold the suspect heading and confirm nothing.
+    suspect_from_id: usize,
 }
 
 impl LocalSlam {
@@ -238,6 +281,10 @@ impl LocalSlam {
             sigma_xy_m: SIGMA_MATCHED_M,
             gyro_offsets: VecDeque::new(),
             heading_suspect: false,
+            unmeasured_ns: 0,
+            confirm_offsets: Vec::new(),
+            confirm_pyramid: None,
+            suspect_from_id: 0,
         }
     }
 
@@ -258,6 +305,118 @@ impl LocalSlam {
 
     pub fn feed_imu(&mut self, s: &ImuSample) {
         self.att.update(s);
+    }
+
+    /// The heading went unmeasured for an unknown time, whatever the IMU
+    /// samples say: they carried no yaw rate (a stand-in fed from a fused
+    /// attitude). The map the scans built meanwhile placed them at a heading
+    /// pinned through any turn, so it cannot re-confirm one: it is dropped,
+    /// and the next scan starts a new map at the current pose. The new map's
+    /// heading against the old one (and the world) is unknown by any turn
+    /// the stretch hid; the caller re-anchors it. Call it in order with the
+    /// samples, before the first one that measures the turn again.
+    pub fn heading_unmeasured(&mut self) {
+        for (_, done) in self.active.drain(..) {
+            if self.record {
+                self.finished.push(done);
+            }
+        }
+        self.history.clear();
+        self.gyro_offsets.clear();
+        self.unobserved = None;
+        self.last_insert = None;
+        self.heading_suspect = false;
+        self.unmeasured_ns = 0;
+        self.confirm_offsets.clear();
+        self.confirm_pyramid = None;
+    }
+
+    /// The heading went unmeasured for `span_ns`.
+    fn suspect(&mut self, span_ns: u64) {
+        if !self.heading_suspect {
+            self.heading_suspect = true;
+            self.suspect_from_id = self.next_id;
+        }
+        self.unmeasured_ns = self.unmeasured_ns.saturating_add(span_ns);
+        self.confirm_offsets.clear();
+    }
+
+    /// One scan's step in re-confirming a suspect heading against the
+    /// active submap, if that submap was started before the heading went
+    /// unmeasured (one started since holds the suspect heading itself). The
+    /// scan's best pose over every turn the stretch could have hidden
+    /// ([`MAX_UNMEASURED_YAW_RATE`]), if it is unambiguous; once
+    /// [`CONFIRM_SCANS`] in a row agree, the heading is confirmed and
+    /// re-seeded there, and the confirming scan's pose in the submap is
+    /// returned.
+    fn reconfirm(&mut self, scan: &Scan2d, prior: Pose2) -> Option<Pose2> {
+        let found = self.confirm_candidate(scan, prior);
+        let Some((g, off)) = found else {
+            self.confirm_offsets.clear();
+            return None;
+        };
+        if self
+            .confirm_offsets
+            .first()
+            .is_some_and(|&o| wrap(off - o).abs() > HEADING_CONFIRM_RAD)
+        {
+            self.confirm_offsets.clear();
+        }
+        self.confirm_offsets.push(off);
+        if self.confirm_offsets.len() < CONFIRM_SCANS {
+            return None;
+        }
+        self.heading_suspect = false;
+        self.unmeasured_ns = 0;
+        self.confirm_offsets.clear();
+        self.confirm_pyramid = None;
+        // The heading jumps to the confirmed one: the motion and the gyro
+        // comparison restart from it.
+        self.gyro_offsets.clear();
+        self.history.clear();
+        self.unobserved = None;
+        Some(g)
+    }
+
+    /// The scan's unambiguous best pose in the active submap over the
+    /// unmeasured stretch's turns, and its heading against the prior's.
+    fn confirm_candidate(&mut self, scan: &Scan2d, prior: Pose2) -> Option<(Pose2, f64)> {
+        let (id, sm) = self.active.first()?;
+        if sm.scans() == 0 || *id >= self.suspect_from_id {
+            return None;
+        }
+        let id = *id;
+        if self.confirm_pyramid.as_ref().is_none_or(|(i, _)| *i != id) {
+            self.confirm_pyramid = Some((id, Pyramid::new(&sm.grid, PYRAMID_DEPTH)));
+        }
+        let (_, pyr) = self.confirm_pyramid.as_ref()?;
+        let p = sm.pose.inverse() * prior;
+        let half = (self.unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE
+            + CONFIRM_MARGIN_RAD)
+            .min(PI);
+        let search = |lo: f64, hi: f64, min_score: f64| {
+            let window = Window {
+                linear_m: CONFIRM_LINEAR_M,
+                angular_rad: 0.5 * (hi - lo),
+            };
+            let center = Pose2::new(p.x, p.y, 0.5 * (lo + hi));
+            branch_and_bound(pyr, scan, center, window, min_score)
+        };
+        let (g, score) = search(p.th - half, p.th + half, self.cfg.loop_min_score)?;
+        // Any heading clear of the best that scores near it makes the room
+        // ambiguous under the turn.
+        let rival_floor = score - CONFIRM_SCORE_MARGIN;
+        let d = g.th - p.th;
+        let rival = if half >= PI {
+            search(g.th + CONFIRM_RIVAL_RAD, g.th + 2.0 * PI - CONFIRM_RIVAL_RAD, rival_floor)
+                .is_some()
+        } else {
+            [(-half, d - CONFIRM_RIVAL_RAD), (d + CONFIRM_RIVAL_RAD, half)]
+                .into_iter()
+                .filter(|(lo, hi)| hi > lo)
+                .any(|(lo, hi)| search(p.th + lo, p.th + hi, rival_floor).is_some())
+        };
+        (!rival).then_some((g, wrap(d)))
     }
 
     /// The scan plane's height and climb rate. While it climbs or descends
@@ -436,6 +595,7 @@ impl LocalSlam {
             degeneracy: 0.0,
             sigma_xy_m: SIGMA_MATCHED_M,
             heading_ok: false,
+            heading_unconfirmed: false,
         };
         // Riding the prior: it carried the pose `speed × dt` since the last
         // scan without a match to check it.
@@ -443,9 +603,12 @@ impl LocalSlam {
         let riding_sigma =
             (self.sigma_xy_m + SIGMA_GROWTH_PER_M * prior_vel.norm() * dt_s).min(SIGMA_MAX_M);
         // Whether the gyro measured the turn since the reference scan: a gap
-        // in the IMU bridges it with a guess.
+        // in the IMU bridges it with a guess. Scans before the first sample
+        // are no gap: the heading starts there, and nothing was lost.
         let measured = !gyro || self.last.is_none_or(|(t1, _, _)| self.att.measured_since(t1));
-        self.heading_suspect |= !measured;
+        if !measured && self.att.last_gap_ns() > 0 {
+            self.suspect(self.att.last_gap_ns());
+        }
         let has_measured = self
             .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
             .is_some();
@@ -453,6 +616,7 @@ impl LocalSlam {
         {
             let consistent = self.check_heading(t, prior.th, heading, yaw_rate, measured);
             out.heading_ok = reached && consistent && !self.heading_suspect;
+            out.heading_unconfirmed = self.heading_suspect;
             self.advance(t, prior, heading);
             self.sigma_xy_m = riding_sigma;
             out.sigma_xy_m = riding_sigma;
@@ -472,25 +636,25 @@ impl LocalSlam {
         if self.active.is_empty() {
             self.start_submap(prior, riding_sigma.max(climbed_sigma));
         }
+        // A heading the IMU left unmeasured is re-confirmed against the map
+        // the scans saw before, never taken from a match that holds to it.
+        let confirmed = if self.heading_suspect
+            && reached
+            && yaw_rate.abs() <= HEADING_CONFIRM_MAX_TURN_RATE
+        {
+            self.reconfirm(&scan, prior)
+        } else {
+            None
+        };
         let (id, sm) = &self.active[0];
         let mut pose = prior;
-        let mut in_submap = sm.pose.inverse() * prior;
+        let mut in_submap = confirmed.unwrap_or_else(|| sm.pose.inverse() * prior);
         if sm.scans() > 0 {
             let window = Window {
                 linear_m: self.cfg.linear_window_m,
                 angular_rad: self.cfg.angular_window_deg.to_radians(),
             };
             let (c, _) = correlative(&sm.grid, &scan, in_submap, window);
-            // A turn lost in a gap in the IMU stays lost (the match holds to
-            // the gyro), so the heading is reported unchecked until a scan
-            // that sees the room well enough agrees with it.
-            if self.heading_suspect
-                && reached
-                && yaw_rate.abs() <= HEADING_CONFIRM_MAX_TURN_RATE
-                && wrap(c.th - in_submap.th).abs() <= HEADING_CONFIRM_RAD
-            {
-                self.heading_suspect = false;
-            }
             // The match holds to the gyro's heading: the gyro integrates a
             // turn far better than a scan resolves one, and in a tunnel or a
             // chamber whose outline changes with height a scan can score
@@ -583,6 +747,7 @@ impl LocalSlam {
         }
         let consistent = self.check_heading(t, pose.th, heading, yaw_rate, measured);
         out.heading_ok = reached && consistent && !self.heading_suspect;
+        out.heading_unconfirmed = self.heading_suspect;
         self.advance(t, pose, heading);
         out
     }

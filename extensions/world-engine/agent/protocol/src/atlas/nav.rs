@@ -254,6 +254,11 @@ pub enum ImuFeedReason {
     Stalled,
     /// Under 40 `RAW_IMU` samples over the last second.
     Starved,
+    /// The feed is back after a gap (the stand-in, or samples dropped), and
+    /// the matcher has not yet re-confirmed the heading the gap left
+    /// unmeasured against its map. Only on the pose topic (the feed itself
+    /// is fine); `map_status` reports the feed.
+    HeadingUnconfirmed,
 }
 
 impl ImuFeedReason {
@@ -262,14 +267,18 @@ impl ImuFeedReason {
             ImuFeedReason::AttitudeStandIn => "attitude_stand_in",
             ImuFeedReason::Stalled => "stalled",
             ImuFeedReason::Starved => "starved",
+            ImuFeedReason::HeadingUnconfirmed => "heading_unconfirmed",
         }
     }
 
     /// The feed's state for this reason: lost when no yaw rate reaches the
-    /// matcher, degraded while it is live but starved.
+    /// matcher or the heading it left unmeasured is not yet re-confirmed,
+    /// degraded while it is live but starved.
     pub fn state(self) -> ImuFeedState {
         match self {
-            ImuFeedReason::AttitudeStandIn | ImuFeedReason::Stalled => ImuFeedState::Lost,
+            ImuFeedReason::AttitudeStandIn
+            | ImuFeedReason::Stalled
+            | ImuFeedReason::HeadingUnconfirmed => ImuFeedState::Lost,
             ImuFeedReason::Starved => ImuFeedState::Degraded,
         }
     }

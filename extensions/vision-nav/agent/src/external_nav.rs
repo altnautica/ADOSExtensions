@@ -171,6 +171,11 @@ pub enum ImuFeed {
     Stalled,
     /// `RAW_IMU` under 40 Hz.
     Starved,
+    /// `RAW_IMU` is back after a gap, and the publisher has not yet
+    /// re-confirmed against its map the heading the gap left unmeasured.
+    /// The pose is lost until it has: no `ODOMETRY`, and the EKF stays on
+    /// its fallback source.
+    HeadingUnconfirmed,
 }
 
 impl ImuFeed {
@@ -179,6 +184,7 @@ impl ImuFeed {
             "attitude_stand_in" => ImuFeed::AttitudeStandIn,
             "stalled" => ImuFeed::Stalled,
             "starved" => ImuFeed::Starved,
+            "heading_unconfirmed" => ImuFeed::HeadingUnconfirmed,
             _ => return None,
         })
     }
@@ -189,6 +195,10 @@ impl ImuFeed {
             ImuFeed::AttitudeStandIn => "no RAW_IMU from the flight controller yet",
             ImuFeed::Stalled => "the flight controller's RAW_IMU stopped",
             ImuFeed::Starved => "the flight controller's RAW_IMU is under 40 Hz",
+            ImuFeed::HeadingUnconfirmed => {
+                "re-confirming the heading against the map after a gap in the flight \
+                 controller's RAW_IMU"
+            }
         }
     }
 }

@@ -80,6 +80,10 @@ pub struct PoseQuality {
     pub degeneracy_ratio: Option<f64>,
     /// Producer's own drift estimate, metres.
     pub drift_hint_m: Option<f64>,
+    /// The heading went unmeasured (a gap in the IMU) and is not yet
+    /// re-confirmed against the map: the pose is lost until it is (the
+    /// planar scan matcher).
+    pub heading_unconfirmed: bool,
 }
 
 /// A diagonal covariance from a position and an orientation sigma.
@@ -272,6 +276,11 @@ pub trait PoseProvider: Send + Sync {
     fn feed_height(&self, _samples: &[HeightSample]) {}
     /// One LiDAR scan.
     fn feed_lidar(&self, _scan: &LidarScan) {}
+    /// The heading went unmeasured for an unknown time, in order with the
+    /// IMU batches: the next one measures the turn again after samples that
+    /// carried no measured yaw rate (the FC attitude stand-in). The planar
+    /// matcher starts a new map there.
+    fn heading_unmeasured(&self) {}
 
     /// The pose holds one floor only (a planar LiDAR cannot see a level
     /// change); the capture HUD says so.

@@ -249,6 +249,19 @@ fn a_pose_held_down_by_the_fc_imu_feed_names_it() {
         check(&degraded, "extnav_health").1,
         "Tracking degraded (the flight controller's RAW_IMU is under 40 Hz); position noise raised."
     );
+    let unconfirmed = eval(ExtnavPreArmInputs {
+        health: Some(ExtnavHealth::Lost),
+        imu_feed: Some(ImuFeed::HeadingUnconfirmed),
+        ..ready()
+    });
+    assert_eq!(
+        check(&unconfirmed, "extnav_health"),
+        (
+            Severity::Blocking,
+            "Tracking lost (re-confirming the heading against the map after a gap in the \
+             flight controller's RAW_IMU)."
+        )
+    );
     let plain = eval(ExtnavPreArmInputs {
         health: Some(ExtnavHealth::Lost),
         ..ready()

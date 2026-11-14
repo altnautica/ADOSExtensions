@@ -144,7 +144,11 @@ impl Engine {
         self.degrade_on_imu_feed(&mut out, now_mono_ns);
         self.fold_gnss_alignment(&out);
         let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
-        let imu_feed = self.imu_feed_degraded;
+        // A pose the feed left alone but whose heading the matcher has yet
+        // to re-confirm after the feed's gap says so.
+        let imu_feed = self.imu_feed_degraded.or(q
+            .heading_unconfirmed
+            .then_some(world_engine_protocol::atlas::ImuFeedReason::HeadingUnconfirmed));
         let due = out
             .last()
             .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns, open))

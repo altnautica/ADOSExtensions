@@ -346,6 +346,7 @@ fn health_and_frames_follow_the_matcher() {
         degeneracy: 0.3,
         sigma_xy_m: 0.05,
         heading_ok: true,
+        heading_unconfirmed: false,
     };
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS - 1, 0.05), VioHealth::Lost);
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS, 0.05), VioHealth::Good);
@@ -361,6 +362,14 @@ fn health_and_frames_follow_the_matcher() {
         ..p
     };
     assert_eq!(health_of(&unchecked, 30, 0.05), VioHealth::Degraded);
+    // A heading the IMU left unmeasured, not yet re-confirmed, is no
+    // navigation heading.
+    let unconfirmed = PoseOut {
+        heading_ok: false,
+        heading_unconfirmed: true,
+        ..p
+    };
+    assert_eq!(health_of(&unconfirmed, 30, 0.05), VioHealth::Lost);
     // T_w_l: the planar pose at z 0, yawed +90 degrees.
     let (r, t) = se3::from_mat4(&t_w_l(&p));
     assert_eq!(t, [1.0, 2.0, 0.0]);

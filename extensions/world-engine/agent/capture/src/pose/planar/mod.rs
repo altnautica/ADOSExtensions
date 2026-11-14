@@ -21,19 +21,22 @@
 //! provider: `T_world_body = T_body_lidar * T_w_l * inv(T_body_lidar)`. The
 //! pose is single-floor: z stays at the mount height.
 //!
-//! Health: `Lost` until the first submap holds [`MIN_SUBMAP_SCANS`] scans;
-//! `Degraded` while the match's `degeneracy` (translation `eig_min / eig_max`,
-//! reported as `quality().degeneracy_ratio`) is below the matcher's
-//! degenerate ratio (the pose rides a motion prior along the weak direction,
-//! measured velocity or not), the scan could not be matched (a climb
-//! among them), or the integrated gyro does not vouch for its heading
-//! (`PoseOut::heading_ok`: the IMU stream stalled, left a gap, or the match
-//! jumped against it); `Good` otherwise.
+//! Health: `Lost` until the first submap holds [`MIN_SUBMAP_SCANS`] scans,
+//! and while the heading a gap in the IMU left unmeasured is not yet
+//! re-confirmed against the map (`PoseOut::heading_unconfirmed`: it may be
+//! off by any turn the gap hid); `Degraded` while the match's `degeneracy`
+//! (translation `eig_min / eig_max`, reported as
+//! `quality().degeneracy_ratio`) is below the matcher's degenerate ratio
+//! (the pose rides a motion prior along the weak direction, measured
+//! velocity or not), the scan could not be matched (a climb among them),
+//! or the integrated gyro does not vouch for its heading
+//! (`PoseOut::heading_ok`: the IMU stream stalled, or the match jumped
+//! against it); `Good` otherwise.
 
 #[cfg(test)]
 mod tests;
 
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -98,7 +101,9 @@ struct Counters {
 }
 
 enum Input {
-    Imu(Vec<ImuSample>),
+    /// IMU samples; `true` when the heading went unmeasured before them
+    /// ([`PoseProvider::heading_unmeasured`]).
+    Imu(Vec<ImuSample>, bool),
     Velocity(Vec<VelocitySample>),
     Height(Vec<HeightSample>),
     Scan(ScanInput),
@@ -111,6 +116,9 @@ pub struct PlanarLidarPose {
     tx: Option<SyncSender<Input>>,
     counters: Arc<Counters>,
     worker: Option<JoinHandle<()>>,
+    /// Set by [`PoseProvider::heading_unmeasured`] until the next IMU batch
+    /// carries it to the matcher.
+    unmeasured: AtomicBool,
 }
 
 /// Row-major `R_z(yaw) * R_y(pitch) * R_x(roll)`.
@@ -138,7 +146,7 @@ pub fn t_w_l(p: &PoseOut) -> [f64; 16] {
 
 /// Health of one matcher pose, `inserted` scans into the first submap.
 pub fn health_of(p: &PoseOut, inserted: usize, degenerate_ratio: f64) -> VioHealth {
-    if inserted < MIN_SUBMAP_SCANS {
+    if inserted < MIN_SUBMAP_SCANS || p.heading_unconfirmed {
         VioHealth::Lost
     } else if p.score <= 0.0 || p.degeneracy < degenerate_ratio || !p.heading_ok {
         VioHealth::Degraded
@@ -185,6 +193,7 @@ impl PlanarLidarPose {
             tx: Some(tx),
             counters,
             worker: Some(worker),
+            unmeasured: AtomicBool::new(false),
         })
     }
 
@@ -221,12 +230,23 @@ fn run(
     t_body_lidar: [f64; 16],
 ) {
     let ratio = slam.config().degenerate_ratio;
-    let process = |slam: &mut LocalSlam, scan: ScanInput| {
+    // The heading re-confirmation, logged on each change.
+    let mut unconfirmed = false;
+    let mut process = |slam: &mut LocalSlam, scan: ScanInput| {
         let out = slam.feed_scan(&scan);
+        if out.heading_unconfirmed != unconfirmed {
+            unconfirmed = out.heading_unconfirmed;
+            if unconfirmed {
+                tracing::warn!("nav_heading_unconfirmed");
+            } else {
+                tracing::info!(yaw_deg = out.yaw.to_degrees(), "nav_heading_confirmed");
+            }
+        }
         let health = health_of(&out, slam.inserted_scans(), ratio);
         let (r, t) = se3::from_mat4(&world_from_body(&t_w_l(&out), &t_body_lidar));
         track.set_quality(PoseQuality {
             degeneracy_ratio: (out.score > 0.0).then_some(out.degeneracy),
+            heading_unconfirmed: out.heading_unconfirmed,
             ..PoseQuality::default()
         });
         track.push(PoseEstimate {
@@ -245,7 +265,10 @@ fn run(
     let mut pending: Option<ScanInput> = None;
     while let Ok(input) = rx.recv() {
         match input {
-            Input::Imu(samples) => {
+            Input::Imu(samples, unmeasured) => {
+                if unmeasured {
+                    slam.heading_unmeasured();
+                }
                 for s in &samples {
                     slam.feed_imu(s);
                     newest_imu = Some(newest_imu.map_or(s.t_ns, |n| n.max(s.t_ns)));
@@ -317,9 +340,16 @@ impl PoseProvider for PlanarLidarPose {
             return;
         }
         let Some(tx) = &self.tx else { return };
-        if tx.try_send(Input::Imu(samples)).is_err() {
+        let unmeasured = self.unmeasured.swap(false, Ordering::AcqRel);
+        if tx.try_send(Input::Imu(samples, unmeasured)).is_err() {
+            // The mark rides the next batch that gets through.
+            self.unmeasured.fetch_or(unmeasured, Ordering::AcqRel);
             self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    fn heading_unmeasured(&self) {
+        self.unmeasured.store(true, Ordering::Release);
     }
 
     fn feed_velocity(&self, src: &str, samples: &[VelocitySample]) {

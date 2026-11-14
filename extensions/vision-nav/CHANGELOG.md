@@ -2,6 +2,15 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.8.4]
+
+### Changed
+
+- External navigation: after a gap in the flight controller's IMU a planar
+  LiDAR pose stays lost, and the `extnav_health` row says it is
+  re-confirming the heading against the map (`heading_unconfirmed`), until
+  the matcher has found the heading again.
+
 ## [0.8.3]
 
 ### Fixed

@@ -110,6 +110,28 @@ fn the_pose_carries_the_estimators_horizontal_sigma() {
     assert_eq!(pd.sigma_xy_m, None);
 }
 
+/// The matcher's map starting over (at the first `RAW_IMU`) latches the
+/// north afresh from the FC heading, once per restart.
+#[test]
+fn a_restarted_map_latches_its_north_afresh_once() {
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let pose = |nav: &mut NavMap, x: f64, heading: f64, t_ms: i64| {
+        nav.on_pose(&at(estimate(x, 0.0, 0.0), t_ms), Some(0.0), Some(heading), t_ms, 0, false);
+    };
+    pose(&mut nav, 0.0, 0.0, 0);
+    pose(&mut nav, 5.0, 0.0, 100);
+    pose(&mut nav, 5.0, 1.0, 200);
+    assert_eq!(nav.map_yaw(), Some(0.0), "fixed once the vehicle left the spot");
+    nav.restart_heading_at(7);
+    assert_eq!(nav.map_yaw(), None, "no north until the next pose");
+    pose(&mut nav, 5.0, 1.0, 300);
+    assert_eq!(nav.map_yaw(), Some(1.0));
+    pose(&mut nav, 10.0, 1.0, 400);
+    nav.restart_heading_at(7);
+    pose(&mut nav, 10.0, 2.0, 500);
+    assert_eq!(nav.map_yaw(), Some(1.0), "the same restart is taken once");
+}
+
 /// The descriptor carries the time the pose describes, not the time it is
 /// published: a LiDAR pose published 150 ms after its scan's first return
 /// is stamped 150 ms back.

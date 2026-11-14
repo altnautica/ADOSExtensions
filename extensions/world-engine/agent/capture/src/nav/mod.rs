@@ -171,6 +171,9 @@ pub struct NavMap {
     logged_yaw: Option<f64>,
     /// The latest pose in `map_ned`: `(R, t)`.
     latest: Option<([f64; 9], [f64; 3])>,
+    /// The host ns the matcher's map last started over at
+    /// ([`Self::restart_heading_at`]).
+    restarted_at: Option<u64>,
 }
 
 /// `Rz(yaw)` about the down axis, row-major.
@@ -208,7 +211,24 @@ impl NavMap {
             offset: [0.0; 2],
             logged_yaw: None,
             latest: None,
+            restarted_at: None,
         }
+    }
+
+    /// The matcher started a new map at host `t_ns` (at the first `RAW_IMU`
+    /// sample: the attitude stand-in before it held no heading through a
+    /// turn, so the old map's heading against the world is unknown). The
+    /// map, its north and its GNSS fit start over once per restart: the
+    /// north is latched afresh as at the first pose.
+    pub fn restart_heading_at(&mut self, t_ns: u64) {
+        if self.restarted_at == Some(t_ns) {
+            return;
+        }
+        tracing::info!(t_ns, "nav_map_restarted");
+        *self = Self {
+            restarted_at: Some(t_ns),
+            ..Self::new(self.settings)
+        };
     }
 
     pub fn settings(&self) -> &NavSettings {

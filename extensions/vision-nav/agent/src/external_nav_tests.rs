@@ -115,6 +115,7 @@ fn the_fc_imu_feed_reason_is_read_when_present() {
     assert_eq!(with_feed(Some("stalled")), Some(ImuFeed::Stalled));
     assert_eq!(with_feed(Some("attitude_stand_in")), Some(ImuFeed::AttitudeStandIn));
     assert_eq!(with_feed(Some("starved")), Some(ImuFeed::Starved));
+    assert_eq!(with_feed(Some("heading_unconfirmed")), Some(ImuFeed::HeadingUnconfirmed));
     // An older publisher sends none; an unknown word does not say.
     assert_eq!(with_feed(None), None);
     assert_eq!(with_feed(Some("sideways")), None);
