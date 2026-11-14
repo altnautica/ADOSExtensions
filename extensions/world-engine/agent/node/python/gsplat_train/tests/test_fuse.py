@@ -88,6 +88,15 @@ def test_max_blocks_for_a_budget() -> None:
     assert fuse.max_blocks_for(5000) == 5000 * (1 << 20) // (16 ** 3 * 20)
 
 
+def test_an_open3d_allocation_failure_counts_as_out_of_memory() -> None:
+    marching_cubes = RuntimeError(
+        "[Open3D Error] VoxelBlockGridImpl.h:1423: Unable to allocate assistance mesh structure for "
+        "Marching Cubes with 3480 active voxel blocks. Please consider using a larger voxel size")
+    assert fuse.is_out_of_memory(marching_cubes)
+    assert fuse.is_out_of_memory(RuntimeError("CUDA runtime error: out of memory"))
+    assert not fuse.is_out_of_memory(RuntimeError("no view had usable depth"))
+
+
 def test_cuda_out_of_memory_retries_coarser_on_the_gpu_never_the_cpu(tmp_path, monkeypatch) -> None:
     _wall_depthset(tmp_path / "ds")
     calls = []

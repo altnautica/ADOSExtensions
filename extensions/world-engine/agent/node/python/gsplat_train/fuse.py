@@ -102,7 +102,10 @@ class TsdfFuser:
 
 
 def is_out_of_memory(e: BaseException) -> bool:
-    return "out of memory" in str(e).lower()
+    """A CUDA out-of-memory, or Open3D's own allocation failure (marching cubes reports one as
+    "Unable to allocate ...")."""
+    msg = str(e).lower()
+    return "out of memory" in msg or "unable to allocate" in msg
 
 
 class GpuAttemptDied(RuntimeError):
