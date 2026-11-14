@@ -1,9 +1,7 @@
 //! The heading held to the integrated gyro (`PoseOut::heading_ok`): a scan
 //! the IMU has not reached rides the extrapolated prior unchecked and never
-//! becomes the next scan's reference, a gap in the IMU leaves the turn
-//! across it unchecked, and a turn lost in such a gap is reported unchecked
-//! while the scans disagree with it, the match following the scans once
-//! they have disagreed for three scans in a row.
+//! becomes the next scan's reference, and a gap in the IMU leaves the turn
+//! across it unchecked.
 
 mod common;
 
@@ -64,9 +62,10 @@ fn err_deg(pose_at: impl Fn(f64) -> Pose2, t: f64, p: &PoseOut) -> f64 {
 
 /// The FC's IMU stream stalls after the scan at 2.0 s (fed to 2.1 s) until
 /// 2.7 s while the scans keep coming, and the drone turns 30 degrees in
-/// between. The scans the IMU has not reached go out on the last rate
-/// extrapolated (none), unchecked; the first scan it covers again turns by
-/// the whole 30 degrees the gyro measured since the last checked scan.
+/// between. The scans the IMU has not reached hold the newest sample's
+/// heading, unchecked, and are still matched for their position; the first
+/// scan it covers again turns by the whole 30 degrees the gyro measured
+/// since.
 #[test]
 fn a_scan_the_imu_has_not_reached_rides_unchecked_and_the_turn_comes_back() {
     let rate = 60f64.to_radians();
@@ -78,9 +77,9 @@ fn a_scan_the_imu_has_not_reached_rides_unchecked_and_the_turn_comes_back() {
         if (2.15..2.65).contains(t) {
             assert!(
                 !p.heading_ok,
-                "t {t:.1}: an extrapolated heading reported checked"
+                "t {t:.1}: an unmeasured heading reported checked"
             );
-            assert_eq!(p.score, 0.0, "t {t:.1}: matched on an extrapolated heading");
+            assert!(p.score > 0.0, "t {t:.1}: an unreached scan was not matched");
         } else if *t >= 0.3 {
             assert!(p.heading_ok, "t {t:.1}: unchecked (err {e:.2} deg)");
             assert!(e.abs() < 1.5, "t {t:.1}: heading err {e:.2} deg");
@@ -88,53 +87,61 @@ fn a_scan_the_imu_has_not_reached_rides_unchecked_and_the_turn_comes_back() {
     }
 }
 
-/// The IMU drops out from 2.0 s to 2.3 s while the drone snaps round 8
-/// degrees (2.0 to 2.1 s): the samples after the gap read no turn, so the
-/// integration bridges it with none. Held to the gyro by the rotation prior,
-/// the heading used to stay 8 degrees off for good, every new submap
-/// anchored on it. After the gap the heading is suspect; the scans clearly
-/// disagree with it, unchecked, and after three in a row the match follows
-/// them back to the true heading: a jump the gyro did not see, unchecked
-/// until the heading has held to the gyro for a second.
+/// The FC's IMU stream stops for good at 4 s, as the drone, walking at
+/// 0.5 m/s, stops. The scans keep being matched for their position on the
+/// newest sample's heading, every one unchecked: the pose stays on the
+/// drone instead of running on at the last velocity.
 #[test]
-fn a_turn_lost_in_an_imu_gap_is_taken_from_the_scans() {
-    let rate = 80f64.to_radians();
-    let pose_at = pivot(rate, 2.0, 2.1);
-    let rate_at = |t: f64| if (2.0..2.1).contains(&t) { rate } else { 0.0 };
+fn a_stopped_imu_keeps_the_scans_matched_and_unchecked() {
+    let pose_at = |t: f64| Pose2::new(1.0 + 0.5 * t.min(4.0), 2.0, 0.0);
+    let out = fly(pose_at, &|_| 0.0, &|t| t >= 3.95, 60);
+    for (t, p) in out.iter().filter(|(t, _)| *t >= 4.05) {
+        assert!(!p.heading_ok, "t {t:.1}: checked without an IMU");
+        // The local frame is the first scan's pose, (1, 2) heading 0.
+        let truth = pose_at(*t);
+        let d = (p.x - (truth.x - 1.0)).hypot(p.y - (truth.y - 2.0));
+        assert!(d < 0.1, "t {t:.1}: {d:.2} m off the drone");
+        assert!(err_deg(pose_at, *t, p).abs() < 1.0, "t {t:.1}: heading off");
+    }
+}
+
+/// The IMU drops out from 2.0 s to 2.3 s in a turn that runs on past it:
+/// 90 degrees/s from 1.9 s to 2.2 s, then 30 degrees/s to 3.0 s. The sample
+/// after the gap bridges it with its own 30 degrees/s, so 12 degrees are
+/// lost, and the match holds to the gyro. Wherever the heading ends up off
+/// by more than 2 degrees, it is reported unchecked.
+#[test]
+fn a_turn_running_on_past_an_imu_gap_is_unchecked_while_off() {
+    let (fast, slow) = (90f64.to_radians(), 30f64.to_radians());
+    let pose_at = move |t: f64| {
+        let th = fast * (t.clamp(1.9, 2.2) - 1.9) + slow * (t.clamp(2.2, 3.0) - 2.2);
+        Pose2::new(3.0, 2.0, th)
+    };
+    let rate_at = move |t: f64| match t {
+        t if (1.9..2.2).contains(&t) => fast,
+        t if (2.2..3.0).contains(&t) => slow,
+        _ => 0.0,
+    };
     let world = rect(0.0, 0.0, 6.0, 4.0);
     let mut rng = Rng::new(11);
     let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
     let mut imu_t = -IMU_DT_S;
-    let mut out = Vec::new();
+    let mut off = 0;
     for k in 0..50 {
         let t = k as f64 * PERIOD_S;
         if k == 20 {
-            // Samples up to 2.0 s (for the scan at 1.9 s), then none until 2.3 s.
+            // Samples up to 2.0 s, then none until 2.3 s.
             imu_t = 2.3 - IMU_DT_S;
         }
         feed_imu(&mut slam, &mut imu_t, t + PERIOD_S, &rate_at);
-        out.push((
-            t,
-            slam.feed_scan(&revolution(&world, &pose_at, t, C1, &mut rng)),
-        ));
+        let p = slam.feed_scan(&revolution(&world, &pose_at, t, C1, &mut rng));
+        let e = err_deg(pose_at, t, &p);
+        if t > 2.0 && e.abs() > 2.0 {
+            off += 1;
+            assert!(!p.heading_ok, "t {t:.1}: heading err {e:.2} deg reported checked");
+        }
     }
-    for (t, p) in out.iter().filter(|(t, _)| *t >= 2.65) {
-        let e = err_deg(pose_at, *t, p);
-        assert!(e.abs() < 1.5, "t {t:.1}: heading err {e:.2} deg");
-    }
-    let flagged: Vec<f64> = out
-        .iter()
-        .filter(|(_, p)| !p.heading_ok)
-        .map(|(t, _)| *t)
-        .collect();
-    assert!(
-        flagged.iter().any(|t| (2.05..2.5).contains(t)),
-        "no scan flagged after the gap: {flagged:?}"
-    );
-    assert!(
-        flagged.iter().all(|t| (2.05..3.75).contains(t)),
-        "flagged outside the gap and the jump: {flagged:?}"
-    );
+    assert!(off > 10, "the gap lost no turn ({off} scans off)");
 }
 
 /// The IMU drops out from 2.0 s to 2.3 s with no turn: the scan it has not

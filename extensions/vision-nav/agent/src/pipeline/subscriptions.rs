@@ -7,7 +7,7 @@
 //! `degradedReasons` instead of running silently without that input.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use ados_protocol::mavlink::ardupilotmega::{MavAutopilot, MavType};
@@ -28,28 +28,33 @@ use crate::scale::ScaleLadder;
 pub const WATCHED_FC_PARAMS: &[&str] = &["EKF2_OF_CTRL", "EKF2_AID_MASK"];
 
 /// The flight controller's system and component id, learned from the
-/// header of its HEARTBEAT or RAW_IMU. 1/1 until the first one arrives.
-/// The FC is not always system 1 (a SITL on another instance takes the
-/// next id), and RAW_IMU streams only once the FC is asked at its own
-/// address, so the heartbeat is what finds it.
-pub struct FcTarget(AtomicU16);
+/// header of its HEARTBEAT or RAW_IMU. [`Self::get`] reads 1/1 until the
+/// first one arrives; [`Self::learned`] reads nothing. The FC is not always
+/// system 1 (a SITL on another instance takes the next id), and RAW_IMU
+/// streams only once the FC is asked at its own address, so the heartbeat
+/// is what finds it.
+#[derive(Default)]
+pub struct FcTarget(AtomicU32);
 
-impl Default for FcTarget {
-    fn default() -> Self {
-        Self(AtomicU16::new(u16::from_be_bytes([1, 1])))
-    }
-}
+/// The bit of [`FcTarget`]'s word that says the pair was learned.
+const LEARNED: u32 = 1 << 16;
 
 impl FcTarget {
     pub fn set(&self, system: u8, component: u8) {
-        self.0
-            .store(u16::from_be_bytes([system, component]), Ordering::Relaxed);
+        let pair = u32::from(u16::from_be_bytes([system, component]));
+        self.0.store(LEARNED | pair, Ordering::Relaxed);
     }
 
-    /// `(system, component)`.
+    /// `(system, component)`, 1/1 until learned.
     pub fn get(&self) -> (u8, u8) {
-        let [s, c] = self.0.load(Ordering::Relaxed).to_be_bytes();
-        (s, c)
+        self.learned().unwrap_or((1, 1))
+    }
+
+    /// `(system, component)` once a HEARTBEAT or RAW_IMU named it.
+    pub fn learned(&self) -> Option<(u8, u8)> {
+        let w = self.0.load(Ordering::Relaxed);
+        let [s, c] = (w as u16).to_be_bytes();
+        (w & LEARNED != 0).then_some((s, c))
     }
 }
 
@@ -347,6 +352,55 @@ mod tests {
     #[test]
     fn fc_target_defaults_to_one_one() {
         assert_eq!(FcTarget::default().get(), (1, 1));
+        assert_eq!(FcTarget::default().learned(), None);
+    }
+
+    /// An FC on system 2 (a SITL on its second instance): the RAW_IMU,
+    /// DISTANCE_SENSOR and OPTICAL_FLOW interval requests wait for its
+    /// heartbeat and go to it at once, never to a guessed 1/1; while RAW_IMU
+    /// does not stream they repeat every 2 s, while it streams every 30 s,
+    /// and once it stops they repeat every 2 s again.
+    #[test]
+    fn stream_requests_reach_an_fc_on_system_two_at_once() {
+        use super::super::ticks::StreamRequests;
+        use crate::mavlink_emit::{of_frame, stream_interval_requests};
+        const S: i64 = 1_000_000_000;
+        let s = sinks();
+        let mut req = StreamRequests::default();
+        let mut send = |now: i64| {
+            let imu = s.imu.latest().map(|x| x.ts_ns);
+            req.due(s.fc_target.learned(), now, imu, s.imu.rate_hz())
+                .map(|(sys, comp)| stream_interval_requests(sys, comp))
+        };
+        assert!(send(0).is_none(), "requested before the FC is known");
+        let hb = heartbeat(
+            MavAutopilot::MAV_AUTOPILOT_ARDUPILOTMEGA,
+            MavType::MAV_TYPE_QUADROTOR,
+        );
+        deliver(&s, &delivery(2, 1, &hb), S / 2);
+        let sent = send(S).expect("requested once the FC is known");
+        for msg in sent {
+            let frame = of_frame(&msg).expect("frame");
+            let Some((_, _, MavMessage::COMMAND_LONG(d))) = decode_frame(&frame) else {
+                panic!("not a COMMAND_LONG");
+            };
+            assert_eq!((d.target_system, d.target_component), (2, 1));
+        }
+        // No RAW_IMU yet: again 2 s later, not before.
+        assert!(send(2 * S).is_none());
+        assert!(send(3 * S).is_some());
+        // RAW_IMU at 100 Hz from 3 s to 33.5 s: the next request is 30 s on.
+        let raw = MavMessage::RAW_IMU(RAW_IMU_DATA::DEFAULT);
+        for k in 0..3050 {
+            let t = 3 * S + k * S / 100;
+            deliver(&s, &delivery(2, 1, &raw), t);
+            if t % S == 0 && t > 3 * S {
+                assert_eq!(send(t).is_some(), t == 33 * S, "at {} s", t / S);
+            }
+        }
+        // Stopped at 33.5 s: stale after 34.5 s, so asked again at 35 s.
+        assert!(send(34 * S).is_none());
+        assert!(send(35 * S).is_some());
     }
 
     #[test]

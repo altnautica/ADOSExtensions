@@ -20,12 +20,18 @@
 //! 4 degrees off. The FC's EKF attitude has the manoeuvre taken out (it
 //! fuses velocity), and gravity carries none of its yaw.
 //!
-//! Until `RAW_IMU` arrives (an FC that has not been asked to stream it), the
-//! stream is synthesised from consecutive FC EKF attitudes ([`sample`]: `R`
-//! world-from-body, ENU world, FLU body; the body rate is the rotation vector
-//! of `R_prevᵀ·R` over the gap, and the specific force of a vehicle not
-//! accelerating is gravity in the body, `Rᵀ·(0, 0, g)`), which carries the
-//! EKF's yaw corrections with it.
+//! Until `RAW_IMU` arrives (an FC that has not been asked to stream it, or
+//! not yet), the stream is synthesised from consecutive FC EKF attitudes
+//! ([`sample`]: `R` world-from-body, ENU world, FLU body; the specific force
+//! of a vehicle not accelerating is gravity in the body, `Rᵀ·(0, 0, g)`).
+//! Its body rate is the turn of the attitude with its yaw taken out: roll
+//! and pitch only, never the EKF's yaw. Under external navigation the EKF's
+//! yaw is the matcher's own heading fused back; a stand-in carrying it closes
+//! a loop in which every degree the EKF turns towards the matcher turns the
+//! matcher a degree further, and the heading spins with the drone standing
+//! still. Without a measured yaw rate the matcher's heading holds still
+//! between scans, so the capture reports its pose degraded until `RAW_IMU`
+//! streams ([`FeedState::degraded`]).
 //!
 //! Delivery: [`sink`] hands each `RAW_IMU` sample, flow velocity and EKF
 //! height to the pose provider on the MAVLink delivery thread as its frame
@@ -35,8 +41,9 @@
 //! it ends rather than up to a tick later. [`FeedState`] keeps the count and
 //! the newest sample time for the capture loop's `nav_imu_feed` log.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use ados_capture_contract::v1::{ImuBatch, ImuSample};
 use ados_scan2d::{HeightSample, VelocitySample};
@@ -88,7 +95,9 @@ pub fn from_raw(t_ns: u64, s: &RawImu, attitude: Option<(u64, [f64; 9])>) -> Imu
 }
 
 /// The sample at `cur` given the previous attitude, `None` for the first one
-/// or after a gap.
+/// or after a gap. Its rate is the turn between the two attitudes with
+/// their yaw taken out ([`without_yaw`]): the stand-in never carries the
+/// EKF's yaw.
 pub fn sample(prev: Option<(u64, [f64; 9])>, cur: (u64, [f64; 9])) -> Option<ImuSample> {
     let (t0, r0) = prev?;
     let (t1, r1) = cur;
@@ -96,7 +105,7 @@ pub fn sample(prev: Option<(u64, [f64; 9])>, cur: (u64, [f64; 9])) -> Option<Imu
         return None;
     }
     let dt = (t1 - t0) as f64 * 1e-9;
-    let delta = se3::mat_mul(&se3::transpose(&r0), &r1);
+    let delta = se3::mat_mul(&se3::transpose(&without_yaw(&r0)), &without_yaw(&r1));
     let gyro = rotation_vector(&delta).map(|w| w / dt);
     let accel = se3::mat_vec(&se3::transpose(&r1), [0.0, 0.0, G]);
     Some(ImuSample {
@@ -107,15 +116,52 @@ pub fn sample(prev: Option<(u64, [f64; 9])>, cur: (u64, [f64; 9])) -> Option<Imu
     })
 }
 
+/// `R` (world-from-body, z up) turned about the world's vertical by minus its
+/// yaw: the tilt alone, `Ry(pitch)·Rx(roll)` of `R = Rz(yaw)·Ry(pitch)·Rx(roll)`.
+fn without_yaw(r: &[f64; 9]) -> [f64; 9] {
+    let (s, c) = (-r[3].atan2(r[0])).sin_cos();
+    se3::mat_mul(&[c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0], r)
+}
+
 /// `R` world-from-body with an ENU world and an FLU body (the bridge's
 /// frames) from the FC's `R_ned_frd`.
 pub fn enu_flu(r_ned_frd: &[f64; 9]) -> [f64; 9] {
     se3::mat_mul(&R_ENU_NED, &se3::mat_mul(r_ned_frd, &R_FRD_FLU))
 }
 
+/// `RAW_IMU` older than this at the capture loop's pose tick: the stream
+/// stalled.
+const RAW_IMU_STALE_NS: u64 = 250_000_000;
+/// Fewer `RAW_IMU` samples than this over the last second: the stream is
+/// starved (the FC is asked for 50 or 100 Hz).
+const RAW_IMU_MIN_PER_S: usize = 40;
+const RATE_WINDOW_NS: u64 = 1_000_000_000;
+
+/// Why the FC IMU feed cannot vouch for the matcher's heading
+/// ([`FeedState::degraded`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FeedDegraded {
+    /// No `RAW_IMU` yet: the attitude stand-in, which carries no yaw rate.
+    AttitudeStandIn,
+    /// The newest `RAW_IMU` sample is older than 250 ms.
+    Stalled,
+    /// Under 40 `RAW_IMU` samples over the last second.
+    Starved,
+}
+
+impl FeedDegraded {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FeedDegraded::AttitudeStandIn => "attitude_stand_in",
+            FeedDegraded::Stalled => "stalled",
+            FeedDegraded::Starved => "starved",
+        }
+    }
+}
+
 /// What the FC feed has handed the pose provider, shared between the
 /// MAVLink delivery thread ([`sink`]) and the capture loop (the attitude
-/// stand-in and the `nav_imu_feed` log).
+/// stand-in, the `nav_imu_feed` log and the pose health).
 #[derive(Debug, Default)]
 pub struct FeedState {
     imu_samples: AtomicU64,
@@ -123,6 +169,9 @@ pub struct FeedState {
     newest_imu_ns: AtomicU64,
     raw_imu: AtomicBool,
     flow: AtomicBool,
+    /// Host ns of the `RAW_IMU` samples of the last [`RATE_WINDOW_NS`] up to
+    /// the newest, oldest first.
+    raw_times: Mutex<VecDeque<u64>>,
 }
 
 impl FeedState {
@@ -130,6 +179,26 @@ impl FeedState {
     pub fn note_imu(&self, t_ns: u64) {
         self.imu_samples.fetch_add(1, Ordering::Relaxed);
         self.newest_imu_ns.fetch_max(t_ns, Ordering::Release);
+    }
+
+    /// One `RAW_IMU` sample at host `t_ns` handed on.
+    fn note_raw_imu(&self, t_ns: u64) {
+        self.note_imu(t_ns);
+        let mut times = self.raw_times();
+        times.push_back(t_ns);
+        while times.front().is_some_and(|&t| t + RATE_WINDOW_NS < t_ns) {
+            times.pop_front();
+        }
+        drop(times);
+        if !self.raw_imu.swap(true, Ordering::AcqRel) {
+            tracing::info!("nav_imu_source_raw_imu");
+        }
+    }
+
+    fn raw_times(&self) -> std::sync::MutexGuard<'_, VecDeque<u64>> {
+        self.raw_times
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Host ns of the newest IMU sample handed on.
@@ -146,6 +215,25 @@ impl FeedState {
     pub fn raw_imu(&self) -> bool {
         self.raw_imu.load(Ordering::Acquire)
     }
+
+    /// Whether, at host `now_ns`, the feed fails to measure the turn the
+    /// matcher's heading rides between scans: the attitude stand-in, or a
+    /// `RAW_IMU` stream that stalled or arrives under 40 Hz. A pose the
+    /// matcher reports good is then degraded.
+    pub fn degraded(&self, now_ns: u64) -> Option<FeedDegraded> {
+        if !self.raw_imu() {
+            return Some(FeedDegraded::AttitudeStandIn);
+        }
+        let times = self.raw_times();
+        let newest = *times.back()?;
+        if newest + RAW_IMU_STALE_NS < now_ns {
+            Some(FeedDegraded::Stalled)
+        } else if times.len() < RAW_IMU_MIN_PER_S {
+            Some(FeedDegraded::Starved)
+        } else {
+            None
+        }
+    }
 }
 
 /// The FC feed's sink for one run's `pose`: each EKF height, and with the
@@ -157,10 +245,7 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
             let attitude = attitude.map(|(t, r)| (t, enu_flu(&r)));
             let samples = vec![from_raw(t_ns, &imu, attitude)];
             pose.feed_imu(FC_IMU_ID, &ImuBatch { samples });
-            state.note_imu(t_ns);
-            if !state.raw_imu.swap(true, Ordering::AcqRel) {
-                tracing::info!("nav_imu_source_raw_imu");
-            }
+            state.note_raw_imu(t_ns);
         }
         NavSample::Velocity { t_ns, v } if fc_is_imu => {
             pose.feed_velocity(FC_IMU_ID, &[VelocitySample { t_ns, v }]);
@@ -213,16 +298,56 @@ mod tests {
         assert!((roll - 0.1745).abs() < 1e-6, "{roll}");
     }
 
+    /// The stand-in carries the attitude's roll and pitch rates and never
+    /// its yaw: under external navigation the EKF's yaw is the matcher's own
+    /// heading fed back.
     #[test]
-    fn a_yawing_vehicle_reads_its_rate_about_body_z() {
+    fn a_yawing_vehicle_reads_no_yaw_rate_and_a_rolling_one_its_roll_rate() {
         let a = rpy(0.0, 0.0, 0.0);
         let b = rpy(0.0, 0.0, 0.02);
         let s = sample(Some((0, a)), (20_000_000, b)).unwrap();
-        assert!((s.gyro[2] - 1.0).abs() < 1e-6, "{:?}", s.gyro);
+        assert!(s.gyro.iter().all(|w| w.abs() < 1e-9), "{:?}", s.gyro);
+        // A tilted vehicle turning: still no rate.
+        let s = sample(Some((0, rpy(0.2, -0.1, 1.0))), (20_000_000, rpy(0.2, -0.1, 3.0))).unwrap();
+        assert!(s.gyro.iter().all(|w| w.abs() < 1e-9), "{:?}", s.gyro);
+        // Rolling 0.02 rad in 20 ms while yawing: 1 rad/s about x.
+        let s = sample(Some((0, rpy(0.0, 0.0, 0.5))), (20_000_000, rpy(0.02, 0.0, 0.9))).unwrap();
+        assert!((s.gyro[0] - 1.0).abs() < 1e-6 && s.gyro[2].abs() < 1e-9, "{:?}", s.gyro);
         assert!(
             sample(Some((0, a)), (2_000_000_000, b)).is_none(),
             "a gap restarts"
         );
+    }
+
+    /// The feed is degraded on the attitude stand-in, and with `RAW_IMU`
+    /// once it stalls for over 250 ms or arrives under 40 Hz.
+    #[test]
+    fn the_feed_is_degraded_until_raw_imu_streams_steadily() {
+        let fed = Arc::new(Fed::default());
+        let state = Arc::new(FeedState::default());
+        let sink = sink(fed, true, state.clone());
+        let raw = |t_ns: u64| NavSample::Imu {
+            t_ns,
+            imu: RawImu {
+                time_usec: t_ns / 1_000,
+                gyro: [0.0; 3],
+                accel: [0.0, 0.0, -9.8],
+            },
+            attitude: None,
+        };
+        state.note_imu(5_000_000_000);
+        assert_eq!(state.degraded(5_000_000_000), Some(FeedDegraded::AttitudeStandIn));
+        // 20 Hz for a second: starved.
+        for k in 0..20 {
+            sink(raw(6_000_000_000 + k * 50_000_000));
+        }
+        assert_eq!(state.degraded(6_960_000_000), Some(FeedDegraded::Starved));
+        // 100 Hz for a second: steady.
+        for k in 0..100 {
+            sink(raw(7_000_000_000 + k * 10_000_000));
+        }
+        assert_eq!(state.degraded(7_995_000_000), None);
+        assert_eq!(state.degraded(8_300_000_000), Some(FeedDegraded::Stalled));
     }
 
     #[test]

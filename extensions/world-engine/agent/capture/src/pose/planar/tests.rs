@@ -569,3 +569,102 @@ fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
     let last = est.last().expect("poses");
     assert!(err(last).abs() < 1.0, "heading err {:.2}° after the stall", err(last));
 }
+
+/// A bench take's ground spin, replayed: the drone sits still on the ground
+/// and the FC does not stream `RAW_IMU` yet, so the matcher's IMU is the FC
+/// attitude stand-in, starved (7 to 37 Hz, with gaps up to 1.2 s). The FC's
+/// EKF fuses the matcher's own pose for its yaw: once external navigation is
+/// on, it resets its yaw to the declared heading and then follows the
+/// matcher's at up to 15 degrees/s. A stand-in carrying that yaw closes a
+/// loop: every degree the EKF turns towards the matcher turns the matcher a
+/// degree further, and the heading spins with the drone still. The heading
+/// holds within a degree.
+#[test]
+fn a_still_drone_on_the_attitude_stand_in_does_not_spin() {
+    use crate::nav::fc_imu;
+
+    let walls = rect(0.0, 0.0, 6.0, 4.0);
+    let body = |_t: u64| [3.0, 2.0, 0.0];
+    let p = PlanarLidarPose::spawn(PlanarLidarConfig {
+        rig: rig(),
+        lidar_id: "lidar0".into(),
+        imu_id: fc_imu::FC_IMU_ID.into(),
+    })
+    .expect("spawn");
+    // The EKF's yaw (ENU world, FLU body, counter-clockwise) before external
+    // navigation: the FC's own, 11 degrees off the map's.
+    let mut ekf_yaw = 0.2f64;
+    /// External navigation reaches the EKF here.
+    const EXT_NAV: u64 = T0 + 2_000_000_000;
+    /// The map's heading in the EKF's world (a declared north).
+    const DECLARED: f64 = PI;
+    let follow_rate = 15f64.to_radians();
+    // ATTITUDE arrives 27 to 140 ms apart, with 1.2 s gaps.
+    let gaps = [
+        (T0 + 4_000_000_000, T0 + 5_200_000_000),
+        (T0 + 8_500_000_000, T0 + 9_700_000_000),
+        (T0 + 13_000_000_000, T0 + 14_200_000_000),
+    ];
+    let mut lcg = 0x2545_f491_u64;
+    let mut next_att = T0 - 200_000_000;
+    let mut prev: Option<(u64, [f64; 9])> = None;
+    let mut ext_nav = false;
+    let mut published_yaw: Option<f64> = None;
+    let end = T0 + 20_000_000_000;
+    let mut fed = 0u64;
+    let mut est = Vec::new();
+    let mut t = T0 - 200_000_000;
+    let mut next_scan = T0;
+    while t < end {
+        if t >= next_att {
+            // The EKF: its yaw follows the matcher's (the vision yaw) once
+            // external navigation is on, first by a reset.
+            if let Some(y) = published_yaw.filter(|_| t >= EXT_NAV) {
+                let vision = y + DECLARED;
+                if !ext_nav {
+                    ext_nav = true;
+                    ekf_yaw = vision;
+                } else {
+                    let dt = prev.map_or(0.0, |(t0, _)| (t - t0) as f64 * 1e-9);
+                    let d = (vision - ekf_yaw).sin().atan2((vision - ekf_yaw).cos());
+                    ekf_yaw += d.clamp(-follow_rate * dt, follow_rate * dt);
+                }
+            }
+            let (c, s) = (ekf_yaw.cos(), ekf_yaw.sin());
+            let cur = (t, [c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]);
+            if let Some(sample) = fc_imu::sample(prev, cur) {
+                p.feed_imu(fc_imu::FC_IMU_ID, &ImuBatch { samples: vec![sample] });
+            }
+            prev = Some(cur);
+            lcg = lcg.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            next_att = t + 27_000_000 + (lcg >> 33) % 113_000_000;
+            if let Some(&(_, g1)) = gaps.iter().find(|(g0, g1)| (*g0..*g1).contains(&next_att)) {
+                next_att = g1;
+            }
+        }
+        if t >= next_scan + PERIOD_NS + 5_000_000 {
+            p.feed_lidar(&scan(next_scan, &walls, &body));
+            fed += 1;
+            next_scan += PERIOD_NS;
+            // At most one scan waits for the IMU; let the matcher take the rest.
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while p.stats().scans_processed + 1 < fed {
+                assert!(Instant::now() < deadline, "the matcher stalled");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let n = est.len();
+            p.drain_new(&mut est);
+            if est.len() > n {
+                let e: &PoseEstimate = est.last().expect("pose");
+                published_yaw = Some(e.r[3].atan2(e.r[0]));
+            }
+        }
+        t += 1_000_000;
+    }
+    assert!(ext_nav, "external navigation never started");
+    assert!(est.len() > 150, "{} poses", est.len());
+    for e in &est {
+        let yaw = e.r[3].atan2(e.r[0]).to_degrees();
+        assert!(yaw.abs() < 1.0, "pose at t {} turned {yaw:.2}° standing still", e.t_ns - T0);
+    }
+}

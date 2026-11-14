@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use ados_capture_contract::v1::ImuBatch;
+use world_engine_protocol::atlas::VioHealth;
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
@@ -228,6 +229,31 @@ impl Engine {
         self.place_scans().await;
     }
 
+    /// With the FC as the matcher's IMU, a pose the matcher reports good is
+    /// degraded while the FC IMU feed fails to measure the heading's turn
+    /// ([`fc_imu::FeedState::degraded`]: the attitude stand-in, or a stalled
+    /// or starved `RAW_IMU`), so vision-nav sends it with a wide yaw
+    /// uncertainty instead of as confident. Each change is logged
+    /// (`nav_imu_feed_degraded` / `nav_imu_feed_ok`).
+    pub(super) fn degrade_on_imu_feed(&mut self, poses: &mut [PoseEstimate], now_ns: u64) {
+        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+            return;
+        }
+        let degraded = self.fc_nav.degraded(now_ns);
+        if degraded != self.imu_feed_degraded {
+            match degraded {
+                Some(why) => tracing::warn!(reason = why.as_str(), "nav_imu_feed_degraded"),
+                None => tracing::info!("nav_imu_feed_ok"),
+            }
+            self.imu_feed_degraded = degraded;
+        }
+        if degraded.is_some() {
+            for e in poses.iter_mut().filter(|e| e.health == VioHealth::Good) {
+                e.health = VioHealth::Degraded;
+            }
+        }
+    }
+
     /// At most every [`NAV_FEED_LOG_EVERY`], with the FC as the IMU: the IMU
     /// rate fed to the pose provider and the median and widest scan-to-IMU
     /// gaps.
@@ -246,6 +272,7 @@ impl Engine {
             scans = f.scans,
             p50_scan_imu_gap_ms = p50,
             max_scan_imu_gap_ms = max,
+            degraded = self.imu_feed_degraded.map(fc_imu::FeedDegraded::as_str),
             "nav_imu_feed"
         );
     }

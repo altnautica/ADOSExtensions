@@ -10,11 +10,10 @@
 //!   levelled with the IMU's roll and pitch, deskewed with the IMU's turn
 //!   over the revolution and the recent velocity, matched by correlative
 //!   search plus Gauss-Newton refinement (pulled towards the motion
-//!   prediction by `translation_weight` / `rotation_weight`; after a gap in
-//!   the IMU the heading follows the scans instead once three in a row
-//!   clearly disagree with the gyro's) into the older of two overlapping
+//!   prediction by `translation_weight` / `rotation_weight`, so the heading
+//!   holds to the gyro's) into the older of two overlapping
 //!   probability-grid submaps, and inserted into both when the motion filter
-//!   passes (a scan held to the gyro against such a disagreement is not).
+//!   passes.
 //!   Along a featureless corridor the pose keeps its motion prior in the
 //!   unconstrained direction, the prior's velocity there fading to rest, and
 //!   [`PoseOut::degeneracy`] drops below [`Scan2dConfig::degenerate_ratio`].

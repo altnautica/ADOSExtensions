@@ -468,31 +468,36 @@ All notable changes to the World Engine extension.
   too sparse to match and rode the gyro) while reporting good. The offset
   still falls at once to a faster delivery, but rises by at most 5 % of the
   host time that passes, so a burst keeps the FC's spacing. 2.2.1.
-- **The planar matcher takes a turn the IMU lost from the scans.** Its
-  local refinement is held to the gyro-predicted heading with a weight that
-  outweighs the scan's own cost past about a degree, so when IMU samples
-  went missing through a turn, the refinement walked back from the
-  correlative search's better heading to the prior's and the map grew on in
-  the wrong heading: a lost 8° stayed 8° for good. After a gap of over
-  0.2 s in the IMU the heading is now suspect until a matched scan's best
-  heading lies within 1° of the prior's. While it is suspect, a scan whose
-  best heading lies further off and scores at least 0.1 better than the
-  best pose at the prior's heading, turning slower than 20°/s, disagrees: it
-  is not inserted into the map, and after three such scans in a row, to the
-  same side and within 2° of each other, the refinement is held to the
-  search's heading instead. Replaying the factory wall flight with the IMU
-  dropped through its turn, the heading ends 0.8° off instead of 7.8°.
-  Without a gap the gyro still wins: in a mine tunnel a scan scored 0.19
-  better 4.5° off the true heading for 2.7 s. The matcher also reports
-  whether the integrated gyro vouches for the heading
-  (`PoseOut::heading_ok`): a scan the IMU has not reached yet goes out on
-  the last rate extrapolated, unmatched, and never becomes the next scan's
-  reference; a gap in the IMU leaves the turn across it unchecked; a scan
-  that disagrees as above is unchecked; and a matched heading that moves
-  against the gyro's by more than 2° (plus 0.03 s times the turn rate)
-  within a second is a jump the gyro did not see. Each reports the pose
-  degraded, so external navigation sends it with the degraded yaw noise
-  instead of a confident jump. 2.2.1.
+- **The planar matcher's heading no longer spins on the FC attitude
+  stand-in.** Until the FC streams `RAW_IMU`, the matcher's IMU is made
+  from the FC's EKF attitudes. Under external navigation that EKF fuses the
+  matcher's own pose, so the stand-in fed the matcher's heading back into
+  its gyro: once the EKF took the external heading, every degree it turned
+  towards the matcher turned the matcher a degree further, and the heading
+  spun at about 15°/s with the drone still on the ground, 60° to 180° before
+  `RAW_IMU` arrived. The stand-in now carries the attitude's roll and pitch
+  rates and never its yaw. 2.2.1.
+- **The planar pose is degraded while the FC IMU feed cannot vouch for its
+  heading:** on the attitude stand-in, when `RAW_IMU` stalls for over 250 ms,
+  or when fewer than 40 samples arrived in the last second. External
+  navigation then sends it with the degraded yaw noise instead of as
+  confident. The capture logs `nav_imu_feed_degraded` with the reason and
+  `nav_imu_feed_ok` on each change, and `nav_imu_feed` carries the reason.
+  2.2.1.
+- **The planar matcher reports whether the integrated gyro vouches for the
+  heading** (`PoseOut::heading_ok`), and each case below reports the pose
+  degraded. A scan the IMU has not reached yet (a stalled or starved feed)
+  holds the newest sample's heading, never the last rate extrapolated past
+  it, and is still matched for its position, so a feed that stops for good
+  leaves the pose on the drone rather than running on at the last velocity;
+  it is kept out of the map and the gyro bias. After a gap of over 0.2 s in
+  the IMU the heading stays unchecked, and its scans stay out of the map,
+  until a scan's own best heading lies within 1° of the gyro's while the
+  drone turns slower than 20°/s: a turn the gap lost stays lost (the match
+  holds to the gyro), but it is no longer reported good while it runs on
+  past the gap. A matched heading that moves against the gyro's by more
+  than 2° (plus 0.03 s times the turn rate) within a second is a jump the
+  gyro did not see. 2.2.1.
 
 ## [2.0.0]
 

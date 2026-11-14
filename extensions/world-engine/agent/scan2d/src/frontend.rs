@@ -68,28 +68,14 @@ const HEADING_JUMP_RAD: f64 = 2.0 * std::f64::consts::PI / 180.0;
 /// degree/s pivot moves each match against the gyro by a degree or two.
 const HEADING_RATE_SLACK_S: f64 = 0.03;
 const HEADING_WINDOW_NS: u64 = 1_000_000_000;
-/// The match holds to the gyro's heading ([`Scan2dConfig::rotation_weight`]
-/// pulls it to the prior's): the gyro integrates a turn far better than a
-/// scan resolves one, and in a tunnel or a chamber whose outline changes
-/// with height a scan can score clearly better several degrees off for
-/// seconds. Only after a gap in the IMU (a turn across it is a guess, see
-/// [`Attitude::measured_since`]) is the heading suspect, until a matched
-/// scan's best heading lies within this of the prior's (1 degree), ...
-const HEADING_HOLD_RAD: f64 = std::f64::consts::PI / 180.0;
-/// ... or the scans clearly disagree: while suspect, a scan whose best
-/// heading lies further off and scores at least this much better (mean cell
-/// probability) than the best pose at the prior's heading, ...
-const HEADING_FOLLOW_SCORE: f64 = 0.1;
-/// ... while the heading turns slower than this, rad/s (20 degrees/s; through
-/// a faster turn the scan's motion and the clocks blur its heading). After
-/// [`HEADING_FOLLOW_SCANS`] such scans in a row within
-/// [`HEADING_FOLLOW_SPREAD_RAD`] of each other, the match follows the scans:
-/// the gyro lost a turn in the gap, and held to it the heading would carry
-/// the error for good, every new submap anchored on it.
-const HEADING_FOLLOW_MAX_TURN_RATE: f64 = 20.0 * std::f64::consts::PI / 180.0;
-const HEADING_FOLLOW_SCANS: usize = 3;
-/// 2 degrees: a lost turn puts every scan about the same angle off.
-const HEADING_FOLLOW_SPREAD_RAD: f64 = 2.0 * std::f64::consts::PI / 180.0;
+/// After a gap in the IMU (a turn across it is a guess, see
+/// [`Attitude::measured_since`]) the heading stays unchecked until a matched
+/// scan's own best heading lies within this of the gyro-held one (1
+/// degree), ...
+const HEADING_CONFIRM_RAD: f64 = std::f64::consts::PI / 180.0;
+/// ... while the heading turns slower than this, rad/s (20 degrees/s;
+/// through a faster turn the scan's motion and the clocks blur its heading).
+const HEADING_CONFIRM_MAX_TURN_RATE: f64 = 20.0 * std::f64::consts::PI / 180.0;
 
 /// The translation directions the last match left unconstrained.
 #[derive(Debug, Clone, Copy)]
@@ -164,13 +150,12 @@ pub struct PoseOut {
     /// climb), never less than 0.05.
     pub sigma_xy_m: f64,
     /// Whether the integrated gyro vouches for the heading. False when the
-    /// IMU had not reached the scan (its stream stalled: the heading is the
-    /// last rate extrapolated, and the scan is neither matched nor kept as
-    /// the next scan's reference), when a gap in the IMU since the previous
-    /// scan left the turn across it unmeasured, when after such a gap the
-    /// scan's own best heading clearly disagrees with the gyro's (the match
-    /// holds to the gyro, then after three such scans in a row follows the
-    /// scans), or when the matched heading moved against the gyro's by more
+    /// IMU had not reached the scan (its stream stalled or is starved: the
+    /// heading is held at the newest sample's, the scan matched for its
+    /// position only and kept out of the map), after a gap in the IMU until
+    /// a scan's own best heading confirms the gyro's within 1 degree (the
+    /// match holds to the gyro's heading, so a turn lost in the gap stays
+    /// lost), or when the matched heading moved against the gyro's by more
     /// than 2 degrees (plus 0.03 s times the turn rate) within a second: a
     /// jump the gyro did not see. With no IMU fed at all there is no gyro to
     /// hold it to, and it is true.
@@ -218,11 +203,8 @@ pub struct LocalSlam {
     /// last [`HEADING_WINDOW_NS`] the gyro measured, oldest first.
     gyro_offsets: VecDeque<(u64, f64, f64)>,
     /// Set by a gap in the IMU, cleared once a matched scan confirms the
-    /// heading or the match follows the scans ([`HEADING_HOLD_RAD`]).
+    /// heading ([`HEADING_CONFIRM_RAD`]).
     heading_suspect: bool,
-    /// `(t_ns, scan heading − prior heading)` of the latest matched scans that
-    /// clearly disagreed with a suspect heading, in a row, oldest first.
-    disagreements: VecDeque<(u64, f64)>,
 }
 
 impl LocalSlam {
@@ -256,7 +238,6 @@ impl LocalSlam {
             sigma_xy_m: SIGMA_MATCHED_M,
             gyro_offsets: VecDeque::new(),
             heading_suspect: false,
-            disagreements: VecDeque::new(),
         }
     }
 
@@ -418,7 +399,19 @@ impl LocalSlam {
     pub fn feed_scan(&mut self, input: &ScanInput) -> PoseOut {
         let t = input.t_ns;
         let (roll, pitch) = self.att.roll_pitch();
-        let heading = self.att.heading_at(t);
+        // A scan the IMU has not reached (its stream stalled or is starved
+        // while the scans keep coming) holds the heading of the newest
+        // sample, never the last rate extrapolated past it without bound. It
+        // is matched for its position, but unchecked, kept out of the map
+        // and the bias, so the next scan the IMU covers turns from that held
+        // heading by what the gyro measured.
+        let gyro = self.att.has_data();
+        let newest = self.att.newest_ns().filter(|_| gyro);
+        let reached = newest.is_none_or(|n| n + IMU_COVER_SLACK_NS >= t);
+        let heading = self.att.heading_at(match newest {
+            Some(n) if !reached => n,
+            _ => t,
+        });
         let span_ns = input.t_offset_ns.iter().copied().max().unwrap_or(0) as u64;
         let (prior, velocity, yaw_rate, prior_vel) = self.predict(t, heading, span_ns);
         let motion = Motion {
@@ -449,28 +442,17 @@ impl LocalSlam {
         let dt_s = self.last.map_or(0.0, |(t1, _, _)| t.saturating_sub(t1) as f64 * 1e-9);
         let riding_sigma =
             (self.sigma_xy_m + SIGMA_GROWTH_PER_M * prior_vel.norm() * dt_s).min(SIGMA_MAX_M);
-        // A scan the IMU has not reached (its stream stalled while the scans
-        // kept coming) has only the last rate, extrapolated, for its turn:
-        // it is published on that prior, unchecked, and neither matched nor
-        // kept as the next scan's reference, so the next scan the IMU covers
-        // turns by what the gyro measured from the last checked scan on.
-        let gyro = self.att.has_data();
-        if gyro && self.att.newest_ns().is_some_and(|n| n + IMU_COVER_SLACK_NS < t) {
-            out.sigma_xy_m = riding_sigma;
-            return out;
-        }
         // Whether the gyro measured the turn since the reference scan: a gap
         // in the IMU bridges it with a guess.
         let measured = !gyro || self.last.is_none_or(|(t1, _, _)| self.att.measured_since(t1));
-        if !measured {
-            self.heading_suspect = true;
-        }
+        self.heading_suspect |= !measured;
         let has_measured = self
             .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
             .is_some();
         if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm(), has_measured)
         {
-            out.heading_ok = self.check_heading(t, prior.th, heading, yaw_rate, measured);
+            let consistent = self.check_heading(t, prior.th, heading, yaw_rate, measured);
+            out.heading_ok = reached && consistent && !self.heading_suspect;
             self.advance(t, prior, heading);
             self.sigma_xy_m = riding_sigma;
             out.sigma_xy_m = riding_sigma;
@@ -492,44 +474,29 @@ impl LocalSlam {
         }
         let (id, sm) = &self.active[0];
         let mut pose = prior;
-        // Whether the scans clearly disagree with a suspect heading, and
-        // whether the match follows them.
-        let (mut disagrees, mut follow) = (false, false);
         let mut in_submap = sm.pose.inverse() * prior;
         if sm.scans() > 0 {
             let window = Window {
                 linear_m: self.cfg.linear_window_m,
                 angular_rad: self.cfg.angular_window_deg.to_radians(),
             };
-            let (c, best) = correlative(&sm.grid, &scan, in_submap, window);
-            let dth = wrap(c.th - in_submap.th);
-            if self.heading_suspect && measured && yaw_rate.abs() <= HEADING_FOLLOW_MAX_TURN_RATE
+            let (c, _) = correlative(&sm.grid, &scan, in_submap, window);
+            // A turn lost in a gap in the IMU stays lost (the match holds to
+            // the gyro), so the heading is reported unchecked until a scan
+            // that sees the room well enough agrees with it.
+            if self.heading_suspect
+                && reached
+                && yaw_rate.abs() <= HEADING_CONFIRM_MAX_TURN_RATE
+                && wrap(c.th - in_submap.th).abs() <= HEADING_CONFIRM_RAD
             {
-                if dth.abs() <= HEADING_HOLD_RAD {
-                    self.heading_suspect = false;
-                } else {
-                    let (_, held) = correlative(
-                        &sm.grid,
-                        &scan,
-                        in_submap,
-                        Window {
-                            linear_m: window.linear_m,
-                            angular_rad: 0.0,
-                        },
-                    );
-                    disagrees = best - held >= HEADING_FOLLOW_SCORE;
-                }
-            }
-            follow = follow_scans(&mut self.disagreements, t, disagrees.then_some(dth));
-            if follow {
                 self.heading_suspect = false;
             }
+            // The match holds to the gyro's heading: the gyro integrates a
+            // turn far better than a scan resolves one, and in a tunnel or a
+            // chamber whose outline changes with height a scan can score
+            // clearly better several degrees off for seconds.
             let pull = Prior {
-                pose: if follow {
-                    Pose2::new(in_submap.x, in_submap.y, c.th)
-                } else {
-                    in_submap
-                },
+                pose: in_submap,
                 translation_weight: self.cfg.translation_weight,
                 rotation_weight: self.cfg.rotation_weight,
             };
@@ -549,12 +516,12 @@ impl LocalSlam {
             if let Some((t1, _, _)) = self.last {
                 if self.att.has_data()
                     && measured
-                    && !disagrees
+                    && reached
                     && yaw_rate.abs() <= BIAS_MAX_TURN_RATE
                     && rotation_information(&info) >= min_rotation_info
                 {
                     let dt = t.saturating_sub(t1) as f64 * 1e-9;
-                    self.att.learn_bias(wrap(r.pose.th - in_submap.th), dt);
+                    self.att.learn_bias(wrap(r.pose.th - pull.pose.th), dt);
                 }
             }
             if deg < self.cfg.degenerate_ratio {
@@ -593,10 +560,11 @@ impl LocalSlam {
         (out.x, out.y, out.yaw) = (pose.x, pose.y, pose.th);
         self.sigma_xy_m = out.sigma_xy_m;
         // A new submap takes its first scan whatever the motion filter says,
-        // so the next scan has something to match against. A scan the gyro
-        // holds against the scans' clear disagreement stays out of the map
-        // until the match follows them.
-        let insert = (self.should_insert(t, pose) && (follow || !disagrees))
+        // so the next scan has something to match against. A scan on a
+        // heading the IMU did not measure (not reached, or suspect since a
+        // gap) stays out of the map, so the map keeps the heading the scans
+        // can still confirm it against.
+        let insert = (reached && !self.heading_suspect && self.should_insert(t, pose))
             || self.active[0].1.scans() == 0;
         if insert {
             self.insert(&scan, t, pose);
@@ -614,7 +582,7 @@ impl LocalSlam {
             });
         }
         let consistent = self.check_heading(t, pose.th, heading, yaw_rate, measured);
-        out.heading_ok = consistent && !disagrees;
+        out.heading_ok = reached && consistent && !self.heading_suspect;
         self.advance(t, pose, heading);
         out
     }
@@ -664,7 +632,7 @@ impl LocalSlam {
     /// there is the one last observed, fading over [`COAST_TAU_S`].
     fn predict(&self, t: u64, heading: f64, span_ns: u64) -> (Pose2, [f64; 2], f64, Vector2<f64>) {
         let imu_rate = if span_ns > 0 {
-            (self.att.heading_at(t + span_ns) - heading) / (span_ns as f64 * 1e-9)
+            (self.att.heading_at(t + span_ns) - self.att.heading_at(t)) / (span_ns as f64 * 1e-9)
         } else {
             self.att.heading_rate()
         };
@@ -760,35 +728,4 @@ impl LocalSlam {
             nodes: self.nodes,
         }
     }
-}
-
-/// Records whether the scan at `t` clearly disagreed with the gyro's heading
-/// (`Some(scan heading − prior heading)`) and returns whether the latest
-/// [`HEADING_FOLLOW_SCANS`] matched scans all did, within
-/// [`HEADING_WINDOW_NS`], to the same side and within
-/// [`HEADING_FOLLOW_SPREAD_RAD`] of each other: the match then follows the
-/// scans, and the count starts again.
-fn follow_scans(disagreements: &mut VecDeque<(u64, f64)>, t: u64, dth: Option<f64>) -> bool {
-    let Some(dth) = dth else {
-        disagreements.clear();
-        return false;
-    };
-    disagreements.push_back((t, dth));
-    while disagreements.len() > HEADING_FOLLOW_SCANS {
-        disagreements.pop_front();
-    }
-    let Some(&(t0, _)) = disagreements.front() else {
-        return false;
-    };
-    let (lo, hi) = disagreements
-        .iter()
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &(_, d)| (lo.min(d), hi.max(d)));
-    let follow = disagreements.len() == HEADING_FOLLOW_SCANS
-        && t.saturating_sub(t0) <= HEADING_WINDOW_NS
-        && lo * hi > 0.0
-        && hi - lo <= HEADING_FOLLOW_SPREAD_RAD;
-    if follow {
-        disagreements.clear();
-    }
-    follow
 }

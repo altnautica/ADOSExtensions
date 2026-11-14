@@ -190,6 +190,9 @@ pub(crate) struct Engine {
     fc_imu_prev: Option<(u64, [f64; 9])>,
     /// What the FC feed has handed the pose provider ([`nav_lane`]'s sink).
     fc_nav: Arc<crate::nav::fc_imu::FeedState>,
+    /// Why the FC IMU feed last left the planar pose degraded, `None` while
+    /// it measures the heading ([`crate::nav::fc_imu::FeedState::degraded`]).
+    imu_feed_degraded: Option<crate::nav::fc_imu::FeedDegraded>,
     /// The scan coverage since the last `nav_imu_feed`.
     nav_feed: nav_lane::NavFeedStats,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
@@ -291,6 +294,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         scan_wait: Default::default(),
         fc_imu_prev: None,
         fc_nav: Default::default(),
+        imu_feed_degraded: None,
         nav_feed: Default::default(),
         reconstruct_steps,
     };

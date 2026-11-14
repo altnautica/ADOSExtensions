@@ -46,7 +46,7 @@ function renderTree(ctx: import("@altnautica/plugin-sdk").PluginContext): void {
 
 definePlugin({
   id: "com.altnautica.vision-nav",
-  version: "0.8.0",
+  version: "0.8.1",
   locale: FLAT_LOCALE,
   async mount(ctx) {
     const host = ensureRootEl();

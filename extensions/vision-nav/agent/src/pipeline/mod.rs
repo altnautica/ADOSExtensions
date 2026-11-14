@@ -179,6 +179,7 @@ impl Plugin for VisionNavPlugin {
         self.tasks.push(ticks::spawn_stream_intervals(
             ctx,
             sinks.fc_target.clone(),
+            sinks.imu.clone(),
             router.clone(),
         ));
         self.tasks.push(ticks::spawn_health(

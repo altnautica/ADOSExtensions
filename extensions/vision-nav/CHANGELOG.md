@@ -2,6 +2,20 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.8.1]
+
+### Fixed
+
+- The RAW_IMU, DISTANCE_SENSOR and OPTICAL_FLOW interval requests reach a
+  flight controller that is not system 1. They went out at start to a
+  guessed 1/1 and then every 30 s, so an FC on system 2 or 3 (a SITL on
+  another instance, or an FC set to another id) streamed RAW_IMU only from
+  the first repeat after its heartbeat named it, up to 30 s later. Until
+  then a LiDAR SLAM that takes the FC's IMU ran on the FC attitude instead.
+  The requests now go only to the FC its own heartbeat names: at once when
+  it is learned or changes, every 2 s while RAW_IMU is older than 1 s or
+  arrives under 40 Hz, and every 30 s while it streams.
+
 ## [0.8.0]
 
 ### Changed
