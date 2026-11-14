@@ -2,8 +2,11 @@
 
 Runs as its own process so it never shares a CUDA context with torch: Open3D's cached CUDA allocator
 aborted ("Block ... should have been recorded") when it shared a process with the splat renderer.
-The grid is an Open3D tensor VoxelBlockGrid on CUDA:0 when CUDA is available. On CUDA an
-out-of-memory grid retries coarser on the GPU, never on the CPU; a node without CUDA fuses on the CPU.
+The grid is an Open3D tensor VoxelBlockGrid on CUDA:0 when CUDA is available. On CUDA every attempt runs
+in a child process of its own: a CUDA out-of-memory leaves the process's CUDA context unusable (the next
+grid fails with "invalid device ordinal", or the process aborts), so the coarser retry starts a fresh one.
+The block cap of each GPU attempt is sized from the VRAM free just before it. An out-of-memory grid retries
+coarser on the GPU, never on the CPU; a node without CUDA fuses on the CPU, in this process.
 Writes <out>/mesh.ply (binary), mesh.glb (surface), dense.ply and dense.laz (coloured surface points).
 
     fuse.py --depthset DIR [--depthset DIR ...] --out DIR [--voxel 0.03] [--max-tris 300000] [--device CUDA:0]
@@ -12,13 +15,15 @@ Writes <out>/mesh.ply (binary), mesh.glb (surface), dense.ply and dense.laz (col
 from __future__ import annotations
 
 import argparse
-import gc
+import multiprocessing as mp
+import tempfile
 from pathlib import Path
 
 import numpy as np
 
 import common
 import depthset
+import vram
 
 BLOCK_RESOLUTION = 16
 BLOCK_COUNT = 10_000  # initial hash capacity; the grid grows past it
@@ -28,6 +33,9 @@ CLUSTER_MIN_TRIANGLES = 50  # smaller disconnected clusters are dropped ...
 CLUSTER_MIN_FRACTION = 0.001  # ... and so are those under this fraction of the largest
 BYTES_PER_VOXEL = 20  # tsdf f32 + weight f32 + colour 3 x f32
 COARSER = (1.0, 1.5, 2.0)  # voxel multipliers of the GPU attempts
+# Share of the free VRAM a GPU attempt's blocks may take: the hash map doubles when it grows (old and new
+# tables live together while it rehashes), and each view's image tensors and Open3D's cache sit beside it.
+VRAM_GRID_FRACTION = 0.4
 
 
 def max_blocks_for(budget_mb: int) -> int:
@@ -97,39 +105,102 @@ def is_out_of_memory(e: BaseException) -> bool:
     return "out of memory" in str(e).lower()
 
 
-def fuse_depthset(roots: list[Path], voxel: float, device: str | None = None, budget_mb: int = 5000):
+class GpuAttemptDied(RuntimeError):
+    """A GPU attempt's child process ended without a result (killed by a signal, as an abort under
+    CUDA memory pressure is); retried coarser like an out-of-memory."""
+
+
+def _fuse_once(sets, vx: float, device: str | None, max_blocks: int | None, n: int):
+    """`(mesh, cloud, fusion)` of one attempt at voxel `vx`, in this process."""
+    fuser = TsdfFuser(vx, device, max_blocks)
+    i = 0
+    for root, views in sets:
+        for v in views:
+            rgb = depthset.load_rgb(root, v).astype(np.float32) / 255.0
+            fuser.integrate(rgb, depthset.load_depth(root, v), v.K, v.w2c)
+            i += 1
+            common.progress(0.05 + 0.75 * i / n, f"fused view {i}/{n}")
+    if fuser.used == 0:
+        raise RuntimeError("no view had usable depth")
+    common.progress(0.82, "extracting surface")
+    return fuser.mesh(), fuser.point_cloud(), {"device": str(fuser.device), "voxel_m": vx,
+                                               "views_capped": fuser.capped}
+
+
+def _attempt_child(conn, sets, vx: float, device: str | None, max_blocks: int | None, n: int, mesh_path: str):
+    """Child-process body of a GPU attempt: the mesh goes to `mesh_path`, the fusion fields or the
+    error message down `conn`."""
+    import open3d as o3d
+
+    try:
+        mesh, _, info = _fuse_once(sets, vx, device, max_blocks, n)
+        if not o3d.io.write_triangle_mesh(mesh_path, mesh, write_ascii=False, compressed=False):
+            raise IOError(f"cannot write {mesh_path}")
+        conn.send(("ok", info))
+    except BaseException as e:  # noqa: BLE001 - reported to the parent
+        conn.send(("error", f"{e}"))
+    finally:
+        conn.close()
+
+
+def _fuse_in_child(sets, vx: float, device: str | None, max_blocks: int | None, n: int):
+    """`_fuse_once` in a fresh (spawned) process, so it gets a CUDA context of its own."""
+    import open3d as o3d
+
+    ctx = mp.get_context("spawn")
+    with tempfile.TemporaryDirectory(prefix="fuse-") as tmp:
+        mesh_path = str(Path(tmp) / "mesh.ply")
+        rx, tx = ctx.Pipe(duplex=False)
+        p = ctx.Process(target=_attempt_child, args=(tx, sets, vx, device, max_blocks, n, mesh_path))
+        p.start()
+        tx.close()
+        try:
+            msg = rx.recv()
+        except EOFError:
+            msg = None
+        p.join()
+        if msg is None:
+            raise GpuAttemptDied(f"GPU attempt at voxel {vx:.3f} m died (exit code {p.exitcode})")
+        if msg[0] == "error":
+            raise RuntimeError(msg[1])
+        mesh = o3d.io.read_triangle_mesh(mesh_path)
+    cloud = o3d.geometry.PointCloud(mesh.vertices)
+    cloud.colors = mesh.vertex_colors
+    return mesh, cloud, msg[1]
+
+
+def _cuda_index(device: str | None) -> int:
+    return int(device.split(":")[1]) if device and ":" in device else 0
+
+
+def gpu_budget_mb(device: str | None) -> int:
+    """MiB the next GPU attempt's blocks may take: VRAM_GRID_FRACTION of the VRAM free now."""
+    return int(vram.free_vram_mb(_cuda_index(device)) * VRAM_GRID_FRACTION)
+
+
+def fuse_depthset(roots: list[Path], voxel: float, device: str | None = None, budget_mb: int | None = None):
     """`(mesh, cloud, fusion)`: the surface and coloured points fused from every view of every depth
-    set in `roots`, and which attempt produced them."""
+    set in `roots`, and which attempt produced them. On CUDA each attempt runs in its own child process
+    with its block cap from `budget_mb`, or from the VRAM free before it when None."""
     import open3d.core as o3c
 
     on_cuda = (device or "").upper().startswith("CUDA") or (device is None and o3c.cuda.is_available())
-    attempts = [m * voxel for m in COARSER] if on_cuda else [voxel]
-    max_blocks = max_blocks_for(budget_mb) if on_cuda else None
     sets = [(Path(r), depthset.read_depthset(Path(r))[1]) for r in roots]
     n = sum(len(views) for _, views in sets)
+    if not on_cuda:
+        mesh, cloud, info = _fuse_once(sets, voxel, device, None, n)
+        return mesh, cloud, {**info, "attempt": 1}
+    attempts = [m * voxel for m in COARSER]
     for k, vx in enumerate(attempts):
-        fuser = None
+        budget = budget_mb if budget_mb is not None else gpu_budget_mb(device)
         try:
-            fuser = TsdfFuser(vx, device, max_blocks)
-            i = 0
-            for root, views in sets:
-                for v in views:
-                    rgb = depthset.load_rgb(root, v).astype(np.float32) / 255.0
-                    fuser.integrate(rgb, depthset.load_depth(root, v), v.K, v.w2c)
-                    i += 1
-                    common.progress(0.05 + 0.75 * i / n, f"fused view {i}/{n}")
-            if fuser.used == 0:
-                raise RuntimeError("no view had usable depth")
-            common.progress(0.82, "extracting surface")
-            return fuser.mesh(), fuser.point_cloud(), {"device": str(fuser.device), "voxel_m": vx,
-                                                       "attempt": k + 1, "views_capped": fuser.capped}
+            mesh, cloud, info = _fuse_in_child(sets, vx, device, max_blocks_for(budget), n)
+            return mesh, cloud, {**info, "attempt": k + 1, "budget_mb": budget}
         except RuntimeError as e:
-            if not is_out_of_memory(e) or k == len(attempts) - 1:
+            if not (is_out_of_memory(e) or isinstance(e, GpuAttemptDied)) or k == len(attempts) - 1:
                 raise
-        # Outside the handler, so the traceback no longer pins the GPU grid.
-        del fuser
-        gc.collect()
-        common.progress(0.05, f"TSDF grid out of GPU memory: retrying on the GPU at voxel {attempts[k + 1]:.3f} m")
+            common.progress(0.05, f"TSDF grid out of GPU memory ({e}); retrying in a fresh process at voxel "
+                                  f"{attempts[k + 1]:.3f} m")
     raise AssertionError("unreachable")
 
 

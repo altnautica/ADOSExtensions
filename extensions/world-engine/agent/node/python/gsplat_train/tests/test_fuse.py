@@ -111,23 +111,41 @@ def test_cuda_out_of_memory_retries_coarser_on_the_gpu_never_the_cpu(tmp_path, m
             return "cloud"
 
     monkeypatch.setattr(fuse, "TsdfFuser", FakeFuser)
+    monkeypatch.setattr(fuse, "_fuse_in_child", fuse._fuse_once)  # the ladder's logic, without child processes
     m, c, info = fuse.fuse_depthset([tmp_path / "ds"], 0.02, "CUDA:0", budget_mb=100)
     assert (m, c) == ("mesh", "cloud")
     cap = fuse.max_blocks_for(100)
     assert [c[0] for c in calls] == pytest.approx([0.02, 0.03, 0.04])
     assert [c[1:] for c in calls] == [("CUDA:0", cap)] * 3
-    assert info == {"device": "CUDA:0", "voxel_m": pytest.approx(0.04), "attempt": 3, "views_capped": 2}
+    assert info == {"device": "CUDA:0", "voxel_m": pytest.approx(0.04), "attempt": 3, "views_capped": 2,
+                    "budget_mb": 100}
 
+    # Without a budget each attempt's cap comes from the VRAM free just before it.
+    free = iter([1000, 500, 250])
+    monkeypatch.setattr(fuse.vram, "free_vram_mb", lambda device=0: next(free))
     calls.clear()
     with pytest.raises(RuntimeError, match="out of memory"):
         monkeypatch.setattr(FakeFuser, "integrate", lambda *a: (_ for _ in ()).throw(RuntimeError("out of memory")))
         fuse.fuse_depthset([tmp_path / "ds"], 0.02, "CUDA:0")
-    assert len(calls) == 3
+    assert [c[2] for c in calls] == [fuse.max_blocks_for(int(f * fuse.VRAM_GRID_FRACTION)) for f in (1000, 500, 250)]
+
+    # A child that dies without a result (an abort) is retried coarser too.
+    died = []
+
+    def dies(sets, vx, device, max_blocks, n):
+        died.append(vx)
+        if len(died) < 2:
+            raise fuse.GpuAttemptDied("GPU attempt died (exit code -6)")
+        return "mesh", "cloud", {"device": device, "voxel_m": vx, "views_capped": 0}
+
+    monkeypatch.setattr(fuse, "_fuse_in_child", dies)
+    assert fuse.fuse_depthset([tmp_path / "ds"], 0.02, "CUDA:0", budget_mb=100)[2]["attempt"] == 2
+    monkeypatch.setattr(fuse, "_fuse_in_child", fuse._fuse_once)
 
     monkeypatch.setattr(FakeFuser, "integrate", lambda *a: (_ for _ in ()).throw(RuntimeError("bad pose")))
     calls.clear()
     with pytest.raises(RuntimeError, match="bad pose"):
-        fuse.fuse_depthset([tmp_path / "ds"], 0.02, "CUDA:0")
+        fuse.fuse_depthset([tmp_path / "ds"], 0.02, "CUDA:0", budget_mb=100)
     assert len(calls) == 1
 
 
@@ -188,3 +206,24 @@ def test_fuse_runs_on_cuda_after_the_parent_used_torch_cuda(tmp_path):
     assert r.returncode == 0, r.stderr
     d = _done(r.stdout)
     assert d["device"] == "CUDA:0" and d["triangles"] > 100
+
+
+@pytest.mark.skipif(not _cuda(), reason="needs torch and a CUDA GPU")
+def test_a_gpu_retry_after_a_real_cuda_out_of_memory_completes_on_cuda(tmp_path, monkeypatch):
+    # The parent holds all but ~256 MiB of the GPU, and a 0.05 mm voxel with no block cap puts every pixel
+    # of every view in its own block, so attempt 1 runs out of GPU memory for real. Attempt 2 (1000x
+    # coarser) fits in what is left, but only in a fresh CUDA context: in the same process Open3D fails
+    # with "invalid device ordinal" after the OOM.
+    import torch
+
+    free, _ = torch.cuda.mem_get_info()
+    hog = torch.empty(max(free - (256 << 20), 0), dtype=torch.uint8, device="cuda")
+    _wall_depthset(tmp_path / "ds")
+    monkeypatch.setattr(fuse, "COARSER", (1.0, 1000.0))
+    try:
+        mesh, cloud, info = fuse.fuse_depthset([tmp_path / "ds"], 0.00005, "CUDA:0", budget_mb=1 << 20)
+    finally:
+        del hog
+    assert info["attempt"] == 2 and info["device"] == "CUDA:0"
+    assert info["voxel_m"] == pytest.approx(0.05)
+    assert len(mesh.triangles) > 100 and len(cloud.points) > 100

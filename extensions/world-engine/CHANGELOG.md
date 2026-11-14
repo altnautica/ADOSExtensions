@@ -143,10 +143,14 @@ All notable changes to the World Engine extension.
   mesh stage ("Block ... should have been recorded") at the first fused
   view. The splat's rendered depth now goes to a depth set
   (`mesh/depthset-splat/`), and `fuse.py` fuses it in its own process, on
-  the GPU when there is one (an out-of-memory grid retries coarser on the
-  GPU), writing `mesh.ply`, `mesh.glb`, `dense.ply` and `dense.laz`. The
-  stage detail lists `device`, `voxel_m`, `attempt` and `views_capped` at
-  its top level. 2.2.2.
+  the GPU when there is one, writing `mesh.ply`, `mesh.glb`, `dense.ply` and
+  `dense.laz`. Each GPU attempt runs in a child process of its own, with its
+  block cap sized from the VRAM free just before it: an out-of-memory grid
+  left the process's CUDA context unusable, so the coarser retry failed
+  ("invalid device ordinal") and the stage ended in an abort. An
+  out-of-memory or aborted attempt now retries coarser in a fresh process,
+  on the GPU. The stage detail lists `device`, `voxel_m`, `attempt`,
+  `views_capped` and `budget_mb` at its top level. 2.2.2.
 - **A planar LiDAR session's cloud is registered and coloured.** A planar
   LiDAR records its compact polar stream (`lidar/<id>.polar.zst`) instead of
   Cartesian point clouds, and `prepare` read only the latter, so a drone
