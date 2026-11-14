@@ -33,7 +33,8 @@ use parking_lot::Mutex;
 use tokio::sync::watch;
 use world_engine_protocol::atlas::{
     AtlasForwardStatus, ATLAS_FORWARD_STATUS_VERSION, ATLAS_KEYFRAME_TOPIC,
-    PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_SCAN_TOPIC,
+    PLUGIN_ATLAS_LIDAR_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+    PLUGIN_ATLAS_SCAN_TOPIC,
 };
 use world_engine_transport::{
     AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer, WfbRelayBearer,
@@ -351,11 +352,15 @@ impl Forwarder {
 /// lanes (the binned scan, the live occupancy tiles and sweep-cloud deltas)
 /// are for operator surfaces on the plugin bus; a streaming drone sends the
 /// node raw polar scans (`atlas.scan`) instead, and those lanes would crowd
-/// keyframes off a constrained bearer.
+/// keyframes off a constrained bearer. The LiDAR link status is for the
+/// operator and the agent only.
 pub fn forwards_to_node(topic: &str) -> bool {
     !matches!(
         topic,
-        PLUGIN_ATLAS_SCAN_TOPIC | PLUGIN_ATLAS_OCCUPANCY_TOPIC | PLUGIN_ATLAS_POINTCLOUD_TOPIC
+        PLUGIN_ATLAS_SCAN_TOPIC
+            | PLUGIN_ATLAS_OCCUPANCY_TOPIC
+            | PLUGIN_ATLAS_POINTCLOUD_TOPIC
+            | PLUGIN_ATLAS_LIDAR_TOPIC
     )
 }
 
@@ -520,6 +525,7 @@ mod tests {
             PLUGIN_ATLAS_SCAN_TOPIC,
             PLUGIN_ATLAS_OCCUPANCY_TOPIC,
             PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+            "plugin.world-engine.lidar",
         ] {
             assert!(!forwards_to_node(topic), "{topic}");
         }

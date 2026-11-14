@@ -11,7 +11,10 @@
 //! and LiDAR source are chosen
 //! from the rig document when a run starts, so a run that is not recording
 //! is restarted when `rig.json` changes (a rig pushed after the service
-//! started would otherwise never get its stereo VIO).
+//! started would otherwise never get its stereo VIO). The rig's LiDAR runs on
+//! its own task for the length of the run ([`LidarRunner`]): a device absent
+//! at start is retried there, its scans reach the loop on one channel, and
+//! its link status goes on the atlas bus at 1 Hz.
 //!
 //! Subscriptions that cannot be withdrawn (frames, vehicle state, the FC
 //! EKF messages, front-panel buttons) are made once and routed to whichever
@@ -27,11 +30,13 @@ use ados_sdk::{ClientError, PluginContext};
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+use world_engine_protocol::atlas::LidarStatus;
 use world_engine_protocol::paths::{ipc_dir, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
 
 use crate::control::serve_control;
 use crate::frame_source::{AtlasFrameSource, FrameRouter};
 use crate::hud::{button_action, HudAction};
+use crate::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
 use crate::pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
@@ -137,7 +142,6 @@ pub struct CaptureRun {
     tasks: Vec<JoinHandle<()>>,
     capture: JoinHandle<()>,
     control_path: PathBuf,
-    _lidar: Option<Box<dyn crate::lidar_source::LidarDriver>>,
 }
 
 impl CaptureRun {
@@ -166,7 +170,7 @@ impl CaptureRun {
         let rig = crate::rig_source::load_rig(&paths.rig);
         let chosen =
             crate::providers::pose_provider(&config, &profile, rig.as_ref(), &feeds.fc, &work_dir);
-        let lidar = crate::providers::lidar_source(&config, rig.as_ref(), &work_dir);
+        let lidar = crate::providers::lidar_runner(&config, rig.as_ref(), &work_dir);
         let lidar_sensor = rig
             .as_ref()
             .and_then(|r| crate::rig_source::lidar_sensor(r, &config.lidar.lidar_id));
@@ -177,10 +181,6 @@ impl CaptureRun {
                 m.pattern == ados_capture_contract::LidarModelPattern::Planar
             }),
             scratch_dir: Some(work_dir.join("map").join(crate::nav::TILES_DIR)),
-        };
-        let (lidar_src, lidar_rx) = match lidar {
-            Some((s, rx)) => (Some(s), Some(rx)),
-            None => (None, None),
         };
         let sensors = Arc::new(Mutex::new(SensorState::default()));
         let (bus_tx, bus_rx) = mpsc::channel(1024);
@@ -193,6 +193,11 @@ impl CaptureRun {
                 cancel.clone(),
             )),
         ];
+        let lidar_rx = lidar.map(|runner| {
+            let (scan_tx, scan_rx) = mpsc::channel(SCAN_CHANNEL_DEPTH);
+            tasks.push(tokio::spawn(lidar_task(runner, scan_tx, publisher.clone())));
+            scan_rx
+        });
         let (hud_tx, hud_rx) = mpsc::channel(8);
         *feeds.hud.lock() = Some(hud_tx);
         let (view_tx, view_rx) = watch::channel(Default::default());
@@ -233,7 +238,6 @@ impl CaptureRun {
             tasks,
             capture,
             control_path: sockets.control.clone(),
-            _lidar: lidar_src,
         })
     }
 
@@ -277,6 +281,23 @@ impl CaptureRun {
 /// the document reads `now`: only when it changed and nothing is recording.
 pub fn rig_restart_due(started: Option<&[u8]>, now: Option<&[u8]>, recording: bool) -> bool {
     !recording && started != now
+}
+
+/// The run's LiDAR: the driver with its start retry, and its link status
+/// published as it is produced. Ends when the run aborts it.
+async fn lidar_task(
+    runner: LidarRunner,
+    scans: mpsc::Sender<crate::lidar_scan::LidarScan>,
+    publisher: AtlasPublisher,
+) {
+    let (status_tx, mut status_rx) = watch::channel(LidarStatus::default());
+    let publish = async {
+        while status_rx.changed().await.is_ok() {
+            let status = status_rx.borrow_and_update().clone();
+            publisher.publish_lidar_status(&status).await;
+        }
+    };
+    tokio::join!(runner.run(scans, status_tx), publish);
 }
 
 /// Keep the display's plugin page in step with the capture state (about 1 Hz,

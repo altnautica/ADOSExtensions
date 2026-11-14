@@ -2,17 +2,19 @@
 //! FLU frame (z = 0) and stamped on the host monotonic clock, forwarded as
 //! [`LidarScan`]s onto a tokio channel by a small bridge thread.
 //!
-//! The device driver keeps reconnecting a lost link on its own. Dropping the
-//! source stops the device (`STOP`), which ends the bridge.
+//! The device driver keeps reconnecting a lost link on its own; the port and
+//! health reported are those of the latest connection. Dropping the source
+//! stops the device (`STOP`), which ends the bridge.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use ados_rplidar::{RawScan, Rplidar, RplidarConfig};
+use ados_rplidar::{Health, HealthStatus, RawScan, Rplidar, RplidarConfig};
 use tokio::sync::mpsc;
+use world_engine_protocol::atlas::LidarHealth;
 
-use super::{LidarDriver, LidarDriverStats, LidarSourceError, SCAN_CHANNEL_DEPTH};
+use super::{LidarDriver, LidarDriverStats, LidarSourceError};
 use crate::lidar_scan::LidarScan;
 
 /// A revolution as the capture path carries it; the vectors move, no copy.
@@ -41,14 +43,14 @@ pub struct RplidarSource {
 
 impl RplidarSource {
     /// Open the device (`cfg.device`: a serial port, `tcp:<host>:<port>` or
-    /// `auto`), run its handshake and start scanning; revolutions arrive on
-    /// the returned receiver tagged `cfg.sensor_id`.
+    /// `auto`), run its handshake and start scanning; revolutions go to
+    /// `scans` tagged `cfg.sensor_id`.
     pub fn start(
         cfg: RplidarConfig,
-    ) -> Result<(Self, mpsc::Receiver<LidarScan>), LidarSourceError> {
+        scans: mpsc::Sender<LidarScan>,
+    ) -> Result<Self, LidarSourceError> {
         let sensor_id = cfg.sensor_id.clone();
         let (device, raw) = Rplidar::start(cfg)?;
-        let (tx, rx) = mpsc::channel(SCAN_CHANNEL_DEPTH);
         let counters = Arc::new(Counters::default());
         let c = counters.clone();
         let bridge = thread::Builder::new()
@@ -57,7 +59,7 @@ impl RplidarSource {
                 // Ends when the device stops (its sender drops) or the
                 // consumer goes away (dropping `raw` then stops the reader).
                 while let Ok(scan) = raw.recv() {
-                    match tx.try_send(scan_from_rplidar(&sensor_id, scan)) {
+                    match scans.try_send(scan_from_rplidar(&sensor_id, scan)) {
                         Ok(()) => c.delivered.fetch_add(1, Ordering::Relaxed),
                         Err(mpsc::error::TrySendError::Full(_)) => {
                             c.dropped.fetch_add(1, Ordering::Relaxed)
@@ -67,14 +69,11 @@ impl RplidarSource {
                 }
             })
             .map_err(LidarSourceError::Thread)?;
-        Ok((
-            Self {
-                device: Some(device),
-                counters,
-                bridge: Some(bridge),
-            },
-            rx,
-        ))
+        Ok(Self {
+            device: Some(device),
+            counters,
+            bridge: Some(bridge),
+        })
     }
 
     /// The device's own counters (revolutions, resyncs, reconnects).
@@ -83,11 +82,26 @@ impl RplidarSource {
     }
 }
 
+/// `GET_HEALTH` in the status vocabulary; a status byte the protocol does
+/// not define is reported as a warning, as the handshake treats it.
+pub fn lidar_health(h: Health) -> (LidarHealth, u16) {
+    let level = match h.status {
+        HealthStatus::Good => LidarHealth::Good,
+        HealthStatus::Warning | HealthStatus::Unknown(_) => LidarHealth::Warning,
+        HealthStatus::Error => LidarHealth::Error,
+    };
+    (level, h.error_code)
+}
+
 impl LidarDriver for RplidarSource {
     fn stats(&self) -> LidarDriverStats {
+        let device = self.device.as_ref();
         let dev = self.device_stats().unwrap_or_default();
         LidarDriverStats {
-            connected: Some(dev.connected),
+            connected: dev.connected,
+            device: device.map(Rplidar::path),
+            health: device.map(|d| lidar_health(d.health())),
+            revolutions: dev.revolutions,
             scans: self.counters.delivered.load(Ordering::Relaxed),
             dropped_scans: self.counters.dropped.load(Ordering::Relaxed) + dev.dropped_scans,
             reconnects: dev.reconnects,
@@ -123,5 +137,14 @@ mod tests {
         assert_eq!((l.t_ns, l.len()), (9, 2));
         assert_eq!((l.t_offset_ns[1], l.intensity[1]), (200_000, 60));
         assert!(l.points.iter().all(|p| p[2] == 0.0));
+    }
+
+    #[test]
+    fn device_health_maps_to_the_status_words_with_its_code() {
+        let h = |status, error_code| lidar_health(Health { status, error_code });
+        assert_eq!(h(HealthStatus::Good, 0), (LidarHealth::Good, 0));
+        assert_eq!(h(HealthStatus::Warning, 7), (LidarHealth::Warning, 7));
+        assert_eq!(h(HealthStatus::Error, 0x1234), (LidarHealth::Error, 0x1234));
+        assert_eq!(h(HealthStatus::Unknown(9), 1), (LidarHealth::Warning, 1));
     }
 }

@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ados_capture_contract::{LidarModelPattern, Rig};
-use tokio::sync::mpsc;
 use world_engine_protocol::atlas::PoseSource;
 
 use crate::lidar_scan::LidarScan;
-use crate::lidar_source::{self, LidarDriver, LidarSourceError};
+use crate::lidar_source::{self, LidarRunner};
 use crate::pose::fc_ekf::FcEkfPose;
 use crate::pose::lidar::{kiss_config, Launcher, LidarPose, LidarPoseConfig};
 use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
@@ -118,25 +117,22 @@ fn lidar_pose(
     }
 }
 
-/// Start the live LiDAR driver for the rig's configured LiDAR, chosen by its
-/// `lidar.model`. `None` when the rig has no such sensor, the driver's device
-/// setting is empty, or the driver cannot start (logged).
-pub fn lidar_source(
+/// The run's task for the rig's configured LiDAR, its driver chosen by the
+/// sensor's `lidar.model`; `None` when the rig declares no such sensor. The
+/// driver starts (and, while the device is absent, retries) inside the task.
+pub fn lidar_runner(
     cfg: &AtlasRuntimeConfig,
     rig: Option<&Rig>,
     work_dir: &Path,
-) -> Option<(Box<dyn LidarDriver>, mpsc::Receiver<LidarScan>)> {
-    let id = &cfg.lidar.lidar_id;
-    let (_, model) = rig_source::lidar_sensor(rig?, id)?;
-    match lidar_source::start(model, &cfg.lidar, id, work_dir) {
-        Ok(s) => Some(s),
-        Err(LidarSourceError::NotConfigured(key)) => {
-            tracing::info!(sensor = %id, key, "lidar_source_not_configured");
-            None
-        }
-        Err(e) => {
-            tracing::warn!(sensor = %id, model = %model.model, error = %e, "lidar_source_unavailable");
-            None
-        }
-    }
+) -> Option<LidarRunner> {
+    let id = cfg.lidar.lidar_id.clone();
+    let (_, model) = rig_source::lidar_sensor(rig?, &id)?;
+    let (model, settings, work_dir) = (model.clone(), cfg.lidar.clone(), work_dir.to_path_buf());
+    let name = model.model.clone();
+    let sensor = id.clone();
+    let starter: lidar_source::Starter =
+        Arc::new(move |scans: tokio::sync::mpsc::Sender<LidarScan>| {
+            lidar_source::start(&model, &settings, &sensor, &work_dir, scans)
+        });
+    Some(LidarRunner::new(id, name, starter))
 }

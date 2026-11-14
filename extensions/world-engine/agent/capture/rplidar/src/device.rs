@@ -6,12 +6,13 @@
 //! each received chunk with host monotonic time and hands it to the
 //! [`RevolutionAssembler`]. A link that errors, closes or goes quiet for
 //! [`STALL_TIMEOUT`] is reopened every [`RECONNECT_DELAY`], without limit,
-//! until it answers again or the driver is dropped. Dropping the driver (or
-//! its receiver) sends `STOP`.
+//! until it answers again or the driver is dropped; the port, info and
+//! health the driver reports are those of the latest connection. Dropping
+//! the driver (or its receiver) sends `STOP`.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -90,17 +91,21 @@ struct Shared {
 /// A scanning device; revolutions arrive on the receiver `start` returns.
 pub struct Rplidar {
     shared: Arc<Shared>,
+    current: Arc<Mutex<Current>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+/// What the handshake of the latest connection found.
+#[derive(Debug, Clone)]
+struct Current {
     path: String,
     info: DeviceInfo,
     health: Health,
-    thread: Option<JoinHandle<()>>,
 }
 
 struct Session {
     link: Box<dyn Link>,
-    path: String,
-    info: DeviceInfo,
-    health: Health,
+    current: Current,
 }
 
 impl Rplidar {
@@ -108,42 +113,48 @@ impl Rplidar {
     /// device cannot be opened, does not answer, or reports a health error;
     /// once started, a lost link is retried in the background.
     pub fn start(cfg: RplidarConfig) -> Result<(Self, Receiver<RawScan>), RplidarError> {
-        let session = connect(&cfg)?;
+        let Session { link, current } = connect(&cfg)?;
         let (tx, rx) = mpsc::sync_channel(CHANNEL_DEPTH);
         let shared = Arc::new(Shared::default());
         shared.connected.store(true, Ordering::Relaxed);
-        let (path, info, health) = (session.path.clone(), session.info, session.health);
+        let current = Arc::new(Mutex::new(current));
         let thread = {
-            let shared = shared.clone();
+            let (shared, current) = (shared.clone(), current.clone());
             thread::Builder::new()
                 .name(format!("rplidar-{}", cfg.sensor_id))
-                .spawn(move || run(cfg, session.link, &shared, &tx))?
+                .spawn(move || run(cfg, link, &shared, &current, &tx))?
         };
         Ok((
             Self {
                 shared,
-                path,
-                info,
-                health,
+                current,
                 thread: Some(thread),
             },
             rx,
         ))
     }
 
-    /// The port the device was first found on.
-    pub fn path(&self) -> &str {
-        &self.path
+    fn current(&self) -> Current {
+        self.current
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
-    /// `GET_INFO` at start-up.
-    pub fn info(&self) -> &DeviceInfo {
-        &self.info
+    /// The port of the latest connection (under `auto`, a reconnect may find
+    /// the device on another one).
+    pub fn path(&self) -> String {
+        self.current().path
     }
 
-    /// `GET_HEALTH` at start-up.
-    pub fn health(&self) -> &Health {
-        &self.health
+    /// `GET_INFO` of the latest connection.
+    pub fn info(&self) -> DeviceInfo {
+        self.current().info
+    }
+
+    /// `GET_HEALTH` of the latest connection.
+    pub fn health(&self) -> Health {
+        self.current().health
     }
 
     pub fn stats(&self) -> RplidarStats {
@@ -203,9 +214,7 @@ fn connect(cfg: &RplidarConfig) -> Result<Session, RplidarError> {
     );
     Ok(Session {
         link,
-        path,
-        info,
-        health,
+        current: Current { path, info, health },
     })
 }
 
@@ -215,7 +224,13 @@ enum End {
     Lost(String),
 }
 
-fn run(cfg: RplidarConfig, mut link: Box<dyn Link>, shared: &Shared, tx: &SyncSender<RawScan>) {
+fn run(
+    cfg: RplidarConfig,
+    mut link: Box<dyn Link>,
+    shared: &Shared,
+    current: &Mutex<Current>,
+    tx: &SyncSender<RawScan>,
+) {
     let mut asm = RevolutionAssembler::new(cfg.baud);
     loop {
         match stream(link.as_mut(), &mut asm, shared, tx) {
@@ -237,7 +252,10 @@ fn run(cfg: RplidarConfig, mut link: Box<dyn Link>, shared: &Shared, tx: &SyncSe
                 return;
             }
             match connect(&cfg) {
-                Ok(s) => break s.link,
+                Ok(s) => {
+                    *current.lock().unwrap_or_else(PoisonError::into_inner) = s.current;
+                    break s.link;
+                }
                 Err(e) => tracing::warn!(
                     sensor = %cfg.sensor_id,
                     error = %e,

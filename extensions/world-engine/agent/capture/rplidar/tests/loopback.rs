@@ -18,6 +18,8 @@ const BURST: usize = 50;
 #[derive(Clone)]
 struct Fake {
     health: [u8; 3],
+    /// `GET_HEALTH` answered on every connection after the first.
+    reconnect_health: Option<[u8; 3]>,
     /// Close the connection after this many nodes streamed.
     nodes_per_conn: Option<usize>,
     /// Every command byte received.
@@ -28,6 +30,7 @@ impl Fake {
     fn new() -> Self {
         Self {
             health: [0, 0, 0],
+            reconnect_health: None,
             nodes_per_conn: None,
             commands: Arc::default(),
         }
@@ -47,15 +50,19 @@ impl Fake {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = format!("tcp:{}", listener.local_addr().unwrap());
         thread::spawn(move || {
-            for conn in listener.incoming() {
+            for (n, conn) in listener.incoming().enumerate() {
                 let Ok(conn) = conn else { return };
-                self.serve(conn);
+                let health = match self.reconnect_health {
+                    Some(h) if n > 0 => h,
+                    _ => self.health,
+                };
+                self.serve(conn, health);
             }
         });
         addr
     }
 
-    fn serve(&self, mut s: TcpStream) {
+    fn serve(&self, mut s: TcpStream, health: [u8; 3]) {
         s.set_read_timeout(Some(Duration::from_millis(2))).unwrap();
         let mut streaming = false;
         let mut k = 0usize;
@@ -91,7 +98,7 @@ impl Fake {
                     }
                     proto::CMD_GET_HEALTH => {
                         let mut r = encode_descriptor(&proto::HEALTH_DESCRIPTOR).to_vec();
-                        r.extend_from_slice(&self.health);
+                        r.extend_from_slice(&health);
                         r
                     }
                     proto::CMD_SCAN => {
@@ -227,4 +234,21 @@ fn a_lost_link_is_reopened_and_scanning_resumes() {
     assert!(scans[3].t_ns - scans[2].t_ns >= 1_900_000_000);
     assert!(lidar.stats().reconnects >= 1);
     assert!(fake.count(proto::CMD_SCAN) >= 2);
+}
+
+#[test]
+fn a_reconnect_reports_the_new_connection_s_port_and_health() {
+    let mut fake = Fake::new();
+    fake.nodes_per_conn = Some(2 * NODES_PER_REV + BURST);
+    fake.reconnect_health = Some([1, 0x02, 0x01]);
+    let addr = fake.spawn();
+    let (lidar, rx) = Rplidar::start(config(addr.clone())).expect("start");
+    assert_eq!(lidar.health().status, HealthStatus::Good);
+    assert_eq!(lidar.path(), addr);
+    // Two revolutions from the first connection, the third from the second.
+    (0..3).for_each(|_| assert_complete(&recv(&rx)));
+    assert!(lidar.stats().reconnects >= 1);
+    let h = lidar.health();
+    assert_eq!((h.status, h.error_code), (HealthStatus::Warning, 0x0102));
+    assert_eq!(lidar.path(), addr);
 }

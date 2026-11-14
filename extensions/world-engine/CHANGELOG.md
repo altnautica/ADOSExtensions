@@ -689,6 +689,15 @@ All notable changes to the World Engine extension.
   controller's attitude and downward range within 300 ms of the scan, a
   return that levels to within 0.25 m of the ground is dropped as floor.
   The scan stays in the body frame, unlevelled. 2.2.2.
+- **The LiDAR reports its own health.** A new shared topic,
+  `plugin.world-engine.lidar` (1 Hz, gated on `telemetry.read`), carries
+  the driver's port, link state, `GET_HEALTH` status and code from the
+  latest (re)connect, the measured revolution rate, and the scan, drop and
+  reconnect counters, so the agent no longer has to list a scanning LiDAR
+  as idle. A LiDAR the rig declares that is absent or silent when capture
+  starts is now retried every 2 s inside the run (`lidar_source_recovered`
+  once it answers) instead of staying off until a config or rig change; an
+  unconfigured device is not retried and reports `connected: false`. 2.2.2.
 
 ### Known limitations
 

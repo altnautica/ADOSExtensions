@@ -275,6 +275,8 @@ agent:
         subscribe_capability: telemetry.read
       - topic: plugin.world-engine.map_status
         subscribe_capability: telemetry.read
+      - topic: plugin.world-engine.lidar
+        subscribe_capability: telemetry.read
     tools:
       - name: capture_start
         description: "Start a capture session on this device, optionally tagged with site, floor and room."

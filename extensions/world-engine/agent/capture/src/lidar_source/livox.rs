@@ -4,14 +4,18 @@
 //! The SDK is a shared library loaded at run time (feature `livox-sdk`, Unix
 //! only). Without the feature, or when the library cannot be loaded, starting
 //! fails with an error naming the cause; there is no fallback source.
+//!
+//! The SDK reports no link state and no health: the link counts as up while
+//! scans keep arriving ([`LINK_STALE`]), and the health is unknown.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use super::{LidarDriver, LidarDriverStats, LidarSourceError, SCAN_CHANNEL_DEPTH};
+use super::{LidarDriver, LidarDriverStats, LidarSourceError};
 use crate::lidar_scan::LidarScan;
 
 pub use ados_livox::SdkNetConfig;
@@ -43,22 +47,35 @@ pub fn scan_from_livox(sensor_id: &str, s: ados_livox::Scan) -> LidarScan {
     }
 }
 
+/// A device whose last scan is older than this counts as disconnected.
+pub const LINK_STALE: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Default)]
+struct Counters {
+    /// Scans of the rig's device, delivered or not.
+    frames: AtomicU64,
+    /// Scans handed to the consumer.
+    delivered: AtomicU64,
+    /// Scans dropped on a full channel or from a second device.
+    dropped: AtomicU64,
+    /// Host monotonic ns of the device's last scan; 0 before the first.
+    last_scan_ns: AtomicU64,
+}
+
 /// A running Livox source; dropping it stops the SDK.
 pub struct LivoxSource {
-    /// Scans handed to the consumer.
-    pub delivered: Arc<AtomicU64>,
-    /// Scans dropped on a full channel or from a second device.
-    pub dropped: Arc<AtomicU64>,
+    counters: Arc<Counters>,
     #[cfg(all(feature = "livox-sdk", unix))]
     driver: ados_livox::SdkDriver,
 }
 
 impl LivoxSource {
-    /// Start the SDK; scans arrive on the returned receiver.
+    /// Start the SDK; scans go to `scans`.
     pub fn start(
         cfg: LivoxSourceConfig,
-    ) -> Result<(Self, mpsc::Receiver<LidarScan>), LidarSourceError> {
-        start_impl(cfg)
+        scans: mpsc::Sender<LidarScan>,
+    ) -> Result<Self, LidarSourceError> {
+        start_impl(cfg, scans)
     }
 
     #[cfg(all(feature = "livox-sdk", unix))]
@@ -69,26 +86,39 @@ impl LivoxSource {
 
 impl LidarDriver for LivoxSource {
     fn stats(&self) -> LidarDriverStats {
+        let c = &self.counters;
+        let last = c.last_scan_ns.load(Ordering::Relaxed);
         LidarDriverStats {
-            connected: None,
-            scans: self.delivered.load(Ordering::Relaxed),
-            dropped_scans: self.dropped.load(Ordering::Relaxed),
+            connected: link_fresh(last, crate::clock::mono_ns()),
+            device: None,
+            health: None,
+            revolutions: c.frames.load(Ordering::Relaxed),
+            scans: c.delivered.load(Ordering::Relaxed),
+            dropped_scans: c.dropped.load(Ordering::Relaxed),
             reconnects: 0,
         }
     }
 }
 
+/// Whether a device whose last scan was at `last_ns` (0: none yet) is still
+/// delivering at `now_ns`.
+fn link_fresh(last_ns: u64, now_ns: u64) -> bool {
+    last_ns != 0 && now_ns.saturating_sub(last_ns) < LINK_STALE.as_nanos() as u64
+}
+
 #[cfg(not(all(feature = "livox-sdk", unix)))]
 fn start_impl(
     _cfg: LivoxSourceConfig,
-) -> Result<(LivoxSource, mpsc::Receiver<LidarScan>), LidarSourceError> {
+    _scans: mpsc::Sender<LidarScan>,
+) -> Result<LivoxSource, LidarSourceError> {
     Err(LidarSourceError::Unsupported)
 }
 
 #[cfg(all(feature = "livox-sdk", unix))]
 fn start_impl(
     cfg: LivoxSourceConfig,
-) -> Result<(LivoxSource, mpsc::Receiver<LidarScan>), LidarSourceError> {
+    scans: mpsc::Sender<LidarScan>,
+) -> Result<LivoxSource, LidarSourceError> {
     use ados_livox::{DecoderConfig, DeviceEvent, Event, SdkDriver, SdkDriverConfig};
 
     let io = |path: &std::path::Path| {
@@ -99,22 +129,25 @@ fn start_impl(
     let config_json = cfg.work_dir.join(SDK_CONFIG_FILE);
     std::fs::write(&config_json, cfg.net.to_json().to_string()).map_err(io(&config_json))?;
 
-    let (tx, rx) = mpsc::channel(SCAN_CHANNEL_DEPTH);
-    let delivered = Arc::new(AtomicU64::new(0));
-    let dropped = Arc::new(AtomicU64::new(0));
-    let (sink_delivered, sink_dropped) = (delivered.clone(), dropped.clone());
+    let counters = Arc::new(Counters::default());
+    let c = counters.clone();
     let sensor_id = cfg.sensor_id;
     // One rig sensor is one device: the first handle seen is kept.
     let mut device: Option<u32> = None;
     let sink = move |ev: DeviceEvent| {
         let Event::Scan(scan) = ev.event else { return };
-        if *device.get_or_insert(ev.handle) != ev.handle
-            || tx.try_send(scan_from_livox(&sensor_id, scan)).is_err()
-        {
-            sink_dropped.fetch_add(1, Ordering::Relaxed);
-        } else {
-            sink_delivered.fetch_add(1, Ordering::Relaxed);
+        if *device.get_or_insert(ev.handle) != ev.handle {
+            c.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
         }
+        c.frames.fetch_add(1, Ordering::Relaxed);
+        c.last_scan_ns
+            .store(crate::clock::mono_ns(), Ordering::Relaxed);
+        let counter = match scans.try_send(scan_from_livox(&sensor_id, scan)) {
+            Ok(()) => &c.delivered,
+            Err(_) => &c.dropped,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     };
     let driver = SdkDriver::start(
         SdkDriverConfig {
@@ -129,14 +162,7 @@ fn start_impl(
         },
         sink,
     )?;
-    Ok((
-        LivoxSource {
-            delivered,
-            dropped,
-            driver,
-        },
-        rx,
-    ))
+    Ok(LivoxSource { counters, driver })
 }
 
 #[cfg(test)]
@@ -161,15 +187,27 @@ mod tests {
     }
 
     #[test]
+    fn the_link_is_up_only_while_scans_keep_arriving() {
+        let stale = LINK_STALE.as_nanos() as u64;
+        assert!(!link_fresh(0, 5), "no scan yet");
+        assert!(link_fresh(1_000, 1_000 + stale - 1));
+        assert!(!link_fresh(1_000, 1_000 + stale));
+    }
+
+    #[test]
     fn missing_sdk_fails_closed() {
         let dir = tempfile::tempdir().unwrap();
-        let err = LivoxSource::start(LivoxSourceConfig {
-            sensor_id: "mid360".into(),
-            sdk_library: dir.path().join("liblivox_lidar_sdk_shared.so"),
-            net: SdkNetConfig::new("192.168.1.50"),
-            work_dir: dir.path().join("work"),
-            period_ns: 100_000_000,
-        })
+        let (tx, _rx) = mpsc::channel(1);
+        let err = LivoxSource::start(
+            LivoxSourceConfig {
+                sensor_id: "mid360".into(),
+                sdk_library: dir.path().join("liblivox_lidar_sdk_shared.so"),
+                net: SdkNetConfig::new("192.168.1.50"),
+                work_dir: dir.path().join("work"),
+                period_ns: 100_000_000,
+            },
+            tx,
+        )
         .err()
         .expect("no SDK library here");
         let msg = err.to_string();

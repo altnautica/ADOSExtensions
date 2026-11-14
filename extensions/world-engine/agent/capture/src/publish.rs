@@ -5,14 +5,16 @@
 //! the plugin-envelope ceiling (4 MiB), generous for a compressed keyframe.
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use ados_protocol::frame::{encode_frame, FrameError, PLUGIN_MAX_FRAME};
 use ados_protocol::ipc::IpcBroadcast;
 use world_engine_protocol::atlas::{
-    AtlasEvent, CaptureStatus, KeyframeEnvelope, LiveOccupancy, LivePointCloud, MapStatus,
-    PolarScan, PoseDescriptor, ScanDescriptor, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
-    ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_MAP_STATUS_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
-    PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_POSE_TOPIC, PLUGIN_ATLAS_SCAN_TOPIC,
+    AtlasEvent, CaptureStatus, KeyframeEnvelope, LidarStatus, LiveOccupancy, LivePointCloud,
+    MapStatus, PolarScan, PoseDescriptor, ScanDescriptor, ATLAS_CAPTURE_STATE_TOPIC,
+    ATLAS_KEYFRAME_TOPIC, ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_LIDAR_TOPIC,
+    PLUGIN_ATLAS_MAP_STATUS_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+    PLUGIN_ATLAS_POSE_TOPIC, PLUGIN_ATLAS_SCAN_TOPIC,
 };
 
 /// Per-client outbound queue depth. Keyframes are large and arrive at the
@@ -33,12 +35,16 @@ pub fn encode_event_frame(topic: &str, payload: Vec<u8>) -> anyhow::Result<Vec<u
         .map_err(|e: FrameError| anyhow::anyhow!("frame atlas event ({} bytes): {e}", body.len()))
 }
 
-/// Owns the atlas bus socket and publishes typed events onto it.
+/// Owns the atlas bus socket and publishes typed events onto it. A clone
+/// publishes onto the same bus (one socket, one set of subscribers), so a
+/// run task can publish beside the capture loop; the socket is removed when
+/// the last clone drops.
+#[derive(Clone)]
 pub struct AtlasPublisher {
-    bus: IpcBroadcast,
+    bus: Arc<IpcBroadcast>,
     /// Keyframes published with no subscriber connected — see
     /// [`AtlasPublisher::publish_keyframe`].
-    undelivered_keyframes: AtomicU64,
+    undelivered_keyframes: Arc<AtomicU64>,
 }
 
 impl AtlasPublisher {
@@ -51,8 +57,8 @@ impl AtlasPublisher {
             IpcBroadcast::bind(socket_path, ATLAS_QUEUE_DEPTH, false, None).await?;
         tracing::info!(path = %socket_path, "atlas_bus_listening");
         Ok(Self {
-            bus,
-            undelivered_keyframes: AtomicU64::new(0),
+            bus: Arc::new(bus),
+            undelivered_keyframes: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -154,6 +160,12 @@ impl AtlasPublisher {
             .await;
     }
 
+    /// Publish the configured LiDAR's link status (shared).
+    pub async fn publish_lidar_status(&self, status: &LidarStatus) {
+        self.publish_encoded(PLUGIN_ATLAS_LIDAR_TOPIC, status.to_msgpack())
+            .await;
+    }
+
     /// Publish the capture-session state. The link folds the latest one into
     /// the extension's `status` telemetry, so the capture loop publishes it on
     /// every change and re-publishes it on a fixed cadence while running.
@@ -193,5 +205,42 @@ mod tests {
         assert_eq!(ev.topic, ATLAS_CAPTURE_STATE_TOPIC);
         let back = CaptureStatus::from_msgpack(&ev.payload).unwrap();
         assert_eq!(back, status);
+    }
+
+    #[tokio::test]
+    async fn a_clone_publishes_the_lidar_status_on_the_same_bus() {
+        use tokio::io::AsyncReadExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("atlas.sock");
+        let publisher = AtlasPublisher::bind(path.to_str().unwrap()).await.unwrap();
+        let shared = publisher.clone();
+        let mut sub = tokio::net::UnixStream::connect(&path).await.unwrap();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while publisher.bus.client_count().await == 0 {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "subscriber not accepted"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        let status = LidarStatus {
+            connected: true,
+            scans: 3,
+            ..LidarStatus::default()
+        };
+        shared.publish_lidar_status(&status).await;
+        let mut len = [0u8; 4];
+        sub.read_exact(&mut len).await.unwrap();
+        let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+        sub.read_exact(&mut body).await.unwrap();
+        let ev = AtlasEvent::decode(&body).unwrap();
+        assert_eq!(ev.topic, PLUGIN_ATLAS_LIDAR_TOPIC);
+        assert_eq!(LidarStatus::from_msgpack(&ev.payload).unwrap(), status);
+        // The socket lives until the last publisher goes.
+        drop(publisher);
+        assert!(path.exists());
+        drop(shared);
+        assert!(!path.exists());
     }
 }
