@@ -20,7 +20,10 @@
 //! Time: the FC stamps `time_boot_ms`. The FC-to-host offset is the minimum of
 //! `arrival_mono − fc_time` over the last [`OFFSET_WINDOW`] messages (the
 //! fastest delivery bounds the latency), so a pose is placed at the instant
-//! the FC sampled it, not when the host read it.
+//! the FC sampled it, not when the host read it. The offset falls at once to
+//! a faster delivery and rises no faster than [`MAX_OFFSET_RISE`] of the host
+//! time that passes ([`FcClock`]), so a delivery stall longer than the window
+//! keeps the delayed burst at the FC's own spacing.
 //!
 //! Frames: the EKF works in NED at its origin with an FRD body. The world is
 //! the session ENU frame at the session anchor: position goes NED → ECEF (at
@@ -49,6 +52,13 @@ use crate::nav::fc_flow;
 pub const MAX_PAIR_NS: u64 = 50_000_000;
 /// Messages the FC→host offset is the minimum over.
 pub const OFFSET_WINDOW: usize = 64;
+/// Fastest the FC-to-host offset rises, per unit of host time: 5 %, so an FC
+/// clock (a simulator's) running as slow as 0.95 of the host's is tracked,
+/// while a burst read within microseconds moves it by nothing.
+pub const MAX_OFFSET_RISE: f64 = 0.05;
+/// An FC clock that steps back further than this has restarted: the offset
+/// starts over.
+const FC_RESTART_NS: i128 = 1_000_000_000;
 /// GNSS state changes kept for [`FcEkfPose::gnss_steady_at`].
 const GNSS_CHANGES: usize = 16;
 
@@ -82,12 +92,60 @@ pub type NavSink = Arc<dyn Fn(NavSample) + Send + Sync>;
 /// `GPS_FIX_TYPE_3D_FIX`.
 const FIX_3D: u8 = 3;
 
+/// The FC-to-host clock offset: the least `arrival − fc_time` over the last
+/// [`OFFSET_WINDOW`] messages, taken at once when it falls and followed at
+/// no more than [`MAX_OFFSET_RISE`] of the elapsed host time when it rises.
+///
+/// The bound is what keeps a stalled delivery honest. When the frames stop
+/// for longer than the window (the companion's MAVLink fan-out stalled for
+/// over half a second in a bench flight) and then arrive in one burst, the
+/// window holds only delayed frames, so its minimum is the newest frame's
+/// own delay: a plain minimum stamps each burst frame at its arrival, the
+/// FC's 10 ms `RAW_IMU` spacing collapses to microseconds, and the gyro
+/// integrated from those stamps loses the turn the burst measured.
+#[derive(Debug, Default)]
+struct FcClock {
+    window: VecDeque<i128>,
+    /// The offset in use, the host time it was last moved at and the newest
+    /// FC time.
+    est: Option<(i128, u64, i128)>,
+}
+
+impl FcClock {
+    /// One frame the FC stamped `fc_ns`, read at host `arrival_ns`.
+    fn note(&mut self, fc_ns: i128, arrival_ns: u64) {
+        if self.est.is_some_and(|(_, _, f)| fc_ns + FC_RESTART_NS < f) {
+            self.window.clear();
+            self.est = None;
+        }
+        self.window.push_back(arrival_ns as i128 - fc_ns);
+        while self.window.len() > OFFSET_WINDOW {
+            self.window.pop_front();
+        }
+        let least = *self.window.iter().min().expect("one pushed");
+        self.est = Some(match self.est {
+            Some((o, a, f)) if least > o => {
+                let rise = (arrival_ns.saturating_sub(a) as f64 * MAX_OFFSET_RISE) as i128;
+                ((o + rise).min(least), arrival_ns, fc_ns.max(f))
+            }
+            Some((_, _, f)) => (least, arrival_ns, fc_ns.max(f)),
+            None => (least, arrival_ns, fc_ns),
+        });
+    }
+
+    /// The FC time `fc_ns` on the host clock.
+    fn host_ns(&self, fc_ns: i128) -> Option<u64> {
+        let (offset, _, _) = self.est?;
+        Some((fc_ns + offset).max(0) as u64)
+    }
+}
+
 /// The process-lifetime state the MAVLink subscriptions feed.
 #[derive(Default)]
 struct FeedInner {
     attitude: Option<AttitudeQuaternion>,
     origin: Option<GpsGlobalOrigin>,
-    offsets: VecDeque<i128>,
+    clock: FcClock,
     anchor: Option<GeoAnchor>,
     cov: Option<[f64; POSE_COV_LEN]>,
     /// FC boot ms of the newest attitude or position.
@@ -108,10 +166,9 @@ struct FeedInner {
 }
 
 impl FeedInner {
-    /// The FC time `fc_ns` on the host clock, by the least-delay offset.
+    /// The FC time `fc_ns` on the host clock ([`FcClock`]).
     fn host_ns(&self, fc_ns: i128) -> Option<u64> {
-        let offset = self.offsets.iter().min()?;
-        Some((fc_ns + offset).max(0) as u64)
+        self.clock.host_ns(fc_ns)
     }
 
     /// The newest attitude on the host clock: `(host ns, R_ned_frd)`.
@@ -224,7 +281,7 @@ impl FcEkfPose {
         let mut estimate = None;
         let nav = match msg {
             FcMessage::Attitude(a) => {
-                note_offset(&mut g.offsets, a.time_boot_ms, arrival_ns);
+                g.clock.note(a.time_boot_ms as i128 * 1_000_000, arrival_ns);
                 g.fc_ms = Some(a.time_boot_ms);
                 g.attitude = Some(a);
                 None
@@ -238,10 +295,7 @@ impl FcEkfPose {
                 None
             }
             FcMessage::Imu(s) => {
-                g.offsets.push_back(arrival_ns as i128 - s.time_usec as i128 * 1_000);
-                while g.offsets.len() > OFFSET_WINDOW {
-                    g.offsets.pop_front();
-                }
+                g.clock.note(s.time_usec as i128 * 1_000, arrival_ns);
                 g.host_ns(s.time_usec as i128 * 1_000).map(|t_ns| NavSample::Imu {
                     t_ns,
                     imu: s,
@@ -274,7 +328,7 @@ impl FcEkfPose {
                 None
             }
             FcMessage::Position(p) => {
-                note_offset(&mut g.offsets, p.time_boot_ms, arrival_ns);
+                g.clock.note(p.time_boot_ms as i128 * 1_000_000, arrival_ns);
                 g.fc_ms = Some(p.time_boot_ms);
                 let height = g
                     .host_ns(p.time_boot_ms as i128 * 1_000_000)
@@ -334,13 +388,6 @@ fn pair_estimate(g: &mut FeedInner, p: &LocalPositionNed) -> Option<PoseEstimate
         health: VioHealth::Good,
         sigma_xy_m: None,
     })
-}
-
-fn note_offset(offsets: &mut VecDeque<i128>, time_boot_ms: u32, arrival_ns: u64) {
-    offsets.push_back(arrival_ns as i128 - time_boot_ms as i128 * 1_000_000);
-    while offsets.len() > OFFSET_WINDOW {
-        offsets.pop_front();
-    }
 }
 
 /// `R_world_body` and the body position for an EKF attitude (FRD→NED

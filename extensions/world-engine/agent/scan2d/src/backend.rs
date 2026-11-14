@@ -285,6 +285,7 @@ pub fn optimize(map: &LocalMap, cfg: &Scan2dConfig) -> Trajectory {
                     degeneracy: nd.degeneracy,
                     // Every node is in the optimised graph.
                     sigma_xy_m: SIGMA_MATCHED_M,
+                    heading_ok: true,
                 }
             })
             .collect(),

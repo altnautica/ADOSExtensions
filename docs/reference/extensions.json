@@ -179,7 +179,7 @@
     {
       "id": "com.altnautica.world-engine",
       "name": "ADOS World Engine",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "description": "3D world model from drone flights, reconstructed on a LAN compute node, plus perception offload for drones without an NPU.",
       "category": null,
       "supported_boards": [

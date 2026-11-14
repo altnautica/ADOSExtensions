@@ -457,6 +457,42 @@ All notable changes to the World Engine extension.
   never shows it to the mcap writer, and fails every later write and the
   close with it: the recording ends with the error and the navigation lanes
   keep publishing. 2.2.0.
+- **The planar matcher's heading survives a stalled flight-controller
+  feed.** The FC-to-host clock offset was the least delay over the last 64
+  MAVLink frames. When the frames stopped reaching the companion for longer
+  than that and then arrived in one burst, the window held only delayed
+  frames, so each `RAW_IMU` frame past it was stamped at its own arrival:
+  samples the FC took 10 ms apart landed microseconds apart, the gyro
+  integrated none of the turn they measured, and the pose came out of the
+  stall that turn short (8° in a pilot flight past a wall, whose scans were
+  too sparse to match and rode the gyro) while reporting good. The offset
+  still falls at once to a faster delivery, but rises by at most 5 % of the
+  host time that passes, so a burst keeps the FC's spacing. 2.2.1.
+- **The planar matcher takes a turn the IMU lost from the scans.** Its
+  local refinement is held to the gyro-predicted heading with a weight that
+  outweighs the scan's own cost past about a degree, so when IMU samples
+  went missing through a turn, the refinement walked back from the
+  correlative search's better heading to the prior's and the map grew on in
+  the wrong heading: a lost 8° stayed 8° for good. After a gap of over
+  0.2 s in the IMU the heading is now suspect until a matched scan's best
+  heading lies within 1° of the prior's. While it is suspect, a scan whose
+  best heading lies further off and scores at least 0.1 better than the
+  best pose at the prior's heading, turning slower than 20°/s, disagrees: it
+  is not inserted into the map, and after three such scans in a row, to the
+  same side and within 2° of each other, the refinement is held to the
+  search's heading instead. Replaying the factory wall flight with the IMU
+  dropped through its turn, the heading ends 0.8° off instead of 7.8°.
+  Without a gap the gyro still wins: in a mine tunnel a scan scored 0.19
+  better 4.5° off the true heading for 2.7 s. The matcher also reports
+  whether the integrated gyro vouches for the heading
+  (`PoseOut::heading_ok`): a scan the IMU has not reached yet goes out on
+  the last rate extrapolated, unmatched, and never becomes the next scan's
+  reference; a gap in the IMU leaves the turn across it unchecked; a scan
+  that disagrees as above is unchecked; and a matched heading that moves
+  against the gyro's by more than 2° (plus 0.03 s times the turn rate)
+  within a second is a jump the gyro did not see. Each reports the pose
+  degraded, so external navigation sends it with the degraded yaw noise
+  instead of a confident jump. 2.2.1.
 
 ## [2.0.0]
 

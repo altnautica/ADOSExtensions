@@ -10,19 +10,22 @@
 //!   levelled with the IMU's roll and pitch, deskewed with the IMU's turn
 //!   over the revolution and the recent velocity, matched by correlative
 //!   search plus Gauss-Newton refinement (pulled towards the motion
-//!   prediction by `translation_weight` / `rotation_weight`) into the older
-//!   of two overlapping probability-grid submaps, and inserted into both when
-//!   the motion filter passes. Along a featureless corridor the pose keeps its
-//!   motion prior in the unconstrained direction, the prior's velocity there
-//!   fading to rest, and [`PoseOut::degeneracy`] drops below
-//!   [`Scan2dConfig::degenerate_ratio`]. A measured ground velocity
-//!   ([`LocalSlam::feed_velocity`]: a downward optical-flow sensor scaled by
-//!   its range, levelled with the IMU's roll and pitch) replaces the recent
-//!   poses' velocity in the prior while it is fresh, so along such a
-//!   direction the pose follows the measured motion. Isolated posts and
-//!   uprights count as constraints in both directions, walls only across
-//!   themselves. A planar scan cuts the scene at its own height, so with the
-//!   height fed ([`LocalSlam::feed_height`]) a scan taken while the height
+//!   prediction by `translation_weight` / `rotation_weight`; after a gap in
+//!   the IMU the heading follows the scans instead once three in a row
+//!   clearly disagree with the gyro's) into the older of two overlapping
+//!   probability-grid submaps, and inserted into both when the motion filter
+//!   passes (a scan held to the gyro against such a disagreement is not).
+//!   Along a featureless corridor the pose keeps its motion prior in the
+//!   unconstrained direction, the prior's velocity there fading to rest, and
+//!   [`PoseOut::degeneracy`] drops below [`Scan2dConfig::degenerate_ratio`].
+//!   A measured ground velocity ([`LocalSlam::feed_velocity`]: a downward
+//!   optical-flow sensor scaled by its range, levelled with the IMU's roll
+//!   and pitch) replaces the recent poses' velocity in the prior while it is
+//!   fresh, so along such a direction the pose follows the measured motion.
+//!   Isolated posts and uprights count as constraints in both directions,
+//!   walls only across themselves. A planar scan cuts the scene at its own
+//!   height, so with the height fed ([`LocalSlam::feed_height`]) a scan
+//!   taken while the height
 //!   changes faster than [`Scan2dConfig::max_climb_rate_mps`], and faster
 //!   than the rig moves sideways, rides the motion prior, unmatched and
 //!   unmapped, for the first [`Scan2dConfig::max_unmatched_climb_m`] of the

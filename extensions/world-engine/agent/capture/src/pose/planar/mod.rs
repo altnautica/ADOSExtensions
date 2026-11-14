@@ -25,8 +25,10 @@
 //! `Degraded` while the match's `degeneracy` (translation `eig_min / eig_max`,
 //! reported as `quality().degeneracy_ratio`) is below the matcher's
 //! degenerate ratio (the pose rides a motion prior along the weak direction,
-//! measured velocity or not), or the scan could not be matched (a climb
-//! among them); `Good` otherwise.
+//! measured velocity or not), the scan could not be matched (a climb
+//! among them), or the integrated gyro does not vouch for its heading
+//! (`PoseOut::heading_ok`: the IMU stream stalled, left a gap, or the match
+//! jumped against it); `Good` otherwise.
 
 #[cfg(test)]
 mod tests;
@@ -138,7 +140,7 @@ pub fn t_w_l(p: &PoseOut) -> [f64; 16] {
 pub fn health_of(p: &PoseOut, inserted: usize, degenerate_ratio: f64) -> VioHealth {
     if inserted < MIN_SUBMAP_SCANS {
         VioHealth::Lost
-    } else if p.score <= 0.0 || p.degeneracy < degenerate_ratio {
+    } else if p.score <= 0.0 || p.degeneracy < degenerate_ratio || !p.heading_ok {
         VioHealth::Degraded
     } else {
         VioHealth::Good

@@ -345,6 +345,7 @@ fn health_and_frames_follow_the_matcher() {
         score: 0.7,
         degeneracy: 0.3,
         sigma_xy_m: 0.05,
+        heading_ok: true,
     };
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS - 1, 0.05), VioHealth::Lost);
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS, 0.05), VioHealth::Good);
@@ -355,6 +356,11 @@ fn health_and_frames_follow_the_matcher() {
     assert_eq!(health_of(&corridor, 30, 0.05), VioHealth::Degraded);
     let unmatched = PoseOut { score: 0.0, ..p };
     assert_eq!(health_of(&unmatched, 30, 0.05), VioHealth::Degraded);
+    let unchecked = PoseOut {
+        heading_ok: false,
+        ..p
+    };
+    assert_eq!(health_of(&unchecked, 30, 0.05), VioHealth::Degraded);
     // T_w_l: the planar pose at z 0, yawed +90 degrees.
     let (r, t) = se3::from_mat4(&t_w_l(&p));
     assert_eq!(t, [1.0, 2.0, 0.0]);
@@ -449,4 +455,117 @@ fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
     // 21 up to the first scan, then one every 10 ms to T0 + 490 ms.
     assert_eq!(state.take_imu_samples(), 21 + 49);
     assert_eq!(p.stats().imu_dropped, 0);
+}
+
+/// A bench flight's heading break, replayed: the FC's `RAW_IMU` stopped
+/// reaching the companion for a second while the LiDAR kept scanning, the
+/// drone turned in the second half of that second, and its scans (tilted
+/// past the walls) held too few points to match, so they rode the gyro.
+/// The frames then arrived in one burst. Stamped at their arrival, the
+/// burst's frames past the clock's window collapsed onto one instant, the
+/// gyro integrated none of the turn they measured, and the pose came out of
+/// the stall that turn short while reporting good. Every pose reported good
+/// holds the heading, and the turn is all there after the stall.
+#[test]
+fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
+    use crate::mavlink_msg::{frame_v2, MSG_RAW_IMU};
+    use crate::nav::fc_imu::{self, FeedState};
+    use crate::pose::fc_ekf::FcEkfPose;
+
+    const STEP_NS: u64 = 10_000_000;
+    const STALL: (u64, u64) = (T0 + 3_000_000_000, T0 + 4_000_000_000);
+    /// The turn: 40 degrees/s over the last 0.35 s of the stall, 14 degrees.
+    const TURN: (u64, u64) = (STALL.0 + 650_000_000, STALL.1);
+    let w = 40f64.to_radians();
+    let yaw = move |t: u64| w * (t.clamp(TURN.0, TURN.1) - TURN.0) as f64 * 1e-9;
+    let rate = move |t: u64| if (TURN.0..TURN.1).contains(&t) { w } else { 0.0 };
+    let walls = rect(0.0, 0.0, 6.0, 4.0);
+    // Walking at 0.5 m/s so scans are inserted (a still body inserts one a
+    // second) and the first submap fills before the stall.
+    let body = move |t: u64| [1.0 + 0.5 * (t - T0) as f64 * 1e-9, 2.0, yaw(t)];
+    let p = Arc::new(
+        PlanarLidarPose::spawn(PlanarLidarConfig {
+            rig: rig(),
+            lidar_id: "lidar0".into(),
+            imu_id: fc_imu::FC_IMU_ID.into(),
+        })
+        .expect("spawn"),
+    );
+    let fc = FcEkfPose::new();
+    fc.set_nav_sink(Some(fc_imu::sink(p.clone(), true, Arc::new(FeedState::default()))));
+    // Host time = FC time; a frame normally arrives 1 ms after it is sampled.
+    let raw_imu = |t: u64, arrival: u64| {
+        let mut b = (t / 1_000).to_le_bytes().to_vec();
+        let zgyro = (-rate(t) * 1000.0).round() as i16; // FRD z, mrad/s
+        for v in [0i16, 0, -1000, 0, 0, zgyro, 0, 0, 0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        fc.on_frame(&frame_v2(MSG_RAW_IMU, &b), arrival);
+    };
+    // Every event in arrival order: frames (sampled, arrival) and scans
+    // (start), each scan arriving 5 ms after its last beam.
+    enum Ev {
+        Imu(u64),
+        Scan(u64),
+    }
+    let end = T0 + 6_000_000_000;
+    let mut evs: Vec<(u64, Ev)> = Vec::new();
+    let mut burst = 0;
+    for t in (T0 - 200_000_000..end).step_by(STEP_NS as usize) {
+        let arrival = if (STALL.0..STALL.1).contains(&t) {
+            burst += 1;
+            STALL.1 + burst * 2_000
+        } else {
+            t + 1_000_000
+        };
+        evs.push((arrival, Ev::Imu(t)));
+    }
+    for t in (T0..end - PERIOD_NS).step_by(PERIOD_NS as usize) {
+        evs.push((t + PERIOD_NS + 5_000_000, Ev::Scan(t)));
+    }
+    evs.sort_by_key(|(a, _)| *a);
+    let mut fed = 0u64;
+    let mut est = Vec::new();
+    for (arrival, ev) in evs {
+        match ev {
+            Ev::Imu(t) => raw_imu(t, arrival),
+            Ev::Scan(t) => {
+                let mut s = scan(t, &walls, &body);
+                if (STALL.0 - PERIOD_NS..STALL.1 + PERIOD_NS).contains(&t) {
+                    // Tilted past the walls: a dozen returns, too few to match.
+                    let keep: Vec<usize> = (0..s.points.len()).step_by(30).collect();
+                    s.points = keep.iter().map(|&k| s.points[k]).collect();
+                    s.t_offset_ns = keep.iter().map(|&k| s.t_offset_ns[k]).collect();
+                    s.intensity = keep.iter().map(|&k| s.intensity[k]).collect();
+                }
+                p.feed_lidar(&s);
+                fed += 1;
+            }
+        }
+        // At most one scan waits for the IMU; let the matcher take the rest.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while p.stats().scans_processed + 1 < fed {
+            assert!(Instant::now() < deadline, "the matcher stalled");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        p.drain_new(&mut est);
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while p.stats().scans_processed < fed {
+        assert!(Instant::now() < deadline, "the last scan was not matched");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    p.drain_new(&mut est);
+    assert_eq!(p.stats().scans_dropped, 0);
+    let err = |e: &PoseEstimate| (e.r[3].atan2(e.r[0]) - yaw(e.t_ns)).sin().asin().to_degrees();
+    let mut good_after = 0;
+    for e in &est {
+        if e.health == VioHealth::Good {
+            assert!(err(e).abs() < 1.5, "good pose at t {} heading err {:.2}°", e.t_ns, err(e));
+            good_after += usize::from(e.t_ns > STALL.1 + PERIOD_NS);
+        }
+    }
+    assert!(good_after >= 10, "{good_after} good poses after the stall");
+    let last = est.last().expect("poses");
+    assert!(err(last).abs() < 1.0, "heading err {:.2}° after the stall", err(last));
 }

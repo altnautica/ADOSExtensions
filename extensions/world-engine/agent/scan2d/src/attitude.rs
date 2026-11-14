@@ -52,6 +52,10 @@ const MAX_LEVEL_TILT_RAD: f64 = 1.0;
 /// Samples further apart than this restart the integration instead of
 /// bridging the gap.
 const MAX_GAP_S: f64 = 0.5;
+/// Samples further apart than this leave the rotation between them
+/// unmeasured ([`Attitude::measured_since`]): the integration bridges the gap
+/// with the later sample's rate, a guess, up to [`MAX_GAP_S`].
+pub const MAX_SAMPLE_GAP_NS: u64 = 200_000_000;
 /// How long the heading history reaches back.
 const HISTORY_NS: u64 = 2_000_000_000;
 /// Time constant of the gyro z-bias estimate: long against a scan's match
@@ -81,6 +85,9 @@ pub struct Attitude {
     history: VecDeque<(u64, f64)>,
     /// Estimated gyro bias about the LiDAR's z axis, rad/s.
     bias_z: f64,
+    /// Time of the sample that ended the latest gap wider than
+    /// [`MAX_SAMPLE_GAP_NS`] (or the first sample).
+    gap_end_ns: Option<u64>,
 }
 
 impl Attitude {
@@ -101,6 +108,7 @@ impl Attitude {
             heading: 0.0,
             history: VecDeque::new(),
             bias_z: 0.0,
+            gap_end_ns: None,
         }
     }
 
@@ -109,11 +117,25 @@ impl Attitude {
         self.last_t_ns.is_some()
     }
 
+    /// Time of the newest sample, `None` before any.
+    pub fn newest_ns(&self) -> Option<u64> {
+        self.last_t_ns
+    }
+
+    /// Whether the samples measured the rotation from `t0_ns` on: no gap
+    /// wider than [`MAX_SAMPLE_GAP_NS`] has ended after it, so the heading
+    /// change from `t0_ns` to any time up to [`Self::newest_ns`] is
+    /// integrated gyro, not a guess across a gap.
+    pub fn measured_since(&self, t0_ns: u64) -> bool {
+        self.gap_end_ns.is_some_and(|g| g <= t0_ns)
+    }
+
     pub fn update(&mut self, s: &ImuSample) {
         let w = self.r_lidar_imu * Vector3::from(s.gyro) - Vector3::new(0.0, 0.0, self.bias_z);
         let a = self.r_lidar_imu * Vector3::from(s.accel);
         let Some(last) = self.last_t_ns else {
             self.last_t_ns = Some(s.t_ns);
+            self.gap_end_ns = Some(s.t_ns);
             if a.norm() > 1e-6 {
                 let roll = a.y.atan2(a.z);
                 let pitch = (-a.x).atan2(a.y.hypot(a.z));
@@ -127,7 +149,11 @@ impl Attitude {
             return;
         }
         self.last_t_ns = Some(s.t_ns);
-        let dt = (s.t_ns - last) as f64 * 1e-9;
+        let dt_ns = s.t_ns - last;
+        if dt_ns > MAX_SAMPLE_GAP_NS {
+            self.gap_end_ns = Some(s.t_ns);
+        }
+        let dt = dt_ns as f64 * 1e-9;
         if dt > MAX_GAP_S {
             self.heading_rate = self.heading_rate_of(&w);
             self.record(s.t_ns);
