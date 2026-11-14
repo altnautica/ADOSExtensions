@@ -363,6 +363,9 @@ mod tests {
             camera_id: "front".into(),
             frame_id: 7,
             ts_ms: 1_700_000_000_000,
+            ts_sensor_ms: None,
+            hfov_deg: Some(87.0),
+            mount_pitch_deg: Some(-15.0),
             frame_width: 1280,
             frame_height: 720,
             detections: vec![Detection {

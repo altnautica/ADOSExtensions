@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_protocol::framebus::DetectionBatch;
+use ados_protocol::framebus::{DetectionBatch, FrameDescriptor};
 use ados_protocol::node_info::NodeInfo;
 use ados_protocol::plugin_mdns::DiscoveredService;
 use ados_sdk::{ClientError, OffloadAdvertisement, PluginContext};
@@ -17,6 +17,8 @@ use rmpv::Value;
 pub type AuxCallback = Arc<dyn Fn(u8, Vec<u8>) + Send + Sync>;
 /// A callback for one vehicle-state snapshot (the agent's state map).
 pub type StateCallback = Arc<dyn Fn(Value) + Send + Sync>;
+/// A callback for one camera frame's descriptor (no pixels).
+pub type DescriptorCallback = Arc<dyn Fn(FrameDescriptor) + Send + Sync>;
 
 /// A WHEP answer the agent relayed: the SDP and the opaque session location
 /// to close it with.
@@ -54,6 +56,14 @@ pub trait Host: Send + Sync + 'static {
     async fn aux_subscribe(&self, callback: AuxCallback) -> Result<(), ClientError>;
     /// `vision.publish_detection` (cap `vision.detection.publish`).
     async fn publish_detection(&self, batch: &DetectionBatch) -> Result<Value, ClientError>;
+    /// `vision.subscribe_frames` (cap `vision.frame.read`) for `camera_id`,
+    /// delivering each frame's descriptor only: the pixels are never read
+    /// from the ring. A frame subscription lasts for the process.
+    async fn subscribe_frame_descriptors(
+        &self,
+        camera_id: &str,
+        callback: DescriptorCallback,
+    ) -> Result<(), ClientError>;
     /// `offload.advertise` (cap `vision.offload.advertise`).
     async fn advertise_offload(&self, advert: &OffloadAdvertisement) -> Result<Value, ClientError>;
     /// `node.info` (cap `node.info.read`): the board, ground-station role and
@@ -126,6 +136,33 @@ impl Host for PluginContext {
 
     async fn publish_detection(&self, batch: &DetectionBatch) -> Result<Value, ClientError> {
         self.vision.publish_detection(batch).await
+    }
+
+    async fn subscribe_frame_descriptors(
+        &self,
+        camera_id: &str,
+        callback: DescriptorCallback,
+    ) -> Result<(), ClientError> {
+        let want = camera_id.to_string();
+        let ipc = self.client();
+        // The `vision.deliver` push carries the descriptor as a `descriptor`
+        // binary; decoding it alone leaves the shared-memory ring untouched.
+        ipc.register_vision_callback(
+            Some(camera_id),
+            Arc::new(move |args: Value| {
+                let Some(blob) = reply_field(&args, "descriptor").and_then(Value::as_slice) else {
+                    return;
+                };
+                if let Ok(d) = FrameDescriptor::from_msgpack(blob) {
+                    if d.camera_id == want {
+                        callback(d);
+                    }
+                }
+            }),
+        );
+        ipc.vision_subscribe_frames(Some(camera_id))
+            .await
+            .map(|_| ())
     }
 
     async fn advertise_offload(&self, advert: &OffloadAdvertisement) -> Result<Value, ClientError> {

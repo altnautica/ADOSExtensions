@@ -143,6 +143,8 @@ mod tests {
                 slot: 0,
                 seq: 1,
                 byte_len: pixels.len() as u32,
+                hfov_deg: None,
+                mount_pitch_deg: None,
             },
             pixels,
         }

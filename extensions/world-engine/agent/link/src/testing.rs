@@ -34,6 +34,8 @@ pub struct FakeHost {
     pub aux_open_reply: Mutex<Result<Value, String>>,
     pub aux_sent: Mutex<Vec<(u8, Vec<u8>)>>,
     pub aux_callback: Mutex<Option<AuxCallback>>,
+    /// The frame-descriptor subscriptions, `(camera, callback)` in order.
+    pub descriptor_callbacks: Mutex<Vec<(String, crate::host::DescriptorCallback)>>,
     /// The vehicle-state callback the link subscribed.
     pub state_callback: Mutex<Option<crate::host::StateCallback>>,
     /// `None` answers `node.info` with an error.
@@ -69,6 +71,7 @@ impl FakeHost {
             ]))),
             aux_sent: Mutex::default(),
             aux_callback: Mutex::default(),
+            descriptor_callbacks: Mutex::default(),
             state_callback: Mutex::default(),
             node_info: Mutex::default(),
             mdns: Mutex::default(),
@@ -230,6 +233,18 @@ impl Host for FakeHost {
 
     async fn publish_detection(&self, _batch: &DetectionBatch) -> Result<Value, ClientError> {
         Ok(Self::ok())
+    }
+
+    async fn subscribe_frame_descriptors(
+        &self,
+        camera_id: &str,
+        callback: crate::host::DescriptorCallback,
+    ) -> Result<(), ClientError> {
+        self.descriptor_callbacks
+            .lock()
+            .push((camera_id.to_string(), callback));
+        self.touch();
+        Ok(())
     }
 
     async fn advertise_offload(

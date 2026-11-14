@@ -26,6 +26,28 @@ use ados_protocol::framebus::{
 };
 use world_engine_protocol::offload::OffloadDetectionBatch;
 
+/// The offloaded camera's geometry as the agent's camera roster declares it
+/// (`cameras[].fov_deg`, `cameras[].mount_pitch_deg` in the roster's sign),
+/// read from the vision engine's frame descriptors for that camera. Stamped on
+/// every republished batch so a consumer (Follow-Me's bearing and range)
+/// projects an offloaded box exactly as it would a local detector's. A field the
+/// roster leaves unset, or a camera with no frame seen yet, stays `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct CameraGeometry {
+    pub hfov_deg: Option<f32>,
+    pub mount_pitch_deg: Option<f32>,
+}
+
+impl CameraGeometry {
+    /// The geometry a frame descriptor carries.
+    pub fn of_frame(d: &framebus::FrameDescriptor) -> Self {
+        Self {
+            hfov_deg: d.hfov_deg,
+            mount_pitch_deg: d.mount_pitch_deg,
+        }
+    }
+}
+
 /// Drives the offload safety gate and converts returned batches into the vision
 /// bus's `DetectionBatch`. Pure logic (no I/O); the publisher does the socket
 /// write.
@@ -37,6 +59,8 @@ pub struct OffloadReturnBridge {
     /// The model id stamped on the published batch (identifies the offload source
     /// on the bus / in the overlay).
     model_id: String,
+    /// The offloaded camera's latest known geometry, stamped on each batch.
+    geometry: CameraGeometry,
 }
 
 impl OffloadReturnBridge {
@@ -53,7 +77,13 @@ impl OffloadReturnBridge {
             session: OffloadSession::new(mode, target_budget_ms, pose_budget_ms),
             designated_track: None,
             model_id: model_id.into(),
+            geometry: CameraGeometry::default(),
         }
+    }
+
+    /// The offloaded camera's geometry for the batches ingested from now on.
+    pub fn set_geometry(&mut self, geometry: CameraGeometry) {
+        self.geometry = geometry;
     }
 
     /// Designate a track to follow (the operator's click-to-track), acquiring the
@@ -105,6 +135,11 @@ impl OffloadReturnBridge {
             // The per-session frame sequence is the frame identity on the bus.
             frame_id: batch.seq,
             ts_ms: batch.ts_ms,
+            // The node pulls the RTSP feed, whose frames carry no simulation
+            // stamp: a consumer pairs the batch by `ts_ms`.
+            ts_sensor_ms: None,
+            hfov_deg: self.geometry.hfov_deg,
+            mount_pitch_deg: self.geometry.mount_pitch_deg,
             // The pixel space the boxes above were denormalized into — the
             // offload session's frame size — so the GCS overlay scales to it
             // instead of guessing (fixes offloaded boxes landing off the target).
@@ -209,6 +244,21 @@ mod tests {
         assert_eq!(b.width, 640.0);
         assert_eq!(b.height, 360.0);
         assert_eq!(db.detections[0].class_label, "person");
+    }
+
+    #[test]
+    fn the_offloaded_camera_geometry_rides_every_batch() {
+        let mut bridge = OffloadReturnBridge::new(OffloadMode::VisionOnly, 500, 500, "offload");
+        let (db, _) = bridge.ingest(&off_batch(Some(1)), 1000);
+        assert_eq!((db.hfov_deg, db.mount_pitch_deg), (None, None));
+        bridge.set_geometry(CameraGeometry {
+            hfov_deg: Some(87.0),
+            mount_pitch_deg: Some(-15.0),
+        });
+        let (db, _) = bridge.ingest(&off_batch(Some(1)), 1010);
+        assert_eq!(db.hfov_deg, Some(87.0));
+        assert_eq!(db.mount_pitch_deg, Some(-15.0));
+        assert_eq!(db.ts_sensor_ms, None);
     }
 
     #[test]

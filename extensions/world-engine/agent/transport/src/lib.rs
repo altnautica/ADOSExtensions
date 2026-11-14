@@ -68,7 +68,7 @@ pub use loopback::LoopbackBearer;
 pub use mdns::{
     compute_advert_txt, pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE, DEVICE_ID_TXT,
 };
-pub use offload_bridge::{DetectionPublisher, OffloadReturnBridge};
+pub use offload_bridge::{CameraGeometry, DetectionPublisher, OffloadReturnBridge};
 pub use offload_client::stream_offload_detections;
 pub use offload_orchestrator::{
     run_offload_orchestrator, DetectionTee, NodeEndpoint, OrchestratorConfig,

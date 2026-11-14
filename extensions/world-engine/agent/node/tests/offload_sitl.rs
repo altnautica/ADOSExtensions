@@ -242,6 +242,11 @@ async fn the_orchestrator_drives_the_offload_loop_end_to_end() {
         model_id: "offload".into(),
         publisher,
         detection_tee: None,
+        camera_geometry: tokio::sync::watch::channel(world_engine_transport::CameraGeometry {
+            hfov_deg: Some(87.0),
+            mount_pitch_deg: Some(-15.0),
+        })
+        .1,
     };
     // The node is resolved up front (the SITL seam skips mDNS and points the
     // orchestrator at the mock node's base URL). Submit + WS + bridge are real.
@@ -323,6 +328,9 @@ async fn the_orchestrator_drives_the_offload_loop_end_to_end() {
             "the batch seq is the frame id on the bus"
         );
         assert_eq!(b.detections.len(), 1);
+        // The offloaded camera's roster geometry rides every batch.
+        assert_eq!(b.hfov_deg, Some(87.0));
+        assert_eq!(b.mount_pitch_deg, Some(-15.0));
         // The normalized [0.4,0.4,0.2,0.2] box denormalized to 64x48 by the bridge.
         let bb = b.detections[0].bbox.as_ref().unwrap();
         assert!(

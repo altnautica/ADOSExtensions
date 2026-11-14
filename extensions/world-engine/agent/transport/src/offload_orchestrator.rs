@@ -31,10 +31,10 @@ use std::time::Duration;
 use ados_offload::OffloadMode;
 use ados_protocol::framebus::DetectionBatch;
 use anyhow::{anyhow, Result};
-use tokio::sync::{mpsc, Notify};
+use tokio::sync::{mpsc, watch, Notify};
 use world_engine_protocol::offload::OffloadDetectionBatch;
 
-use crate::offload_bridge::{DetectionPublisher, OffloadReturnBridge};
+use crate::offload_bridge::{CameraGeometry, DetectionPublisher, OffloadReturnBridge};
 use crate::offload_client::stream_offload_detections;
 use crate::ComputeClient;
 use world_engine_protocol::compute::ComputeJobKind;
@@ -97,6 +97,9 @@ pub struct OrchestratorConfig {
     /// the local vision bus (the cloud-relay detection publisher). `None` on a
     /// LAN-only agent (local stays local, no cloud round-trip).
     pub detection_tee: Option<Arc<dyn DetectionTee>>,
+    /// The offloaded camera's geometry, as its frame descriptors carry it;
+    /// each returned batch is stamped with the value current when it lands.
+    pub camera_geometry: watch::Receiver<CameraGeometry>,
 }
 
 impl OrchestratorConfig {
@@ -124,6 +127,7 @@ impl OrchestratorConfig {
             model_id: "offload".into(),
             publisher,
             detection_tee: None,
+            camera_geometry: watch::channel(CameraGeometry::default()).1,
         }
     }
 
@@ -132,6 +136,13 @@ impl OrchestratorConfig {
     /// LAN-only.
     pub fn with_detection_tee(mut self, tee: Option<Arc<dyn DetectionTee>>) -> Self {
         self.detection_tee = tee;
+        self
+    }
+
+    /// Follow the offloaded camera's geometry (its roster field of view and
+    /// mount pitch) so every republished batch carries it.
+    pub fn with_camera_geometry(mut self, geometry: watch::Receiver<CameraGeometry>) -> Self {
+        self.camera_geometry = geometry;
         self
     }
 }
@@ -252,6 +263,7 @@ async fn drain_into_bridge(
         tokio::select! {
             maybe = det_rx.recv() => match maybe {
                 Some(batch) => {
+                    bridge.set_geometry(*cfg.camera_geometry.borrow());
                     let (db, _status) = bridge.ingest(&batch, now_ms());
                     // A publish fault is logged and the next batch is tried
                     // again; a returned box is never dropped silently past a log.
@@ -334,5 +346,50 @@ mod tests {
         assert_eq!(cfg.mode, OffloadMode::VisionOnly);
         assert_eq!(cfg.model_id, "offload");
         assert_eq!(cfg.pose_budget_ms, 1000);
+    }
+
+    #[tokio::test]
+    async fn a_returned_batch_carries_the_camera_geometry_current_when_it_lands() {
+        struct Keep(std::sync::Mutex<Vec<DetectionBatch>>);
+        #[async_trait::async_trait]
+        impl DetectionPublisher for Keep {
+            async fn publish(&self, batch: &DetectionBatch) -> Result<()> {
+                self.0.lock().unwrap().push(batch.clone());
+                Ok(())
+            }
+        }
+        let keep = Arc::new(Keep(std::sync::Mutex::new(Vec::new())));
+        let (geo_tx, geo_rx) = watch::channel(CameraGeometry::default());
+        let cfg = OrchestratorConfig::vision_only(
+            "s1",
+            "front",
+            "rtsp://localhost:8554/main",
+            1280,
+            720,
+            1000,
+            keep.clone(),
+        )
+        .with_camera_geometry(geo_rx);
+        let (tx, rx) = mpsc::channel(4);
+        let batch = |seq| OffloadDetectionBatch::new("s1", "front", seq, 1000, 1280, 720, vec![]);
+        tx.send(batch(1)).await.unwrap();
+        let drain = tokio::spawn(async move {
+            drain_into_bridge(&cfg, rx, Arc::new(Notify::new())).await;
+        });
+        while keep.0.lock().unwrap().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        // The first frame descriptor arrives after the session opened.
+        geo_tx.send_replace(CameraGeometry {
+            hfov_deg: Some(62.2),
+            mount_pitch_deg: Some(-90.0),
+        });
+        tx.send(batch(2)).await.unwrap();
+        drop(tx);
+        drain.await.unwrap();
+        let got = keep.0.lock().unwrap();
+        assert_eq!((got[0].hfov_deg, got[0].mount_pitch_deg), (None, None));
+        assert_eq!(got[1].hfov_deg, Some(62.2));
+        assert_eq!(got[1].mount_pitch_deg, Some(-90.0));
     }
 }

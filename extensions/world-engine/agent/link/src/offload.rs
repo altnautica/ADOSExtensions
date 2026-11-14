@@ -33,7 +33,7 @@ use ados_sdk::OffloadAdvertisement;
 use tokio::sync::{watch, Notify};
 use tokio::task::JoinHandle;
 use world_engine_transport::{
-    run_offload_orchestrator, DetectionTee, NodeEndpoint, OrchestratorConfig,
+    run_offload_orchestrator, CameraGeometry, DetectionTee, NodeEndpoint, OrchestratorConfig,
 };
 
 use crate::compute_node;
@@ -168,6 +168,9 @@ impl Reconciler {
         let mut last_search: Option<Instant> = None;
         // Built on the first session and reused: one drain task for the process.
         let mut tee: Option<Arc<CloudDetectionTee>> = None;
+        // The offloaded camera's geometry from its frame descriptors, followed
+        // from the first session on (a frame subscription lasts the process).
+        let mut geometry: Option<watch::Receiver<CameraGeometry>> = None;
 
         loop {
             tokio::select! {
@@ -225,6 +228,19 @@ impl Reconciler {
                 Arc::new(SdkDetectionPublisher::new(self.host.clone())),
             )
             .with_detection_tee(Some(tee as Arc<dyn DetectionTee>));
+            if geometry.is_none() {
+                match follow_camera_geometry(self.host.as_ref(), CAMERA_ID).await {
+                    Ok(rx) => geometry = Some(rx),
+                    Err(e) => tracing::warn!(
+                        error = %e,
+                        "offload: no frame descriptors for the camera geometry; batches carry none"
+                    ),
+                }
+            }
+            let cfg = match &geometry {
+                Some(rx) => cfg.with_camera_geometry(rx.clone()),
+                None => cfg,
+            };
             let endpoint = NodeEndpoint {
                 base_url: target.base_url,
                 credential: target.credential,
@@ -306,6 +322,29 @@ impl Reconciler {
     }
 }
 
+/// Follow `camera`'s geometry (its roster field of view and mount pitch) from
+/// the vision engine's frame descriptors. The receiver holds the newest frame's
+/// values, `None` fields until the first frame arrives.
+async fn follow_camera_geometry(
+    host: &dyn Host,
+    camera: &str,
+) -> Result<watch::Receiver<CameraGeometry>, ados_sdk::ClientError> {
+    let (tx, rx) = watch::channel(CameraGeometry::default());
+    host.subscribe_frame_descriptors(
+        camera,
+        Arc::new(move |d| {
+            let g = CameraGeometry::of_frame(&d);
+            tx.send_if_modified(|cur| {
+                let changed = *cur != g;
+                *cur = g;
+                changed
+            });
+        }),
+    )
+    .await?;
+    Ok(rx)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +393,45 @@ mod tests {
         );
         // An unresolvable host is an error (never a fabricated reach).
         assert!(local_ip_towards("not a host", 80).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_offloaded_cameras_frame_descriptors_set_the_batch_geometry() {
+        use ados_protocol::framebus::{
+            FrameDescriptor, FrameFormat, FRAMEBUS_DESCRIPTOR_VERSION, TIMEBASE_HOST,
+        };
+        let host = FakeHost::new();
+        let rx = follow_camera_geometry(host.as_ref(), CAMERA_ID)
+            .await
+            .unwrap();
+        let (camera, callback) = host.descriptor_callbacks.lock()[0].clone();
+        assert_eq!(camera, CAMERA_ID);
+        assert_eq!(*rx.borrow(), CameraGeometry::default());
+        callback(FrameDescriptor {
+            v: FRAMEBUS_DESCRIPTOR_VERSION,
+            camera_id: CAMERA_ID.into(),
+            frame_id: 1,
+            ts_ns: 0,
+            ts_sensor_ns: None,
+            exposure_ns: None,
+            trigger_seq: None,
+            timebase: TIMEBASE_HOST,
+            width: 1280,
+            height: 720,
+            format: FrameFormat::Rgb24,
+            shm_name: "ados-vision-front".into(),
+            slot: 0,
+            seq: 1,
+            byte_len: 0,
+            hfov_deg: Some(87.0),
+            mount_pitch_deg: Some(-15.0),
+        });
+        assert_eq!(
+            *rx.borrow(),
+            CameraGeometry {
+                hfov_deg: Some(87.0),
+                mount_pitch_deg: Some(-15.0),
+            }
+        );
     }
 }
