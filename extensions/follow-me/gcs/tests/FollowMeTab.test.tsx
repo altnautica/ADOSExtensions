@@ -192,6 +192,28 @@ describe("FollowMeTab", () => {
     expect(screen.queryByTestId("fm-prompt-resume")).toBeNull();
   });
 
+  it("offers no resume in strict re-acquire, where a resumed search gives up at once", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{ ...waiting, holdReason: "awaiting-operator", reacquireMode: "strict" }}
+      />,
+    );
+    expect(screen.getByTestId("fm-prompt")).toBeTruthy();
+    expect(screen.queryByTestId("fm-prompt-resume")).toBeNull();
+  });
+
+  it("keeps the prompt through a camera loss, without resume", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...waiting, holdReason: "camera-lost" }} />);
+    expect(screen.getByTestId("fm-prompt-body").textContent).toBe(
+      "The follow camera stopped sending frames. The follow holds at the last point.",
+    );
+    expect(screen.queryByTestId("fm-prompt-resume")).toBeNull();
+    expect(screen.getByTestId("fm-prompt-stop")).toBeTruthy();
+  });
+
   it("renders specs and live metrics with the generic detector", () => {
     const h = harnessCtx();
     render(<FollowMeTab ctx={h.ctx} followOverride={idleFollow} />);

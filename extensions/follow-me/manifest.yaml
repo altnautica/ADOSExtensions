@@ -74,8 +74,9 @@ risk: high
 
 compatibility:
   # The pilot's vantage goal and its goal status (flight.goal.status) arrive
-  # in 0.112.1.
-  ados_version: ">=0.112.1"
+  # in 0.112.1; the cockpit, kiosk, dashboard and terminal UI show the
+  # recovery phases and the waiting prompt from 0.115.0.
+  ados_version: ">=0.115.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 
@@ -320,6 +321,9 @@ gcs:
           label: "settings.gimbalPoint"
           group: "settings.title"
           order: 30
+      # The follow camera's geometry for an agent that does not report it on
+      # the detection batches. The agent's camera roster wins when present;
+      # unset falls back to the built-in reference camera (87°, 15° down).
       - key: camera_hfov_deg
         binding: plugin.config
         schema:
@@ -327,16 +331,12 @@ gcs:
           minimum: 30
           maximum: 160
           step: 1
-          default: 70
         ui:
           widget: number
           label: "settings.cameraHfov"
           group: "settings.title"
           order: 40
-      # Fixed downward tilt of the designate camera below the horizon. A
-      # forward camera needs a positive tilt for the image-to-ground
-      # projection to intersect; 90 is straight down. The default is a modest
-      # forward-down angle so a fresh install can resolve a ground point.
+      # Downward tilt below the horizon; 90 is straight down.
       - key: mount_pitch_deg
         binding: plugin.config
         schema:
@@ -344,9 +344,8 @@ gcs:
           minimum: 0
           maximum: 90
           step: 1
-          default: 30
         ui:
-          widget: range
+          widget: number
           label: "settings.mountPitch"
           group: "settings.title"
           order: 42

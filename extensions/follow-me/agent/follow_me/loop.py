@@ -58,8 +58,10 @@ from follow_me.state import (
     HOLD_NO_RANGE,
     HOLD_POSE_STALE,
     LOCK_LOCKED,
+    LOCK_LOST,
     LOCK_UNCERTAIN,
     PHASE_ACQUIRING,
+    PHASE_AWAIT_OPERATOR,
     PHASE_FOLLOWING,
     PHASE_HOLDING,
     PHASE_IDLE,
@@ -216,7 +218,9 @@ class FollowLoopMixin:
         """The follow camera's batches stopped: hold, and the estimate stops
         where it is rather than carry its velocity on. A recovery is kept, so
         the tracks it gave up on stay excluded and a wait for the operator
-        still waits when the frames return."""
+        still waits when the frames return; while it waits, the hold stays at
+        its latched point and the phase stays the wait, so the operator's
+        prompt stays up."""
         if not self._camera_lost:
             self._camera_lost = True
             self._ctx.log.warning(
@@ -224,6 +228,18 @@ class FollowLoopMixin:
             )
         self._uncertain_since_s = None
         self._filter.stop(now)
+        rec = self._recovery
+        if rec is not None and rec.phase == PHASE_AWAIT_OPERATOR:
+            await self._hold(
+                cfg,
+                now,
+                phase=PHASE_AWAIT_OPERATOR,
+                hold_reason=HOLD_CAMERA_LOST,
+                lock_state=LOCK_LOST,
+                hold_ne=rec.hold_ne,
+                hold_d=rec.hold_d,
+            )
+            return
         locked_before = self._tracker.has_lock or self._filter.initialized
         await self._hold(
             cfg,

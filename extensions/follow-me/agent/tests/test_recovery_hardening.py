@@ -98,17 +98,50 @@ async def test_a_camera_loss_while_waiting_leaves_the_operator_in_charge(monkeyp
     await _follow_one(plugin, clock)
     await _unsure_for(plugin, clock, 3.2)
     assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
-    # The follow camera goes silent (no batch at all): the follow holds for
-    # the camera.
+    held = _state_events(ctx)[-1]["hold_ne"]
+    # The follow camera goes silent (no batch at all) while the vehicle
+    # drifts 6 m: the follow holds for the camera at the latched point and
+    # still waits for the operator.
     clock.advance(2.5)
     _fresh(plugin)
+    plugin._pose.north_m += 6.0
     await plugin._tick()
-    assert _state_events(ctx)[-1]["hold_reason"] == "camera-lost"
+    st = _state_events(ctx)[-1]
+    assert st["hold_reason"] == "camera-lost"
+    assert st["phase"] == PHASE_AWAIT_OPERATOR
+    assert st["hold_ne"] == held
+    assert [ctx.flight.setpoints[-1]["n"], ctx.flight.setpoints[-1]["e"]] == held
     # Frames come back with the engine calling the lost track locked again:
     # the follow still waits for the operator.
     await _engine_reports(plugin, clock, 7, LOCK_LOCKED)
-    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    st = _state_events(ctx)[-1]
+    assert st["phase"] == PHASE_AWAIT_OPERATOR
+    assert st["hold_reason"] != "camera-lost"
     assert plugin._tracker.has_lock is False
+
+
+@pytest.mark.asyncio
+async def test_a_camera_loss_mid_search_holds_and_the_search_goes_on_after(monkeypatch: Any) -> None:
+    ctx = _Ctx(config=_cfg(search_budget_s=20.0))
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+    await _step(plugin, clock, 1.0)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_PREDICTING
+    # Silence past the start grace and the camera-lost window.
+    for _ in range(6):
+        clock.advance(1.0)
+        _fresh(plugin)
+        await plugin._tick()
+    st = _state_events(ctx)[-1]
+    assert st["hold_reason"] == "camera-lost" and st["commanding"] is False
+    # Frames come back: the recovery picks up where it was, never a follow.
+    await _step(plugin, clock, 0.1)
+    assert _state_events(ctx)[-1]["phase"] in (
+        PHASE_PREDICTING,
+        PHASE_REPOSITIONING,
+        PHASE_SEARCHING,
+    )
 
 
 @pytest.mark.asyncio

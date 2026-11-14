@@ -94,7 +94,8 @@ every inferred frame, an empty one too, so `camera-lost` means no batch from
 the follow camera for more than 2 s (after the first 5 s of an activation).
 It stops the subject estimate and takes precedence over the lock reasons. A
 recovery is kept through it, so a follow waiting for the operator still
-waits when the frames return.
+waits when the frames return; meanwhile it keeps the phase
+`holding-await-operator` and holds at the latched point.
 
 ### Pilot lease, sticks and stopping
 

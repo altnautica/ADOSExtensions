@@ -6,8 +6,9 @@ uses independent semantic versioning per extension.
 
 ## [0.5.0] - Unreleased
 
-Needs ADOS agent 0.112.1 or later, for the pilot's vantage goal and its
-goal status.
+Needs ADOS agent 0.115.0 or later: the pilot's vantage goal and its goal
+status, and the cockpit, kiosk, dashboard and terminal UI that show the
+recovery phases and the waiting prompt.
 
 ### Changed
 
@@ -51,7 +52,11 @@ goal status.
 - The `camera-lost` hold no longer ends a recovery. The tracks it gave up on
   stay excluded, and a follow waiting for the operator still waits when the
   frames return, instead of locking onto the lost track the engine reports
-  again.
+  again. While it waits the hold stays at the latched point, the phase stays
+  `holding-await-operator` with the reason `camera-lost`, and the prompt
+  offers no resume until the frames return.
+- The follow tab offers no resume in Strict mode, where a resumed search
+  gives up again at once.
 
 ### Added
 

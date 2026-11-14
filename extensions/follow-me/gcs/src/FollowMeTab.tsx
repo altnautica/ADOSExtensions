@@ -166,8 +166,10 @@ function AwaitPrompt({
     });
   };
   const reason = follow.holdReason ?? "awaiting-operator";
-  // With no prediction left there is nothing to resume from.
-  const canResume = reason !== "no-range";
+  // Nothing to resume from with no prediction left or no frames to search
+  // in, and in strict re-acquire a resumed search gives up again at once.
+  const canResume =
+    reason !== "no-range" && reason !== "camera-lost" && follow.reacquireMode !== "strict";
   const button: CSSProperties = {
     font: "inherit",
     fontSize: "0.8rem",

@@ -149,6 +149,16 @@ describe("manifest config defaults", () => {
   it("follows at 6 m, where a walker is still tall enough in frame to detect", () => {
     expect(manifestParamDefault(readFileSync(manifestPath, "utf8"), "follow_distance_m")).toBe("6");
   });
+
+  it("leaves the camera geometry unset, so the camera roster or the reference camera applies", () => {
+    const text = readFileSync(manifestPath, "utf8");
+    for (const key of ["camera_hfov_deg", "mount_pitch_deg"]) {
+      expect(manifestParamDefault(text, key), key).toBeUndefined();
+      const block = text.slice(text.indexOf(`- key: ${key}\n`));
+      const widget = /widget: (\S+)/.exec(block)?.[1];
+      expect(widget, key).toBe("number");
+    }
+  });
 });
 
 describe("manifest 0.5 release", () => {
@@ -169,8 +179,8 @@ describe("manifest 0.5 release", () => {
     expect(/^version: "([^"]+)"/m.exec(text)?.[1]).toBe("0.5.0");
   });
 
-  it("needs the agent with the pilot's vantage goal", () => {
-    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.112.1");
+  it("needs the agent whose surfaces show the recovery phases and the waiting prompt", () => {
+    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.115.0");
   });
 
   it("may send commands, for the hold prompt's actions", () => {
