@@ -40,17 +40,32 @@ def test_without_a_3d_fix_the_limit_is_the_gnss_denied_cap() -> None:
     assert effective_limit(1.5, feed, 20.0) == 1.5
 
 
-def test_an_external_nav_source_fails_closed_to_the_cap() -> None:
+def test_external_nav_on_the_gps_source_set_is_uncapped_as_the_pilot_flies_it() -> None:
+    # vision-nav in its external-navigation mode with the EKF on source set 1
+    # and a 3-D fix: the pilot flies uncapped, so the limit is the follow's.
+    feed = NavFeed()
+    feed.on_gps_fix(6, 10.0)
+    feed.on_nav_state({"mode": "external_nav", "active_set": 1, "gps_fix": 6}, 10.0)
+    assert effective_limit(6.0, feed, 10.0) == 6.0
+
+
+def test_the_source_set_is_the_last_one_named_and_a_set_outside_1_to_3_is_capped() -> None:
     feed = NavFeed()
     feed.on_gps_fix(3, 10.0)
-    feed.on_nav_state({"mode": "external_nav", "active_set": 1, "gps_fix": 3}, 10.0)
-    assert effective_limit(6.0, feed, 10.0) == 2.0
-    # A nav feed that went quiet says nothing; the GPS fix decides.
-    assert effective_limit(6.0, feed, 13.5) == 2.0
-    feed.on_gps_fix(3, 13.5)
-    assert effective_limit(6.0, feed, 13.5) == 6.0
-    feed.on_nav_state({"mode": "off", "gps_fix": 3}, 14.0)
-    assert effective_limit(6.0, feed, 14.0) == 6.0
+    # Before any nav.state, the boot set 1.
+    assert effective_limit(6.0, feed, 10.0) == 6.0
+    feed.on_nav_state({"mode": "external_nav", "active_set": 2}, 10.0)
+    assert effective_limit(6.0, feed, 10.0) == 6.0
+    feed.on_nav_state({"mode": "external_nav", "active_set": 4}, 10.5)
+    assert effective_limit(6.0, feed, 10.5) == 2.0
+    # A nav.state without a set keeps the last one named, even once it is old.
+    feed.on_nav_state({"mode": "off", "active_set": None}, 11.0)
+    feed.on_gps_fix(3, 20.0)
+    assert effective_limit(6.0, feed, 20.0) == 2.0
+    feed.on_nav_state({"mode": "off", "active_set": 1}, 20.0)
+    assert effective_limit(6.0, feed, 20.0) == 6.0
+    # Without a fresh 3-D fix the cap applies on any set.
+    assert effective_limit(6.0, feed, 23.5) == 2.0
 
 
 # -- the subject's measured motion ---------------------------------------------

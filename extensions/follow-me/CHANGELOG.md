@@ -68,8 +68,11 @@ recovery phases and the waiting prompt.
   `uncertain_mode`, `predictive_search`, `operator_resume_seq`, and
   `outpaced` with `speed_limit_mps`: the subject has been measured faster
   than the limit in force (the lower of `max_speed_mps` and the pilot's
-  2 m/s cap without GNSS, judged from `GPS_RAW_INT` and the vision-nav
-  `nav.state`) for 2 s; the follow tab shows it.
+  2 m/s cap without GNSS) for 2 s; the follow tab shows it. The cap is
+  rebuilt with the pilot's rule for unknown EKF source parameters: uncapped
+  while the source set last named by the vision-nav `nav.state`
+  (`active_set`, set 1 before any) is 1-3 and `GPS_RAW_INT` has a fresh 3-D
+  fix. vision-nav's external-navigation mode on the GPS set is not capped.
 - The vantage goal carries `hypotheses_ne`: where the subject was last seen
   and 3 m back along its track, for the pilot to cover besides the
   prediction.
@@ -84,6 +87,13 @@ recovery phases and the waiting prompt.
 ### Removed
 
 - The `reacquire_window_s` setting.
+
+### Known limitations
+
+- The pilot does not forward its speed cap to plugins, and a plugin cannot
+  read the EKF source parameters. A source set whose `EK3_SRCn_POSXY` names
+  a non-GPS source therefore reads as uncapped in `speed_limit_mps`, while
+  the pilot, which reads that parameter, flies it capped at 2 m/s.
 
 ## [0.4.9] - 2026-11-14
 

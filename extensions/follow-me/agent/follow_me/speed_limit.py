@@ -2,11 +2,15 @@
 
 The limit in force is the lower of the follow's ``max_speed_mps`` and the
 pilot's cap without GNSS (2 m/s). The pilot's own cap is not forwarded to
-plugins, so it is rebuilt here from feeds a plugin can read, failing closed
-the way the pilot does: GNSS only with a fresh 3-D fix from GPS_RAW_INT, and
-never while a fresh ``nav.state`` from the vision-nav extension reports its
-external-navigation mode (that source may be the EKF's active one, and
-without the EKF source parameters it cannot be told apart).
+plugins, so it is rebuilt here with the pilot's rule for an EKF whose source
+parameters it does not know: uncapped while the active EKF source set is 1-3
+and a 3-D fix from GPS_RAW_INT is fresh. The active set is the last one the
+vision-nav extension's ``nav.state`` named (``active_set``), and the boot set
+1 before any. Its external-navigation mode alone says nothing: vision-nav
+runs it beside GPS on set 1.
+
+Known limitation: a source set whose ``EK3_SRCn_POSXY`` is not GPS reads as
+uncapped here, while the pilot, which reads that parameter, caps it.
 
 The subject's speed is judged on measured fixes, not the subject filter:
 the filter caps a person at 3 m/s, so it can never show a sprinter outrunning
@@ -25,10 +29,12 @@ from typing import Any
 NAV_STATE_TOPIC = "nav.state"
 # The pilot's horizontal speed cap while the position source is not GNSS.
 GNSS_DENIED_MAX_SPEED_MPS = 2.0
-# A GPS fix or nav.state older than this says nothing (the pilot's rule).
+# A GPS fix older than this says nothing (the pilot's rule).
 NAV_FEED_STALE_S = 3.0
 _FIX_3D = 3
-_EXTERNAL_NAV = "external_nav"
+# The EKF source set ArduPilot boots with, and the sets it has.
+_BOOT_SOURCE_SET = 1
+_SOURCE_SETS = (1, 2, 3)
 
 # The window of fixes the subject's speed is measured over, the shortest
 # span that gives a rate, and how old the newest fix may be.
@@ -42,30 +48,31 @@ AT_LIMIT_SHARE = 0.8
 
 
 class NavFeed:
-    """The latest GPS fix type and vision-nav mode, with when they arrived."""
+    """The latest GPS fix type, when it arrived, and the active EKF source
+    set last named by vision-nav."""
 
-    __slots__ = ("gps_fix", "gps_at", "nav_mode", "nav_at")
+    __slots__ = ("gps_fix", "gps_at", "source_set")
 
     def __init__(self) -> None:
         self.gps_fix: int | None = None
         self.gps_at = -math.inf
-        self.nav_mode: str | None = None
-        self.nav_at = -math.inf
+        self.source_set: int = _BOOT_SOURCE_SET
 
     def on_gps_fix(self, fix_type: int, now: float) -> None:
         self.gps_fix = fix_type
         self.gps_at = now
 
     def on_nav_state(self, payload: Any, now: float) -> None:
-        mode = payload.get("mode") if isinstance(payload, dict) else None
-        self.nav_mode = str(mode) if isinstance(mode, str) else None
-        self.nav_at = now
+        # The FC keeps a set until told otherwise, so a report without one
+        # keeps the last set named.
+        active = payload.get("active_set") if isinstance(payload, dict) else None
+        if isinstance(active, int) and not isinstance(active, bool):
+            self.source_set = active
 
     def gnss_denied(self, now: float) -> bool:
-        if now - self.nav_at <= NAV_FEED_STALE_S and self.nav_mode == _EXTERNAL_NAV:
-            return True
         fresh_fix = now - self.gps_at <= NAV_FEED_STALE_S
-        return not (fresh_fix and self.gps_fix is not None and self.gps_fix >= _FIX_3D)
+        fix_3d = fresh_fix and self.gps_fix is not None and self.gps_fix >= _FIX_3D
+        return not (self.source_set in _SOURCE_SETS and fix_3d)
 
 
 def effective_limit(max_speed_mps: float, feed: NavFeed, now: float) -> float:

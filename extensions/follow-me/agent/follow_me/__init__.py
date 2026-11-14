@@ -282,9 +282,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
             await ctx.events.subscribe(GOAL_STATUS_TOPIC, self._on_goal_status)
         except Exception as exc:  # noqa: BLE001
             ctx.log.warning("follow_me_goal_status_unavailable", reason=str(exc))
-        # The vision-nav extension's navigation state: while it reports its
-        # external-navigation mode the pilot may be flying at its GNSS-denied
-        # cap. Optional; without it the GPS fix alone decides.
+        # The vision-nav extension's navigation state names the active EKF
+        # source set, which decides the pilot's GNSS-denied cap with the GPS
+        # fix. Optional; without it the boot set 1 and the GPS fix decide.
         try:
             await ctx.events.subscribe(NAV_STATE_TOPIC, self._on_nav_state)
         except Exception as exc:  # noqa: BLE001
