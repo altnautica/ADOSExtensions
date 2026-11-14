@@ -21,10 +21,12 @@
 //! provider: `T_world_body = T_body_lidar * T_w_l * inv(T_body_lidar)`. The
 //! pose is single-floor: z stays at the mount height.
 //!
-//! Health: `Lost` until the first submap holds [`MIN_SUBMAP_SCANS`] scans,
-//! and while the heading a gap in the IMU left unmeasured is not yet
-//! re-confirmed against the map (`PoseOut::heading_unconfirmed`: it may be
-//! off by any turn the gap hid); `Degraded` while the match's `degeneracy`
+//! Health: `Lost` until the map holds [`MIN_SUBMAP_SCANS`] scans (counted
+//! again from each new map: the first `RAW_IMU`, or a heading not
+//! re-confirmed in time, `PoseOut::map_restarted`), and while the heading a
+//! gap in the IMU left unmeasured is not yet re-confirmed against the map
+//! (`PoseOut::heading_unconfirmed`: it may be off by any turn the gap hid);
+//! `Degraded` while the match's `degeneracy`
 //! (translation `eig_min / eig_max`, reported as
 //! `quality().degeneracy_ratio`) is below the matcher's degenerate ratio
 //! (the pose rides a motion prior along the weak direction, measured
@@ -106,6 +108,8 @@ enum Input {
     Imu(Vec<ImuSample>, bool),
     Velocity(Vec<VelocitySample>),
     Height(Vec<HeightSample>),
+    /// `(t_ns, heading)`: [`PoseProvider::feed_fc_heading`].
+    FcHeading(u64, f64),
     Scan(ScanInput),
 }
 
@@ -230,15 +234,21 @@ fn run(
     t_body_lidar: [f64; 16],
 ) {
     let ratio = slam.config().degenerate_ratio;
-    // The heading re-confirmation, logged on each change.
+    // The heading re-confirmation, logged on each change, and the maps
+    // started over in flight so far.
     let mut unconfirmed = false;
+    let mut restarts = 0u32;
     let mut process = |slam: &mut LocalSlam, scan: ScanInput| {
         let out = slam.feed_scan(&scan);
+        if out.map_restarted {
+            restarts += 1;
+            tracing::warn!(restarts, "nav_map_restarted_unconfirmed");
+        }
         if out.heading_unconfirmed != unconfirmed {
             unconfirmed = out.heading_unconfirmed;
             if unconfirmed {
                 tracing::warn!("nav_heading_unconfirmed");
-            } else {
+            } else if !out.map_restarted {
                 tracing::info!(yaw_deg = out.yaw.to_degrees(), "nav_heading_confirmed");
             }
         }
@@ -247,6 +257,7 @@ fn run(
         track.set_quality(PoseQuality {
             degeneracy_ratio: (out.score > 0.0).then_some(out.degeneracy),
             heading_unconfirmed: out.heading_unconfirmed,
+            map_restarts: restarts,
             ..PoseQuality::default()
         });
         track.push(PoseEstimate {
@@ -282,6 +293,7 @@ fn run(
             }
             Input::Velocity(samples) => samples.iter().for_each(|s| slam.feed_velocity(s)),
             Input::Height(samples) => samples.iter().for_each(|s| slam.feed_height(s)),
+            Input::FcHeading(t_ns, heading) => slam.feed_fc_heading(t_ns, heading),
             Input::Scan(scan) => {
                 if let Some(p) = pending.take() {
                     process(&mut slam, p);
@@ -350,6 +362,13 @@ impl PoseProvider for PlanarLidarPose {
 
     fn heading_unmeasured(&self) {
         self.unmeasured.store(true, Ordering::Release);
+    }
+
+    fn feed_fc_heading(&self, t_ns: u64, heading: f64) {
+        let Some(tx) = &self.tx else { return };
+        if tx.try_send(Input::FcHeading(t_ns, heading)).is_err() {
+            self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn feed_velocity(&self, src: &str, samples: &[VelocitySample]) {

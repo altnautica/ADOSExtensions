@@ -125,10 +125,11 @@ impl Attitude {
         self.last_t_ns
     }
 
-    /// Length of the latest gap wider than [`MAX_SAMPLE_GAP_NS`], ns: the
-    /// time over which the rotation went unmeasured.
-    pub fn last_gap_ns(&self) -> u64 {
-        self.gap_ns
+    /// The latest gap wider than [`MAX_SAMPLE_GAP_NS`]: the time of the
+    /// sample that ended it and its length, ns (the time over which the
+    /// rotation went unmeasured); `None` before one.
+    pub fn last_gap(&self) -> Option<(u64, u64)> {
+        (self.gap_ns > 0).then_some((self.gap_end_ns?, self.gap_ns))
     }
 
     /// Whether the samples measured the rotation from `t0_ns` on: no gap

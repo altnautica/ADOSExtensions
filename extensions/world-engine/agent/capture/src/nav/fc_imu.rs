@@ -311,6 +311,10 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
                 pose.heading_unmeasured();
             }
             let attitude = attitude.map(|(t, r)| (t, enu_flu(&r)));
+            if let Some((t, r)) = attitude {
+                // Only its change across a gap reaches the matcher.
+                pose.feed_fc_heading(t, r[3].atan2(r[0]));
+            }
             let samples = vec![from_raw(t_ns, &imu, attitude)];
             pose.feed_imu(FC_IMU_ID, &ImuBatch { samples });
             state.note_raw_imu(t_ns, arrival_ns);
@@ -534,6 +538,7 @@ mod tests {
         Imu(String, ImuSample),
         Velocity(String, VelocitySample),
         Height(HeightSample),
+        FcHeading(u64, f64),
     }
 
     #[derive(Default)]
@@ -559,6 +564,9 @@ mod tests {
         }
         fn feed_height(&self, samples: &[HeightSample]) {
             self.got.lock().extend(samples.iter().map(|s| Got::Height(*s)));
+        }
+        fn feed_fc_heading(&self, t_ns: u64, heading: f64) {
+            self.got.lock().push(Got::FcHeading(t_ns, heading));
         }
     }
 
@@ -601,9 +609,14 @@ mod tests {
             sink(s);
         }
         let got = fed.got.lock().clone();
-        let [Got::Imu(src, imu), Got::Velocity(vsrc, v), Got::Height(h)] = got.as_slice() else {
+        let [Got::FcHeading(ht, heading), Got::Imu(src, imu), Got::Velocity(vsrc, v), Got::Height(h)] =
+            got.as_slice()
+        else {
             panic!("{got:?}");
         };
+        // The FC's attitude rides the sample: nose north is ENU yaw +90°.
+        assert_eq!(*ht, 90_000_000);
+        assert!((heading - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "{heading}");
         assert_eq!((src.as_str(), vsrc.as_str()), (FC_IMU_ID, FC_IMU_ID));
         assert_eq!(imu.t_ns, 100_000_000);
         assert_eq!(imu.gyro, vec![0.0, -0.0, -0.3], "a right yaw (FRD +z) is FLU -z");

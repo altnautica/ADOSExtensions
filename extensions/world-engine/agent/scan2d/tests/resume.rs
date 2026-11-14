@@ -1,9 +1,10 @@
 //! Recovery when the IMU's yaw rate comes back after the drone yawed
 //! without it: the samples of the stretch dropped, a stand-in that carried
 //! no yaw rate, or a delivery stall that bursts. A heading a gap left
-//! unmeasured is never reported checked off the drone's, and the scans
-//! re-confirm it against the map they saw before; after a stand-in the map
-//! starts over.
+//! unmeasured is never reported checked off the drone's: the scans
+//! re-confirm it against the map they saw before (near the flight
+//! controller's own turn across a short gap), or the map starts over; after
+//! a stand-in the map starts over.
 
 mod common;
 
@@ -30,17 +31,35 @@ enum Feed {
 }
 
 struct Run {
-    /// Scans after `resume` reported checked more than 1.5 degrees off.
+    /// Scans after `resume` reported checked more than 1.5 degrees off,
+    /// before any restart.
     checked_off: Vec<(f64, f64)>,
-    /// The first scan after `resume` reported checked.
+    /// The first scan after `resume` reported checked, before any restart.
     first_ok: Option<f64>,
     /// The heading error of the last scan, degrees.
     final_err: f64,
+    /// The scan that started the map over ([`PoseOut::map_restarted`]),
+    /// its heading error then, and the scans after it whose error moved
+    /// from that by more than 1.5 degrees (the caller re-anchors the new
+    /// map once).
+    restart: Option<(f64, f64)>,
+    restart_drift: Vec<(f64, f64)>,
 }
 
 /// The drone yaws `deg` at `rate_dps` from 2 s on, in place at (4, 3) of
-/// `world`, while the IMU's yaw rate is missing over [stop, resume).
-fn run(world: &[Seg], deg: f64, rate_dps: f64, feed: Feed, stop: f64, resume: f64) -> Run {
+/// `world`, while the IMU's yaw rate is missing over [stop, resume). With
+/// `fc_heading` the flight controller's heading rides each delivered
+/// sample, as the capture feeds it (its attitude streams on through a
+/// `RAW_IMU` gap).
+fn run(
+    world: &[Seg],
+    deg: f64,
+    rate_dps: f64,
+    feed: Feed,
+    stop: f64,
+    resume: f64,
+    fc_heading: bool,
+) -> Run {
     let (t0, t1) = (2.0, 2.0 + deg / rate_dps);
     let rate = rate_dps.to_radians();
     let yaw = move |t: f64| rate * (t.clamp(t0, t1) - t0);
@@ -52,6 +71,8 @@ fn run(world: &[Seg], deg: f64, rate_dps: f64, feed: Feed, stop: f64, resume: f6
         checked_off: Vec::new(),
         first_ok: None,
         final_err: 0.0,
+        restart: None,
+        restart_drift: Vec::new(),
     };
     for n in 0..200 {
         let t = n as f64 * 0.1;
@@ -73,9 +94,13 @@ fn run(world: &[Seg], deg: f64, rate_dps: f64, feed: Feed, stop: f64, resume: f6
             if feed == Feed::Dropped && (stop..resume).contains(&imu_t) {
                 continue;
             }
+            let t_ns = (imu_t * 1e9).round() as u64;
+            if fc_heading {
+                slam.feed_fc_heading(t_ns, 1.0 + yaw(imu_t));
+            }
             let wz = if stand_in || !(t0..t1).contains(&imu_t) { 0.0 } else { rate };
             slam.feed_imu(&ImuSample {
-                t_ns: (imu_t * 1e9).round() as u64,
+                t_ns,
                 gyro: [0.0, 0.0, wz],
                 accel: [0.0, 0.0, 9.81],
             });
@@ -83,11 +108,22 @@ fn run(world: &[Seg], deg: f64, rate_dps: f64, feed: Feed, stop: f64, resume: f6
         let p = slam.feed_scan(&revolution(world, &pose_at, t, C1, &mut rng));
         let e = wrap(p.yaw - yaw(t)).to_degrees();
         out.final_err = e;
-        if t >= resume && p.heading_ok {
-            out.first_ok.get_or_insert(t);
-            if e.abs() > 1.5 {
-                out.checked_off.push((t, e));
+        if p.map_restarted {
+            out.restart.get_or_insert((t, e));
+        }
+        match out.restart {
+            Some((_, e0)) => {
+                if wrap((e - e0).to_radians()).to_degrees().abs() > 1.5 {
+                    out.restart_drift.push((t, e));
+                }
             }
+            None if t >= resume && p.heading_ok => {
+                out.first_ok.get_or_insert(t);
+                if e.abs() > 1.5 {
+                    out.checked_off.push((t, e));
+                }
+            }
+            None => {}
         }
         if p.heading_ok {
             assert!(!p.heading_unconfirmed, "t {t:.1}: checked yet unconfirmed");
@@ -98,6 +134,7 @@ fn run(world: &[Seg], deg: f64, rate_dps: f64, feed: Feed, stop: f64, resume: f6
 
 fn assert_recovers(r: &Run, what: &str) {
     assert!(r.checked_off.is_empty(), "{what}: reported checked off the drone at {:?}", r.checked_off);
+    assert_eq!(r.restart, None, "{what}: started the map over");
     assert!(r.first_ok.is_some(), "{what}: never re-confirmed");
     assert!(r.final_err.abs() < 1.5, "{what}: ends {:.2} deg off", r.final_err);
 }
@@ -106,8 +143,24 @@ fn assert_recovers(r: &Run, what: &str) {
 fn a_yaw_whose_samples_dropped_is_re_confirmed_against_the_map() {
     let w = room();
     for (deg, rate) in [(30.0, 15.0), (90.0, 45.0)] {
-        let r = run(&w, deg, rate, Feed::Dropped, 1.0, 5.0);
+        let r = run(&w, deg, rate, Feed::Dropped, 1.0, 5.0, false);
         assert_recovers(&r, &format!("dropped {deg} deg"));
+    }
+}
+
+/// A short gap inside a fast turn: the flight controller's own heading
+/// change across it is the turn it hid, so the scans confirm near it
+/// through the turn, the gap counted once, rather than waiting it out with
+/// a search of every turn.
+#[test]
+fn a_short_gap_in_a_fast_turn_is_re_confirmed_on_the_flight_controllers_turn() {
+    let w = room();
+    for (deg, rate) in [(90.0, 60.0), (150.0, 80.0)] {
+        let r = run(&w, deg, rate, Feed::Dropped, 2.5, 3.0, true);
+        let what = format!("short gap {deg} deg");
+        assert_recovers(&r, &what);
+        let first = r.first_ok.expect("checked");
+        assert!(first <= 3.6, "{what}: re-confirmed only at {first:.1} s");
     }
 }
 
@@ -115,7 +168,7 @@ fn a_yaw_whose_samples_dropped_is_re_confirmed_against_the_map() {
 fn a_yaw_through_a_delivery_stall_recovers_exactly() {
     let w = room();
     for (deg, rate) in [(30.0, 15.0), (90.0, 45.0)] {
-        let r = run(&w, deg, rate, Feed::Burst, 1.0, 5.0);
+        let r = run(&w, deg, rate, Feed::Burst, 1.0, 5.0, false);
         assert_recovers(&r, &format!("burst {deg} deg"));
         assert_eq!(r.first_ok, Some(5.0), "burst {deg} deg: the burst measured the turn");
     }
@@ -130,7 +183,7 @@ fn a_yaw_through_a_delivery_stall_recovers_exactly() {
 fn a_stand_in_without_yaw_rate_starts_a_new_map() {
     let w = room();
     for (deg, rate) in [(30.0, 15.0), (90.0, 30.0)] {
-        let r = run(&w, deg, rate, Feed::StandIn, 0.0, 6.0);
+        let r = run(&w, deg, rate, Feed::StandIn, 0.0, 6.0, false);
         let what = format!("stand-in {deg} deg");
         assert_eq!(r.first_ok, Some(6.0), "{what}: the new map tracks at once");
         let off: Vec<_> = r.checked_off.iter().filter(|(_, e)| (e + deg).abs() > 1.5).collect();
@@ -141,9 +194,13 @@ fn a_stand_in_without_yaw_rate_starts_a_new_map() {
 
 /// In the middle of a bare square a quarter turn maps the outline onto
 /// itself: after a stretch long enough to hide a quarter turn the heading
-/// cannot be told from the others, and it stays unconfirmed.
+/// cannot be told from the others. It is never confirmed; once the bounds
+/// pass the map starts over, and the new one tracks steadily from there.
 #[test]
-fn an_ambiguous_room_leaves_the_heading_unconfirmed() {
-    let r = run(&rect(1.0, 0.0, 7.0, 6.0), 0.0, 15.0, Feed::Dropped, 1.0, 5.0);
+fn an_ambiguous_room_starts_the_map_over() {
+    let r = run(&rect(1.0, 0.0, 7.0, 6.0), 0.0, 15.0, Feed::Dropped, 1.0, 5.0, false);
     assert_eq!(r.first_ok, None, "re-confirmed a heading the room leaves ambiguous");
+    let (at, _) = r.restart.expect("the map starts over");
+    assert!(at <= 7.6, "started over only at {at:.1} s");
+    assert!(r.restart_drift.is_empty(), "the new map moved at {:?}", r.restart_drift);
 }

@@ -174,6 +174,9 @@ pub struct NavMap {
     /// The host ns the matcher's map last started over at
     /// ([`Self::restart_heading_at`]).
     restarted_at: Option<u64>,
+    /// The north was re-anchored to the FC heading in flight
+    /// ([`Self::restart_in_flight`]), whatever the declared take-off heading.
+    north_from_fc: bool,
 }
 
 /// `Rz(yaw)` about the down axis, row-major.
@@ -212,6 +215,7 @@ impl NavMap {
             logged_yaw: None,
             latest: None,
             restarted_at: None,
+            north_from_fc: false,
         }
     }
 
@@ -229,6 +233,42 @@ impl NavMap {
             restarted_at: Some(t_ns),
             ..Self::new(self.settings)
         };
+    }
+
+    /// The matcher started a new map in flight at pose `e` (a heading a gap
+    /// in the IMU left unmeasured was not re-confirmed in time,
+    /// [`crate::pose::PoseQuality::map_restarts`]): its heading against the
+    /// old map is the gyro's guess across the gap. Its north is taken from
+    /// the FC's attitude yaw now (`fc_heading`), even with a declared
+    /// take-off heading, which holds only at the take-off spot; the pose is
+    /// lost (external navigation not fused) until the new map holds enough
+    /// scans, so this yaw is the FC's own. The offset keeps `e` where the
+    /// old map placed it, so `map_ned` does not jump, and the GNSS fit
+    /// starts over (it fitted the old map). Without an FC heading the old
+    /// north stays.
+    pub fn restart_in_flight(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc_heading: Option<f64>) {
+        let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
+        let Some(heading) = fc_heading else {
+            tracing::warn!("nav_map_restart_without_fc_heading");
+            return;
+        };
+        let old = self.ned_of(&r_frd, t_frd).map(|(_, t)| t);
+        let yaw0 = wrap_pi(heading - frd_yaw(&r_frd));
+        let placed = se3::mat_vec(&rz(yaw0), t_frd);
+        self.offset = old.map_or([0.0; 2], |t| [t[0] - placed[0], t[1] - placed[1]]);
+        self.yaw0 = Some(yaw0);
+        self.spot = None;
+        self.left_spot = true;
+        self.north_from_fc = true;
+        self.align = MapAlign::default();
+        self.logged_yaw = None;
+        tracing::info!(
+            heading_rad = heading,
+            yaw0_rad = yaw0,
+            offset_n_m = self.offset[0],
+            offset_e_m = self.offset[1],
+            "nav_map_north_restarted"
+        );
     }
 
     pub fn settings(&self) -> &NavSettings {
@@ -252,7 +292,7 @@ impl NavMap {
             Some(MapNorth::Gnss)
         } else if self.yaw0.is_none() {
             None
-        } else if self.settings.takeoff_heading_rad.is_some() {
+        } else if self.settings.takeoff_heading_rad.is_some() && !self.north_from_fc {
             Some(MapNorth::Declared)
         } else {
             Some(MapNorth::FcHeading)

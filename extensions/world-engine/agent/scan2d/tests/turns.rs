@@ -19,11 +19,14 @@ const PERIOD_NS: u64 = 100_000_000;
 
 /// One recording: the matcher's IMU stream, the stream synthesised from the
 /// flight controller's own attitude (empty when not recorded) and that
-/// attitude, and `(revolution, true yaw)` in time order.
+/// attitude, the heading the flight controller reports (its own attitude,
+/// else the true one at its rate), and `(revolution, true yaw)` in time
+/// order.
 struct Recording {
     imu: Vec<ImuSample>,
     fc_attitude_imu: Vec<ImuSample>,
     fc_attitudes: Vec<(u64, Rotation3<f64>)>,
+    fc_headings: Vec<(u64, f64)>,
     scans: Vec<(ScanInput, f64)>,
 }
 
@@ -73,9 +76,11 @@ fn recorded(text: &str) -> Recording {
         }
     }
     let imu = if gyro.is_empty() { from_attitudes(&atts) } else { gyro };
+    let heading_src = if fc_atts.is_empty() { &atts } else { &fc_atts };
     Recording {
         imu,
         fc_attitude_imu: from_attitudes(&fc_atts),
+        fc_headings: heading_src.iter().map(|(t, r)| (*t, r.euler_angles().2)).collect(),
         fc_attitudes: fc_atts,
         scans,
     }
@@ -284,3 +289,80 @@ fn warehouse_return_leg_holds_the_heading() {
     eprintln!("warehouse return leg, accelerometer: mean {raw_mean:+.3} deg");
     assert!(raw_mean.abs() > 1.0, "the accelerometer's lean reaches the heading: {raw_mean:+.3} deg");
 }
+
+/// Replay with a 0.3 s hole in the IMU from `hole_ns` after the first scan
+/// (its samples dropped), feeding the flight controller's heading with each
+/// sample as the capture service does. Returns the seconds from the hole's
+/// end until the pose is usable again (re-confirmed, or a restarted map
+/// holding 10 scans), the worst heading error while usable after it (degrees,
+/// re-based at a restart, where the capture re-anchors the north) and the
+/// restarts.
+fn holed_replay(rec: &Recording, imu: &[ImuSample], hole_ns: Option<u64>) -> (Option<f64>, f64, usize) {
+    let t0 = rec.scans[0].0.t_ns;
+    let hole = hole_ns.map_or((0, 0), |h| (t0 + h, t0 + h + 300_000_000));
+    let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
+    let mut it = imu.iter().filter(|s| !(hole.0 < s.t_ns && s.t_ns < hole.1)).peekable();
+    let mut fed = 0;
+    let mut base = None;
+    let (mut usable_at, mut worst, mut restarts) = (None, 0.0f64, 0);
+    for (scan, yaw) in &rec.scans {
+        while let Some(s) = it.next_if(|s| s.t_ns <= scan.t_ns + PERIOD_NS) {
+            let k = rec.fc_headings.partition_point(|(t, _)| *t <= s.t_ns);
+            if k > fed {
+                let (t, h) = rec.fc_headings[k - 1];
+                slam.feed_fc_heading(t, h);
+                fed = k;
+            }
+            slam.feed_imu(s);
+        }
+        let out = slam.feed_scan(scan);
+        if out.map_restarted {
+            restarts += 1;
+            base = None;
+        }
+        let (y0, ty0) = *base.get_or_insert((out.yaw, *yaw));
+        let e = wrap((out.yaw - y0) - (yaw - ty0)).to_degrees();
+        if scan.t_ns > hole.1 && !out.heading_unconfirmed && slam.inserted_scans() >= 10 {
+            usable_at.get_or_insert((scan.t_ns - hole.1) as f64 * 1e-9);
+            worst = worst.max(e.abs());
+        }
+    }
+    (usable_at, worst, restarts)
+}
+
+/// A 0.3 s hole whose samples dropped inside a turn, at the marks where the
+/// pose used to stay lost for the rest of the recording (the aisle at 2 to
+/// 5 s, the room take-off at 2 s, the warehouse at 30 s) and one where it
+/// re-confirmed (the warehouse at 22 s). The pose is usable again within
+/// seconds, on a heading within 2° of the truth (the aisle's own unholed
+/// replay is up to 1.74° off); unholed, nothing restarts.
+#[test]
+fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
+    let aisle = recorded(include_str!("data/aisle_waypoint_turns.txt"));
+    let room = recorded(include_str!("data/room_takeoff_turn.txt"));
+    let warehouse = recorded(include_str!("data/warehouse_return_leg.txt"));
+    let wh_imu = with_fc_gravity(&warehouse);
+    let s = 1_000_000_000u64;
+    let cases: [(&str, &Recording, &[ImuSample], u64); 7] = [
+        ("aisle 2 s", &aisle, &aisle.imu, 2 * s),
+        ("aisle 3 s", &aisle, &aisle.imu, 3 * s),
+        ("aisle 4 s", &aisle, &aisle.imu, 4 * s),
+        ("aisle 5 s", &aisle, &aisle.imu, 5 * s),
+        ("room 2 s", &room, &room.imu, 2 * s),
+        ("warehouse 22 s", &warehouse, &wh_imu, 22 * s),
+        ("warehouse 30 s", &warehouse, &wh_imu, 30 * s),
+    ];
+    for (name, rec, imu, hole) in cases {
+        let (usable, worst, restarts) = holed_replay(rec, imu, Some(hole));
+        eprintln!("{name}: usable after {usable:?} s, worst {worst:.2} deg, restarts {restarts}");
+        let usable = usable.unwrap_or_else(|| panic!("{name}: lost for the rest of the recording"));
+        assert!(usable <= HOLE_USABLE_S, "{name}: usable only after {usable:.1} s");
+        assert!(worst <= 2.0, "{name}: {worst:.2} deg off while usable");
+    }
+    for (name, rec, imu) in [("aisle", &aisle, &aisle.imu), ("room", &room, &room.imu), ("warehouse", &warehouse, &wh_imu)] {
+        assert_eq!(holed_replay(rec, imu, None).2, 0, "{name}: restarted with no hole");
+    }
+}
+
+/// The bound on [`a_short_imu_hole_in_a_turn_is_usable_again_within_seconds`].
+const HOLE_USABLE_S: f64 = 4.0;

@@ -132,6 +132,38 @@ fn a_restarted_map_latches_its_north_afresh_once() {
     assert_eq!(nav.map_yaw(), Some(1.0), "the same restart is taken once");
 }
 
+/// The matcher's map starting over in flight (a heading a gap left
+/// unmeasured was not re-confirmed in time) takes its north from the FC
+/// heading then, even with a declared take-off heading, and keeps the pose
+/// where the old map had it: `map_ned` does not jump, and the new north
+/// stays fixed after.
+#[test]
+fn a_map_restarted_in_flight_takes_the_fc_north_without_a_jump() {
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    });
+    let pose = |nav: &mut NavMap, x: f64, heading: f64, t_ms: i64| {
+        nav.on_pose(&at(estimate(x, 0.0, 0.0), t_ms), Some(0.0), Some(heading), t_ms, 0, false)
+            .expect("due")
+    };
+    pose(&mut nav, 0.0, 0.0, 0);
+    let before = pose(&mut nav, 10.0, 0.0, 100).pose.t;
+    assert!((before[0]).abs() < 1e-9 && (before[1] - 10.0).abs() < 1e-9, "{before:?}");
+    // The new map's heading is the gyro's guess, 0.1 rad off the FC's.
+    let heading = PI / 2.0 + 0.1;
+    nav.restart_in_flight(&at(estimate(10.0, 0.0, 0.0), 150), Some(0.0), Some(heading));
+    assert_eq!(nav.map_yaw(), Some(heading));
+    assert_eq!(nav.north(), Some(MapNorth::FcHeading));
+    let still = pose(&mut nav, 10.0, heading + 0.5, 200);
+    for k in 0..2 {
+        assert!((still.pose.t[k] - before[k]).abs() < 1e-9, "jumped to {:?}", still.pose.t);
+    }
+    let on = pose(&mut nav, 11.0, heading + 0.5, 300).pose.t;
+    assert!((on[0] - heading.cos()).abs() < 1e-9 && (on[1] - 10.0 - heading.sin()).abs() < 1e-9);
+    assert_eq!(nav.map_yaw(), Some(heading), "fixed: the north does not follow the FC");
+}
+
 /// The descriptor carries the time the pose describes, not the time it is
 /// published: a LiDAR pose published 150 ms after its scan's first return
 /// is stamped 150 ms back.

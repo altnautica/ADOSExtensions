@@ -178,6 +178,38 @@ fn a_box_room_walk_is_tracked_within_ten_centimetres_and_good() {
     assert!(p.single_floor());
 }
 
+/// The map started over at the heading going unmeasured (the first
+/// `RAW_IMU` after the attitude stand-in) holds the pose lost again until the
+/// new map holds [`MIN_SUBMAP_SCANS`] scans, as the first map did.
+#[test]
+fn a_restarted_map_is_lost_until_it_holds_its_first_scans() {
+    let walls = rect(0.0, 0.0, 6.0, 4.0);
+    // 0.12 m a revolution: every scan is inserted.
+    let v = 1.2;
+    let body = |t: u64| [0.8 + v * (t - T0) as f64 * 1e-9, 2.0, 0.0];
+    let p = spawn();
+    let est = drive(&p, &walls, &body, 0.0, 12);
+    assert_eq!(est.last().map(|e| e.health), Some(VioHealth::Good));
+    p.heading_unmeasured();
+    let mut after = Vec::new();
+    for i in 12..32 {
+        let t = T0 + i as u64 * PERIOD_NS;
+        p.feed_imu("imu0", &imu(t, t + PERIOD_NS, 0.0));
+        p.feed_lidar(&scan(t, &walls, &body));
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while p.stats().scans_processed < i as u64 + 1 {
+            assert!(Instant::now() < deadline, "scan {i} not matched in 60 s");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        p.drain_new(&mut after);
+    }
+    let health: Vec<_> = after.iter().map(|e| e.health).collect();
+    assert_eq!(health.len(), 20);
+    let lost = health.iter().take_while(|h| **h == VioHealth::Lost).count();
+    assert!(lost >= MIN_SUBMAP_SCANS - 1, "{health:?}");
+    assert!(health[12..].iter().all(|h| *h != VioHealth::Lost), "{health:?}");
+}
+
 /// Live order: each scan reaches the matcher before the IMU batch covering
 /// it, while the body yaw zigzags (+90°/s, then −90°/s, each revolution).
 /// Once an IMU stream exists, a scan waits until the IMU reaches its last
@@ -347,6 +379,7 @@ fn health_and_frames_follow_the_matcher() {
         sigma_xy_m: 0.05,
         heading_ok: true,
         heading_unconfirmed: false,
+        map_restarted: false,
     };
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS - 1, 0.05), VioHealth::Lost);
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS, 0.05), VioHealth::Good);

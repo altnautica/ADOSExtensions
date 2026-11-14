@@ -167,5 +167,7 @@ fn a_gap_in_the_imu_leaves_the_next_scan_unchecked() {
             flagged.push(k);
         }
     }
-    assert_eq!(flagged, vec![21, 22, 23, 24], "only the scans across the gap and its re-confirm");
+    // Three scans from the first after the gap agree, and the third
+    // re-confirms.
+    assert_eq!(flagged, vec![21, 22, 23], "only the scans across the gap and its re-confirm");
 }

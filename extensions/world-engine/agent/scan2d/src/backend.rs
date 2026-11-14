@@ -287,6 +287,7 @@ pub fn optimize(map: &LocalMap, cfg: &Scan2dConfig) -> Trajectory {
                     sigma_xy_m: SIGMA_MATCHED_M,
                     heading_ok: true,
                     heading_unconfirmed: false,
+                    map_restarted: false,
                 }
             })
             .collect(),

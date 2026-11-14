@@ -515,19 +515,37 @@ All notable changes to the World Engine extension.
   against the gyro's by more than 2° (plus 0.03 s times the turn rate)
   within a second is a jump the gyro did not see. 2.2.1.
 - **A heading a gap in the IMU left unmeasured is re-confirmed against the
-  map before the pose counts again.** After a gap of over 0.2 s (its
-  samples dropped) the heading is unconfirmed (`PoseOut::heading_unconfirmed`),
-  its scans stay out of the map, and the pose is lost (`imu_feed:
-  heading_unconfirmed`). Each scan, while the drone turns slower than
-  20°/s, searches the submap built before the gap over every turn the gap
-  could have hidden (180°/s times the gap plus 5°, up to the whole circle)
-  and ±3 m; a heading counts only when it scores at least the loop-closure
-  minimum and no heading more than 10° from it scores within 0.1 of it.
-  Three scans in a row agreeing within 1° re-seed the heading there. A gap
+  map before the pose counts again, or the map starts over.** After a gap
+  of over 0.2 s (its samples dropped) the heading is unconfirmed
+  (`PoseOut::heading_unconfirmed`), its scans stay out of the map, and the
+  pose is lost (`imu_feed: heading_unconfirmed`); the gap is counted once.
+  Across a gap of up to 1 s the flight controller's own heading change
+  (the attitude riding each `RAW_IMU` sample; only its change is used, as
+  under external navigation it fuses this pose's heading) less the gyro's
+  is the turn the gap hid: each scan, while the drone turns slower than
+  90°/s, searches the submap built before the gap within 8° of it and
+  ±3 m, and a heading counts at a score of 0.40. Otherwise each scan,
+  while the drone turns slower than 20°/s, searches over every turn the
+  gap could have hidden (180°/s times the gap plus 5°), and a heading
+  counts only when it scores at least the loop-closure minimum and no
+  heading more than 10° from it scores within 0.1 of it. Three scans
+  agreeing within 1° (one scan between them may find none) re-seed the
+  heading there. A heading not re-confirmed 2 s after the first scan
+  searched, after 15 searched scans with none, 3 m from where the gap was
+  noticed or 5 s after it starts the map over at the current pose
+  (`PoseOut::map_restarted`, `nav_map_restarted_unconfirmed`): the capture
+  takes the new map's north from the FC heading then (the pose is lost, so
+  the FC is not fusing it), keeps the position where it was and starts the
+  GNSS fit over; the pose is lost until the new map holds 10 scans. A gap
   whose samples arrive late in a burst keeps them and needs no
   re-confirmation. Before, the pose came back from lost at the heading the
-  gyro held, off by the turn the gap hid (90° in a 4 s gap, reported good),
-  and external navigation re-engaged on it. 2.2.1.
+  gyro held, off by the turn the gap hid (90° in a 4 s gap, reported
+  good); and after the first fix, a 0.3 s hole in a turn left the pose lost
+  for the rest of the flight in 6 of 7 recorded cases. Replaying the six
+  recorded flights with a 0.3 s hole at every second (178 holes), the pose
+  was usable again within 3.0 s in 177 (one fell 2 s before the recording
+  ends), 5 by starting over; no usable heading was more than 1.55° off
+  (the flight's own replay without a hole reaches 1.74°). 2.2.1.
 - **The planar matcher starts a new map at the first `RAW_IMU` sample.**
   The attitude stand-in before it carries no yaw rate, so the map built on
   it placed its scans at a heading pinned through any turn and cannot
@@ -539,14 +557,13 @@ All notable changes to the World Engine extension.
 
 - Where the room's outline repeats under a turn (a bare rectangle under
   half a turn, a near-square under a quarter), a heading a gap left
-  unmeasured is never re-confirmed, and the pose stays lost for the rest
-  of the flight: the flight controller flies on its other sources.
-  Measured on simulated rooms with turns of 10° to 180° hidden in dropped
-  gaps of 0.5 to 5.5 s (84 cases): no heading was reported checked more
-  than 1.5° off; 49 stayed unconfirmed, every one in a room whose outline
-  repeats or a near-symmetric one. A scene whose outline repeats under a
-  turn of less than 10° is not caught by the ambiguity test and could be
-  confirmed off by up to that turn. 2.2.1.
+  unmeasured is not re-confirmed: the map starts over within 5 s and the
+  pose is lost until it holds 10 scans, its north the FC heading then. On
+  simulated rooms with turns of 0° to 180° hidden in dropped gaps of 0.25
+  to 5.5 s, no heading was reported checked more than 1.5° off. A scene
+  whose outline repeats under a turn of less than 8° (10° without the FC
+  heading) is not caught and could be confirmed off by up to that turn.
+  2.2.1.
 - After the map starts over at the first `RAW_IMU`, the north comes from
   the declared take-off heading, or else the FC heading on the spot: a
   vehicle turned between that moment and take-off with a declared heading

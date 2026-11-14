@@ -193,6 +193,9 @@ pub(crate) struct Engine {
     /// Why the FC IMU feed last left the planar pose degraded, `None` while
     /// it measures the heading ([`crate::nav::fc_imu::FeedState::degraded`]).
     imu_feed_degraded: Option<world_engine_protocol::atlas::ImuFeedReason>,
+    /// The planar matcher's in-flight map restarts the navigation map has
+    /// re-anchored ([`crate::pose::PoseQuality::map_restarts`]).
+    nav_map_restarts: u32,
     /// The scan coverage since the last `nav_imu_feed`.
     nav_feed: nav_lane::NavFeedStats,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
@@ -295,6 +298,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         fc_imu_prev: None,
         fc_nav: Default::default(),
         imu_feed_degraded: None,
+        nav_map_restarts: 0,
         nav_feed: Default::default(),
         reconstruct_steps,
     };

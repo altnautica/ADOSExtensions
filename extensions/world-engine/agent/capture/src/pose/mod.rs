@@ -84,6 +84,10 @@ pub struct PoseQuality {
     /// re-confirmed against the map: the pose is lost until it is (the
     /// planar scan matcher).
     pub heading_unconfirmed: bool,
+    /// Maps the matcher started over in flight because a heading a gap
+    /// left unmeasured could not be re-confirmed in time: each one's north
+    /// is re-anchored ([`crate::nav::NavMap::restart_in_flight`]).
+    pub map_restarts: u32,
 }
 
 /// A diagonal covariance from a position and an orientation sigma.
@@ -281,6 +285,11 @@ pub trait PoseProvider: Send + Sync {
     /// carried no measured yaw rate (the FC attitude stand-in). The planar
     /// matcher starts a new map there.
     fn heading_unmeasured(&self) {}
+    /// The flight controller's heading of the IMU frame (ENU yaw of its
+    /// fused attitude, radians) at host `t_ns`, in order with the IMU
+    /// batches: the planar matcher takes its change across a gap in the IMU
+    /// as the turn the gap hid, never its value.
+    fn feed_fc_heading(&self, _t_ns: u64, _heading: f64) {}
 
     /// The pose holds one floor only (a planar LiDAR cannot see a level
     /// change); the capture HUD says so.

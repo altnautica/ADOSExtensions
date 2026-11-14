@@ -142,8 +142,16 @@ impl Engine {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
         self.degrade_on_imu_feed(&mut out, now_mono_ns);
-        self.fold_gnss_alignment(&out);
         let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
+        if let Some(e) = out.last() {
+            // The matcher started a new map in flight: re-anchor its north. A
+            // new provider counts from zero again.
+            if q.map_restarts > self.nav_map_restarts {
+                self.nav.restart_in_flight(e, fc_up, heading);
+            }
+            self.nav_map_restarts = q.map_restarts;
+        }
+        self.fold_gnss_alignment(&out);
         // A pose the feed left alone but whose heading the matcher has yet
         // to re-confirm after the feed's gap says so.
         let imu_feed = self.imu_feed_degraded.or(q

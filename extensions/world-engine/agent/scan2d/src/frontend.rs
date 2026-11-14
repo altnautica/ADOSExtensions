@@ -98,9 +98,74 @@ const CONFIRM_LINEAR_M: f64 = 3.0;
 /// [`Scan2dConfig::loop_min_score`] and no heading more than
 /// [`CONFIRM_RIVAL_RAD`] from it within the search scores within this of
 /// it: a room whose outline repeats under a turn (a rectangle under half a
-/// turn) leaves the heading ambiguous, and it stays unconfirmed.
+/// turn) leaves the heading ambiguous, and it is not confirmed.
 const CONFIRM_SCORE_MARGIN: f64 = 0.1;
 const CONFIRM_RIVAL_RAD: f64 = 10.0 * std::f64::consts::PI / 180.0;
+/// Scans in a row that may find no candidate inside a run of
+/// [`CONFIRM_SCANS`] without ending it.
+const CONFIRM_MAX_MISSES: usize = 1;
+/// A gap no longer than this (under external navigation's one-second hold
+/// before its fallback) takes the turn it hid from the flight controller's
+/// own heading ([`LocalSlam::feed_fc_heading`]) when one was reported
+/// within [`FC_HEADING_MAX_AGE_NS`] of each end; the scans then search only
+/// within [`HINT_HALF_RAD`] of it (narrower than [`CONFIRM_RIVAL_RAD`], so
+/// no rival heading fits inside), with a bar of [`HINT_MIN_SCORE`] (a scan
+/// at the true pose of a live flight scores 0.25 to 0.55 against a submap
+/// it has moved away from), and through turns up to
+/// [`HINT_CONFIRM_MAX_TURN_RATE`].
+const HINT_MAX_GAP_NS: u64 = 1_000_000_000;
+const HINT_HALF_RAD: f64 = 8.0 * std::f64::consts::PI / 180.0;
+const HINT_MIN_SCORE: f64 = 0.40;
+const HINT_CONFIRM_MAX_TURN_RATE: f64 = 90.0 * std::f64::consts::PI / 180.0;
+const FC_HEADING_MAX_AGE_NS: u64 = 200_000_000;
+const FC_HEADING_KEEP_NS: u64 = 5_000_000_000;
+/// A heading not re-confirmed within these bounds starts the map over at
+/// the current pose ([`PoseOut::map_restarted`]): [`RESTART_AFTER_GATE_NS`]
+/// after the first scan searched, [`RESTART_EMPTY_SCANS`] searched scans
+/// with no candidate, [`RESTART_MOVED_M`] from where the gap was noticed
+/// (the submap before it falls behind), or [`RESTART_MAX_NS`] after that
+/// in any case.
+const RESTART_AFTER_GATE_NS: u64 = 2_000_000_000;
+const RESTART_EMPTY_SCANS: usize = 15;
+const RESTART_MOVED_M: f64 = 3.0;
+const RESTART_MAX_NS: u64 = 5_000_000_000;
+
+/// A heading a gap in the IMU left unmeasured ([`LocalSlam::suspect`]).
+#[derive(Debug, Clone)]
+struct Suspect {
+    /// How long the heading went unmeasured, ns; saturating.
+    unmeasured_ns: u64,
+    /// The flight controller's heading change across the gaps less the
+    /// gyro-held one's, radians: the turn they hid. `None` when a gap had
+    /// none ([`HINT_MAX_GAP_NS`]).
+    hint: Option<f64>,
+    /// The first submap id started since: those hold the suspect heading
+    /// and confirm nothing.
+    from_id: usize,
+    /// The scan that noticed the gap, and its prior position.
+    since_ns: u64,
+    at: Vector2<f64>,
+    /// The first scan searched.
+    gated_ns: Option<u64>,
+    /// Searched scans with no candidate.
+    empty: usize,
+    /// Searched scans in a row with no candidate.
+    misses: usize,
+    /// The current run: each scan's best map heading against the gyro-held
+    /// one, radians.
+    offsets: Vec<f64>,
+}
+
+impl Suspect {
+    /// Whether the scan at `t` with its prior at `xy` is past the bounds:
+    /// the map starts over.
+    fn exhausted(&self, t: u64, xy: Vector2<f64>) -> bool {
+        t >= self.since_ns + RESTART_MAX_NS
+            || self.gated_ns.is_some_and(|g| t >= g + RESTART_AFTER_GATE_NS)
+            || self.empty >= RESTART_EMPTY_SCANS
+            || (xy - self.at).norm() > RESTART_MOVED_M
+    }
+}
 
 /// The translation directions the last match left unconstrained.
 #[derive(Debug, Clone, Copy)]
@@ -184,13 +249,20 @@ pub struct PoseOut {
     /// all there is no gyro to hold it to, and it is true.
     pub heading_ok: bool,
     /// The heading went unmeasured (a gap in the IMU) and the scans have not
-    /// yet
-    /// re-confirmed it against the map: [`CONFIRM_SCANS`] scans in a row
-    /// found one heading, unambiguously, over every turn the gap could have
-    /// hidden. Until then the heading may be off by any turn the gap hid,
-    /// and is no navigation heading. Confirming re-seeds the heading to the
-    /// one the scans found.
+    /// yet re-confirmed it against the map: [`CONFIRM_SCANS`] scans in a row
+    /// found one heading, near the flight controller's turn across a short
+    /// gap or else unambiguously over every turn the gap could have hidden.
+    /// Until then the heading may be off by any turn the gap hid, and is no
+    /// navigation heading. Confirming re-seeds the heading to the one the
+    /// scans found.
     pub heading_unconfirmed: bool,
+    /// The heading was not re-confirmed within the bounds
+    /// ([`RESTART_AFTER_GATE_NS`] and the rest): the map was dropped at this
+    /// scan and a new one starts at its pose, its heading the gyro's guess
+    /// across the gap. The caller re-anchors the new map's heading (the
+    /// flight controller's, while it does not fuse this pose);
+    /// [`LocalSlam::inserted_scans`] counts from it.
+    pub map_restarted: bool,
 }
 
 /// Everything local SLAM built, for the offline back end.
@@ -233,21 +305,19 @@ pub struct LocalSlam {
     /// `(t_ns, map heading − gyro heading, |turn rate|)` of the scans of the
     /// last [`HEADING_WINDOW_NS`] the gyro measured, oldest first.
     gyro_offsets: VecDeque<(u64, f64, f64)>,
-    /// Set by a gap in the IMU, cleared once the scans re-confirm the
-    /// heading ([`HEADING_CONFIRM_RAD`]).
-    heading_suspect: bool,
-    /// How long the heading went unmeasured since it was last confirmed,
-    /// ns; saturating.
-    unmeasured_ns: u64,
-    /// The re-confirming scans so far: each one's best map heading against
-    /// the gyro-held one, radians.
-    confirm_offsets: Vec<f64>,
+    /// The heading a gap in the IMU left unmeasured, until the scans
+    /// re-confirm it or the map starts over ([`Suspect`]).
+    suspect: Option<Suspect>,
+    /// The end of the last gap counted into [`Self::suspect`]: each scan
+    /// after a gap sees it, and it is counted once.
+    counted_gap_end_ns: Option<u64>,
     /// The pyramid of the submap the re-confirmation searches, by submap
     /// id; the submap takes no scans while the heading is suspect.
     confirm_pyramid: Option<(usize, Pyramid)>,
-    /// The first submap id started since the heading went suspect: those
-    /// hold the suspect heading and confirm nothing.
-    suspect_from_id: usize,
+    /// `(t_ns, heading)` the flight controller reports for the IMU frame
+    /// ([`Self::feed_fc_heading`]), unwrapped, the last
+    /// [`FC_HEADING_KEEP_NS`], oldest first.
+    fc_headings: VecDeque<(u64, f64)>,
 }
 
 impl LocalSlam {
@@ -280,11 +350,10 @@ impl LocalSlam {
             climb: None,
             sigma_xy_m: SIGMA_MATCHED_M,
             gyro_offsets: VecDeque::new(),
-            heading_suspect: false,
-            unmeasured_ns: 0,
-            confirm_offsets: Vec::new(),
+            suspect: None,
+            counted_gap_end_ns: None,
             confirm_pyramid: None,
-            suspect_from_id: 0,
+            fc_headings: VecDeque::new(),
         }
     }
 
@@ -292,7 +361,8 @@ impl LocalSlam {
         &self.cfg
     }
 
-    /// Scans inserted into the submaps so far.
+    /// Scans inserted into the submaps since the map last started over
+    /// ([`Self::heading_unmeasured`], [`PoseOut::map_restarted`]).
     pub fn inserted_scans(&self) -> usize {
         self.inserted
     }
@@ -307,14 +377,49 @@ impl LocalSlam {
         self.att.update(s);
     }
 
+    /// The flight controller's own heading of the IMU frame about the
+    /// vertical at `t_ns`, radians counter-clockwise from any fixed
+    /// direction (its fused attitude's yaw). Only its change across a gap in
+    /// the IMU is used ([`HINT_MAX_GAP_NS`]): the turn the gap hid, which the
+    /// scans then re-confirm within [`HINT_HALF_RAD`] of. Its absolute value
+    /// never reaches the heading: under external navigation the flight
+    /// controller fuses this matcher's own heading, and taking it back would
+    /// close a loop. Feed it in time order with the IMU.
+    pub fn feed_fc_heading(&mut self, t_ns: u64, heading: f64) {
+        let h = match self.fc_headings.back() {
+            Some(&(t, _)) if t >= t_ns => return,
+            Some(&(_, h0)) => h0 + wrap(heading - h0),
+            None => heading,
+        };
+        self.fc_headings.push_back((t_ns, h));
+        while self
+            .fc_headings
+            .front()
+            .is_some_and(|&(t, _)| t + FC_HEADING_KEEP_NS < t_ns)
+        {
+            self.fc_headings.pop_front();
+        }
+    }
+
+    /// The flight controller's heading reported nearest `t_ns`, within
+    /// [`FC_HEADING_MAX_AGE_NS`]: `(its time, heading)`.
+    fn fc_heading_near(&self, t_ns: u64) -> Option<(u64, f64)> {
+        self.fc_headings
+            .iter()
+            .copied()
+            .min_by_key(|&(t, _)| t.abs_diff(t_ns))
+            .filter(|&(t, _)| t.abs_diff(t_ns) <= FC_HEADING_MAX_AGE_NS)
+    }
+
     /// The heading went unmeasured for an unknown time, whatever the IMU
     /// samples say: they carried no yaw rate (a stand-in fed from a fused
     /// attitude). The map the scans built meanwhile placed them at a heading
     /// pinned through any turn, so it cannot re-confirm one: it is dropped,
     /// and the next scan starts a new map at the current pose. The new map's
     /// heading against the old one (and the world) is unknown by any turn
-    /// the stretch hid; the caller re-anchors it. Call it in order with the
-    /// samples, before the first one that measures the turn again.
+    /// the stretch hid; the caller re-anchors it. [`Self::inserted_scans`]
+    /// counts the new map's scans. Call it in order with the samples, before
+    /// the first one that measures the turn again.
     pub fn heading_unmeasured(&mut self) {
         for (_, done) in self.active.drain(..) {
             if self.record {
@@ -325,50 +430,81 @@ impl LocalSlam {
         self.gyro_offsets.clear();
         self.unobserved = None;
         self.last_insert = None;
-        self.heading_suspect = false;
-        self.unmeasured_ns = 0;
-        self.confirm_offsets.clear();
+        self.inserted = 0;
+        self.suspect = None;
         self.confirm_pyramid = None;
     }
 
-    /// The heading went unmeasured for `span_ns`.
-    fn suspect(&mut self, span_ns: u64) {
-        if !self.heading_suspect {
-            self.heading_suspect = true;
-            self.suspect_from_id = self.next_id;
+    /// The gap in the IMU that ended at `end_ns` after `len_ns` left the
+    /// heading unmeasured (counted once however many scans see it). Across
+    /// a short one the flight controller's own heading change, against the
+    /// gyro-held one, is the turn it hid ([`Suspect::hint`]).
+    fn suspect(&mut self, t: u64, at: Pose2, end_ns: u64, len_ns: u64) {
+        if self.counted_gap_end_ns == Some(end_ns) {
+            return;
         }
-        self.unmeasured_ns = self.unmeasured_ns.saturating_add(span_ns);
-        self.confirm_offsets.clear();
+        self.counted_gap_end_ns = Some(end_ns);
+        let start_ns = end_ns.saturating_sub(len_ns);
+        let hint = (len_ns <= HINT_MAX_GAP_NS)
+            .then(|| {
+                let (ta, ha) = self.fc_heading_near(start_ns)?;
+                let (tb, hb) = self.fc_heading_near(end_ns)?;
+                (tb > ta).then(|| {
+                    wrap((hb - ha) - (self.att.heading_at(tb) - self.att.heading_at(ta)))
+                })
+            })
+            .flatten();
+        let s = self.suspect.get_or_insert(Suspect {
+            unmeasured_ns: 0,
+            hint: Some(0.0),
+            from_id: self.next_id,
+            since_ns: t,
+            at: Vector2::new(at.x, at.y),
+            gated_ns: None,
+            empty: 0,
+            misses: 0,
+            offsets: Vec::new(),
+        });
+        s.unmeasured_ns = s.unmeasured_ns.saturating_add(len_ns);
+        s.hint = s.hint.zip(hint).map(|(a, b)| a + b);
+        s.offsets.clear();
+        s.misses = 0;
     }
 
     /// One scan's step in re-confirming a suspect heading against the
     /// active submap, if that submap was started before the heading went
-    /// unmeasured (one started since holds the suspect heading itself). The
-    /// scan's best pose over every turn the stretch could have hidden
-    /// ([`MAX_UNMEASURED_YAW_RATE`]), if it is unambiguous; once
-    /// [`CONFIRM_SCANS`] in a row agree, the heading is confirmed and
-    /// re-seeded there, and the confirming scan's pose in the submap is
-    /// returned.
-    fn reconfirm(&mut self, scan: &Scan2d, prior: Pose2) -> Option<Pose2> {
+    /// unmeasured (one started since holds the suspect heading itself): the
+    /// scan's best pose within [`HINT_HALF_RAD`] of the flight controller's
+    /// turn across a short gap, or else over every turn the stretch could
+    /// have hidden ([`MAX_UNMEASURED_YAW_RATE`]) if it is unambiguous. Once
+    /// [`CONFIRM_SCANS`] in a row agree (one scan between them may find
+    /// none), the heading is confirmed and re-seeded there, and the
+    /// confirming scan's pose in the submap is returned.
+    fn reconfirm(&mut self, t: u64, scan: &Scan2d, prior: Pose2) -> Option<Pose2> {
         let found = self.confirm_candidate(scan, prior);
+        let s = self.suspect.as_mut()?;
+        s.gated_ns.get_or_insert(t);
         let Some((g, off)) = found else {
-            self.confirm_offsets.clear();
+            s.empty += 1;
+            s.misses += 1;
+            if s.misses > CONFIRM_MAX_MISSES {
+                s.offsets.clear();
+            }
             return None;
         };
-        if self
-            .confirm_offsets
+        s.misses = 0;
+        if s
+            .offsets
             .first()
             .is_some_and(|&o| wrap(off - o).abs() > HEADING_CONFIRM_RAD)
         {
-            self.confirm_offsets.clear();
+            s.offsets.clear();
         }
-        self.confirm_offsets.push(off);
-        if self.confirm_offsets.len() < CONFIRM_SCANS {
+        s.offsets.push(off);
+        if s.offsets.len() < CONFIRM_SCANS {
             return None;
         }
-        self.heading_suspect = false;
-        self.unmeasured_ns = 0;
-        self.confirm_offsets.clear();
+        self.suspect = None;
         self.confirm_pyramid = None;
         // The heading jumps to the confirmed one: the motion and the gyro
         // comparison restart from it.
@@ -378,11 +514,15 @@ impl LocalSlam {
         Some(g)
     }
 
-    /// The scan's unambiguous best pose in the active submap over the
-    /// unmeasured stretch's turns, and its heading against the prior's.
+    /// The scan's best pose in the active submap over the unmeasured
+    /// stretch's turns, and its heading against the prior's: near the
+    /// flight controller's turn when there is one, else unambiguous over
+    /// every turn.
     fn confirm_candidate(&mut self, scan: &Scan2d, prior: Pose2) -> Option<(Pose2, f64)> {
+        let s = self.suspect.as_ref()?;
+        let (unmeasured_ns, hint, from_id) = (s.unmeasured_ns, s.hint, s.from_id);
         let (id, sm) = self.active.first()?;
-        if sm.scans() == 0 || *id >= self.suspect_from_id {
+        if sm.scans() == 0 || *id >= from_id {
             return None;
         }
         let id = *id;
@@ -391,9 +531,6 @@ impl LocalSlam {
         }
         let (_, pyr) = self.confirm_pyramid.as_ref()?;
         let p = sm.pose.inverse() * prior;
-        let half = (self.unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE
-            + CONFIRM_MARGIN_RAD)
-            .min(PI);
         let search = |lo: f64, hi: f64, min_score: f64| {
             let window = Window {
                 linear_m: CONFIRM_LINEAR_M,
@@ -402,6 +539,13 @@ impl LocalSlam {
             let center = Pose2::new(p.x, p.y, 0.5 * (lo + hi));
             branch_and_bound(pyr, scan, center, window, min_score)
         };
+        if let Some(h) = hint {
+            // Narrow enough that no rival heading fits inside it.
+            let (g, _) = search(p.th + h - HINT_HALF_RAD, p.th + h + HINT_HALF_RAD, HINT_MIN_SCORE)?;
+            return Some((g, wrap(g.th - p.th)));
+        }
+        let half = (unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE + CONFIRM_MARGIN_RAD)
+            .min(PI);
         let (g, score) = search(p.th - half, p.th + half, self.cfg.loop_min_score)?;
         // Any heading clear of the best that scores near it makes the room
         // ambiguous under the turn.
@@ -596,6 +740,7 @@ impl LocalSlam {
             sigma_xy_m: SIGMA_MATCHED_M,
             heading_ok: false,
             heading_unconfirmed: false,
+            map_restarted: false,
         };
         // Riding the prior: it carried the pose `speed × dt` since the last
         // scan without a match to check it.
@@ -606,8 +751,18 @@ impl LocalSlam {
         // in the IMU bridges it with a guess. Scans before the first sample
         // are no gap: the heading starts there, and nothing was lost.
         let measured = !gyro || self.last.is_none_or(|(t1, _, _)| self.att.measured_since(t1));
-        if !measured && self.att.last_gap_ns() > 0 {
-            self.suspect(self.att.last_gap_ns());
+        if !measured {
+            if let Some((end_ns, len_ns)) = self.att.last_gap() {
+                self.suspect(t, prior, end_ns, len_ns);
+            }
+        }
+        if self
+            .suspect
+            .as_ref()
+            .is_some_and(|s| s.exhausted(t, Vector2::new(prior.x, prior.y)))
+        {
+            self.heading_unmeasured();
+            out.map_restarted = true;
         }
         let has_measured = self
             .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
@@ -615,8 +770,8 @@ impl LocalSlam {
         if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm(), has_measured)
         {
             let consistent = self.check_heading(t, prior.th, heading, yaw_rate, measured);
-            out.heading_ok = reached && consistent && !self.heading_suspect;
-            out.heading_unconfirmed = self.heading_suspect;
+            out.heading_ok = reached && consistent && self.suspect.is_none();
+            out.heading_unconfirmed = self.suspect.is_some();
             self.advance(t, prior, heading);
             self.sigma_xy_m = riding_sigma;
             out.sigma_xy_m = riding_sigma;
@@ -638,11 +793,12 @@ impl LocalSlam {
         }
         // A heading the IMU left unmeasured is re-confirmed against the map
         // the scans saw before, never taken from a match that holds to it.
-        let confirmed = if self.heading_suspect
-            && reached
-            && yaw_rate.abs() <= HEADING_CONFIRM_MAX_TURN_RATE
-        {
-            self.reconfirm(&scan, prior)
+        let max_rate = match self.suspect.as_ref().map(|s| s.hint) {
+            Some(Some(_)) => HINT_CONFIRM_MAX_TURN_RATE,
+            _ => HEADING_CONFIRM_MAX_TURN_RATE,
+        };
+        let confirmed = if self.suspect.is_some() && reached && yaw_rate.abs() <= max_rate {
+            self.reconfirm(t, &scan, prior)
         } else {
             None
         };
@@ -728,7 +884,7 @@ impl LocalSlam {
         // heading the IMU did not measure (not reached, or suspect since a
         // gap) stays out of the map, so the map keeps the heading the scans
         // can still confirm it against.
-        let insert = (reached && !self.heading_suspect && self.should_insert(t, pose))
+        let insert = (reached && self.suspect.is_none() && self.should_insert(t, pose))
             || self.active[0].1.scans() == 0;
         if insert {
             self.insert(&scan, t, pose);
@@ -746,8 +902,8 @@ impl LocalSlam {
             });
         }
         let consistent = self.check_heading(t, pose.th, heading, yaw_rate, measured);
-        out.heading_ok = reached && consistent && !self.heading_suspect;
-        out.heading_unconfirmed = self.heading_suspect;
+        out.heading_ok = reached && consistent && self.suspect.is_none();
+        out.heading_unconfirmed = self.suspect.is_some();
         self.advance(t, pose, heading);
         out
     }
