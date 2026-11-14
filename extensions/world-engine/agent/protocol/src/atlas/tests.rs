@@ -273,6 +273,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         source: NavPoseSource::LidarPlanar,
         north: Some(MapNorth::Gnss),
         sigma_xy_m: Some(0.4),
+        imu_feed: Some(ImuFeedReason::Starved),
     };
     assert_eq!(
         pose_desc,

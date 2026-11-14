@@ -198,9 +198,9 @@ pub use keyframe::{
     TimeAlignment, VioHealth, KEYFRAME_MAX_SIGMA_NS, POSE_COV_LEN,
 };
 pub use nav::{
-    ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapPayloadKind, MapStatus,
-    NavFrame, NavPoseMode, NavPoseSource, OccupancyTile, ScanDescriptor, StreamPhase,
-    StreamProgress, UploadPhase, UploadProgress,
+    ComputePlacement, ImuFeedReason, ImuFeedState, ImuFeedStatus, LiveOccupancy, LivePointCloud,
+    MapNorth, MapPayloadKind, MapStatus, NavFrame, NavPoseMode, NavPoseSource, OccupancyTile,
+    ScanDescriptor, StreamPhase, StreamProgress, UploadPhase, UploadProgress,
 };
 pub use polar::{PolarError, PolarScan};
 

@@ -52,6 +52,7 @@ use crate::geodesy::{R_ENU_NED, R_FRD_FLU};
 use crate::mavlink_msg::RawImu;
 use crate::pose::fc_ekf::{NavSample, NavSink};
 use crate::pose::{se3, PoseProvider};
+use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, VioHealth};
 
 /// The `atlas.lidar.imu` id that selects this stream.
 pub const FC_IMU_ID: &str = "fc";
@@ -137,28 +138,6 @@ const RAW_IMU_STALE_NS: u64 = 250_000_000;
 const RAW_IMU_MIN_PER_S: usize = 40;
 const RATE_WINDOW_NS: u64 = 1_000_000_000;
 
-/// Why the FC IMU feed cannot vouch for the matcher's heading
-/// ([`FeedState::degraded`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FeedDegraded {
-    /// No `RAW_IMU` yet: the attitude stand-in, which carries no yaw rate.
-    AttitudeStandIn,
-    /// The newest `RAW_IMU` sample is older than 250 ms.
-    Stalled,
-    /// Under 40 `RAW_IMU` samples over the last second.
-    Starved,
-}
-
-impl FeedDegraded {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            FeedDegraded::AttitudeStandIn => "attitude_stand_in",
-            FeedDegraded::Stalled => "stalled",
-            FeedDegraded::Starved => "starved",
-        }
-    }
-}
-
 /// What the FC feed has handed the pose provider, shared between the
 /// MAVLink delivery thread ([`sink`]) and the capture loop (the attitude
 /// stand-in, the `nav_imu_feed` log and the pose health).
@@ -220,19 +199,50 @@ impl FeedState {
     /// matcher's heading rides between scans: the attitude stand-in, or a
     /// `RAW_IMU` stream that stalled or arrives under 40 Hz. A pose the
     /// matcher reports good is then degraded.
-    pub fn degraded(&self, now_ns: u64) -> Option<FeedDegraded> {
+    pub fn degraded(&self, now_ns: u64) -> Option<ImuFeedReason> {
         if !self.raw_imu() {
-            return Some(FeedDegraded::AttitudeStandIn);
+            return Some(ImuFeedReason::AttitudeStandIn);
         }
         let times = self.raw_times();
         let newest = *times.back()?;
         if newest + RAW_IMU_STALE_NS < now_ns {
-            Some(FeedDegraded::Stalled)
+            Some(ImuFeedReason::Stalled)
         } else if times.len() < RAW_IMU_MIN_PER_S {
-            Some(FeedDegraded::Starved)
+            Some(ImuFeedReason::Starved)
         } else {
             None
         }
+    }
+
+    /// `RAW_IMU` samples over the second up to host `now_ns`; `None` before
+    /// `RAW_IMU`.
+    pub fn raw_rate_hz(&self, now_ns: u64) -> Option<f32> {
+        if !self.raw_imu() {
+            return None;
+        }
+        let times = self.raw_times();
+        let n = times.iter().rev().take_while(|&&t| t + RATE_WINDOW_NS >= now_ns).count();
+        Some(n as f32 * 1e9 / RATE_WINDOW_NS as f32)
+    }
+}
+
+/// Holds the poses of a matcher that takes the FC as its IMU to the feed's
+/// `reason` ([`FeedState::degraded`]).
+/// - On the attitude stand-in or a stalled `RAW_IMU`, no yaw rate reaches
+///   the matcher, whose rotation prior then pins the heading so it cannot
+///   follow a yaw at all: every pose is lost. vision-nav sends no
+///   `ODOMETRY` for it, and the flight controller falls back to its other
+///   sources.
+/// - On a live but starved `RAW_IMU`, the heading is measured, coarsely: a
+///   pose the matcher reports good is degraded.
+pub fn hold_poses_to_feed(poses: &mut [crate::pose::PoseEstimate], reason: Option<ImuFeedReason>) {
+    match reason.map(ImuFeedReason::state) {
+        Some(ImuFeedState::Lost) => poses.iter_mut().for_each(|e| e.health = VioHealth::Lost),
+        Some(_) => poses
+            .iter_mut()
+            .filter(|e| e.health == VioHealth::Good)
+            .for_each(|e| e.health = VioHealth::Degraded),
+        None => {}
     }
 }
 
@@ -336,18 +346,52 @@ mod tests {
             attitude: None,
         };
         state.note_imu(5_000_000_000);
-        assert_eq!(state.degraded(5_000_000_000), Some(FeedDegraded::AttitudeStandIn));
+        assert_eq!(state.degraded(5_000_000_000), Some(ImuFeedReason::AttitudeStandIn));
+        assert_eq!(state.raw_rate_hz(5_000_000_000), None);
         // 20 Hz for a second: starved.
         for k in 0..20 {
             sink(raw(6_000_000_000 + k * 50_000_000));
         }
-        assert_eq!(state.degraded(6_960_000_000), Some(FeedDegraded::Starved));
+        assert_eq!(state.degraded(6_960_000_000), Some(ImuFeedReason::Starved));
+        assert_eq!(state.raw_rate_hz(6_960_000_000), Some(20.0));
         // 100 Hz for a second: steady.
         for k in 0..100 {
             sink(raw(7_000_000_000 + k * 10_000_000));
         }
         assert_eq!(state.degraded(7_995_000_000), None);
-        assert_eq!(state.degraded(8_300_000_000), Some(FeedDegraded::Stalled));
+        assert_eq!(state.raw_rate_hz(7_995_000_000), Some(100.0));
+        assert_eq!(state.degraded(8_300_000_000), Some(ImuFeedReason::Stalled));
+        assert_eq!(state.raw_rate_hz(8_300_000_000), Some(70.0));
+    }
+
+    /// No yaw rate reaching the matcher (the stand-in, a stalled feed) loses
+    /// every pose, whatever the matcher said; a starved but live feed only
+    /// degrades a good one; a steady feed leaves them be.
+    #[test]
+    fn a_feed_without_a_yaw_rate_loses_the_pose_and_a_starved_one_degrades_it() {
+        use crate::pose::PoseEstimate;
+        use world_engine_protocol::atlas::{PoseSource, POSE_COV_LEN};
+        let poses = || {
+            [VioHealth::Good, VioHealth::Degraded, VioHealth::Lost].map(|health| PoseEstimate {
+                t_ns: 0,
+                r: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                t: [0.0; 3],
+                cov: [0.0; POSE_COV_LEN],
+                source: PoseSource::Lidar,
+                health,
+                sigma_xy_m: None,
+            })
+        };
+        let held = |reason| {
+            let mut p = poses();
+            hold_poses_to_feed(&mut p, reason);
+            p.map(|e| e.health)
+        };
+        use VioHealth::*;
+        assert_eq!(held(Some(ImuFeedReason::AttitudeStandIn)), [Lost, Lost, Lost]);
+        assert_eq!(held(Some(ImuFeedReason::Stalled)), [Lost, Lost, Lost]);
+        assert_eq!(held(Some(ImuFeedReason::Starved)), [Degraded, Degraded, Lost]);
+        assert_eq!(held(None), [Good, Degraded, Lost]);
     }
 
     #[test]

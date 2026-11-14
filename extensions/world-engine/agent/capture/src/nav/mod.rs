@@ -403,6 +403,8 @@ impl NavMap {
             source: nav_source(e.source),
             north: self.north(),
             sigma_xy_m: e.sigma_xy_m,
+            // Set by the capture loop, which knows the FC IMU feed.
+            imu_feed: None,
         })
     }
 

@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use ados_capture_contract::v1::ImuBatch;
-use world_engine_protocol::atlas::VioHealth;
+use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus};
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
@@ -229,12 +229,9 @@ impl Engine {
         self.place_scans().await;
     }
 
-    /// With the FC as the matcher's IMU, a pose the matcher reports good is
-    /// degraded while the FC IMU feed fails to measure the heading's turn
-    /// ([`fc_imu::FeedState::degraded`]: the attitude stand-in, or a stalled
-    /// or starved `RAW_IMU`), so vision-nav sends it with a wide yaw
-    /// uncertainty instead of as confident. Each change is logged
-    /// (`nav_imu_feed_degraded` / `nav_imu_feed_ok`).
+    /// With the FC as the matcher's IMU, the pose follows the FC IMU feed
+    /// ([`fc_imu::FeedState::degraded`], [`fc_imu::hold_poses_to_feed`]).
+    /// Each change is logged (`nav_imu_feed_degraded` / `nav_imu_feed_ok`).
     pub(super) fn degrade_on_imu_feed(&mut self, poses: &mut [PoseEstimate], now_ns: u64) {
         if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
             return;
@@ -242,16 +239,19 @@ impl Engine {
         let degraded = self.fc_nav.degraded(now_ns);
         if degraded != self.imu_feed_degraded {
             match degraded {
-                Some(why) => tracing::warn!(reason = why.as_str(), "nav_imu_feed_degraded"),
+                Some(why) => tracing::warn!(
+                    reason = why.as_str(),
+                    pose = match why.state() {
+                        ImuFeedState::Lost => "lost",
+                        _ => "degraded",
+                    },
+                    "nav_imu_feed_degraded"
+                ),
                 None => tracing::info!("nav_imu_feed_ok"),
             }
             self.imu_feed_degraded = degraded;
         }
-        if degraded.is_some() {
-            for e in poses.iter_mut().filter(|e| e.health == VioHealth::Good) {
-                e.health = VioHealth::Degraded;
-            }
-        }
+        fc_imu::hold_poses_to_feed(poses, degraded);
     }
 
     /// At most every [`NAV_FEED_LOG_EVERY`], with the FC as the IMU: the IMU
@@ -272,7 +272,7 @@ impl Engine {
             scans = f.scans,
             p50_scan_imu_gap_ms = p50,
             max_scan_imu_gap_ms = max,
-            degraded = self.imu_feed_degraded.map(fc_imu::FeedDegraded::as_str),
+            degraded = self.imu_feed_degraded.map(ImuFeedReason::as_str),
             "nav_imu_feed"
         );
     }
@@ -300,7 +300,8 @@ impl Engine {
             keyframes_dropped: recorder.map_or(0, |r| r.sidecars().keyframes.dropped()),
         };
         let open = self.session.is_some();
-        let out = self.nav.tick(&inputs, open);
+        let mut out = self.nav.tick(&inputs, open);
+        out.status.imu_feed = self.imu_feed_status();
         if let Some(o) = &out.occupancy {
             self.publisher.publish_live_occupancy(o).await;
         }
@@ -308,6 +309,22 @@ impl Engine {
             self.publisher.publish_live_pointcloud(c).await;
         }
         self.publisher.publish_map_status(&out.status).await;
+    }
+
+    /// [`world_engine_protocol::atlas::MapStatus::imu_feed`]: with the FC as
+    /// the planar pose's IMU, whether its feed measures the heading, why
+    /// not, and the `RAW_IMU` rate; `None` otherwise.
+    fn imu_feed_status(&self) -> Option<ImuFeedStatus> {
+        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+            return None;
+        }
+        let now = crate::clock::mono_ns();
+        let reason = self.fc_nav.degraded(now);
+        Some(ImuFeedStatus {
+            state: reason.map_or(ImuFeedState::Ok, ImuFeedReason::state),
+            reason,
+            rate_hz: self.fc_nav.raw_rate_hz(now),
+        })
     }
 
     /// Save the live map into a closing session's directory, before its

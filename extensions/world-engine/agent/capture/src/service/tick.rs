@@ -144,9 +144,11 @@ impl Engine {
         self.degrade_on_imu_feed(&mut out, now_mono_ns);
         self.fold_gnss_alignment(&out);
         let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
+        let imu_feed = self.imu_feed_degraded;
         let due = out
             .last()
-            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns, open));
+            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns, open))
+            .map(|pd| PoseDescriptor { imu_feed, ..pd });
         if out.is_empty() || self.recorder().is_none() {
             return due;
         }

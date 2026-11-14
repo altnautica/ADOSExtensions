@@ -161,6 +161,38 @@ impl MapNorth {
     }
 }
 
+/// Why the publisher's flight-controller IMU feed left the pose degraded or
+/// lost, as the pose topic reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImuFeed {
+    /// No `RAW_IMU` yet: the attitude stand-in, with no yaw rate.
+    AttitudeStandIn,
+    /// `RAW_IMU` stopped.
+    Stalled,
+    /// `RAW_IMU` under 40 Hz.
+    Starved,
+}
+
+impl ImuFeed {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "attitude_stand_in" => ImuFeed::AttitudeStandIn,
+            "stalled" => ImuFeed::Stalled,
+            "starved" => ImuFeed::Starved,
+            _ => return None,
+        })
+    }
+
+    /// How an operator reads it.
+    pub fn describe(self) -> &'static str {
+        match self {
+            ImuFeed::AttitudeStandIn => "no RAW_IMU from the flight controller yet",
+            ImuFeed::Stalled => "the flight controller's RAW_IMU stopped",
+            ImuFeed::Starved => "the flight controller's RAW_IMU is under 40 Hz",
+        }
+    }
+}
+
 /// One pose in map FRD.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PoseSample {
@@ -173,6 +205,9 @@ pub struct PoseSample {
     /// The publisher's horizontal one-sigma uncertainty, metres; `None`
     /// when it does not say.
     pub sigma_xy_m: Option<f32>,
+    /// Why the publisher's FC IMU feed left the pose degraded or lost;
+    /// `None` when it did not (or the publisher does not say).
+    pub imu_feed: Option<ImuFeed>,
 }
 
 impl PoseSample {
@@ -275,6 +310,9 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         .and_then(as_f64)
         .filter(|s| s.is_finite() && *s >= 0.0)
         .map(|s| s as f32);
+    let imu_feed = get(p, "imu_feed")
+        .and_then(Value::as_str)
+        .and_then(ImuFeed::parse);
     Ok(PoseSample {
         ts_ms,
         r,
@@ -282,6 +320,7 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         health,
         north,
         sigma_xy_m,
+        imu_feed,
     })
 }
 

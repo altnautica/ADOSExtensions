@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::external_nav::{ExtnavHealth, MapNorth};
+use crate::external_nav::{ExtnavHealth, ImuFeed, MapNorth};
 use crate::nav_commands::extnav_fc_params;
 use crate::nav_config::ExternalNavConfig;
 use crate::pre_arm::PreArmCheck;
@@ -57,6 +57,9 @@ pub struct ExtnavPreArmInputs {
     /// Where the fresh pose's map north comes from; `None` when there is no
     /// fresh pose or it does not say.
     pub north: Option<MapNorth>,
+    /// Why the publisher's FC IMU feed left the fresh pose degraded or
+    /// lost; `None` when it did not or there is no fresh pose.
+    pub imu_feed: Option<ImuFeed>,
     /// The flight controller has reported an EKF origin this boot.
     pub origin_seen: bool,
     /// That origin followed a `SET_GPS_GLOBAL_ORIGIN` the plugin sent.
@@ -108,12 +111,20 @@ pub(crate) fn extnav_checks(inputs: Option<&ExtnavPreArmInputs>) -> Vec<PreArmCh
     } else {
         PreArmCheck::ok("extnav_source", "")
     };
+    // A pose the publisher's FC IMU feed held down names that feed: its
+    // heading is not measured (lost) or measured coarsely (degraded).
+    let feed = i
+        .imu_feed
+        .map_or(String::new(), |f| format!(" ({})", f.describe()));
     let health = match i.health {
         Some(ExtnavHealth::Good) => PreArmCheck::ok("extnav_health", "Tracking good."),
-        Some(ExtnavHealth::Degraded) => {
-            PreArmCheck::pending("extnav_health", "Tracking degraded; position noise raised.")
+        Some(ExtnavHealth::Degraded) => PreArmCheck::pending(
+            "extnav_health",
+            format!("Tracking degraded{feed}; position noise raised."),
+        ),
+        Some(ExtnavHealth::Lost) => {
+            PreArmCheck::blocking("extnav_health", format!("Tracking lost{feed}."))
         }
-        Some(ExtnavHealth::Lost) => PreArmCheck::blocking("extnav_health", "Tracking lost."),
         None => PreArmCheck::pending("extnav_health", "No fresh pose."),
     };
     let mut checks = vec![

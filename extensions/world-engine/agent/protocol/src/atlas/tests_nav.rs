@@ -38,6 +38,7 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         source: NavPoseSource::LidarPlanar,
         north: Some(MapNorth::Declared),
         sigma_xy_m: Some(0.35),
+        imu_feed: Some(ImuFeedReason::Stalled),
     };
     let v = serde_json::to_value(&pd).unwrap();
     assert_eq!(v["health"], "good");
@@ -45,25 +46,31 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
     assert_eq!(v["source"], "lidar_planar");
     assert_eq!(v["north"], "declared");
     assert_eq!(v["sigma_xy_m"], 0.35);
+    assert_eq!(v["imu_feed"], "stalled");
     assert_eq!(v["pose"]["R"][0], 1.0);
     assert_eq!(
         PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(),
         pd
     );
-    // An older publisher sends no north and no sigma; they read as unknown.
+    // An older publisher sends no north, sigma or IMU feed; they read as
+    // unknown.
     let mut old = v.clone();
-    old.as_object_mut().unwrap().remove("north");
-    old.as_object_mut().unwrap().remove("sigma_xy_m");
+    for key in ["north", "sigma_xy_m", "imu_feed"] {
+        old.as_object_mut().unwrap().remove(key);
+    }
     let parsed: PoseDescriptor = serde_json::from_value(old).unwrap();
     assert_eq!(parsed.north, None);
     assert_eq!(parsed.sigma_xy_m, None);
+    assert_eq!(parsed.imu_feed, None);
     let none = PoseDescriptor {
         north: None,
         sigma_xy_m: None,
+        imu_feed: None,
         ..pd
     };
     let v = serde_json::to_value(&none).unwrap();
     assert!(v.get("north").is_none() && v.get("sigma_xy_m").is_none());
+    assert!(v.get("imu_feed").is_none());
 }
 
 #[test]
@@ -138,6 +145,35 @@ fn scan_and_map_status_use_the_documented_keys() {
     ] {
         assert!(v.get(key).is_some(), "{key}");
     }
+}
+
+/// `imu_feed` is null without an FC IMU, absent on an older device, and
+/// otherwise `{state, reason, rate_hz}` in snake case: lost on the
+/// attitude stand-in or a stalled feed, degraded on a starved one.
+#[test]
+fn map_status_carries_the_fc_imu_feed() {
+    let v = serde_json::to_value(MapStatus::default()).unwrap();
+    assert!(v["imu_feed"].is_null());
+    let st = MapStatus {
+        imu_feed: Some(ImuFeedStatus {
+            state: ImuFeedState::Lost,
+            reason: Some(ImuFeedReason::AttitudeStandIn),
+            rate_hz: None,
+        }),
+        ..MapStatus::default()
+    };
+    let v = serde_json::to_value(&st).unwrap();
+    assert_eq!(
+        v["imu_feed"],
+        serde_json::json!({"state": "lost", "reason": "attitude_stand_in", "rate_hz": null})
+    );
+    assert_eq!(ImuFeedReason::AttitudeStandIn.state(), ImuFeedState::Lost);
+    assert_eq!(ImuFeedReason::Stalled.state(), ImuFeedState::Lost);
+    assert_eq!(ImuFeedReason::Starved.state(), ImuFeedState::Degraded);
+    let mut old = serde_json::to_value(MapStatus::default()).unwrap();
+    old.as_object_mut().unwrap().remove("imu_feed");
+    let back: MapStatus = serde_json::from_value(old).unwrap();
+    assert_eq!(back.imu_feed, None);
 }
 
 #[test]

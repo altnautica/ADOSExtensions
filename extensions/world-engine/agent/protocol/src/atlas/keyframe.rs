@@ -405,4 +405,10 @@ pub struct PoseDescriptor {
     /// estimators that report none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sigma_xy_m: Option<f64>,
+    /// Why the flight controller's IMU feed left the pose degraded or lost
+    /// ([`super::nav::ImuFeedReason`]); absent while the feed measures the
+    /// heading, from older publishers and from poses that do not take the
+    /// FC as their IMU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub imu_feed: Option<super::nav::ImuFeedReason>,
 }

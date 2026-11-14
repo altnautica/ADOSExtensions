@@ -229,6 +229,64 @@ pub struct StreamProgress {
     pub bytes_per_s: u64,
 }
 
+/// Whether the flight controller's IMU feed measures the heading a planar
+/// LiDAR pose rides between scans.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImuFeedState {
+    Ok,
+    /// The feed is live but starved: the heading is measured, coarsely. The
+    /// pose is degraded.
+    Degraded,
+    /// No yaw rate reaches the matcher (the attitude stand-in, or a stalled
+    /// `RAW_IMU`): the heading cannot follow a yaw at all, and the pose is
+    /// lost.
+    Lost,
+}
+
+/// Why the FC IMU feed is degraded or lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImuFeedReason {
+    /// No `RAW_IMU` yet: the FC attitude stand-in, which carries no yaw rate.
+    AttitudeStandIn,
+    /// The newest `RAW_IMU` sample is older than 250 ms.
+    Stalled,
+    /// Under 40 `RAW_IMU` samples over the last second.
+    Starved,
+}
+
+impl ImuFeedReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ImuFeedReason::AttitudeStandIn => "attitude_stand_in",
+            ImuFeedReason::Stalled => "stalled",
+            ImuFeedReason::Starved => "starved",
+        }
+    }
+
+    /// The feed's state for this reason: lost when no yaw rate reaches the
+    /// matcher, degraded while it is live but starved.
+    pub fn state(self) -> ImuFeedState {
+        match self {
+            ImuFeedReason::AttitudeStandIn | ImuFeedReason::Stalled => ImuFeedState::Lost,
+            ImuFeedReason::Starved => ImuFeedState::Degraded,
+        }
+    }
+}
+
+/// [`MapStatus::imu_feed`]: the FC IMU feed of a planar LiDAR pose that
+/// takes the flight controller as its IMU (`atlas.lidar.imu = "fc"`). The
+/// pose is degraded or lost while the feed is ([`ImuFeedReason::state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ImuFeedStatus {
+    pub state: ImuFeedState,
+    /// Null while `state` is ok.
+    pub reason: Option<ImuFeedReason>,
+    /// `RAW_IMU` samples over the last second; null before `RAW_IMU`.
+    pub rate_hz: Option<f32>,
+}
+
 /// The live map's state on `plugin.world-engine.map_status` (1 Hz).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct MapStatus {
@@ -250,4 +308,7 @@ pub struct MapStatus {
     pub nav_pose: NavPoseMode,
     pub upload: UploadProgress,
     pub stream: StreamProgress,
+    /// The FC IMU feed; null when the pose does not take the FC as its IMU.
+    #[serde(default)]
+    pub imu_feed: Option<ImuFeedStatus>,
 }

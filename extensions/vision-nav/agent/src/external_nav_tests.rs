@@ -42,6 +42,7 @@ fn pose(x: f64, y: f64, yaw: f64, health: ExtnavHealth) -> PoseSample {
         health,
         north: Some(MapNorth::Declared),
         sigma_xy_m: None,
+        imu_feed: None,
     }
 }
 
@@ -98,6 +99,25 @@ fn the_map_north_is_read_from_a_map_ned_pose() {
     assert!(MapNorth::holds_yaw(Some(MapNorth::Gnss)));
     assert!(!MapNorth::holds_yaw(Some(MapNorth::FcHeading)));
     assert!(!MapNorth::holds_yaw(None));
+}
+
+#[test]
+fn the_fc_imu_feed_reason_is_read_when_present() {
+    let with_feed = |word: Option<&str>| {
+        let Value::Map(mut m) = payload("map_ned", "lost", IDENTITY, [0.0; 3]) else {
+            unreachable!()
+        };
+        if let Some(w) = word {
+            m.push((Value::from("imu_feed"), Value::from(w)));
+        }
+        parse_pose_payload(&Value::Map(m)).unwrap().imu_feed
+    };
+    assert_eq!(with_feed(Some("stalled")), Some(ImuFeed::Stalled));
+    assert_eq!(with_feed(Some("attitude_stand_in")), Some(ImuFeed::AttitudeStandIn));
+    assert_eq!(with_feed(Some("starved")), Some(ImuFeed::Starved));
+    // An older publisher sends none; an unknown word does not say.
+    assert_eq!(with_feed(None), None);
+    assert_eq!(with_feed(Some("sideways")), None);
 }
 
 #[test]

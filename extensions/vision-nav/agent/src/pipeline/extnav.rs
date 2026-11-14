@@ -223,6 +223,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                     pose_error: view.error.clone(),
                     health,
                     north: view.fresh.and_then(|(p, _)| p.north),
+                    imu_feed: view.fresh.and_then(|(p, _)| p.imu_feed),
                     origin_seen: fc.origin_seen,
                     origin_by_plugin: origin.origin_by_plugin(),
                     gps_primary: task.cfg.gps_primary,

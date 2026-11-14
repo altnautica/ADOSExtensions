@@ -2,6 +2,16 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.8.2]
+
+### Changed
+
+- External navigation: the `extnav_health` pre-arm row names the flight
+  controller's IMU feed when the pose's publisher reports that the feed left
+  the pose lost or degraded (`imu_feed` on the pose topic): no RAW_IMU yet,
+  RAW_IMU stopped, or RAW_IMU under 40 Hz. A planar LiDAR pose is lost while
+  no yaw rate reaches its matcher, and no ODOMETRY is sent for it.
+
 ## [0.8.1]
 
 ### Fixed

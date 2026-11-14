@@ -192,7 +192,7 @@ pub(crate) struct Engine {
     fc_nav: Arc<crate::nav::fc_imu::FeedState>,
     /// Why the FC IMU feed last left the planar pose degraded, `None` while
     /// it measures the heading ([`crate::nav::fc_imu::FeedState::degraded`]).
-    imu_feed_degraded: Option<crate::nav::fc_imu::FeedDegraded>,
+    imu_feed_degraded: Option<world_engine_protocol::atlas::ImuFeedReason>,
     /// The scan coverage since the last `nav_imu_feed`.
     nav_feed: nav_lane::NavFeedStats,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).

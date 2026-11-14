@@ -48,6 +48,7 @@ fn ready() -> ExtnavPreArmInputs {
         pose_error: None,
         health: Some(ExtnavHealth::Good),
         north: Some(MapNorth::FcHeading),
+        imu_feed: None,
         origin_seen: true,
         origin_by_plugin: false,
         gps_primary: false,
@@ -134,6 +135,37 @@ fn lost_blocks_degraded_and_origin_wait() {
     assert_eq!(check(&degraded, "ekf_origin").0, Severity::Pending);
     assert_eq!(degraded.checks.len(), 5);
     assert!(!degraded.armable);
+}
+
+/// A pose the publisher's FC IMU feed held down says which feed failed.
+#[test]
+fn a_pose_held_down_by_the_fc_imu_feed_names_it() {
+    let lost = eval(ExtnavPreArmInputs {
+        health: Some(ExtnavHealth::Lost),
+        imu_feed: Some(ImuFeed::Stalled),
+        ..ready()
+    });
+    assert_eq!(
+        check(&lost, "extnav_health"),
+        (
+            Severity::Blocking,
+            "Tracking lost (the flight controller's RAW_IMU stopped)."
+        )
+    );
+    let degraded = eval(ExtnavPreArmInputs {
+        health: Some(ExtnavHealth::Degraded),
+        imu_feed: Some(ImuFeed::Starved),
+        ..ready()
+    });
+    assert_eq!(
+        check(&degraded, "extnav_health").1,
+        "Tracking degraded (the flight controller's RAW_IMU is under 40 Hz); position noise raised."
+    );
+    let plain = eval(ExtnavPreArmInputs {
+        health: Some(ExtnavHealth::Lost),
+        ..ready()
+    });
+    assert_eq!(check(&plain, "extnav_health").1, "Tracking lost.");
 }
 
 #[test]

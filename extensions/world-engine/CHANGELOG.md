@@ -477,13 +477,19 @@ All notable changes to the World Engine extension.
   spun at about 15°/s with the drone still on the ground, 60° to 180° before
   `RAW_IMU` arrived. The stand-in now carries the attitude's roll and pitch
   rates and never its yaw. 2.2.1.
-- **The planar pose is degraded while the FC IMU feed cannot vouch for its
-  heading:** on the attitude stand-in, when `RAW_IMU` stalls for over 250 ms,
-  or when fewer than 40 samples arrived in the last second. External
-  navigation then sends it with the degraded yaw noise instead of as
-  confident. The capture logs `nav_imu_feed_degraded` with the reason and
+- **The planar pose follows the FC IMU feed.** With no yaw rate reaching
+  the matcher (on the attitude stand-in, or when `RAW_IMU` stalls for over
+  250 ms) the rotation prior pins the heading and it cannot follow a yaw at
+  all, so every pose is lost: external navigation sends no `ODOMETRY`, and
+  the flight controller falls back to its other sources. While `RAW_IMU` is
+  live but under 40 samples a second the pose is degraded. The pose
+  descriptor names the cause (`imu_feed`), the capture logs
+  `nav_imu_feed_degraded` with the reason and the pose's state and
   `nav_imu_feed_ok` on each change, and `nav_imu_feed` carries the reason.
-  2.2.1.
+  `plugin.world-engine.map_status` carries the feed as `imu_feed`
+  (`{state: ok | degraded | lost, reason, rate_hz}`, null when the pose
+  does not take the FC as its IMU), for a pre-arm hold until `RAW_IMU`
+  streams. 2.2.1.
 - **The planar matcher reports whether the integrated gyro vouches for the
   heading** (`PoseOut::heading_ok`), and each case below reports the pose
   degraded. A scan the IMU has not reached yet (a stalled or starved feed)
@@ -493,11 +499,19 @@ All notable changes to the World Engine extension.
   it is kept out of the map and the gyro bias. After a gap of over 0.2 s in
   the IMU the heading stays unchecked, and its scans stay out of the map,
   until a scan's own best heading lies within 1° of the gyro's while the
-  drone turns slower than 20°/s: a turn the gap lost stays lost (the match
-  holds to the gyro), but it is no longer reported good while it runs on
-  past the gap. A matched heading that moves against the gyro's by more
-  than 2° (plus 0.03 s times the turn rate) within a second is a jump the
-  gyro did not see. 2.2.1.
+  drone turns slower than 20°/s. A turn the gap lost stays lost (the match
+  holds to the gyro). A matched heading that moves against the gyro's by
+  more than 2° (plus 0.03 s times the turn rate) within a second is a jump
+  the gyro did not see. 2.2.1.
+
+### Known limitations
+
+- A turn lost in an IMU gap of a few tenths of a second can still be
+  reported good a few degrees off: once a scan agrees with the held heading
+  within 1° against a submap built before the gap, the heading counts as
+  confirmed even though that submap cannot resolve the error. A recorded
+  warehouse flight with a 0.3 s gap inside a 13° turn holds 3.5° off and
+  reports good. 2.2.1.
 
 ## [2.0.0]
 
