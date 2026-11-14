@@ -155,7 +155,7 @@ pub fn run(
     }
     // The script may run in WSL and report paths in its own form; the files
     // are at known places in the job, so only the facts are kept.
-    done.retain(|k, _| !matches!(k.as_str(), "ply" | "glb" | "mesh" | "path"));
+    done.retain(|k, _| !matches!(k.as_str(), "ply" | "glb" | "mesh" | "path" | "dense"));
     Ok(Value::Object(done))
 }
 
@@ -194,7 +194,7 @@ mod tests {
             let out = Path::new(&args[args.iter().position(|a| a == "--out").unwrap() + 1]);
             fs::write(out.join("mesh.ply"), b"ply")?;
             fs::write(out.join("mesh.glb"), b"glTF")?;
-            on_line(r#"{"event":"done","triangles":8,"ply":"/x/mesh.ply"}"#);
+            on_line(r#"{"event":"done","triangles":8,"ply":"/x/mesh.ply","dense":"/x/dense.laz"}"#);
             self.calls.lock().unwrap().push(args);
             Ok(())
         }

@@ -14,6 +14,7 @@ small disconnected clusters, decimate to --max-tris and write <out>/mesh.ply (bi
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -69,13 +70,18 @@ def splat_depthset(renderer, views, root: Path) -> Path:
     return root
 
 
-def run_fuse(args, roots: list[Path], label: str) -> None:
-    """fuse.py over `roots`; its stdout (progress and the done event) is inherited."""
+def run_fuse(args, roots: list[Path], label: str, discard: tuple[Path, ...] = ()) -> None:
+    """fuse.py over `roots`; its stdout (progress and the done event) is inherited. The depth sets in
+    `discard` (rendered for this run only, about 4 MB a view) are deleted afterwards, fused or not."""
     cmd = [sys.executable, str(Path(__file__).with_name("fuse.py")), "--out", str(args.out), "--voxel",
            str(args.voxel), "--max-tris", str(args.max_tris), "--method-label", label]
     for r in roots:
         cmd += ["--depthset", str(r)]
-    r = subprocess.run(cmd)
+    try:
+        r = subprocess.run(cmd)
+    finally:
+        for d in discard:
+            shutil.rmtree(d, ignore_errors=True)
     if r.returncode != 0:
         raise RuntimeError(f"fuse.py exited with {r.returncode}")
 
@@ -170,13 +176,13 @@ def main(args) -> None:
             renderer = mesh2dgs.train_2dgs(args, max_splats=len(splat["means"]))
         else:
             renderer = common.SplatRenderer(splat)
-        roots = [splat_depthset(renderer, views, args.out / "depthset-splat")]
-        roots += list(args.extra_depthset or [])
+        splat_root = splat_depthset(renderer, views, args.out / "depthset-splat")
+        roots = [splat_root] + list(args.extra_depthset or [])
         del renderer
         import torch
 
         torch.cuda.empty_cache()
-        run_fuse(args, roots, args.method)
+        run_fuse(args, roots, args.method, discard=(splat_root,))
         return
     mesh, dropped, ply, glb = fuse.finish(args.out, mesh, args.max_tris)
     common.done(triangles=int(len(mesh.triangles)), method=method, cluster_triangles_dropped=dropped,

@@ -51,6 +51,9 @@ VOXEL_LADDER = (1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0)  # voxel multipliers tried u
 ESTIMATE_HEADROOM = 0.85  # share of INTEGRATE_MAX_BLOCKS the estimated grid may take
 ESTIMATE_STRIDE = 4  # pixel stride of the block estimate, as Open3D's DepthTouch
 ESTIMATE_RAY_SAMPLES = 4
+# Share of the available host memory a CPU grid's blocks may take (the extraction chunks, the views and
+# the mesh sit beside it).
+HOST_GRID_FRACTION = 0.5
 
 
 def depth_max_for(valid: np.ndarray, voxel: float) -> float:
@@ -86,6 +89,9 @@ class TsdfFuser:
         )
         self.voxel = voxel
         self.max_blocks = INTEGRATE_MAX_BLOCKS if max_blocks is None else min(max_blocks, INTEGRATE_MAX_BLOCKS)
+        if self.device.get_type() == o3c.Device.DeviceType.CPU:
+            # A CPU map that grows doubles its capacity (old and new tables together), so it never grows.
+            self.max_blocks = min(self.max_blocks, self.grid.hashmap().capacity())
         self.used = 0
         self.capped = 0  # views skipped because they would grow the grid past max_blocks
 
@@ -315,38 +321,55 @@ def estimate_blocks(sets, vxs: list[float]) -> dict[float, int]:
     return {vx: len(c) for vx, c in acc.items()}
 
 
-def voxel_for(sets, voxel: float, max_blocks: int) -> tuple[float, int]:
-    """The finest of `voxel` x VOXEL_LADDER whose estimated block count fits ESTIMATE_HEADROOM of
+def voxel_for(est: dict[float, int], max_blocks: int) -> tuple[float, int]:
+    """The finest voxel in `est` (voxel -> estimated blocks) whose estimate fits ESTIMATE_HEADROOM of
     `max_blocks` (the coarsest when none fits; the grid cap still guards it), and its estimate."""
-    vxs = [m * voxel for m in VOXEL_LADDER]
-    est = estimate_blocks(sets, vxs)
+    vxs = sorted(est)
     for vx in vxs:
         if est[vx] <= ESTIMATE_HEADROOM * max_blocks:
             return vx, est[vx]
     return vxs[-1], est[vxs[-1]]
 
 
+def host_available_mb() -> int:
+    """MemAvailable of the host, in MiB."""
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        if line.startswith("MemAvailable:"):
+            return int(line.split()[1]) // 1024
+    raise RuntimeError("no MemAvailable in /proc/meminfo")
+
+
+def cpu_max_blocks() -> int:
+    """The block cap of a CPU grid: the integrate bound, or less when HOST_GRID_FRACTION of the
+    available host memory holds fewer blocks."""
+    return min(INTEGRATE_MAX_BLOCKS, max_blocks_for(int(host_available_mb() * HOST_GRID_FRACTION)))
+
+
 def fuse_depthset(roots: list[Path], voxel: float, device: str | None = None, budget_mb: int | None = None):
     """`(mesh, cloud, fusion)`: the surface and coloured points fused from every view of every depth
     set in `roots`, and which attempt produced them. The voxel is first coarsened from `voxel` until the
-    estimated grid fits INTEGRATE_MAX_BLOCKS. On CUDA each attempt runs in its own child process with its
-    block cap from `budget_mb`, or from the VRAM free before it when None."""
+    estimated grid fits its cap. On CUDA each attempt runs in its own child process with its block cap
+    from `budget_mb`, or from the VRAM free before it when None; a grid estimated past that budget fuses on
+    the CPU, its cap from the host memory available."""
     import open3d.core as o3c
 
     on_cuda = (device or "").upper().startswith("CUDA") or (device is None and o3c.cuda.is_available())
     sets = [(Path(r), depthset.read_depthset(Path(r))[1]) for r in roots]
     n = sum(len(views) for _, views in sets)
     common.progress(0.02, "estimating the grid size")
-    vx0, est = voxel_for(sets, voxel, INTEGRATE_MAX_BLOCKS)
+    est_by_vx = estimate_blocks(sets, [m * voxel for m in VOXEL_LADDER])
+    vx0, est = voxel_for(est_by_vx, INTEGRATE_MAX_BLOCKS)
     if on_cuda and est > ESTIMATE_HEADROOM * max_blocks_for(budget_mb if budget_mb is not None
                                                             else gpu_budget_mb(device)):
         common.progress(0.03, f"an estimated {est} blocks exceed the GPU budget; fusing on the CPU")
         on_cuda, device = False, "CPU:0"
     if not on_cuda:
-        # Preallocated so the map never rehashes: CPU growth doubles the capacity, and old and new tables
-        # live together while it does.
-        prealloc = min(int(est * 1.1) + BLOCK_COUNT, INTEGRATE_MAX_BLOCKS)
-        mesh, cloud, info = _fuse_once(sets, vx0, device, None, n, prealloc)
+        cap = cpu_max_blocks()
+        vx0, est = voxel_for(est_by_vx, cap)
+        # Preallocated, and capped at that capacity, so the map never rehashes: CPU growth doubles the
+        # capacity, and old and new tables live together while it does.
+        prealloc = min(int(est * 1.1) + BLOCK_COUNT, cap)
+        mesh, cloud, info = _fuse_once(sets, vx0, device, prealloc, n, prealloc)
         return mesh, cloud, {**info, "attempt": 1, "estimated_blocks": est}
     attempts = [m * vx0 for m in COARSER]
     for k, vx in enumerate(attempts):

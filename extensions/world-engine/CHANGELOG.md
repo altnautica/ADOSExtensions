@@ -155,10 +155,12 @@ All notable changes to the World Engine extension.
   the CPU, a GPU MMU fault on the GPU, on a 300-view warehouse session).
   Depth past 30 m is not fused, the voxel is coarsened from the requested
   one until the estimated grid fits under the fusion bound (fusing on the
-  CPU, preallocated, when it exceeds the GPU budget), no grid grows past
-  it, and the surface is extracted on the CPU in chunks under the marching
-  cubes bound. The stage detail lists `device`, `voxel_m`, `attempt`,
-  `views_capped`, `estimated_blocks` and `budget_mb` at its top level.
+  CPU when it exceeds the GPU budget, preallocated to a cap sized from the
+  available host memory so the map never doubles), no grid grows past it,
+  and the surface is extracted on the CPU in chunks under the marching
+  cubes bound. The rendered splat depth set is deleted once fused. The stage
+  detail lists `device`, `voxel_m`, `attempt`, `views_capped`,
+  `estimated_blocks` and `budget_mb` at its top level, and no file paths.
   2.2.2.
 - **A planar LiDAR session's cloud is registered and coloured.** A planar
   LiDAR records its compact polar stream (`lidar/<id>.polar.zst`) instead of

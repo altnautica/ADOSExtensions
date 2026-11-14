@@ -39,6 +39,28 @@ def test_splat_depthset_renders_every_view_scaled_and_masked(tmp_path) -> None:
     assert depthset.load_rgb(root, out[0])[1, 1].tolist() == [255, 255, 255]
 
 
+def test_the_rendered_depth_set_is_deleted_after_fusion_even_when_it_fails(tmp_path, monkeypatch) -> None:
+    import subprocess
+    import types
+
+    import pytest
+
+    rendered, extra = tmp_path / "depthset-splat", tmp_path / "mvs"
+    for d in (rendered, extra):
+        d.mkdir()
+        (d / "view.png").write_bytes(b"x")
+    args = types.SimpleNamespace(out=tmp_path, voxel=0.02, max_tris=10)
+    for rc in (0, 1):
+        monkeypatch.setattr(subprocess, "run", lambda cmd, rc=rc: types.SimpleNamespace(returncode=rc))
+        rendered.mkdir(exist_ok=True)
+        if rc:
+            with pytest.raises(RuntimeError, match="exited with 1"):
+                mesh.run_fuse(args, [rendered, extra], "tsdf", discard=(rendered,))
+        else:
+            mesh.run_fuse(args, [rendered, extra], "tsdf", discard=(rendered,))
+        assert not rendered.exists() and (extra / "view.png").exists()
+
+
 def test_lidar_cloud_meshes_by_poisson_with_splat_colours(tmp_path) -> None:
     import types
 

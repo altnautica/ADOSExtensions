@@ -135,8 +135,9 @@ def test_surface_extraction_never_runs_on_the_gpu_grid() -> None:
 
 
 def test_no_grid_grows_past_the_integrate_index_bound() -> None:
-    assert fuse.TsdfFuser(0.02, "CPU:0").max_blocks == fuse.INTEGRATE_MAX_BLOCKS
-    assert fuse.TsdfFuser(0.02, "CPU:0", max_blocks=10 ** 9).max_blocks == fuse.INTEGRATE_MAX_BLOCKS
+    cpu = fuse.TsdfFuser(0.02, "CPU:0", max_blocks=10 ** 9, block_count=2000)
+    assert cpu.max_blocks <= cpu.grid.hashmap().capacity()  # a CPU map never rehashes to twice its size
+    assert cpu.max_blocks <= fuse.INTEGRATE_MAX_BLOCKS
     assert fuse.INTEGRATE_MAX_BLOCKS * 3 * 16 ** 3 < 2 ** 31
     assert fuse.MC_MAX_BLOCKS * 16 ** 3 * 16 < 2 ** 31
 
@@ -170,11 +171,30 @@ def test_far_depth_is_cut_at_the_depth_range() -> None:
     assert fuse.depth_max_for(np.array([50.0, 90.0, 120.0]), 0.02) == fuse.DEPTH_MAX_M
 
 
-def test_the_voxel_coarsens_until_the_estimated_grid_fits(monkeypatch) -> None:
-    monkeypatch.setattr(fuse, "estimate_blocks", lambda sets, vxs: {vx: int(1e6 * (0.02 / vx) ** 2) for vx in vxs})
-    vx, est = fuse.voxel_for([], 0.02, 170_000)
-    assert est <= fuse.ESTIMATE_HEADROOM * 170_000
+def test_the_voxel_coarsens_until_the_estimated_grid_fits() -> None:
+    est = {m * 0.02: int(1e6 / m ** 2) for m in fuse.VOXEL_LADDER}
+    vx, n = fuse.voxel_for(est, 170_000)
+    assert n <= fuse.ESTIMATE_HEADROOM * 170_000
     assert vx == 0.02 * min(m for m in fuse.VOXEL_LADDER if 1e6 / m ** 2 <= fuse.ESTIMATE_HEADROOM * 170_000)
+
+
+def test_a_cpu_grid_is_preallocated_to_its_cap_and_sized_by_host_memory(tmp_path, monkeypatch) -> None:
+    _wall_depthset(tmp_path / "ds")
+    monkeypatch.setattr(fuse, "estimate_blocks", lambda sets, vxs: {vx: int(1e6 * (0.02 / vx) ** 2) for vx in vxs})
+    monkeypatch.setattr(fuse, "host_available_mb", lambda: 16000)  # 0.5 x 16000 MiB holds 102,400 blocks
+    seen = {}
+
+    def once(sets, vx, device, max_blocks, n, block_count):
+        seen.update(vx=vx, max_blocks=max_blocks, block_count=block_count)
+        return "mesh", "cloud", {"device": device, "voxel_m": vx, "views_capped": 0}
+
+    monkeypatch.setattr(fuse, "_fuse_once", once)
+    fuse.fuse_depthset([tmp_path / "ds"], 0.02, "CPU:0")
+    cap = fuse.max_blocks_for(8000)
+    assert cap < fuse.INTEGRATE_MAX_BLOCKS  # the host, not the index bound, sets this cap
+    assert seen["vx"] > 0.02  # the requested voxel's 1e6 blocks would not fit
+    assert seen["max_blocks"] == seen["block_count"] <= cap
+    assert 1e6 * (0.02 / seen["vx"]) ** 2 <= fuse.ESTIMATE_HEADROOM * cap
 
 
 def test_the_block_estimate_tracks_the_real_grid(tmp_path) -> None:
@@ -210,7 +230,7 @@ def test_marching_cubes_past_its_index_bound_is_chunked_not_crashed() -> None:
     n = 32_769  # one block past Open3D 0.20's 32-bit marching-cubes table offset
     one_pass = subprocess.run([sys.executable, "-c", _PLANE_GRID + f"plane_grid({n}).extract_triangle_mesh(weight_threshold=3.0)"],
                               capture_output=True, text=True)
-    assert one_pass.returncode != 0  # SIGSEGV: why extract_chunked exists
+    assert one_pass.returncode == -11  # SIGSEGV: why extract_chunked exists
     ns: dict = {}
     exec(_PLANE_GRID, ns)
     import open3d as o3d
@@ -354,7 +374,7 @@ def test_a_gpu_retry_after_a_real_cuda_out_of_memory_completes_on_cuda(tmp_path,
     hog = torch.empty(max(free - (1 << 30), 0), dtype=torch.uint8, device="cuda")
     _wall_depthset(tmp_path / "ds")
     monkeypatch.setattr(fuse, "COARSER", (1.0, 1000.0))
-    monkeypatch.setattr(fuse, "voxel_for", lambda sets, voxel, cap: (voxel, 0))  # the forced OOM needs the fine voxel
+    monkeypatch.setattr(fuse, "estimate_blocks", lambda sets, vxs: {vx: 0 for vx in vxs})  # the forced OOM needs the fine voxel
     try:
         mesh, cloud, info = fuse.fuse_depthset([tmp_path / "ds"], 0.00005, "CUDA:0", budget_mb=1 << 20)
     finally:
