@@ -173,16 +173,20 @@ impl Engine {
             return Err(CtlReply::err(codes::ALREADY_RECORDING, "a session is open"));
         }
         let cams = &self.cams;
-        let frame_size = |id: &str| {
+        let seen = |id: &str| {
             cams.get(id)
                 .filter(|c| c.width > 0)
-                .map(|c| (c.width, c.height))
+                .map(|c| crate::rig_source::SeenCamera {
+                    width: c.width,
+                    height: c.height,
+                    geometry: c.geometry,
+                })
         };
         let rig = match crate::rig_source::load_rig(&self.paths.rig) {
             // A stored rig gains any enabled camera it lacks: the session
             // records every enabled camera, and only rig cameras reconstruct.
             Some(stored) => {
-                let (rig, added) = crate::rig_source::complete_rig(stored, &self.cfg, frame_size);
+                let (rig, added) = crate::rig_source::complete_rig(stored, &self.cfg, seen);
                 for id in &added {
                     tracing::warn!(camera = %id, "rig_camera_derived");
                 }
@@ -190,7 +194,7 @@ impl Engine {
             }
             None => {
                 let imus = self.sensors.lock().imu_sources();
-                crate::rig_source::derive_rig(&self.cfg, frame_size, &imus)
+                crate::rig_source::derive_rig(&self.cfg, seen, &imus)
             }
         };
         let clock = ClockSidecar::read(&self.paths.clock_sidecar);

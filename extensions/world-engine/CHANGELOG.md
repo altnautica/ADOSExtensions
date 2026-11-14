@@ -665,6 +665,30 @@ All notable changes to the World Engine extension.
   re-confirm one. The capture starts the navigation map, its north and its
   GNSS fit over there (`nav_map_restarted`), and latches the north afresh as
   at the first pose. 2.2.1.
+- **A derived rig points its cameras as they are mounted.** Without a
+  stored rig (or for a camera the stored rig lacks) the capture placed the
+  primary camera level along the nose and every other camera at the body
+  frame, which is looking straight up, so a belly mapping camera was
+  reconstructed 180° wrong and a front camera 15° down was taken as level.
+  Each derived camera now takes its pitch and field of view from the
+  agent's camera roster (`cameras[].mount_pitch_deg`, negative below the
+  nose, and `cameras[].fov_deg`), which the vision engine stamps on every
+  frame, and falls back to its role: `down` straight down with the image
+  top toward the nose, `up` straight up, `left`, `right` and `back` level
+  along their side, `primary` and `aux` level forward. The pinhole of a
+  camera with no intrinsics override uses the roster's field of view, or
+  70° when the roster gives none. `atlas.hfov_deg`, one field of view for
+  every camera copied by hand from the roster, is removed. 2.2.2.
+- **The shared scan carries no airframe and no floor.** The binned
+  body-frame scan (`plugin.world-engine.scan`, which vision-nav turns into
+  `OBSTACLE_DISTANCE` for the flight controller's proximity avoidance) kept
+  every return above 0 m: props and legs, the rig's blocked sectors, and
+  the floor a pitched drone's scan plane meets ahead. Returns nearer than
+  0.35 m (or the sensor's own minimum, if larger), past its maximum, or in
+  a `blocked_azimuth_deg` sector are now dropped, and with the flight
+  controller's attitude and downward range within 300 ms of the scan, a
+  return that levels to within 0.25 m of the ground is dropped as floor.
+  The scan stays in the body frame, unlevelled. 2.2.2.
 
 ### Known limitations
 

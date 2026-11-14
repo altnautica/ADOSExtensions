@@ -3,9 +3,10 @@
 //!
 //! The capture *core* ([`crate::CaptureConfig`]) declares the rig and the
 //! selection thresholds. This runtime layer wraps it with the service-only
-//! settings: the enable gate, the pose provider, the field of view used to derive a
-//! default pinhole when a camera is uncalibrated, any per-camera intrinsics
-//! override, and the stated pose prior.
+//! settings: the enable gate, the pose provider, any per-camera intrinsics
+//! override, and the stated pose prior. A camera without an override gets a
+//! pinhole from the field of view its frames carry (the agent's camera
+//! roster).
 //!
 //! The plugin host stores the config as flat dotted keys (`atlas.enabled`,
 //! `atlas.selection.max_interval_ms`, ...). [`AtlasRuntimeConfig::from_values`]
@@ -31,9 +32,9 @@ pub use settings::{
     SegmentSettings, VioSettings,
 };
 
-fn default_hfov_deg() -> f64 {
-    70.0
-}
+/// The horizontal field of view assumed for a camera whose roster entry
+/// gives no `fov_deg`: the vision engine's own assumption for such a camera.
+pub const DEFAULT_HFOV_DEG: f64 = 70.0;
 
 /// A per-camera intrinsics override in the capture contract's camera-model
 /// form (frame size comes from the frames themselves). When a camera has been
@@ -183,7 +184,6 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_ENABLED,
     KEY_CAPTURE_PROFILE,
     KEY_POSE_PROVIDER,
-    KEY_HFOV_DEG,
     KEY_CAMERAS,
     KEY_MIN_TRANSLATION_M,
     KEY_MIN_ROTATION_RAD,
@@ -209,7 +209,6 @@ pub const CONFIG_KEYS: &[&str] = &[
 pub const KEY_ENABLED: &str = "atlas.enabled";
 pub const KEY_CAPTURE_PROFILE: &str = "atlas.capture_profile";
 pub const KEY_POSE_PROVIDER: &str = "atlas.pose_provider";
-pub const KEY_HFOV_DEG: &str = "atlas.hfov_deg";
 pub const KEY_CAMERAS: &str = "atlas.cameras";
 pub const KEY_MIN_TRANSLATION_M: &str = "atlas.selection.min_translation_m";
 pub const KEY_MIN_ROTATION_RAD: &str = "atlas.selection.min_rotation_rad";
@@ -251,7 +250,6 @@ pub struct AtlasRuntimeConfig {
     pub device_id: String,
     pub capture: CaptureConfig,
     pub pose_provider: PoseProviderConfig,
-    pub hfov_deg: f64,
     pub intrinsics: HashMap<String, IntrinsicsOverride>,
     /// The uncertainty stated on every FC EKF pose (see [`PosePrior`]).
     pub pose_prior: PosePrior,
@@ -323,7 +321,6 @@ impl Default for AtlasRuntimeConfig {
             device_id: String::new(),
             capture: CaptureConfig::default(),
             pose_provider: PoseProviderConfig::Auto,
-            hfov_deg: default_hfov_deg(),
             intrinsics: HashMap::new(),
             pose_prior: PosePrior::default(),
             pose_publish_interval_ms: default_pose_publish_interval_ms(),
@@ -498,7 +495,6 @@ impl AtlasRuntimeConfig {
                 selection,
             },
             pose_provider: typed(values, KEY_POSE_PROVIDER, PoseProviderConfig::Auto)?,
-            hfov_deg: typed(values, KEY_HFOV_DEG, default_hfov_deg())?,
             intrinsics: intrinsics(values)?,
             pose_prior: typed(values, KEY_POSE_PRIOR, PosePrior::default())?,
             pose_publish_interval_ms: integer(
@@ -533,11 +529,18 @@ impl AtlasRuntimeConfig {
 
     /// The camera model for a camera: the configured override if present, else
     /// an uncalibrated pinhole derived from the frame size and the field of
-    /// view.
-    pub fn intrinsics_for(&self, camera_id: &str, width: u32, height: u32) -> CameraModel {
+    /// view its frames carry (`hfov_deg`, from the agent's camera roster), or
+    /// [`DEFAULT_HFOV_DEG`] when the roster gives none.
+    pub fn intrinsics_for(
+        &self,
+        camera_id: &str,
+        width: u32,
+        height: u32,
+        hfov_deg: Option<f64>,
+    ) -> CameraModel {
         match self.intrinsics.get(camera_id) {
             Some(o) => o.to_camera_model(width, height),
-            None => default_intrinsics(width, height, self.hfov_deg),
+            None => default_intrinsics(width, height, hfov_deg.unwrap_or(DEFAULT_HFOV_DEG)),
         }
     }
 }

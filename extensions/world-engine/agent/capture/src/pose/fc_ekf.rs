@@ -378,6 +378,14 @@ impl FcEkfPose {
         self.inner.lock().host_attitude()
     }
 
+    /// The newest downward range to the ground ([`fc_flow::ground_range`])
+    /// on the host clock: `(host ns, metres)`.
+    pub fn ground_range(&self) -> Option<(u64, f64)> {
+        let g = self.inner.lock();
+        let (ms, m) = g.range?;
+        Some((g.host_ns(i128::from(ms) * 1_000_000)?, m))
+    }
+
     /// Hand every `RAW_IMU` sample, flow velocity and EKF height to `sink`
     /// as its frame arrives ([`NavSample`]); `None` stops it. A run sets it
     /// while it runs: nothing is queued for a run that is not there.

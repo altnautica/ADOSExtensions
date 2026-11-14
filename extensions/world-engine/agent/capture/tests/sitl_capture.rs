@@ -61,6 +61,7 @@ fn frame(cam: &str, k: u64) -> CapturedFrame {
         width: 64,
         height: 48,
         format: FrameFormat::Gray8,
+        geometry: Default::default(),
         pixels: (0..64 * 48)
             .map(|i| ((i * 7 + k as usize) % 251) as u8)
             .collect(),

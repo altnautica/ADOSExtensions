@@ -134,6 +134,8 @@ struct CamStats {
     dropped: u64,
     /// Host ns of this camera's last keyframe (its IMU window starts there).
     last_kf_ns: Option<u64>,
+    /// The roster geometry the camera's latest frame carried.
+    geometry: crate::rig_source::CameraGeometry,
 }
 
 /// A finished exposure apply, back on the loop.

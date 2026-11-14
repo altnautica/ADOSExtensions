@@ -111,6 +111,7 @@ impl Engine {
         let cam = self.cams.entry(f.camera_id.clone()).or_default();
         cam.width = f.width;
         cam.height = f.height;
+        cam.geometry = f.geometry;
         cam.frames += 1;
         if let Some(prev) = cam.last_ts_ns.filter(|p| f.ts_ns > *p) {
             let inst = 1e9 / (f.ts_ns - prev) as f64;
@@ -185,7 +186,9 @@ impl Engine {
         let (fx, width) = match rig_model {
             Some(c) => (c.fx, c.width),
             None => {
-                let c = self.cfg.intrinsics_for(&f.camera_id, f.width, f.height);
+                let c = self
+                    .cfg
+                    .intrinsics_for(&f.camera_id, f.width, f.height, f.geometry.hfov_deg);
                 (c.fx, c.width)
             }
         };
@@ -302,13 +305,16 @@ impl Engine {
     }
 
     /// The camera model: the rig's when it has one, else the configured or
-    /// derived intrinsics.
+    /// derived intrinsics on the field of view the camera's frames carry.
     fn camera_model(&self, camera: &str, w: u32, h: u32) -> ados_capture_contract::CameraModel {
         self.rig
             .as_ref()
             .and_then(|r| r.sensors.iter().find(|s| s.id == camera))
             .and_then(|s| s.camera.clone())
-            .unwrap_or_else(|| self.cfg.intrinsics_for(camera, w, h))
+            .unwrap_or_else(|| {
+                let hfov = self.cams.get(camera).and_then(|c| c.geometry.hfov_deg);
+                self.cfg.intrinsics_for(camera, w, h, hfov)
+            })
     }
 }
 
@@ -457,6 +463,7 @@ mod tests {
             width: 2,
             height: 2,
             format: ados_protocol::framebus::FrameFormat::Gray8,
+            geometry: Default::default(),
             pixels: vec![0; 4],
         };
         retime(&mut f, 10_000_000_000);

@@ -29,6 +29,7 @@ fn frame(
         width: 4,
         height: 2,
         format,
+        geometry: Default::default(),
         pixels: vec![fill; 8],
     }
 }

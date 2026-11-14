@@ -706,7 +706,8 @@ impl NavMap {
         true
     }
 
-    /// Fold one LiDAR scan: the body-frame scan and the placed polar record
+    /// Fold one LiDAR scan: the body-frame scan (the default
+    /// [`frames::ScanFilter`]) and the placed polar record
     /// ([`Self::body_scan`], [`Self::place_scan`]) at once.
     pub fn on_scan(
         &mut self,
@@ -717,7 +718,7 @@ impl NavMap {
         session_open: bool,
     ) -> ScanOut {
         ScanOut {
-            scan: self.body_scan(scan, t_body_sensor, session_open),
+            scan: self.body_scan(scan, t_body_sensor, &frames::ScanFilter::default(), session_open),
             polar: self.place_scan(scan, t_body_sensor, world, fc_up, session_open),
         }
     }
@@ -727,10 +728,11 @@ impl NavMap {
         &self,
         scan: &LidarScan,
         t_body_sensor: &[f64; 16],
+        filter: &frames::ScanFilter,
         session_open: bool,
     ) -> Option<ScanDescriptor> {
         self.active(session_open)
-            .then(|| frames::body_scan(scan, t_body_sensor))
+            .then(|| frames::body_scan(scan, t_body_sensor, filter))
     }
 
     /// Place one LiDAR scan. `world` is the provider's body pose at the scan

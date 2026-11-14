@@ -30,14 +30,6 @@
       "maximum": 200000,
       "default": 30000
     },
-    "atlas.hfov_deg": {
-      "type": "number",
-      "title": "Horizontal field of view (degrees)",
-      "description": "Used to derive a pinhole model for a camera with no calibrated intrinsics.",
-      "minimum": 1,
-      "maximum": 179,
-      "default": 70
-    },
     "atlas.cameras": {
       "type": "array",
       "title": "Cameras",

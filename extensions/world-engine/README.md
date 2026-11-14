@@ -106,8 +106,7 @@ Per-node plugin configuration (`config-schema.json`):
 | `atlas.memory_budget_mb` | RAM the live map stores may hold (keyframe queue 40 %, scan ring 10 %, sweep cloud 30 %, occupancy 20 %); unset, 80 % of the capture unit's memory cap. A full sweep cloud doubles its voxel (`sweep_cloud_coarsened`); full queues drop their oldest entry and count it |
 | `atlas.rig_id` | Rig whose calibrations `GET /atlas/calib` lists; empty uses the only rig in the device calibration store |
 | `atlas.reconstruct_steps` | Splat training steps (the detail level) for this drone's reconstructions, the GCS-submitted ones and those the compute node runs itself from the capture stream; carried on every capture status. Unset, the node uses `ADOS_COMPUTE_TRAIN_ITERS` (default 30000) |
-| `atlas.hfov_deg` | Camera horizontal field of view used when no intrinsics are given |
-| `atlas.cameras[]` | Cameras the capture service reads |
+| `atlas.cameras[]` | Cameras the capture service reads. With no stored rig (or for a camera the stored rig lacks) each one is placed at the body origin, pointed by its agent roster entry's `mount_pitch_deg` (negative below the nose; else by role: `down` straight down with the image top toward the nose, `up` straight up, side and back cameras level) and given a pinhole from the roster's `fov_deg` (70 degrees when absent), which the vision engine stamps on every frame |
 | `atlas.selection.*` | Keyframe selection thresholds |
 | `atlas.intrinsics.*` | Camera intrinsics |
 | `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02) |
@@ -132,6 +131,7 @@ publishes shared topics other extensions and the agent's navigation API read:
 | `plugin.world-engine.occupancy` | 1 Hz | Live: changed 64×64-cell tiles at 5 cm as grey PNG (0 occupied, 254 free, 205 unknown), `kind: "live"`; node products say `kind: "product"` |
 | `plugin.world-engine.pointcloud` | 1 Hz | Live: up to 20 000 new voxel centroids of the sweep cloud (every scan placed by SLAM x, y, yaw, the FC height and the IMU roll and pitch), `kind: "live"` |
 | `plugin.world-engine.map_status` | 1 Hz | Placement, the capture process's resident memory (`VmRSS`, null when unreadable) beside the map budget, voxel size, keyframes dropped, sweep points, mapped area, upload and stream progress |
+| `plugin.world-engine.lidar` | 1 Hz while the rig declares `atlas.lidar.lidar_id` | The LiDAR link: `v` (1), `device` (the opened port, the resolved `/dev/serial/by-id` path under `auto`; null when never opened), `connected`, `health` (`good`, `warning` or `error`) and `health_code` from the device's latest (re)connect (null when it never connected or the driver has no health report, as on the Livox), `rate_hz` (revolutions per second over the last second; null when not connected), and `scans`, `dropped_scans` and `reconnects` since the run started. A LiDAR absent when capture starts is retried every 2 s and reports `connected: false` with null device, health and rate until it answers. Not forwarded to the compute node |
 
 Occupancy tiles farther than 200 m from the vehicle, or past the occupancy
 share of the budget (farthest first), are written to the session's

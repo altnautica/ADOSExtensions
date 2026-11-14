@@ -80,7 +80,6 @@ fn no_keys_is_the_disabled_default() {
     assert_eq!(c.mains_hz, 50);
     assert_eq!(c.capture.profile, CaptureProfile::Freeform);
     assert!(c.capture.cameras.is_empty());
-    assert!((c.hfov_deg - 70.0).abs() < 1e-12);
     assert_eq!(c.capture.selection, SelectionParams::default());
     assert_eq!(c.pose_publish_interval_ms, 100);
     // A null value (the host's "unset") is the same as an absent key.
@@ -119,7 +118,6 @@ fn full_key_set_loads() {
         (KEY_MAINS_HZ, json!(60)),
         (KEY_VIO, json!({"left": "a", "right": "b"})),
         (KEY_SEGMENT, json!({"max_duration_s": 60})),
-        (KEY_HFOV_DEG, json!(90)),
         (
             KEY_CAMERAS,
             json!([
@@ -148,7 +146,6 @@ fn full_key_set_loads() {
     assert_eq!(c.segment.limits().max_duration_ns, 60_000_000_000);
     assert_eq!(c.capture.profile, CaptureProfile::Orbit);
     assert_eq!(c.capture.enabled_camera_count(), 1);
-    assert!((c.hfov_deg - 90.0).abs() < 1e-9);
     assert!((c.capture.selection.min_translation_m - 1.0).abs() < 1e-9);
     assert!((c.capture.selection.min_rotation_rad - 0.3).abs() < 1e-9);
     assert_eq!(c.capture.selection.max_interval_ms, 1500);
@@ -157,13 +154,18 @@ fn full_key_set_loads() {
     assert_eq!(c.pose_prior.position_sigma_m, Some(0.05));
     assert!((c.pose_prior.gnss_uere_m - 2.5).abs() < 1e-12);
     // The configured intrinsics override is used for `front`.
-    let k = c.intrinsics_for("front", 1280, 720);
+    let k = c.intrinsics_for("front", 1280, 720, Some(87.0));
     assert!((k.fx - 900.0).abs() < 1e-9);
     assert!((k.cx - 640.0).abs() < 1e-9);
     assert_eq!((k.width, k.height), (1280, 720));
     assert!(k.calibrated);
-    // An uncalibrated camera falls back to the derived pinhole.
-    assert!(!c.intrinsics_for("down", 1280, 720).calibrated);
+    // An uncalibrated camera falls back to a pinhole on the field of view its
+    // frames carry, else the default one.
+    let down = c.intrinsics_for("down", 1280, 720, Some(90.0));
+    assert!(!down.calibrated);
+    assert!((down.fx - 640.0).abs() < 1e-9);
+    let bare = c.intrinsics_for("down", 1280, 720, None);
+    assert!((bare.fx - 640.0 / (DEFAULT_HFOV_DEG / 2.0).to_radians().tan()).abs() < 1e-9);
 }
 
 #[test]
@@ -314,7 +316,7 @@ fn an_override_with_the_wrong_coefficient_count_is_refused() {
                          "cy": 360.0, "dist": [0.01, 0.0, 0.0, 0.0]}}),
     )]);
     let c = AtlasRuntimeConfig::from_values("", &ok).unwrap();
-    let m = c.intrinsics_for("front", 1280, 720);
+    let m = c.intrinsics_for("front", 1280, 720, None);
     assert_eq!(m.model, CameraModelModel::Kb4);
     assert_eq!(m.dist.len(), 4);
 }

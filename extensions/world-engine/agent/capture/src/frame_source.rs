@@ -20,6 +20,8 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::rig_source::CameraGeometry;
+
 /// One frame pulled from a source: its pixels plus what they are and when
 /// they were exposed.
 #[derive(Debug, Clone)]
@@ -41,6 +43,9 @@ pub struct CapturedFrame {
     pub width: u32,
     pub height: u32,
     pub format: FrameFormat,
+    /// The camera's field of view and mount pitch as the agent's camera
+    /// roster declares them, stamped by the vision engine.
+    pub geometry: CameraGeometry,
     pub pixels: Vec<u8>,
 }
 
@@ -59,6 +64,10 @@ impl From<Frame> for CapturedFrame {
             width: d.width,
             height: d.height,
             format: d.format,
+            geometry: CameraGeometry {
+                hfov_deg: d.hfov_deg.map(f64::from),
+                mount_pitch_deg: d.mount_pitch_deg.map(f64::from),
+            },
             pixels: frame.pixels,
         }
     }
@@ -254,6 +263,7 @@ impl SyntheticFrameSource {
                 width,
                 height,
                 format: FrameFormat::Rgb24,
+                geometry: CameraGeometry::default(),
                 pixels: vec![(i % 256) as u8; (width * height * 3) as usize],
             })
             .collect();
