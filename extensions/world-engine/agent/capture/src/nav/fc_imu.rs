@@ -130,13 +130,18 @@ pub fn enu_flu(r_ned_frd: &[f64; 9]) -> [f64; 9] {
     se3::mat_mul(&R_ENU_NED, &se3::mat_mul(r_ned_frd, &R_FRD_FLU))
 }
 
-/// `RAW_IMU` older than this at the capture loop's pose tick: the stream
-/// stalled.
+/// No `RAW_IMU` frame received for longer than this at the capture loop's
+/// pose tick: the stream stalled. Received, not stamped: a simulator below
+/// real time stamps its samples ever further behind the host clock while
+/// every one arrives on time.
 const RAW_IMU_STALE_NS: u64 = 250_000_000;
-/// Fewer `RAW_IMU` samples than this over the last second: the stream is
-/// starved (the FC is asked for 50 or 100 Hz).
+/// Fewer `RAW_IMU` frames than this received over the last second: the
+/// stream is starved (the FC is asked for 50 or 100 Hz).
 const RAW_IMU_MIN_PER_S: usize = 40;
 const RATE_WINDOW_NS: u64 = 1_000_000_000;
+/// A wait between two `RAW_IMU` frames longer than this is counted in the
+/// `nav_imu_feed` log ([`FeedState::take_raw_gaps`]).
+const RAW_GAP_LOG_NS: u64 = 100_000_000;
 
 /// What the FC feed has handed the pose provider, shared between the
 /// MAVLink delivery thread ([`sink`]) and the capture loop (the attitude
@@ -150,9 +155,13 @@ pub struct FeedState {
     /// Host ns of the first `RAW_IMU` sample; 0 before it.
     raw_since_ns: AtomicU64,
     flow: AtomicBool,
-    /// Host ns of the `RAW_IMU` samples of the last [`RATE_WINDOW_NS`] up to
-    /// the newest, oldest first.
+    /// Host arrival ns of the `RAW_IMU` frames of the last
+    /// [`RATE_WINDOW_NS`] up to the newest, oldest first.
     raw_times: Mutex<VecDeque<u64>>,
+    /// Waits between `RAW_IMU` frames over [`RAW_GAP_LOG_NS`] since the last
+    /// [`Self::take_raw_gaps`]: how many, and the longest, ns.
+    raw_gaps: AtomicU64,
+    raw_gap_max_ns: AtomicU64,
 }
 
 impl FeedState {
@@ -162,12 +171,20 @@ impl FeedState {
         self.newest_imu_ns.fetch_max(t_ns, Ordering::Release);
     }
 
-    /// One `RAW_IMU` sample at host `t_ns` handed on.
-    fn note_raw_imu(&self, t_ns: u64) {
+    /// One `RAW_IMU` sample at host `t_ns` handed on, its frame received at
+    /// host `arrival_ns`.
+    fn note_raw_imu(&self, t_ns: u64, arrival_ns: u64) {
         self.note_imu(t_ns);
         let mut times = self.raw_times();
-        times.push_back(t_ns);
-        while times.front().is_some_and(|&t| t + RATE_WINDOW_NS < t_ns) {
+        if let Some(&prev) = times.back() {
+            let wait = arrival_ns.saturating_sub(prev);
+            if wait > RAW_GAP_LOG_NS {
+                self.raw_gaps.fetch_add(1, Ordering::Relaxed);
+                self.raw_gap_max_ns.fetch_max(wait, Ordering::Relaxed);
+            }
+        }
+        times.push_back(arrival_ns);
+        while times.front().is_some_and(|&t| t + RATE_WINDOW_NS < arrival_ns) {
             times.pop_front();
         }
         drop(times);
@@ -177,6 +194,14 @@ impl FeedState {
         if !self.raw_imu.swap(true, Ordering::AcqRel) {
             tracing::info!("nav_imu_source_raw_imu");
         }
+    }
+
+    /// Waits between `RAW_IMU` frames over 100 ms since the last call: how
+    /// many, and the longest in ms.
+    pub fn take_raw_gaps(&self) -> (u64, f64) {
+        let n = self.raw_gaps.swap(0, Ordering::Relaxed);
+        let max = self.raw_gap_max_ns.swap(0, Ordering::Relaxed);
+        (n, max as f64 * 1e-6)
     }
 
     /// Host ns of the first `RAW_IMU` sample; `None` before it.
@@ -224,8 +249,8 @@ impl FeedState {
         }
     }
 
-    /// `RAW_IMU` samples over the second up to host `now_ns`; `None` before
-    /// `RAW_IMU`.
+    /// `RAW_IMU` frames received over the second up to host `now_ns`;
+    /// `None` before `RAW_IMU`.
     pub fn raw_rate_hz(&self, now_ns: u64) -> Option<f32> {
         if !self.raw_imu() {
             return None;
@@ -276,14 +301,19 @@ pub fn hold_poses_to_feed(
 /// measured turn.
 pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>) -> NavSink {
     Arc::new(move |s| match s {
-        NavSample::Imu { t_ns, imu, attitude } if fc_is_imu => {
+        NavSample::Imu {
+            t_ns,
+            arrival_ns,
+            imu,
+            attitude,
+        } if fc_is_imu => {
             if !state.raw_imu() {
                 pose.heading_unmeasured();
             }
             let attitude = attitude.map(|(t, r)| (t, enu_flu(&r)));
             let samples = vec![from_raw(t_ns, &imu, attitude)];
             pose.feed_imu(FC_IMU_ID, &ImuBatch { samples });
-            state.note_raw_imu(t_ns);
+            state.note_raw_imu(t_ns, arrival_ns);
         }
         NavSample::Velocity { t_ns, v } if fc_is_imu => {
             pose.feed_velocity(FC_IMU_ID, &[VelocitySample { t_ns, v }]);
@@ -366,6 +396,7 @@ mod tests {
         let sink = sink(fed, true, state.clone());
         let raw = |t_ns: u64| NavSample::Imu {
             t_ns,
+            arrival_ns: t_ns,
             imu: RawImu {
                 time_usec: t_ns / 1_000,
                 gyro: [0.0; 3],
@@ -390,6 +421,43 @@ mod tests {
         assert_eq!(state.raw_rate_hz(7_995_000_000), Some(100.0));
         assert_eq!(state.degraded(8_300_000_000), Some(ImuFeedReason::Stalled));
         assert_eq!(state.raw_rate_hz(8_300_000_000), Some(70.0));
+    }
+
+    /// The feed is judged by when its frames arrive, not by their stamps: a
+    /// simulator at 0.8 of real time whose samples are stamped ever further
+    /// behind the host clock (as a clock bound once left them) but arrive
+    /// at 80 a second is steady; once they stop arriving it is stalled
+    /// within 250 ms of the last, and each wait over 100 ms is counted.
+    #[test]
+    fn the_feed_is_judged_by_arrival_not_by_stamp() {
+        let fed = Arc::new(Fed::default());
+        let state = Arc::new(FeedState::default());
+        let sink = sink(fed, true, state.clone());
+        let raw = |arrival_ns: u64, lag_ns: u64| NavSample::Imu {
+            t_ns: arrival_ns - lag_ns,
+            arrival_ns,
+            imu: RawImu {
+                time_usec: 0,
+                gyro: [0.0; 3],
+                accel: [0.0, 0.0, -9.8],
+            },
+            attitude: None,
+        };
+        // 5 s at 80 a second, the stamps falling behind by 15 % of the time.
+        for k in 0..400u64 {
+            let arrival = 6_000_000_000 + k * 12_500_000;
+            sink(raw(arrival, k * 12_500_000 * 15 / 100));
+        }
+        let last = 6_000_000_000 + 399 * 12_500_000;
+        assert_eq!(state.degraded(last + 5_000_000), None, "arriving steadily");
+        assert_eq!(state.raw_rate_hz(last + 5_000_000), Some(80.0));
+        assert_eq!(state.degraded(last + 240_000_000), None);
+        assert_eq!(state.degraded(last + 260_000_000), Some(ImuFeedReason::Stalled));
+        assert_eq!(state.take_raw_gaps(), (0, 0.0));
+        sink(raw(last + 400_000_000, 0));
+        sink(raw(last + 412_500_000, 0));
+        assert_eq!(state.take_raw_gaps(), (1, 400.0));
+        assert_eq!(state.take_raw_gaps(), (0, 0.0), "taken");
     }
 
     /// No yaw rate reaching the matcher (the stand-in, a stalled feed) loses
@@ -500,6 +568,7 @@ mod tests {
         [
             NavSample::Imu {
                 t_ns: 100_000_000,
+                arrival_ns: 100_000_000,
                 imu: RawImu {
                     time_usec: 1,
                     gyro: [0.0, 0.0, 0.3],

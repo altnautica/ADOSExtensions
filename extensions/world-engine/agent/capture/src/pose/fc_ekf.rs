@@ -21,9 +21,10 @@
 //! `arrival_mono − fc_time` over the last [`OFFSET_WINDOW`] messages (the
 //! fastest delivery bounds the latency), so a pose is placed at the instant
 //! the FC sampled it, not when the host read it. The offset falls at once to
-//! a faster delivery and rises no faster than [`MAX_OFFSET_RISE`] of the host
-//! time that passes ([`FcClock`]), so a delivery stall longer than the window
-//! keeps the delayed burst at the FC's own spacing.
+//! a faster delivery and rises no faster than the measured clock drift plus
+//! [`MAX_OFFSET_RISE`] of the host time that passes ([`FcClock`]), so a
+//! delivery stall longer than the window keeps the delayed burst at the FC's
+//! own spacing, and a simulator below real time stays on the host clock.
 //!
 //! Frames: the EKF works in NED at its origin with an FRD body. The world is
 //! the session ENU frame at the session anchor: position goes NED → ECEF (at
@@ -52,12 +53,22 @@ use crate::nav::fc_flow;
 pub const MAX_PAIR_NS: u64 = 50_000_000;
 /// Messages the FC→host offset is the minimum over.
 pub const OFFSET_WINDOW: usize = 64;
-/// Fastest the FC-to-host offset rises, per unit of host time: 5 %, so an FC
-/// clock (a simulator's) running as slow as 0.95 of the host's is tracked,
-/// while a burst read within microseconds moves it by nothing.
+/// Fastest the FC-to-host offset rises, per unit of host time, beyond the
+/// measured drift ([`FcClock`]): 5 %, so a burst read within microseconds
+/// moves it by nothing.
 pub const MAX_OFFSET_RISE: f64 = 0.05;
+/// Host time each drift bucket holds the least offset over.
+const DRIFT_BUCKET_NS: u64 = 1_000_000_000;
+/// Drift buckets kept, and the fewest the drift is measured from.
+const DRIFT_BUCKETS: usize = 8;
+const DRIFT_MIN_BUCKETS: usize = 4;
+/// Fastest measured drift, per unit of host time: an FC clock (a
+/// simulator's) running as slow as half the host's. One running faster
+/// makes the offset fall, which it follows at once.
+const MAX_DRIFT: f64 = 0.5;
 /// An FC clock that steps back further than this has restarted: the offset
-/// starts over.
+/// starts over. An offset falling further than this at once is a step of
+/// the FC clock too: the drift starts over.
 const FC_RESTART_NS: i128 = 1_000_000_000;
 /// GNSS state changes kept for [`FcEkfPose::gnss_steady_at`].
 const GNSS_CHANGES: usize = 16;
@@ -70,6 +81,8 @@ pub enum NavSample {
     /// `(host ns, R_ned_frd)` for its gravity ([`crate::nav::fc_imu`]).
     Imu {
         t_ns: u64,
+        /// When its frame reached the host, monotonic ns.
+        arrival_ns: u64,
         imu: RawImu,
         attitude: Option<(u64, [f64; 9])>,
     },
@@ -94,7 +107,8 @@ const FIX_3D: u8 = 3;
 
 /// The FC-to-host clock offset: the least `arrival − fc_time` over the last
 /// [`OFFSET_WINDOW`] messages, taken at once when it falls and followed at
-/// no more than [`MAX_OFFSET_RISE`] of the elapsed host time when it rises.
+/// no more than the measured drift plus [`MAX_OFFSET_RISE`] of the elapsed
+/// host time when it rises.
 ///
 /// The bound is what keeps a stalled delivery honest. When the frames stop
 /// for longer than the window (the companion's MAVLink fan-out stalled for
@@ -103,12 +117,36 @@ const FIX_3D: u8 = 3;
 /// own delay: a plain minimum stamps each burst frame at its arrival, the
 /// FC's 10 ms `RAW_IMU` spacing collapses to microseconds, and the gyro
 /// integrated from those stamps loses the turn the burst measured.
+///
+/// The drift is an FC clock running slower than the host's: a simulator
+/// below real time (0.8 of it in a loaded bench flight). The least offset
+/// then rises steadily with every frame on time, and a fixed bound would
+/// leave each sample further behind the host clock, read as a stalled feed
+/// and scans waiting on IMU seconds old. It is the median slope of the
+/// least offset of each [`DRIFT_BUCKET_NS`] of host time over the last
+/// [`DRIFT_BUCKETS`] (a stall's burst moves one bucket, not the median),
+/// within `[0, MAX_DRIFT]`. Each windowed offset is carried forward by the
+/// drift to the newest arrival before the minimum is taken, so the window
+/// no longer lags a rising offset by its own length; the newest frame is
+/// still in it, so no stamp is later than its arrival. When the drift is
+/// first measured (or grows), the offset may rise once by the growth over
+/// the host time it was measured across: the lag gathered while the drift
+/// was not yet known.
 #[derive(Debug, Default)]
 struct FcClock {
-    window: VecDeque<i128>,
+    /// `(offset, arrival host ns)` of the last [`OFFSET_WINDOW`] messages.
+    window: VecDeque<(i128, u64)>,
     /// The offset in use, the host time it was last moved at and the newest
     /// FC time.
     est: Option<(i128, u64, i128)>,
+    /// `(bucket start host ns, least offset)`, oldest first; the last one
+    /// is still filling.
+    buckets: VecDeque<(u64, i128)>,
+    /// The drift over the finished buckets, measured as each one finishes.
+    drift: f64,
+    /// One-off rise allowed beyond the rate: the lag a newly measured drift
+    /// gathered before it was known.
+    catch_up: i128,
 }
 
 impl FcClock {
@@ -117,20 +155,81 @@ impl FcClock {
         if self.est.is_some_and(|(_, _, f)| fc_ns + FC_RESTART_NS < f) {
             self.window.clear();
             self.est = None;
+            self.restart_drift();
         }
-        self.window.push_back(arrival_ns as i128 - fc_ns);
+        let offset = arrival_ns as i128 - fc_ns;
+        if self.est.is_some_and(|(o, _, _)| offset + FC_RESTART_NS < o) {
+            self.restart_drift();
+        }
+        self.note_bucket(offset, arrival_ns);
+        self.window.push_back((offset, arrival_ns));
         while self.window.len() > OFFSET_WINDOW {
             self.window.pop_front();
         }
-        let least = *self.window.iter().min().expect("one pushed");
+        let drift = self.drift;
+        let least = self
+            .window
+            .iter()
+            .map(|&(o, a)| o + ((arrival_ns.saturating_sub(a)) as f64 * drift) as i128)
+            .min()
+            .expect("one pushed");
+        let rise_rate = MAX_OFFSET_RISE + drift;
+        let catch_up = std::mem::take(&mut self.catch_up);
         self.est = Some(match self.est {
             Some((o, a, f)) if least > o => {
-                let rise = (arrival_ns.saturating_sub(a) as f64 * MAX_OFFSET_RISE) as i128;
+                let rise = (arrival_ns.saturating_sub(a) as f64 * rise_rate) as i128 + catch_up;
                 ((o + rise).min(least), arrival_ns, fc_ns.max(f))
             }
             Some((_, _, f)) => (least, arrival_ns, fc_ns.max(f)),
             None => (least, arrival_ns, fc_ns),
         });
+    }
+
+    fn restart_drift(&mut self) {
+        self.buckets.clear();
+        self.drift = 0.0;
+        self.catch_up = 0;
+    }
+
+    fn note_bucket(&mut self, offset: i128, arrival_ns: u64) {
+        match self.buckets.back_mut() {
+            Some((start, least)) if arrival_ns < *start + DRIFT_BUCKET_NS => {
+                *least = (*least).min(offset);
+            }
+            _ => {
+                let (drift, span_ns) = self.finished_drift();
+                if drift > self.drift {
+                    self.catch_up = ((drift - self.drift) * span_ns as f64) as i128;
+                }
+                self.drift = drift;
+                self.buckets.push_back((arrival_ns, offset));
+                while self.buckets.len() > DRIFT_BUCKETS {
+                    self.buckets.pop_front();
+                }
+            }
+        }
+    }
+
+    /// How fast the least offset rises per unit of host time over the
+    /// buckets so far, all finished: the median of the pairwise slopes, 0
+    /// with too few; and the host time those buckets span.
+    fn finished_drift(&self) -> (f64, u64) {
+        let b = &self.buckets;
+        if b.len() < DRIFT_MIN_BUCKETS {
+            return (0.0, 0);
+        }
+        let mut slopes = [0.0; DRIFT_BUCKETS * (DRIFT_BUCKETS - 1) / 2];
+        let mut n = 0;
+        for i in 0..b.len() {
+            for j in i + 1..b.len() {
+                slopes[n] = (b[j].1 - b[i].1) as f64 / (b[j].0 - b[i].0) as f64;
+                n += 1;
+            }
+        }
+        let slopes = &mut slopes[..n];
+        slopes.sort_by(f64::total_cmp);
+        let span_ns = b[b.len() - 1].0 - b[0].0;
+        (slopes[n / 2].clamp(0.0, MAX_DRIFT), span_ns)
     }
 
     /// The FC time `fc_ns` on the host clock.
@@ -298,6 +397,7 @@ impl FcEkfPose {
                 g.clock.note(s.time_usec as i128 * 1_000, arrival_ns);
                 g.host_ns(s.time_usec as i128 * 1_000).map(|t_ns| NavSample::Imu {
                     t_ns,
+                    arrival_ns,
                     imu: s,
                     attitude: g.host_attitude(),
                 })
@@ -627,6 +727,100 @@ mod tests {
         p.set_nav_sink(None);
         p.on_frame(&imu(1_030_000, 700), 5_032_000_000);
         assert_eq!(fed.lock().len(), 2, "no sink, nothing handed on");
+    }
+
+    fn raw_imu_frame(usec: u64) -> Vec<u8> {
+        let mut b = usec.to_le_bytes().to_vec();
+        for v in [0i16, 0, -1000, 0, 0, 0, 0, 0, 0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        frame_v2(27, &b)
+    }
+
+    /// The sink's `(t_ns, arrival_ns)` of each `RAW_IMU` sample.
+    fn imu_times(got: &Mutex<Vec<NavSample>>) -> Vec<(u64, u64)> {
+        got.lock()
+            .iter()
+            .filter_map(|s| match s {
+                NavSample::Imu { t_ns, arrival_ns, .. } => Some((*t_ns, *arrival_ns)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A simulator running at 0.8 of real time: `RAW_IMU` at 100 Hz on the
+    /// FC clock arrives steadily, 12.5 ms apart on the host's. The measured
+    /// drift keeps each sample at its arrival less the 2 ms delay, where a
+    /// bound of 5 % alone left the newest 1.4 s behind after 10 s.
+    #[test]
+    fn a_simulator_below_real_time_stays_on_the_host_clock() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        for k in 0..1_000u64 {
+            let fc_us = 1_000_000 + k * 10_000;
+            p.on_frame(&raw_imu_frame(fc_us), 5_002_000_000 + k * 12_500_000);
+        }
+        let times = imu_times(&got);
+        let late: Vec<_> = times[500..]
+            .iter()
+            .map(|(t, a)| a.saturating_sub(*t) as f64 * 1e-6)
+            .collect();
+        let worst = late.iter().copied().fold(0.0, f64::max);
+        assert!(worst < 50.0, "a sample placed {worst:.0} ms before its arrival");
+        let spacing = times[999].0 - times[998].0;
+        assert!((spacing as i64 - 12_500_000).abs() < 2_000_000, "spacing {spacing} ns");
+    }
+
+    /// A delivery stall that bursts keeps the FC's spacing, drift or not.
+    #[test]
+    fn a_stall_then_a_burst_keeps_the_fc_spacing() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        let mut k = 0u64;
+        let send = |k: u64, host: u64| p.on_frame(&raw_imu_frame(1_000_000 + k * 10_000), host);
+        // 6 s steady, then 1 s nothing, then that second's 100 samples at once.
+        while k < 600 {
+            send(k, 5_002_000_000 + k * 10_000_000);
+            k += 1;
+        }
+        for j in 0..100 {
+            send(k + j, 5_002_000_000 + 7_000_000_000 + j * 1_000);
+        }
+        let times = imu_times(&got);
+        let burst = &times[600..];
+        let spacing = (burst[99].0 - burst[0].0) as f64 / 99.0;
+        assert!((spacing - 10e6).abs() < 1e6, "burst spacing {spacing} ns");
+    }
+
+    /// An FC clock that steps (a reboot back to zero, or a jump forward) is
+    /// taken at once, not smoothed over by the drift.
+    #[test]
+    fn a_clock_step_is_taken_at_once() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        // 8 s at 0.8 of real time: the drift is measured.
+        for k in 0..640u64 {
+            p.on_frame(&raw_imu_frame(60_000_000 + k * 10_000), 5_002_000_000 + k * 12_500_000);
+        }
+        // Reboot: FC time back to 1 s, read at the host's 20 s. The first
+        // frame after a step is the only offset known, so it is placed at
+        // its own arrival; the old offset would put it 55 s out.
+        p.on_frame(&raw_imu_frame(1_000_000), 20_002_000_000);
+        let (t, a) = *imu_times(&got).last().expect("one");
+        assert_eq!(a, t, "the reboot starts the offset over");
+        // A jump forward by 30 s: the offset falls at once.
+        p.on_frame(&raw_imu_frame(31_010_000), 20_012_000_000);
+        let (t, a) = *imu_times(&got).last().expect("one");
+        assert_eq!(a, t, "the jump is taken at once");
+        // With the drift started over, a stall and burst keep the spacing:
+        // 100 samples 10 ms apart on the FC clock, read within 100 µs.
+        for j in 1..=100u64 {
+            p.on_frame(&raw_imu_frame(31_010_000 + j * 10_000), 21_500_000_000 + j * 1_000);
+        }
+        let times = imu_times(&got);
+        let n = times.len();
+        let spacing = (times[n - 1].0 - times[n - 100].0) as f64 / 99.0;
+        assert!((spacing - 10e6).abs() < 1e6, "burst spacing {spacing} ns after the step");
     }
 
     /// `OPTICAL_FLOW` (ArduPilot: boot ms in `time_usec`) is scaled by the

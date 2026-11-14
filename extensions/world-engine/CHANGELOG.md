@@ -478,18 +478,33 @@ All notable changes to the World Engine extension.
   `RAW_IMU` arrived. The stand-in now carries the attitude's roll and pitch
   rates and never its yaw. 2.2.1.
 - **The planar pose follows the FC IMU feed.** With no yaw rate reaching
-  the matcher (on the attitude stand-in, or when `RAW_IMU` stalls for over
-  250 ms) the rotation prior pins the heading and it cannot follow a yaw at
-  all, so every pose is lost: external navigation sends no `ODOMETRY`, and
-  the flight controller falls back to its other sources. While `RAW_IMU` is
-  live but under 40 samples a second the pose is degraded. The pose
-  descriptor names the cause (`imu_feed`), the capture logs
-  `nav_imu_feed_degraded` with the reason and the pose's state and
-  `nav_imu_feed_ok` on each change, and `nav_imu_feed` carries the reason.
+  the matcher (on the attitude stand-in, or when no `RAW_IMU` frame has
+  arrived for over 250 ms) the rotation prior pins the heading and it cannot
+  follow a yaw at all, so every pose is lost: external navigation sends no
+  `ODOMETRY`, and the flight controller falls back to its other sources.
+  While `RAW_IMU` arrives at under 40 frames a second the pose is degraded.
+  Both are judged by when the frames reach the companion, not by their FC
+  stamps. The pose descriptor names the cause (`imu_feed`), the capture
+  logs `nav_imu_feed_degraded` with the reason and the pose's state and
+  `nav_imu_feed_ok` on each change, and `nav_imu_feed` carries the reason
+  and the waits between `RAW_IMU` frames over 100 ms
+  (`raw_imu_gaps_over_100ms`, `raw_imu_gap_max_ms`).
   `plugin.world-engine.map_status` carries the feed as `imu_feed`
   (`{state: ok | degraded | lost, reason, rate_hz}`, null when the pose
   does not take the FC as its IMU), for a pre-arm hold until `RAW_IMU`
   streams. 2.2.1.
+- **A flight controller clock slower than the companion's stays on the
+  companion's clock.** The FC-to-companion offset rose at most 5 % of the
+  time passing, so a simulator running below real time (0.55 to 0.9 of it
+  in a loaded bench flight) stamped its samples ever further behind: the
+  feed read as stalled for the rest of the flight while every sample
+  arrived, and the matcher waited on IMU seconds old. The offset now also
+  follows the measured drift (the median slope of the least offset per
+  second over the last 8 s, up to an FC clock at half the companion's
+  rate): the offsets it takes the least of are carried forward by the
+  drift, and the lag gathered before the drift was measured is taken back
+  once. A delivery stall's burst still keeps the FC's spacing, and an FC
+  clock that steps (a reboot, a jump forward) is taken at once. 2.2.1.
 - **The planar matcher reports whether the integrated gyro vouches for the
   heading** (`PoseOut::heading_ok`), and each case below reports the pose
   degraded. A scan the IMU has not reached yet (a stalled or starved feed)

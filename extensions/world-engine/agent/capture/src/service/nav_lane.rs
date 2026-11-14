@@ -261,8 +261,8 @@ impl Engine {
     }
 
     /// At most every [`NAV_FEED_LOG_EVERY`], with the FC as the IMU: the IMU
-    /// rate fed to the pose provider and the median and widest scan-to-IMU
-    /// gaps.
+    /// rate fed to the pose provider, the median and widest scan-to-IMU
+    /// gaps, and the waits between `RAW_IMU` frames over 100 ms.
     fn log_nav_feed(&mut self) {
         if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
             return;
@@ -273,11 +273,14 @@ impl Engine {
         }
         let mut f = std::mem::take(&mut self.nav_feed);
         let (p50, max) = f.gaps_ms().unzip();
+        let (raw_gaps, raw_gap_max_ms) = self.fc_nav.take_raw_gaps();
         tracing::info!(
             imu_hz = self.fc_nav.take_imu_samples() as f64 / elapsed_s,
             scans = f.scans,
             p50_scan_imu_gap_ms = p50,
             max_scan_imu_gap_ms = max,
+            raw_imu_gaps_over_100ms = raw_gaps,
+            raw_imu_gap_max_ms = raw_gap_max_ms,
             degraded = self.imu_feed_degraded.map(ImuFeedReason::as_str),
             "nav_imu_feed"
         );
