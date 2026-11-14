@@ -143,18 +143,10 @@ impl Engine {
             .map_or(0, |d| d.as_millis() as i64);
         self.degrade_on_imu_feed(&mut out, now_mono_ns);
         let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
-        if let Some(e) = out.last() {
-            // The matcher started a new map in flight: place it from the FC,
-            // and again on each pose while it stays lost. A new provider
-            // counts from zero again.
-            let fc = self.nav_deps.fc_feed.as_ref();
-            if q.map_restarts > self.nav_map_restarts {
-                self.nav.restart_in_flight(e, fc_up, fc);
-            } else {
-                self.nav.seat_while_lost(e, fc_up, fc);
-            }
-            self.nav_map_restarts = q.map_restarts;
-        }
+        // A map the matcher started over in flight is placed from the FC.
+        let fc = self.nav_deps.fc_feed.as_ref();
+        self.nav
+            .on_matcher_poses(&out, q.map_restarts, &mut self.nav_map_restarts, fc_up, fc);
         self.fold_gnss_alignment(&out);
         // A pose the feed left alone but whose heading the matcher has yet
         // to re-confirm after the feed's gap says so.

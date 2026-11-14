@@ -37,6 +37,14 @@ pub struct AttitudeQuaternion {
     pub time_boot_ms: u32,
     /// `[w, x, y, z]`.
     pub q: [f64; 4],
+    /// The heading's rate, rad/s clockwise from above, from the body rates
+    /// the message carries (the gyro's, unmoved by an EKF yaw reset).
+    pub heading_rate: f64,
+}
+
+/// The heading's rate from FRD body rates `[p, q, r]` at `roll`, `pitch`.
+fn heading_rate(roll: f64, pitch: f64, rates: [f64; 3]) -> f64 {
+    (rates[1] * roll.sin() + rates[2] * roll.cos()) / pitch.cos().max(1e-3)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -160,16 +168,22 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
     Some(match id {
         MSG_ATTITUDE => {
             let b: [u8; 28] = padded(payload);
+            let (roll, pitch) = (f32_at(&b, 4), f32_at(&b, 8));
             FcMessage::Attitude(AttitudeQuaternion {
                 time_boot_ms: u32_at(&b, 0),
-                q: quat_from_euler(f32_at(&b, 4), f32_at(&b, 8), f32_at(&b, 12)),
+                q: quat_from_euler(roll, pitch, f32_at(&b, 12)),
+                heading_rate: heading_rate(roll, pitch, [f32_at(&b, 16), f32_at(&b, 20), f32_at(&b, 24)]),
             })
         }
         MSG_ATTITUDE_QUATERNION => {
             let b: [u8; 32] = padded(payload);
+            let q = [f32_at(&b, 4), f32_at(&b, 8), f32_at(&b, 12), f32_at(&b, 16)];
+            let m = crate::pose::se3::matrix_from_quat(q);
+            let (roll, pitch) = (m[7].atan2(m[8]), (-m[6]).clamp(-1.0, 1.0).asin());
             FcMessage::Attitude(AttitudeQuaternion {
                 time_boot_ms: u32_at(&b, 0),
-                q: [f32_at(&b, 4), f32_at(&b, 8), f32_at(&b, 12), f32_at(&b, 16)],
+                q,
+                heading_rate: heading_rate(roll, pitch, [f32_at(&b, 20), f32_at(&b, 24), f32_at(&b, 28)]),
             })
         }
         MSG_LOCAL_POSITION_NED => {
@@ -306,6 +320,8 @@ mod tests {
         };
         assert_eq!(a.time_boot_ms, 1234);
         assert_eq!(a.q, [1.0, 0.0, 0.0, 0.0]);
+        // Level: the heading turns at the body's yaw rate.
+        assert!((a.heading_rate - 0.3).abs() < 1e-6, "{}", a.heading_rate);
 
         let mut p = Vec::new();
         p.extend_from_slice(&50u32.to_le_bytes());

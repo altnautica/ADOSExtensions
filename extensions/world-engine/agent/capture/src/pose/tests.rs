@@ -15,6 +15,7 @@ fn est(t_ns: u64, yaw: f64, x: f64) -> PoseEstimate {
         source: PoseSource::Vio,
         health: VioHealth::Good,
         sigma_xy_m: None,
+        heading_ok: true,
     }
 }
 

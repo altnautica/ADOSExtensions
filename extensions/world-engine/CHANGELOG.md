@@ -138,6 +138,21 @@ All notable changes to the World Engine extension.
 
 ### Fixed
 
+- **A map the planar matcher starts over in flight keeps the map's own
+  north.** Its heading was the FC's absolute heading, degrees off the
+  map's (2.8 to 7.5° at the recorded warehouse's restarts); it is now the
+  last trusted pose's turned by the FC's turn since, and the FC's position
+  change is turned into the map's north (see the re-confirmation entry
+  below). A pose whose heading went unmeasured (a scan the IMU did not
+  reach) is never placed from: one inside a 1.5 s hole put a replayed
+  restart 85° and 23 m off. A degraded pose with a measured heading is, so
+  a restart deep in a featureless corridor keeps the north; without the
+  FC's turn since, the restarted map stays lost rather than fused on the
+  matcher's guess.
+  The FC-turn window that re-confirms a short gap widens from 8° to 10°,
+  with a rival check inside it, so an honest FC turn 7 to 9° off is no
+  longer rejected at its edge. 2.2.3.
+
 - **TSDF meshing no longer aborts on newer GPUs.** Fusion shared a process
   with the splat renderer, and Open3D's cached CUDA allocator aborted the
   mesh stage ("Block ... should have been recorded") at the first fused
@@ -571,11 +586,12 @@ All notable changes to the World Engine extension.
   (the attitude riding each `RAW_IMU` sample; only its change is used, as
   under external navigation it fuses this pose's heading) less the gyro's
   is the turn the gap hid: each scan, while the drone turns slower than
-  90°/s, searches the submap built before the gap within 8° of it and
-  ±3 m, and a heading counts at a score of 0.40 unless it lies within
-  1.5° of that window's edge (the flight controller's heading stepped
-  across the gap: the turn is outside the window, and the edge is only
-  the nearest it allows). Otherwise each scan,
+  90°/s, searches the submap built before the gap within 11.5° of it and
+  ±3 m, and a heading counts at a score of 0.40 only within 10° of it (one
+  in the margin beyond means the flight controller's heading stepped
+  across the gap: the turn lies at or past the margin, whose edge is only
+  the nearest it allows) and when no heading in the window more than 10°
+  from it scores within 0.1 of it. Otherwise each scan,
   while the drone turns slower than 20°/s, searches over every turn the
   gap could have hidden (180°/s times the gap plus 5°), and a heading
   counts only when it scores at least the loop-closure minimum and no
@@ -588,21 +604,26 @@ All notable changes to the World Engine extension.
   noticed) or 5 s after it starts the map over at the current pose
   (`PoseOut::map_restarted`, `nav_map_restarted_unconfirmed`). The pose
   was lost since the gap (the FC fused none of it and ran on its other
-  sources), so the capture places the new map from the FC
-  (`nav_map_north_restarted`): its north is the FC heading at the
-  restart pose's own time (`FcEkfPose::heading_at`; the pose describes
-  its scan's first return, a revolution or more before the newest
-  attitude), latched once; its position is the last pose that was not
-  lost, moved by the FC's `LOCAL_POSITION_NED` change since
-  (`NavMap::outage_seed`; only the change, never the FC's position), on
-  the restart pose and on each pose while the new map warms up lost
-  (`NavMap::seat_while_lost`). The GNSS fit starts over; the pose is lost
-  until the new map holds 10 scans. Before, the restarted map kept the
-  position the matcher had carried blind through the gap (2.6 m off on
-  the recorded room, 6.9 to 24 m on the warehouse with 1.5 and 5 s
+  sources), so the capture places the new map from the FC's change over
+  the outage (`NavMap::on_matcher_poses`, `nav_map_north_restarted`): its
+  heading is the last good pose's (a degraded one may be a scan the IMU
+  did not reach, matched on a stale prior), turned by the FC's turn
+  from that pose to the restart pose's own time (`NavMap::outage_heading`,
+  `FcEkfPose::turn_between`: the attitude's heading rate integrated, which
+  an EKF yaw reset does not move; a gap in the attitudes is bridged by the
+  yaw's change and warns `nav_map_restart_fc_turn_bridged`), so the map
+  keeps its own north, latched once; its position is that pose's moved by
+  the FC's `LOCAL_POSITION_NED` change, turned from the FC's north into
+  the map's (`NavMap::outage_seed`; never the FC's own heading or
+  position), on the restart pose and on each pose while the new map
+  warms up lost (`NavMap::seat_while_lost`). The GNSS fit starts over; the
+  pose is lost until the new map holds 10 scans. Before, the restarted map
+  kept the position the matcher had carried blind through the gap (2.6 m
+  off on the recorded room, 6.9 to 24 m on the warehouse with 1.5 and 5 s
   holes), which the flight controller's EKF resets onto when it takes the
   pose again, and its north was the newest FC heading, off by the turn
-  since the pose (9° or more at 90°/s). A gap
+  since the pose (9° or more at 90°/s) and by the FC's own heading error
+  against the map (2.8 to 7.5° at the warehouse's restarts). A gap
   whose samples arrive late in a burst keeps them and needs no
   re-confirmation. Before, the pose came back from lost at the heading the
   gyro held, off by the turn the gap hid (90° in a 4 s gap, reported
@@ -624,16 +645,28 @@ All notable changes to the World Engine extension.
 - Where the room's outline repeats under a turn (a bare rectangle under
   half a turn, a near-square under a quarter), a heading a gap left
   unmeasured is not re-confirmed: the map starts over within 5 s and the
-  pose is lost until it holds 10 scans, its north the FC heading then. On
+  pose is lost until it holds 10 scans, its north carried over on the FC's
+  turn. On
   simulated rooms with turns of 0° to 180° hidden in dropped gaps of 0.25
   to 5.5 s, no heading was reported checked more than 1.5° off. A scene
-  whose outline repeats under a turn of less than 8° (10° without the FC
-  heading) is not caught and could be confirmed off by up to that turn.
+  whose outline repeats under a turn of less than 10° is not caught and
+  could be confirmed off by up to that turn.
   2.2.1.
 - After the map starts over at the first `RAW_IMU`, the north comes from
   the declared take-off heading, or else the FC heading on the spot: a
   vehicle turned between that moment and take-off with a declared heading
   keeps the map off by that turn, as before. 2.2.1.
+- A map started over in flight without the FC's `LOCAL_POSITION_NED` at
+  both ends of the outage (none streamed, or an outage longer than the
+  30 s history) keeps the position the matcher carried blind through the
+  gap, metres off after a second or more, and warns
+  `nav_map_restart_without_fc_position`. 2.2.3.
+- `FcEkfPose::heading_at` and `FcEkfPose::ned_at` interpolate in a straight
+  line across any gap in the FC's own attitudes or positions (a link loss
+  drops them with `RAW_IMU`), however long; a restart's lookups fall
+  outside the gap, but one inside it reads that line. The turn over an
+  attitude gap is bridged the same way and warns
+  `nav_map_restart_fc_turn_bridged`. 2.2.3.
 
 ## [2.0.0]
 

@@ -486,6 +486,7 @@ mod tests {
                 source: PoseSource::Lidar,
                 health,
                 sigma_xy_m: None,
+                heading_ok: true,
             })
         };
         // The poses are at host 0; RAW_IMU began at `since`.

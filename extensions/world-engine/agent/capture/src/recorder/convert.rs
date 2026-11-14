@@ -229,6 +229,7 @@ mod tests {
             source: PoseSource::Vio,
             health: VioHealth::Degraded,
             sigma_xy_m: None,
+            heading_ok: true,
         };
         let (p, c) = pose(&e, 1_500_000_000);
         let pose = p.pose.unwrap();

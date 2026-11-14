@@ -44,6 +44,8 @@ pub mod frames;
 pub mod scan_wait;
 
 #[cfg(test)]
+mod restart_replay;
+#[cfg(test)]
 mod tests;
 
 use std::path::{Path, PathBuf};
@@ -175,15 +177,21 @@ pub struct NavMap {
     /// The host ns the matcher's map last started over at
     /// ([`Self::restart_heading_at`]).
     restarted_at: Option<u64>,
-    /// The north was re-anchored to the FC heading in flight
-    /// ([`Self::restart_in_flight`]), whatever the declared take-off heading.
-    north_from_fc: bool,
-    /// The last pose that was not lost: its host ns and `map_ned` north,
-    /// east ([`Self::outage_seed`] places a restarted map from it).
-    trusted: Option<(u64, [f64; 2])>,
+    /// The last trusted pose: its host ns, `map_ned` north, east and heading
+    /// (radians clockwise from north); [`Self::outage_seed`] and
+    /// [`Self::outage_heading`] place a restarted map from it. A pose not
+    /// lost whose heading was measured ([`PoseEstimate::heading_ok`]): a
+    /// degraded one in a featureless corridor keeps its measured heading,
+    /// but a scan the IMU did not reach (a stall before the gap is noticed)
+    /// has the matcher's guess on a stale prior for a heading.
+    trusted: Option<(u64, [f64; 2], f64)>,
     /// A map restarted in flight is placed from the FC on each lost pose
     /// until a pose is not lost ([`Self::seat_while_lost`]).
     seating: bool,
+    /// A map restarted in flight without the FC's turn since the trusted
+    /// pose ([`Self::restart_in_flight`]): its north is unknown, so every
+    /// pose of it is lost until the matcher starts over again.
+    blind: bool,
 }
 
 /// `Rz(yaw)` about the down axis, row-major.
@@ -222,9 +230,9 @@ impl NavMap {
             logged_yaw: None,
             latest: None,
             restarted_at: None,
-            north_from_fc: false,
             trusted: None,
             seating: false,
+            blind: false,
         }
     }
 
@@ -244,32 +252,69 @@ impl NavMap {
         };
     }
 
+    /// One matcher pose `e` for placing a map the matcher started over in
+    /// flight: `restarted` when the matcher's restart count rose since the
+    /// last pose ([`crate::pose::PoseQuality::map_restarts`]), so
+    /// [`Self::restart_in_flight`], else [`Self::seat_while_lost`].
+    pub fn on_matcher_pose(&mut self, e: &PoseEstimate, restarted: bool, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
+        if restarted {
+            self.restart_in_flight(e, fc_up, fc);
+        } else {
+            self.seat_while_lost(e, fc_up, fc);
+        }
+    }
+
+    /// The capture's tick: the matcher's poses `out` drained since the last
+    /// tick and its restart count `map_restarts`, against `seen`, the count
+    /// at the last tick (a new provider counts from zero again). The newest
+    /// pose goes to [`Self::on_matcher_pose`].
+    pub fn on_matcher_poses(
+        &mut self,
+        out: &[PoseEstimate],
+        map_restarts: u32,
+        seen: &mut u32,
+        fc_up: Option<f64>,
+        fc: Option<&FcEkfPose>,
+    ) {
+        if let Some(e) = out.last() {
+            self.on_matcher_pose(e, map_restarts > *seen, fc_up, fc);
+            *seen = map_restarts;
+        }
+    }
+
     /// The matcher started a new map in flight at pose `e` (a heading a gap
-    /// in the IMU left unmeasured was not re-confirmed in time,
-    /// [`crate::pose::PoseQuality::map_restarts`]): its heading and position
-    /// against the old map are the matcher's guess across the gap, tracked
-    /// without a measured heading. The pose has been lost (external
-    /// navigation not fused) since the gap and stays lost until the new map
-    /// holds enough scans, so the flight controller (`fc`) ran on its other
-    /// sources meanwhile, and the new map is placed from it once:
-    /// - its north is the FC's attitude yaw at `e`'s own time
-    ///   ([`FcEkfPose::heading_at`]; `e` describes its scan's first return,
-    ///   a revolution or more before now), even with a declared take-off
-    ///   heading, which holds only at the take-off spot;
+    /// in the IMU left unmeasured was not re-confirmed in time): its heading
+    /// and position against the old map are the matcher's guess across the
+    /// gap, tracked without a measured heading. The pose has been lost
+    /// (external navigation not fused) since the gap and stays lost until
+    /// the new map holds enough scans, so the flight controller (`fc`) ran
+    /// on its other sources meanwhile, and the new map is placed from it:
+    /// - its heading at `e` is [`Self::outage_heading`], latched once: the
+    ///   old map's north carries over, never the FC's own;
     /// - `e` is placed at [`Self::outage_seed`]; without it, where the old
     ///   map placed `e`. While the pose stays lost (the new map's warm-up)
     ///   each later lost pose is placed there again
     ///   ([`Self::seat_while_lost`]): the new map's first scans track the
-    ///   drone poorly, and only a pose that is not lost is trusted.
+    ///   drone poorly, and only a pose that is not lost ends the placing.
     ///
-    /// The GNSS fit starts over (it fitted the old map). Without an FC
-    /// heading at `e`'s time the old north stays.
+    /// The GNSS fit starts over (it fitted the old map). Without the FC's
+    /// turn since the trusted pose (none, or older than the FC's attitude
+    /// history) the new map's north is unknown: it stays lost, never fused
+    /// on the matcher's guess through the outage. Without the FC's position
+    /// at both ends the pose keeps the old map's blind position. Both warn,
+    /// as does a turn bridged across a gap in the FC's attitudes.
     pub fn restart_in_flight(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
-        let Some(heading) = fc.and_then(|fc| fc.heading_at(e.t_ns)) else {
+        let Some((heading, bridged)) = fc.and_then(|fc| self.outage_heading(e.t_ns, fc)) else {
             tracing::warn!("nav_map_restart_without_fc_heading");
+            self.blind = true;
+            self.seating = false;
             return;
         };
+        self.blind = false;
+        if bridged {
+            tracing::warn!("nav_map_restart_fc_turn_bridged");
+        }
         let seed = fc.and_then(|fc| self.outage_seed(e.t_ns, fc));
         if seed.is_none() {
             tracing::warn!("nav_map_restart_without_fc_position");
@@ -283,7 +328,6 @@ impl NavMap {
         self.yaw0 = Some(yaw0);
         self.spot = None;
         self.left_spot = true;
-        self.north_from_fc = true;
         self.align = MapAlign::default();
         self.logged_yaw = None;
         tracing::info!(
@@ -314,16 +358,40 @@ impl NavMap {
 
     /// Where a pose at host `t_ns` is in `map_ned` (north, east) after an
     /// outage of the pose, for placing a map started over for any reason:
-    /// the last pose that was not lost, moved by the FC's own position change
-    /// (`LOCAL_POSITION_NED`, `fc`) from that pose's time to `t_ns`. Only the
-    /// change over the outage is taken, never the FC's position: while the
-    /// pose was lost the FC fused no external navigation and ran on its other
-    /// sources. `None` before a pose that was not lost, or without the FC's
-    /// position at both ends.
+    /// the last trusted pose, moved by the FC's own position change
+    /// (`LOCAL_POSITION_NED`, `fc`) from that pose's time to `t_ns`, turned
+    /// from the FC's frame into the map's by the FC's heading against the
+    /// map's then ([`Self::outage_heading`] less [`FcEkfPose::heading_at`]:
+    /// the FC's north is degrees off the map's, more after an EKF yaw
+    /// reset). Only the change over the outage is taken, never the FC's
+    /// position: while the pose was lost the FC fused no external navigation
+    /// and ran on its other sources. `None` before a trusted pose,
+    /// or without the FC's position at both ends.
     pub fn outage_seed(&self, t_ns: u64, fc: &FcEkfPose) -> Option<[f64; 2]> {
-        let (t, ne) = self.trusted?;
+        let (t, ne, _) = self.trusted?;
         let (then, now) = (fc.ned_at(t)?, fc.ned_at(t_ns)?);
-        Some([ne[0] + now[0] - then[0], ne[1] + now[1] - then[1]])
+        let (n, e) = (now[0] - then[0], now[1] - then[1]);
+        let off = match (self.outage_heading(t_ns, fc), fc.heading_at(t_ns)) {
+            (Some((map, _)), Some(own)) => map - own,
+            _ => 0.0,
+        };
+        let (s, c) = off.sin_cos();
+        Some([ne[0] + c * n - s * e, ne[1] + s * n + c * e])
+    }
+
+    /// The heading in `map_ned` (radians clockwise from north) of a pose at
+    /// host `t_ns` after an outage of the pose, as [`Self::outage_seed`]:
+    /// the last trusted pose's, turned by the FC's turn from that
+    /// pose's time to `t_ns` ([`FcEkfPose::turn_between`]: its heading rate
+    /// integrated, so to the pose's own time and through an EKF yaw reset),
+    /// and whether a gap in the FC's attitudes was bridged by its yaw's own
+    /// change. The FC's own heading may sit degrees off the map's north and
+    /// is never taken. `None` before a trusted pose, or without
+    /// the FC's attitude at both ends.
+    pub fn outage_heading(&self, t_ns: u64, fc: &FcEkfPose) -> Option<(f64, bool)> {
+        let (t, _, yaw) = self.trusted?;
+        let (turn, bridged) = fc.turn_between(t, t_ns)?;
+        Some((wrap_pi(yaw + turn), bridged))
     }
 
     pub fn settings(&self) -> &NavSettings {
@@ -347,7 +415,7 @@ impl NavMap {
             Some(MapNorth::Gnss)
         } else if self.yaw0.is_none() {
             None
-        } else if self.settings.takeoff_heading_rad.is_some() && !self.north_from_fc {
+        } else if self.settings.takeoff_heading_rad.is_some() {
             Some(MapNorth::Declared)
         } else {
             Some(MapNorth::FcHeading)
@@ -503,8 +571,11 @@ impl NavMap {
         self.follow_heading(&r_frd, t_frd, fc_heading);
         let (r, t) = self.ned_of(&r_frd, t_frd)?;
         self.latest = Some((r, t));
-        if e.health != VioHealth::Lost {
-            self.trusted = Some((e.t_ns, [t[0], t[1]]));
+        let health = if self.blind { VioHealth::Lost } else { e.health };
+        if health != VioHealth::Lost && e.heading_ok {
+            self.trusted = Some((e.t_ns, [t[0], t[1]], frd_yaw(&r)));
+        }
+        if health != VioHealth::Lost {
             self.seating = false;
         }
         if !self.active(session_open) {
@@ -517,7 +588,7 @@ impl NavMap {
             pose: Pose { r, t, cov: None },
             anchor: None,
             ts_ms: now_ms - (now_mono_ns.saturating_sub(e.t_ns) / 1_000_000) as i64,
-            health: e.health,
+            health,
             frame: NavFrame::MapNed,
             source: nav_source(e.source),
             north: self.north(),
@@ -600,7 +671,8 @@ impl NavMap {
             t_frd[2] = -(up - up0) - off[2];
         }
         let (r_map, t_map) = self.ned_of(&r_frd, t_frd)?;
-        let polar = frames::polar_scan(scan, scan.t_ns, &r_map, t_map, e.health);
+        let health = if self.blind { VioHealth::Lost } else { e.health };
+        let polar = frames::polar_scan(scan, scan.t_ns, &r_map, t_map, health);
         if self.active(session_open) {
             self.map.insert(&polar);
         }

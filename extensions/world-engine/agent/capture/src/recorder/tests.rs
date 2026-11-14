@@ -149,6 +149,7 @@ fn every_channel_is_recorded_and_segments_roll() {
                 source: PoseSource::Vio,
                 health: VioHealth::Good,
                 sigma_xy_m: None,
+                heading_ok: true,
             },
             t,
         );

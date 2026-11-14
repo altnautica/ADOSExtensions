@@ -68,6 +68,11 @@ pub struct PoseEstimate {
     /// it reports one (the planar scan matcher: it grows while the matcher
     /// rides its motion prior). Published as the pose's `sigma_xy_m`.
     pub sigma_xy_m: Option<f64>,
+    /// The heading was measured: false on a planar scan matcher pose whose
+    /// scan the IMU did not reach or whose heading left the integrated gyro
+    /// (`PoseOut::heading_ok`), its heading the matcher's guess on a stale
+    /// prior. True from estimators that measure their heading throughout.
+    pub heading_ok: bool,
 }
 
 /// Producer-side quality signals the HUD shows beside the pose.
@@ -241,6 +246,7 @@ pub fn interpolate(poses: &VecDeque<PoseEstimate>, t_ns: u64) -> Option<PoseEsti
             (Some(x), Some(y)) => Some(x.max(y)),
             (x, y) => x.or(y),
         },
+        heading_ok: a.heading_ok && b.heading_ok,
     })
 }
 

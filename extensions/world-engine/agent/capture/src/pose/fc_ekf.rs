@@ -258,15 +258,54 @@ struct FeedInner {
     /// `(host ns, north, east)` of each estimate in the EKF's own local frame
     /// (`LOCAL_POSITION_NED`), the last [`super::TRACK_HISTORY_NS`].
     ned: VecDeque<(u64, [f64; 2])>,
-    /// `(host ns, yaw)` of each attitude, radians clockwise from north,
-    /// unwrapped (continuous across ±π), the last
-    /// [`super::TRACK_HISTORY_NS`].
-    yaws: VecDeque<(u64, f64)>,
+    /// Each attitude's heading, the last [`super::TRACK_HISTORY_NS`].
+    headings: VecDeque<Heading>,
     /// Newest downward ground range ([`fc_flow::ground_range`]): FC boot ms,
     /// metres.
     range: Option<(u32, f64)>,
     /// The run's matcher input ([`FcEkfPose::set_nav_sink`]).
     sink: Option<NavSink>,
+}
+
+/// The FC's heading at one attitude.
+#[derive(Debug, Clone, Copy)]
+struct Heading {
+    t_ns: u64,
+    /// Radians clockwise from north, unwrapped (continuous across ±π).
+    yaw: f64,
+    /// The heading's rate the attitude reports, rad/s.
+    rate: f64,
+    /// The turn since the first attitude kept, radians: the rate
+    /// integrated between attitudes, so an EKF yaw reset does not move it;
+    /// across a gap over [`TURN_MAX_STEP_NS`] the yaw's own change.
+    turn: f64,
+    /// Gaps bridged by the yaw's change so far.
+    bridged: u32,
+}
+
+/// The longest gap between attitudes their rates are integrated across.
+const TURN_MAX_STEP_NS: u64 = 250_000_000;
+
+impl Heading {
+    /// The next attitude's heading: `yaw` (within ±π) unwrapped onto this
+    /// one's, its turn integrated from both rates or, across a long gap,
+    /// the yaw's change.
+    fn next(&self, t_ns: u64, yaw: f64, rate: f64) -> Self {
+        let yaw = self.yaw + crate::nav::wrap_pi(yaw - self.yaw);
+        let dt = t_ns - self.t_ns;
+        let (turn, bridged) = if dt <= TURN_MAX_STEP_NS {
+            (0.5 * (self.rate + rate) * dt as f64 * 1e-9, self.bridged)
+        } else {
+            (yaw - self.yaw, self.bridged + 1)
+        };
+        Self {
+            t_ns,
+            yaw,
+            rate,
+            turn: self.turn + turn,
+            bridged,
+        }
+    }
 }
 
 impl FeedInner {
@@ -376,19 +415,44 @@ impl FcEkfPose {
         }
     }
 
+    /// The FC's heading at host `t_ns`, interpolated between the attitudes
+    /// around it; `None` further than [`super::MAX_EXTRAPOLATION_NS`]
+    /// outside them.
+    fn heading_near(&self, t_ns: u64) -> Option<Heading> {
+        let g = self.inner.lock();
+        let i = g.headings.partition_point(|h| h.t_ns <= t_ns);
+        match (i.checked_sub(1).map(|j| g.headings[j]), g.headings.get(i).copied()) {
+            (Some(a), Some(b)) => {
+                let w = (t_ns - a.t_ns) as f64 / (b.t_ns - a.t_ns) as f64;
+                Some(Heading {
+                    t_ns,
+                    yaw: a.yaw + w * (b.yaw - a.yaw),
+                    rate: a.rate + w * (b.rate - a.rate),
+                    turn: a.turn + w * (b.turn - a.turn),
+                    bridged: b.bridged,
+                })
+            }
+            (Some(h), None) | (None, Some(h)) => (h.t_ns.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(h),
+            (None, None) => None,
+        }
+    }
+
     /// The FC's attitude yaw (radians clockwise from north, within ±π) at
     /// host `t_ns`, interpolated between the attitudes around it; `None`
     /// further than [`super::MAX_EXTRAPOLATION_NS`] outside them.
     pub fn heading_at(&self, t_ns: u64) -> Option<f64> {
-        let g = self.inner.lock();
-        let i = g.yaws.partition_point(|(t, _)| *t <= t_ns);
-        let near = |(t, y): (u64, f64)| (t.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(y);
-        let yaw = match (i.checked_sub(1).map(|j| g.yaws[j]), g.yaws.get(i).copied()) {
-            (Some((t0, y0)), Some((t1, y1))) => Some(y0 + (t_ns - t0) as f64 / (t1 - t0) as f64 * (y1 - y0)),
-            (Some(e), None) | (None, Some(e)) => near(e),
-            (None, None) => None,
-        }?;
-        Some(crate::nav::wrap_pi(yaw))
+        self.heading_near(t_ns).map(|h| crate::nav::wrap_pi(h.yaw))
+    }
+
+    /// How far the FC turned from host `from_ns` to `to_ns`, radians
+    /// clockwise: its heading rate integrated between attitudes, which an
+    /// EKF yaw reset (a lane switch, a new yaw source) does not move, and
+    /// whether a gap in its attitudes over [`TURN_MAX_STEP_NS`] (a link
+    /// loss) was bridged by the yaw's own change instead. `None` without an
+    /// attitude at both ends.
+    pub fn turn_between(&self, from_ns: u64, to_ns: u64) -> Option<(f64, bool)> {
+        let (a, b) = (self.heading_near(from_ns)?, self.heading_near(to_ns)?);
+        Some((b.turn - a.turn, b.bridged != a.bridged))
     }
 
     /// Fold one delivered raw frame, read at host monotonic `arrival_ns`.
@@ -404,16 +468,21 @@ impl FcEkfPose {
                 g.fc_ms = Some(a.time_boot_ms);
                 g.attitude = Some(a);
                 if let Some((t_ns, r)) = g.host_attitude() {
-                    let yaw = crate::nav::frd_yaw(&r);
-                    let yaw = g.yaws.back().map_or(yaw, |&(_, y0)| {
-                        y0 + (yaw - y0 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
-                            - std::f64::consts::PI
-                    });
-                    if g.yaws.back().is_none_or(|&(t, _)| t < t_ns) {
-                        g.yaws.push_back((t_ns, yaw));
-                    }
-                    while g.yaws.front().is_some_and(|&(t, _)| t + super::TRACK_HISTORY_NS < t_ns) {
-                        g.yaws.pop_front();
+                    let (yaw, rate) = (crate::nav::frd_yaw(&r), a.heading_rate);
+                    let next = match g.headings.back() {
+                        None => Some(Heading {
+                            t_ns,
+                            yaw,
+                            rate,
+                            turn: 0.0,
+                            bridged: 0,
+                        }),
+                        Some(h) if h.t_ns < t_ns => Some(h.next(t_ns, yaw, rate)),
+                        Some(_) => None,
+                    };
+                    g.headings.extend(next);
+                    while g.headings.front().is_some_and(|h| h.t_ns + super::TRACK_HISTORY_NS < t_ns) {
+                        g.headings.pop_front();
                     }
                 }
                 None
@@ -521,6 +590,7 @@ fn pair_estimate(g: &mut FeedInner, p: &LocalPositionNed) -> Option<PoseEstimate
         source: PoseSource::FcEkf,
         health: VioHealth::Good,
         sigma_xy_m: None,
+        heading_ok: true,
     })
 }
 
@@ -562,10 +632,17 @@ impl PoseProvider for FcEkfPose {
 pub(crate) mod test_frames {
     use crate::mavlink_msg::frame_v2;
 
-    /// `ATTITUDE_QUATERNION` at FC boot `ms`, `q` FRD→NED `[w, x, y, z]`.
+    /// `ATTITUDE_QUATERNION` at FC boot `ms`, `q` FRD→NED `[w, x, y, z]`,
+    /// not turning.
     pub(crate) fn att(ms: u32, q: [f32; 4]) -> Vec<u8> {
+        att_turning(ms, q, 0.0)
+    }
+
+    /// `ATTITUDE_QUATERNION` at FC boot `ms`, `q` FRD→NED `[w, x, y, z]`,
+    /// level and yawing at `yaw_rate` rad/s.
+    pub(crate) fn att_turning(ms: u32, q: [f32; 4], yaw_rate: f32) -> Vec<u8> {
         let mut p = ms.to_le_bytes().to_vec();
-        for v in q.iter().chain([0.0f32; 3].iter()) {
+        for v in q.iter().chain([0.0f32, 0.0, yaw_rate].iter()) {
             p.extend_from_slice(&v.to_le_bytes());
         }
         frame_v2(31, &p)
@@ -979,5 +1056,28 @@ mod tests {
         assert!((seam - 179.9).abs() < 1e-3, "{seam}");
         assert!(deg(1_020 + 1_000).is_some(), "near the newest");
         assert!(deg(3_000).is_none(), "past the newest by more than the extrapolation");
+    }
+
+    /// The FC's turn is its heading rate integrated: a 7° EKF yaw reset at
+    /// 1.5 s does not move it, and a 1 s gap in its attitudes (a link loss)
+    /// is bridged by the yaw's own change and flagged.
+    #[test]
+    fn the_turn_follows_the_rate_through_a_yaw_reset() {
+        use super::test_frames::att_turning;
+        let p = FcEkfPose::new();
+        let rate = 30f64.to_radians();
+        let yaw = |ms: u32| 30f64.to_radians() * (ms - 1_000) as f64 / 1e3 + if ms >= 1_500 { 7f64.to_radians() } else { 0.0 };
+        let q = |y: f64| [(y / 2.0).cos() as f32, 0.0, 0.0, (y / 2.0).sin() as f32];
+        for ms in (1_000..=2_000u32).step_by(20).chain((3_000..=3_200).step_by(20)) {
+            p.on_frame(&att_turning(ms, q(yaw(ms)), rate as f32), ms as u64 * 1_000_000);
+        }
+        let ms = |v: u64| v * 1_000_000;
+        let (turn, bridged) = p.turn_between(ms(1_100), ms(1_900)).expect("both ends");
+        assert!((turn.to_degrees() - 24.0).abs() < 0.05, "{}", turn.to_degrees());
+        assert!(!bridged);
+        let (turn, bridged) = p.turn_between(ms(1_900), ms(3_100)).expect("both ends");
+        assert!((turn.to_degrees() - 36.0).abs() < 0.05, "{}", turn.to_degrees());
+        assert!(bridged, "the 1 s gap is flagged");
+        assert!(p.turn_between(ms(500), ms(1_100)).is_none());
     }
 }

@@ -130,6 +130,7 @@ pub fn apply_line(track: &PoseTrack, t_body_lidar: &[f64; 16], seen: u32, line: 
         source: PoseSource::Lidar,
         health,
         sigma_xy_m: None,
+        heading_ok: true,
     });
     true
 }

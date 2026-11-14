@@ -91,6 +91,7 @@ mod tests {
             source: PoseSource::Lidar,
             health: VioHealth::Good,
             sigma_xy_m: None,
+            heading_ok: true,
         }
     }
 

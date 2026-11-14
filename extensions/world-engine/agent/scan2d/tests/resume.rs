@@ -168,16 +168,24 @@ fn a_short_gap_in_a_fast_turn_is_re_confirmed_on_the_flight_controllers_turn() {
 /// The flight controller's heading stepping across a short gap in a fast
 /// turn (an EKF lane switch or yaw reset) puts the turn it hid outside the
 /// window searched around it: the best heading inside is on the window's
-/// edge, and it is not confirmed there. The map starts over instead.
+/// edge, and it is not confirmed there. The map starts over instead. A
+/// turn the flight controller has up to 9° off is still inside the window
+/// and confirmed on the scans, without starting over.
 #[test]
 fn a_turn_the_flight_controller_misreports_is_not_confirmed_on_the_window_edge() {
     let w = room();
-    for bias in [10.0, -10.0] {
+    for bias in [11.0, -11.0, 14.0, -14.0] {
         let r = run(&w, 90.0, 90.0, Feed::Dropped, 2.3, 2.8, Some(bias));
         let what = format!("FC turn {bias:+} deg off");
         assert!(r.checked_off.is_empty(), "{what}: confirmed off the drone at {:?}", r.checked_off);
         assert_eq!(r.first_ok, None, "{what}: confirmed before the map started over");
         assert!(r.restart.is_some(), "{what}: never started the map over");
+    }
+    for bias in [7.0, -7.0, 9.0, -9.0] {
+        let r = run(&w, 90.0, 90.0, Feed::Dropped, 2.3, 2.8, Some(bias));
+        let what = format!("FC turn {bias:+} deg off");
+        assert_recovers(&r, &what);
+        assert!(r.restart.is_none(), "{what}: started the map over");
     }
 }
 

@@ -271,6 +271,7 @@ fn run(
             source: PoseSource::Lidar,
             health,
             sigma_xy_m: Some(out.sigma_xy_m),
+            heading_ok: out.heading_ok,
         });
         counters.queued_scans.fetch_sub(1, Ordering::Release);
         counters.scans_processed.fetch_add(1, Ordering::Release);

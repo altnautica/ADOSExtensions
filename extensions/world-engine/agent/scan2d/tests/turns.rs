@@ -324,26 +324,11 @@ fn replay_holed(
         .collect()
 }
 
-/// The flight controller's heading at `t_ns`, interpolated between the
-/// ones it reported.
-fn fc_heading_at(rec: &Recording, t_ns: u64) -> f64 {
-    let h = &rec.fc_headings;
-    let k = h.partition_point(|(t, _)| *t <= t_ns).clamp(1, h.len() - 1);
-    let ((ta, a), (tb, b)) = (h[k - 1], h[k]);
-    let f = (t_ns as f64 - ta as f64) / (tb - ta) as f64;
-    a + f.clamp(0.0, 1.0) * wrap(b - a)
-}
-
 /// The flight controller's dead reckoning while the pose is lost (no
 /// external navigation): its position runs off by this, m/s, from the
 /// hole's start (optical flow over a range finder, a few percent of the
 /// warehouse's 2 m/s).
 const FC_DRIFT_MPS: [f64; 2] = [0.08, -0.06];
-/// A pose stays not lost this long into a hole, until the capture judges
-/// the IMU feed stalled.
-const FEED_STALL_NS: u64 = 250_000_000;
-/// How long after the pose is usable again its position is scored.
-const POSITION_SCORED_NS: u64 = 10_000_000_000;
 
 /// How the pose came back after a hole ([`holed_replay`]).
 #[derive(Debug)]
@@ -358,30 +343,13 @@ struct Recovery {
     /// the recording.
     restart_s: Option<f64>,
     left_s: f64,
-    /// The worst position error against the unholed replay, m: at a
-    /// restart, and while usable for [`POSITION_SCORED_NS`] after the hole.
-    worst_m: f64,
-    /// The flight controller's own error in the position change it gave
-    /// the last restart, m.
-    fc_drift_m: f64,
-    /// The recorded flight controller heading's error at the last restart
-    /// against its error at the first scan (where the map's north was
-    /// latched), degrees: what an FC north would add.
-    fc_north_deg: f64,
 }
 
 /// Replay with a hole of `len_ns` in the IMU from `hole_ns` after the first
 /// scan, the flight controller's heading and position fed beside it (its
 /// position the unholed replay's, off by [`FC_DRIFT_MPS`] from the hole's
-/// start), and the pose placed in the world as the capture places it: at a
-/// restart, its north from the heading at the restart pose's own time, and
-/// its position, and each pose's until one is usable, the last trusted
-/// pose's moved by the flight controller's position change since. That
-/// north is the truth's here: the capture
-/// takes the flight controller's heading, whose own error carries into the
-/// new map whole (`fc_north_deg`; the timing is the capture's to get
-/// right, `nav::tests`). The heading is scored against the truth, the
-/// position against the unholed replay.
+/// start). The heading is scored against the truth, re-based at a restart
+/// (the capture places a restarted map: `nav::restart_replay`).
 fn holed_replay(rec: &Recording, imu: &[ImuSample], hole_ns: Option<(u64, u64)>) -> Recovery {
     let t0 = rec.scans[0].0.t_ns;
     let hole = hole_ns.map_or((0, 0), |(h, len)| (t0 + h, t0 + h + len));
@@ -401,63 +369,27 @@ fn holed_replay(rec: &Recording, imu: &[ImuSample], hole_ns: Option<(u64, u64)>)
         [p[0] + d[0], p[1] + d[1]]
     };
     let holed = replay_holed(rec, imu, hole, Some(&fc));
-    // The unholed replay's frame against the truth's heading.
+    // The unholed replay's frame against the truth's heading, and the
+    // holed one's turned onto it at each restart.
     let (y0, ty0) = (reference[0].0.yaw, rec.scans[0].1);
-    // The holed replay's poses into the unholed one's frame:
-    // `R(rot) p + shift`, changed at each restart.
-    let (mut rot, mut shift) = (0.0f64, [0.0f64; 2]);
-    let place = |rot: f64, shift: [f64; 2], o: &PoseOut| {
-        let (s, c) = rot.sin_cos();
-        [c * o.x - s * o.y + shift[0], s * o.x + c * o.y + shift[1]]
-    };
-    let mut trusted: Option<(u64, [f64; 2])> = None;
+    let mut rot = 0.0f64;
     let mut r = Recovery {
         usable_s: None,
         worst_deg: 0.0,
         restarts: 0,
         restart_s: None,
         left_s: rec.scans.last().map_or(0.0, |(s, _)| s.t_ns.saturating_sub(hole.1) as f64 * 1e-9),
-        worst_m: 0.0,
-        fc_drift_m: 0.0,
-        fc_north_deg: 0.0,
     };
-    let mut usable_at = None;
-    let mut seating = false;
-    for (k, ((out, inserted), (scan, yaw))) in holed.iter().zip(&rec.scans).enumerate() {
-        let truth = reference[k].0;
-        let usable = !out.heading_unconfirmed && *inserted >= 10;
+    for ((out, inserted), (scan, yaw)) in holed.iter().zip(&rec.scans) {
         if out.map_restarted {
             r.restarts += 1;
             r.restart_s.get_or_insert(out.t_ns.saturating_sub(hole.1) as f64 * 1e-9);
             rot = (*yaw - ty0 + y0) - out.yaw;
-            r.fc_north_deg =
-                wrap((fc_heading_at(rec, out.t_ns) - yaw) - (fc_heading_at(rec, t0) - ty0)).to_degrees();
-            seating = true;
         }
-        seating &= !usable || out.map_restarted;
-        if seating {
-            let (tt, from) = trusted.expect("a trusted pose before the hole");
-            let (a, b) = (fc(tt), fc(out.t_ns));
-            let seed = [from[0] + b[0] - a[0], from[1] + b[1] - a[1]];
-            let here = place(rot, [0.0; 2], out);
-            shift = [seed[0] - here[0], seed[1] - here[1]];
-            let (da, db) = (drift(tt), drift(out.t_ns));
-            r.fc_drift_m = (db[0] - da[0]).hypot(db[1] - da[1]);
-            r.worst_m = r.worst_m.max((seed[0] - truth.x).hypot(seed[1] - truth.y));
-        }
-        let p = place(rot, shift, out);
-        let stalled = hole.0 + FEED_STALL_NS < scan.t_ns && scan.t_ns <= hole.1;
-        if usable && !stalled {
-            trusted = Some((out.t_ns, p));
-        }
-        if scan.t_ns > hole.1 && usable {
-            let at = *usable_at.get_or_insert(scan.t_ns);
+        if scan.t_ns > hole.1 && !out.heading_unconfirmed && *inserted >= 10 {
             r.usable_s.get_or_insert((scan.t_ns - hole.1) as f64 * 1e-9);
             let e = wrap((out.yaw + rot - y0) - (yaw - ty0)).to_degrees();
             r.worst_deg = r.worst_deg.max(e.abs());
-            if scan.t_ns <= at + POSITION_SCORED_NS {
-                r.worst_m = r.worst_m.max((p[0] - truth.x).hypot(p[1] - truth.y));
-            }
         }
     }
     r
@@ -471,15 +403,7 @@ fn holed_replay(rec: &Recording, imu: &[ImuSample], hole_ns: Option<(u64, u64)>)
 /// The pose is usable again within seconds (the aisle at 5 s starts over
 /// in time, but its recording ends before the new map holds 10 scans), on
 /// a heading within 2° of the truth (the aisle's own unholed replay is up
-/// to 1.74° off). A restarted map is placed from the flight controller's
-/// heading at its pose and its position change over the outage: from the
-/// restart to 10 s after the pose is usable, the position is within the
-/// flight controller's own drift over the outage plus
-/// [`HOLE_POSITION_SLACK_M`] of the unholed replay's. Placed where the
-/// matcher carried the pose blind instead, it was 2.6 m (the room) and 6.9,
-/// 10 and 24 m (the warehouse) off. The aisle is degenerate along its axis,
-/// where the replays part whatever the hole, so its position is not
-/// scored. Unholed, nothing restarts.
+/// to 1.74° off). Unholed, nothing restarts.
 #[test]
 fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
     let aisle = recorded(include_str!("data/aisle_waypoint_turns.txt"));
@@ -488,22 +412,22 @@ fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
     let wh_imu = with_fc_gravity(&warehouse);
     let (s, ms) = (1_000_000_000u64, 1_000_000u64);
     let cases: [HoleCase; 10] = [
-        ("aisle 2 s", &aisle, &aisle.imu, 2 * s, 300 * ms, false),
-        ("aisle 3 s", &aisle, &aisle.imu, 3 * s, 300 * ms, false),
-        ("aisle 4 s", &aisle, &aisle.imu, 4 * s, 300 * ms, false),
-        ("aisle 5 s", &aisle, &aisle.imu, 5 * s, 300 * ms, false),
-        ("room 2 s", &room, &room.imu, 2 * s, 300 * ms, true),
-        ("warehouse 22 s", &warehouse, &wh_imu, 22 * s, 300 * ms, true),
-        ("warehouse 30 s", &warehouse, &wh_imu, 30 * s, 300 * ms, true),
-        ("warehouse 22 s, 1.5 s hole", &warehouse, &wh_imu, 22 * s, 1_500 * ms, true),
-        ("warehouse 30 s, 1.5 s hole", &warehouse, &wh_imu, 30 * s, 1_500 * ms, true),
-        ("warehouse 30 s, 5 s hole", &warehouse, &wh_imu, 30 * s, 5_000 * ms, true),
+        ("aisle 2 s", &aisle, &aisle.imu, 2 * s, 300 * ms),
+        ("aisle 3 s", &aisle, &aisle.imu, 3 * s, 300 * ms),
+        ("aisle 4 s", &aisle, &aisle.imu, 4 * s, 300 * ms),
+        ("aisle 5 s", &aisle, &aisle.imu, 5 * s, 300 * ms),
+        ("room 2 s", &room, &room.imu, 2 * s, 300 * ms),
+        ("warehouse 22 s", &warehouse, &wh_imu, 22 * s, 300 * ms),
+        ("warehouse 30 s", &warehouse, &wh_imu, 30 * s, 300 * ms),
+        ("warehouse 22 s, 1.5 s hole", &warehouse, &wh_imu, 22 * s, 1_500 * ms),
+        ("warehouse 30 s, 1.5 s hole", &warehouse, &wh_imu, 30 * s, 1_500 * ms),
+        ("warehouse 30 s, 5 s hole", &warehouse, &wh_imu, 30 * s, 5_000 * ms),
     ];
-    for (name, rec, imu, at, len, scored) in cases {
+    for (name, rec, imu, at, len) in cases {
         let r = holed_replay(rec, imu, Some((at, len)));
         eprintln!(
-            "{name}: usable after {:?} s, worst {:.2} deg, restarts {}, position {:.2} m off (FC drift {:.2} m, FC north {:+.1} deg)",
-            r.usable_s, r.worst_deg, r.restarts, r.worst_m, r.fc_drift_m, r.fc_north_deg
+            "{name}: usable after {:?} s, worst {:.2} deg, restarts {}",
+            r.usable_s, r.worst_deg, r.restarts
         );
         match r.usable_s {
             Some(usable) => assert!(usable <= HOLE_USABLE_S, "{name}: usable only after {usable:.1} s"),
@@ -517,10 +441,6 @@ fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
             }
         }
         assert!(r.worst_deg <= 2.0, "{name}: {:.2} deg off while usable", r.worst_deg);
-        if scored {
-            let bound = r.fc_drift_m + HOLE_POSITION_SLACK_M;
-            assert!(r.worst_m <= bound, "{name}: {:.2} m off (bound {bound:.2} m)", r.worst_m);
-        }
     }
     for (name, rec, imu) in [("aisle", &aisle, &aisle.imu), ("room", &room, &room.imu), ("warehouse", &warehouse, &wh_imu)] {
         assert_eq!(holed_replay(rec, imu, None).restarts, 0, "{name}: restarted with no hole");
@@ -528,11 +448,10 @@ fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
 }
 
 /// A hole case: its name, the recording and its IMU, the hole's start and
-/// length after the first scan (ns), and whether its position is scored.
-type HoleCase<'a> = (&'a str, &'a Recording, &'a [ImuSample], u64, u64, bool);
+/// length after the first scan (ns).
+type HoleCase<'a> = (&'a str, &'a Recording, &'a [ImuSample], u64, u64);
 
 /// The bounds on [`a_short_imu_hole_in_a_turn_is_usable_again_within_seconds`].
 const HOLE_USABLE_S: f64 = 3.0;
-const HOLE_POSITION_SLACK_M: f64 = 1.0;
 /// A restarted map is usable once it holds 10 scans (10 Hz).
 const WARM_UP_S: f64 = 1.0;

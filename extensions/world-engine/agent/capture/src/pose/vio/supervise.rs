@@ -64,6 +64,7 @@ pub fn to_estimate(st: &ChildState, t_imu_body: &[f64; 16], health: VioHealth) -
         source: PoseSource::Vio,
         health,
         sigma_xy_m: None,
+        heading_ok: true,
     }
 }
 

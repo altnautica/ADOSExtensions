@@ -107,17 +107,18 @@ const CONFIRM_MAX_MISSES: usize = 1;
 /// A gap no longer than this (under external navigation's one-second hold
 /// before its fallback) takes the turn it hid from the flight controller's
 /// own heading ([`LocalSlam::feed_fc_heading`]) when one was reported
-/// within [`FC_HEADING_MAX_AGE_NS`] of each end; the scans then search only
-/// within [`HINT_HALF_RAD`] of it (narrower than [`CONFIRM_RIVAL_RAD`], so
-/// no rival heading fits inside), with a bar of [`HINT_MIN_SCORE`] (a scan
-/// at the true pose of a live flight scores 0.25 to 0.55 against a submap
-/// it has moved away from), and through turns up to
-/// [`HINT_CONFIRM_MAX_TURN_RATE`]. A best heading within [`HINT_EDGE_RAD`]
-/// of the window's edge is no candidate: the turn was likely outside the
-/// window (the flight controller's heading stepped across the gap), and
-/// the edge is only the nearest it allows.
+/// within [`FC_HEADING_MAX_AGE_NS`] of each end; the scans then accept a
+/// heading only within [`HINT_HALF_RAD`] of it, with a bar of
+/// [`HINT_MIN_SCORE`] (a scan at the true pose of a live flight scores 0.25
+/// to 0.55 against a submap it has moved away from), and through turns up
+/// to [`HINT_CONFIRM_MAX_TURN_RATE`]. They search [`HINT_EDGE_RAD`] past
+/// that window: a best heading in that margin is no candidate, since the
+/// turn lies at or beyond it (the flight controller's heading stepped
+/// across the gap), and the margin's edge is only the nearest it allows.
+/// The window is wider than [`CONFIRM_RIVAL_RAD`], so a heading in it that
+/// far from the best and scoring near it is a rival, as in the full search.
 const HINT_MAX_GAP_NS: u64 = 1_000_000_000;
-const HINT_HALF_RAD: f64 = 8.0 * std::f64::consts::PI / 180.0;
+const HINT_HALF_RAD: f64 = 10.0 * std::f64::consts::PI / 180.0;
 const HINT_EDGE_RAD: f64 = 1.5 * std::f64::consts::PI / 180.0;
 const HINT_MIN_SCORE: f64 = 0.40;
 const HINT_CONFIRM_MAX_TURN_RATE: f64 = 90.0 * std::f64::consts::PI / 180.0;
@@ -595,12 +596,22 @@ impl LocalSlam {
             branch_and_bound(pyr, scan, center, window, min_score)
         };
         if let Some(h) = hint {
-            // Narrow enough that no rival heading fits inside it.
-            let (g, _) = search(p.th + h - HINT_HALF_RAD, p.th + h + HINT_HALF_RAD, HINT_MIN_SCORE)?;
-            if wrap(g.th - (p.th + h)).abs() > HINT_HALF_RAD - HINT_EDGE_RAD {
+            // Searched HINT_EDGE_RAD past the accepted window, so a best
+            // heading in that margin (the turn lies at or beyond it) is
+            // told from one inside.
+            let (lo, hi) = (p.th + h - HINT_HALF_RAD - HINT_EDGE_RAD, p.th + h + HINT_HALF_RAD + HINT_EDGE_RAD);
+            let (g, score) = search(lo, hi, HINT_MIN_SCORE)?;
+            if wrap(g.th - (p.th + h)).abs() > HINT_HALF_RAD {
                 return None;
             }
-            return Some((g, wrap(g.th - p.th)));
+            // The window is wider than CONFIRM_RIVAL_RAD: a heading in it
+            // clear of the best that scores near it is a rival.
+            let rival_floor = score - CONFIRM_SCORE_MARGIN;
+            let rival = [(lo, g.th - CONFIRM_RIVAL_RAD), (g.th + CONFIRM_RIVAL_RAD, hi)]
+                .into_iter()
+                .filter(|(a, b)| b > a)
+                .any(|(a, b)| search(a, b, rival_floor).is_some());
+            return (!rival).then_some((g, wrap(g.th - p.th)));
         }
         let half = (unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE + CONFIRM_MARGIN_RAD)
             .min(PI);
