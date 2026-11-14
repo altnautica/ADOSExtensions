@@ -68,6 +68,10 @@ pub const PLUGIN_ATLAS_SCAN_TOPIC: &str = "plugin.world-engine.scan";
 /// Shared-data: the live map's state ([`MapStatus`], 1 Hz).
 pub const PLUGIN_ATLAS_MAP_STATUS_TOPIC: &str = "plugin.world-engine.map_status";
 
+/// Shared-data: the configured LiDAR's link and health ([`LidarStatus`],
+/// 1 Hz while the rig declares the sensor).
+pub const PLUGIN_ATLAS_LIDAR_TOPIC: &str = "plugin.world-engine.lidar";
+
 /// Every shared-data world-model topic, in one place, so a consumer or a gate
 /// iterates the set rather than hard-coding string literals that drift.
 pub const PLUGIN_ATLAS_TOPICS: &[&str] = &[
@@ -78,6 +82,7 @@ pub const PLUGIN_ATLAS_TOPICS: &[&str] = &[
     PLUGIN_ATLAS_MESH_TOPIC,
     PLUGIN_ATLAS_SCAN_TOPIC,
     PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+    PLUGIN_ATLAS_LIDAR_TOPIC,
 ];
 
 // --- Shared-data access policy --------------------------------------------
@@ -94,9 +99,10 @@ pub const PLUGIN_ATLAS_TOPICS: &[&str] = &[
 /// gate into a naming convention.
 pub fn atlas_topic_subscribe_capability(topic: &str) -> Option<&'static str> {
     match topic {
-        PLUGIN_ATLAS_POSE_TOPIC | PLUGIN_ATLAS_SCAN_TOPIC | PLUGIN_ATLAS_MAP_STATUS_TOPIC => {
-            Some(ATLAS_POSE_READ_CAP)
-        }
+        PLUGIN_ATLAS_POSE_TOPIC
+        | PLUGIN_ATLAS_SCAN_TOPIC
+        | PLUGIN_ATLAS_MAP_STATUS_TOPIC
+        | PLUGIN_ATLAS_LIDAR_TOPIC => Some(ATLAS_POSE_READ_CAP),
         PLUGIN_ATLAS_POINTCLOUD_TOPIC
         | PLUGIN_ATLAS_OCCUPANCY_TOPIC
         | PLUGIN_ATLAS_SPLAT_TOPIC
@@ -198,9 +204,10 @@ pub use keyframe::{
     TimeAlignment, VioHealth, KEYFRAME_MAX_SIGMA_NS, POSE_COV_LEN,
 };
 pub use nav::{
-    ComputePlacement, ImuFeedReason, ImuFeedState, ImuFeedStatus, LiveOccupancy, LivePointCloud,
-    MapNorth, MapPayloadKind, MapStatus, NavFrame, NavPoseMode, NavPoseSource, OccupancyTile,
-    ScanDescriptor, StreamPhase, StreamProgress, UploadPhase, UploadProgress,
+    ComputePlacement, ImuFeedReason, ImuFeedState, ImuFeedStatus, LidarHealth, LidarStatus,
+    LiveOccupancy, LivePointCloud, MapNorth, MapPayloadKind, MapStatus, NavFrame, NavPoseMode,
+    NavPoseSource, OccupancyTile, ScanDescriptor, StreamPhase, StreamProgress, UploadPhase,
+    UploadProgress, LIDAR_STATUS_VERSION,
 };
 pub use polar::{PolarError, PolarScan};
 
@@ -316,4 +323,5 @@ impl_msgpack!(
     LiveOccupancy,
     LivePointCloud,
     MapStatus,
+    LidarStatus,
 );

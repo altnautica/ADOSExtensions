@@ -312,3 +312,59 @@ pub struct MapStatus {
     #[serde(default)]
     pub imu_feed: Option<ImuFeedStatus>,
 }
+
+/// Schema version of [`LidarStatus`].
+pub const LIDAR_STATUS_VERSION: u16 = 1;
+
+/// A LiDAR's own health report (the RPLIDAR `GET_HEALTH` status).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LidarHealth {
+    Good,
+    Warning,
+    Error,
+}
+
+/// The configured LiDAR's link on `plugin.world-engine.lidar`, 1 Hz while
+/// the rig declares the sensor. A driver that is not running (the device
+/// absent at start, or not configured) reports `connected: false`, null
+/// device, health and rate, and zero counters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LidarStatus {
+    /// [`LIDAR_STATUS_VERSION`].
+    pub v: u16,
+    /// The port the device is on (the resolved `/dev/serial/by-id` path
+    /// under USB discovery); null when it was never opened.
+    pub device: Option<String>,
+    pub connected: bool,
+    /// The device's health from its latest (re)connect; null when it never
+    /// connected or the driver has no health report.
+    pub health: Option<LidarHealth>,
+    /// The device's error code beside `health`.
+    pub health_code: Option<u16>,
+    /// Revolutions per second over the last status period; null when not
+    /// connected.
+    pub rate_hz: Option<f32>,
+    /// Scans handed to the capture service since the run started.
+    pub scans: u64,
+    /// Scans dropped because a consumer fell behind, since the run started.
+    pub dropped_scans: u64,
+    /// Link re-establishments after a loss, since the run started.
+    pub reconnects: u64,
+}
+
+impl Default for LidarStatus {
+    fn default() -> Self {
+        Self {
+            v: LIDAR_STATUS_VERSION,
+            device: None,
+            connected: false,
+            health: None,
+            health_code: None,
+            rate_hz: None,
+            scans: 0,
+            dropped_scans: 0,
+            reconnects: 0,
+        }
+    }
+}

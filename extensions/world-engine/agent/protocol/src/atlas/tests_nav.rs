@@ -10,7 +10,12 @@ fn the_nav_topics_are_shared_and_gated_by_telemetry_read() {
         PLUGIN_ATLAS_MAP_STATUS_TOPIC,
         "plugin.world-engine.map_status"
     );
-    for topic in [PLUGIN_ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_MAP_STATUS_TOPIC] {
+    assert_eq!(PLUGIN_ATLAS_LIDAR_TOPIC, "plugin.world-engine.lidar");
+    for topic in [
+        PLUGIN_ATLAS_SCAN_TOPIC,
+        PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+        PLUGIN_ATLAS_LIDAR_TOPIC,
+    ] {
         assert!(PLUGIN_ATLAS_TOPICS.contains(&topic));
         assert_eq!(
             atlas_topic_subscribe_capability(topic),
@@ -19,6 +24,10 @@ fn the_nav_topics_are_shared_and_gated_by_telemetry_read() {
     }
     assert_eq!(
         atlas_topic_subscribe_capability("plugin.world-engine.scan.x"),
+        None
+    );
+    assert_eq!(
+        atlas_topic_subscribe_capability("plugin.world-engine.lidar.x"),
         None
     );
 }
@@ -174,6 +183,72 @@ fn map_status_carries_the_fc_imu_feed() {
     old.as_object_mut().unwrap().remove("imu_feed");
     let back: MapStatus = serde_json::from_value(old).unwrap();
     assert_eq!(back.imu_feed, None);
+}
+
+#[test]
+fn the_lidar_status_carries_exactly_the_documented_keys() {
+    let keys = |v: &serde_json::Value| {
+        let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+        k.sort();
+        k
+    };
+    let want = [
+        "connected",
+        "device",
+        "dropped_scans",
+        "health",
+        "health_code",
+        "rate_hz",
+        "reconnects",
+        "scans",
+        "v",
+    ];
+
+    // Not running: nulls and zero counters, never invented values.
+    let idle = LidarStatus::default();
+    let v = serde_json::to_value(&idle).unwrap();
+    assert_eq!(keys(&v), want);
+    assert_eq!(v["v"], 1);
+    assert_eq!(v["connected"], false);
+    for key in ["device", "health", "health_code", "rate_hz"] {
+        assert!(v[key].is_null(), "{key}");
+    }
+    for key in ["scans", "dropped_scans", "reconnects"] {
+        assert_eq!(v[key], 0, "{key}");
+    }
+
+    let live = LidarStatus {
+        device: Some("/dev/serial/by-id/usb-Silicon_Labs_CP2102N-if00-port0".into()),
+        connected: true,
+        health: Some(LidarHealth::Warning),
+        health_code: Some(0x0102),
+        rate_hz: Some(10.0),
+        scans: 120,
+        dropped_scans: 2,
+        reconnects: 1,
+        ..LidarStatus::default()
+    };
+    let v = serde_json::to_value(&live).unwrap();
+    assert_eq!(keys(&v), want);
+    assert_eq!(v["health"], "warning");
+    assert_eq!(v["health_code"], 0x0102);
+    assert_eq!(v["rate_hz"], 10.0);
+    for (h, word) in [
+        (LidarHealth::Good, "good"),
+        (LidarHealth::Warning, "warning"),
+        (LidarHealth::Error, "error"),
+    ] {
+        assert_eq!(serde_json::to_value(h).unwrap(), word);
+    }
+
+    // The bus carries it as a named msgpack map inside the envelope.
+    let ev = AtlasEvent::new(PLUGIN_ATLAS_LIDAR_TOPIC, None, live.to_msgpack().unwrap());
+    let back = AtlasEvent::decode(&ev.encode().unwrap()).unwrap();
+    assert_eq!(back.topic, "plugin.world-engine.lidar");
+    assert_eq!(LidarStatus::from_msgpack(&back.payload).unwrap(), live);
+    let wire: serde_json::Value = rmp_serde::from_slice(&back.payload).unwrap();
+    assert_eq!(keys(&wire), want);
+    assert_eq!(wire["health"], "warning");
 }
 
 #[test]
