@@ -334,6 +334,21 @@ function MetricsSection({
         testId="fm-agl"
       />
       <MetricRow
+        label={t("metrics.cameraGeometry")}
+        value={
+          f?.cameraHfovDeg == null ||
+          f.cameraMountPitchDeg == null ||
+          f.cameraGeometrySource == null
+            ? DASH
+            : [
+                t("unit.deg", { value: f.cameraHfovDeg.toFixed(0) }),
+                t("unit.deg", { value: f.cameraMountPitchDeg.toFixed(0) }),
+                t(`geometry.${f.cameraGeometrySource}`),
+              ].join(" · ")
+        }
+        testId="fm-camera-geometry"
+      />
+      <MetricRow
         label={t("metrics.targetSpeed")}
         value={
           f?.targetSpeedMps == null

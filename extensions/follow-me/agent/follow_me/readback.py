@@ -7,6 +7,7 @@ import math
 from typing import Any
 
 from follow_me import fc_state, projection
+from follow_me.camera import CameraGeometry, configured_geometry, geometry_of
 from follow_me.loop import SETPOINT_RATE_WINDOW_S
 from follow_me.projection import CameraPose, TargetFix
 from follow_me.ranging import Scan
@@ -47,6 +48,7 @@ _DISCRETE_KEYS = (
     "orbit_direction",
     "lease_id",
     "nudged",
+    "camera_geometry_source",
 )
 
 
@@ -80,6 +82,8 @@ class ReadbackMixin:
     _lease_id: str | None
     _nudges: Any
     _orbit_phase: float | None
+    _geometry: CameraGeometry
+    _latest_batch: Any
 
     def _setpoint_rate_hz(self, now: float) -> float:
         """Setpoints sent per second over the last SETPOINT_RATE_WINDOW_S."""
@@ -118,13 +122,18 @@ class ReadbackMixin:
         return None
 
     def _camera_pose(
-        self, cfg: FollowConfig, now: float, exposed_s: float | None = None
+        self,
+        cfg: FollowConfig,
+        now: float,
+        geometry: CameraGeometry,
+        exposed_s: float | None = None,
     ) -> CameraPose:
         """The camera's pose, with the vehicle attitude at ``exposed_s`` (a
-        frame's exposure on the plugin's clock) when given, else the latest.
-        A box is a picture of where the subject was when its frame was
-        exposed; the vehicle has pitched and yawed since, and projecting the
-        box through the newer attitude moves the subject by metres."""
+        frame's exposure on the flight controller's clock) when given, else
+        the latest. A box is a picture of where the subject was when its
+        frame was exposed; the vehicle has pitched and yawed since, and
+        projecting the box through the newer attitude moves the subject by
+        metres."""
         roll, pitch, yaw = (
             self._pose.attitude_at(exposed_s)
             if exposed_s is not None
@@ -138,7 +147,7 @@ class ReadbackMixin:
                 roll_rad=roll,
                 pitch_rad=pitch,
                 yaw_rad=yaw,
-                mount_pitch_deg=cfg.mount_pitch_deg,
+                mount_pitch_deg=geometry.mount_down_deg,
             )
         return CameraPose(
             roll_rad=roll,
@@ -169,6 +178,7 @@ class ReadbackMixin:
         bbox: Any,
         frame_w: int,
         frame_h: int,
+        geometry: CameraGeometry,
         exposed_s: float | None = None,
     ) -> TargetFix | None:
         agl, source = self._agl(now)
@@ -179,8 +189,8 @@ class ReadbackMixin:
             bbox_h=float(bbox.height),
             frame_width=frame_w,
             frame_height=frame_h,
-            horizontal_fov_deg=cfg.camera_hfov_deg,
-            cam=self._camera_pose(cfg, now, exposed_s),
+            horizontal_fov_deg=geometry.hfov_deg,
+            cam=self._camera_pose(cfg, now, geometry, exposed_s),
             agl_m=agl,
             agl_source=source,
             scan=self._fresh_scan(now),
@@ -189,19 +199,21 @@ class ReadbackMixin:
     def _predicted_bbox(
         self, cfg: FollowConfig, now: float, x: list[float]
     ) -> dict[str, object] | None:
+        sighting = self._sighting
         frame_w, frame_h = (
-            self._sighting.frame_wh
-            if self._sighting is not None and self._sighting.frame_wh
+            sighting.frame_wh
+            if sighting is not None and sighting.frame_wh
             else self._frame_size()
         )
+        geometry = sighting.geometry if sighting is not None else self._geometry
         box = projection.predict_bbox(
             offset_north_m=x[0] - self._pose.north_m,
             offset_east_m=x[1] - self._pose.east_m,
             agl_m=self._agl(now)[0],
-            cam=self._camera_pose(cfg, now),
+            cam=self._camera_pose(cfg, now, geometry),
             frame_width=frame_w,
             frame_height=frame_h,
-            horizontal_fov_deg=cfg.camera_hfov_deg,
+            horizontal_fov_deg=geometry.hfov_deg,
         )
         if box is None:
             return None
@@ -298,6 +310,16 @@ class ReadbackMixin:
         state.nudged = self._nudges.nudged
         if self._orbit_phase is not None:
             state.orbit_phase_deg = _r(math.degrees(self._orbit_phase) % 360.0, 1)
+        # Before the first batch, and after a settings change, the settings
+        # (or the default) are what the next frame will be projected with.
+        geometry = (
+            self._geometry
+            if cfg is None
+            else geometry_of(self._latest_batch, configured_geometry(cfg))
+        )
+        state.camera_hfov_deg = _r(geometry.hfov_deg, 1)
+        state.camera_mount_pitch_deg = _r(geometry.mount_pitch_deg, 1)
+        state.camera_geometry_source = geometry.source
         if cfg is not None:
             state.reacquire_mode = cfg.reacquire_mode
             state.follow_mode = cfg.follow_mode

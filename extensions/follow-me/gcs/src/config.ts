@@ -31,8 +31,6 @@ export function normalizeConfig(raw: unknown): FollowConfig {
       typeof r.designate_camera === "string" && r.designate_camera
         ? r.designate_camera
         : DEFAULT_CONFIG.designate_camera,
-    camera_hfov_deg: numberOr(r.camera_hfov_deg, DEFAULT_CONFIG.camera_hfov_deg),
-    mount_pitch_deg: numberOr(r.mount_pitch_deg, DEFAULT_CONFIG.mount_pitch_deg),
     reacquire_mode:
       r.reacquire_mode === undefined
         ? DEFAULT_CONFIG.reacquire_mode

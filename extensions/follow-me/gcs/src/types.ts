@@ -38,6 +38,11 @@ export type ReacquireMode = "strict" | "smart";
  * barometric height. */
 export type AglSource = "rng" | "baro";
 
+/** Where the follow camera geometry came from: the camera roster carried on
+ * the detection batches, the operator's settings (an agent that does not
+ * report the roster), or the built-in reference camera. */
+export type CameraGeometrySource = "roster" | "settings" | "default";
+
 export type RangeCueKind = "ground" | "box_height" | "lidar";
 
 /** One range cue the agent fused into the subject range. */
@@ -65,7 +70,8 @@ export type HoldReason =
   | "fc-disarmed"
   | "no-range"
   | "lease-busy"
-  | "lease-refused";
+  | "lease-refused"
+  | "camera-lost";
 
 const HOLD_REASONS: readonly HoldReason[] = [
   "inactive",
@@ -78,6 +84,7 @@ const HOLD_REASONS: readonly HoldReason[] = [
   "no-range",
   "lease-busy",
   "lease-refused",
+  "camera-lost",
 ];
 
 /** Follow at a distance and an angle, or orbit the subject. */
@@ -149,6 +156,14 @@ export interface FollowState {
   leaseId: number | string | null;
   /** The operator nudged the parameters with the sticks this session. */
   nudged: boolean;
+  /** The follow camera's horizontal field of view in use, degrees. */
+  cameraHfovDeg?: number | null;
+  /** The follow camera's mount pitch in use, degrees, negative below the
+   * nose (the camera roster's sign). */
+  cameraMountPitchDeg?: number | null;
+  /** Where that geometry came from: the camera roster, the settings or the
+   * built-in default. */
+  cameraGeometrySource?: CameraGeometrySource | null;
 }
 
 /** The agent emits snake_case keys; normalize to the camelCase shape. */
@@ -184,6 +199,9 @@ export interface RawFollowState {
   /** Agent wall-clock time of the report, when the host forwards it. */
   ts_ms?: number;
   nudged?: boolean;
+  camera_hfov_deg?: number | null;
+  camera_mount_pitch_deg?: number | null;
+  camera_geometry_source?: CameraGeometrySource | string | null;
 }
 
 /** The per-drone config the tab reads through ctx.config. */
@@ -193,8 +211,6 @@ export interface FollowConfig {
   follow_height_m: number;
   gimbal_point: boolean;
   designate_camera: string;
-  camera_hfov_deg: number;
-  mount_pitch_deg: number;
   reacquire_mode: ReacquireMode;
   reacquire_window_s: number;
   reacquire_min_similarity: number;
@@ -213,8 +229,6 @@ export const DEFAULT_CONFIG: FollowConfig = {
   follow_height_m: 4,
   gimbal_point: true,
   designate_camera: "auto",
-  camera_hfov_deg: 70,
-  mount_pitch_deg: 30,
   reacquire_mode: "smart",
   reacquire_window_s: 4,
   reacquire_min_similarity: 0.75,
@@ -258,6 +272,9 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   orbitPhaseDeg: null,
   leaseId: null,
   nudged: false,
+  cameraHfovDeg: null,
+  cameraMountPitchDeg: null,
+  cameraGeometrySource: null,
 };
 
 /** Map the agent's snake_case read-back onto the camelCase FollowState. */
@@ -302,6 +319,14 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
         ? (raw.lease_id ?? null)
         : null,
     nudged: raw.nudged === true,
+    cameraHfovDeg: num(raw.camera_hfov_deg),
+    cameraMountPitchDeg: num(raw.camera_mount_pitch_deg),
+    cameraGeometrySource:
+      raw.camera_geometry_source === "roster" ||
+      raw.camera_geometry_source === "settings" ||
+      raw.camera_geometry_source === "default"
+        ? raw.camera_geometry_source
+        : null,
   };
 }
 

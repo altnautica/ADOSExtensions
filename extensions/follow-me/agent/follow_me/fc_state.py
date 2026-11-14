@@ -39,12 +39,26 @@ _POSE_MAX_AGE_S = 0.5
 # milliseconds after its frame was exposed, and a following drone pitches and
 # yaws by several degrees in that time. A box is projected through the
 # attitude at its frame's exposure, read from these samples: three seconds at
-# up to 50 Hz. A frame newer than the newest sample by more than the hold, one
-# older than the history, or one inside a gap between two samples has no
-# attitude of its own and takes the latest.
+# up to 50 Hz, keyed by the flight controller's own time of each sample
+# (``time_boot_ms``), so a delivery stall that hands the plugin a burst of
+# samples at once still places each at its instant. A frame newer than the
+# newest sample by more than the hold, one older than the history, or one
+# inside a gap between two samples has no attitude of its own and takes the
+# latest.
 _ATTITUDE_HISTORY = 150
 _ATTITUDE_HOLD_S = 0.1
 _ATTITUDE_MAX_GAP_S = 0.25
+
+# The flight-controller clock on the host clock. The offset (host arrival
+# minus FC time) is the least one over the last OFFSET_WINDOW messages: the
+# fastest delivery is the closest to the true offset. It is taken at once
+# when it falls and rises no faster than MAX_OFFSET_RISE of the host time
+# that passes, so a delivery stall longer than the window does not drag the
+# offset up with it. An FC time stepping back by more than FC_RESTART_S is a
+# flight-controller reboot and starts the estimate over.
+OFFSET_WINDOW = 64
+MAX_OFFSET_RISE = 0.05
+FC_RESTART_S = 1.0
 
 # Downward rangefinder. Usable as the AGL source only while younger than
 # this; older readings fall back to barometric height.
@@ -104,6 +118,57 @@ def monotonic() -> float:
     reads. Routed through a single function so the whole staleness surface
     can be driven from a test without sleeping through real windows."""
     return time.monotonic()
+
+
+class FcClock:
+    """The flight controller's boot clock mapped onto the plugin's clock,
+    estimated from the ``time_boot_ms`` of the messages it streams."""
+
+    __slots__ = ("_window", "_offset", "_moved_at", "_newest_fc")
+
+    def __init__(self) -> None:
+        self._window: deque[float] = deque(maxlen=OFFSET_WINDOW)
+        self._offset: float | None = None
+        self._moved_at = 0.0
+        self._newest_fc = 0.0
+
+    @property
+    def offset_s(self) -> float | None:
+        """Host time minus FC time, or None before the first message."""
+        return self._offset
+
+    def note(self, fc_s: float, arrival_s: float) -> None:
+        """One message the FC stamped ``fc_s``, read at host ``arrival_s``."""
+        if self._offset is not None and fc_s + FC_RESTART_S < self._newest_fc:
+            self._window.clear()
+            self._offset = None
+        self._window.append(arrival_s - fc_s)
+        least = min(self._window)
+        if self._offset is None:
+            self._newest_fc = fc_s
+            self._offset = least
+        else:
+            if least > self._offset:
+                rise = max(0.0, arrival_s - self._moved_at) * MAX_OFFSET_RISE
+                self._offset = min(self._offset + rise, least)
+            else:
+                self._offset = least
+            self._newest_fc = max(self._newest_fc, fc_s)
+        self._moved_at = arrival_s
+
+    def fc_s(self, host_s: float) -> float | None:
+        """The host instant ``host_s`` on the FC clock, or None while the
+        offset is unknown."""
+        return None if self._offset is None else host_s - self._offset
+
+
+def fc_time_s(msg: dict[str, Any]) -> float | None:
+    """A message's ``time_boot_ms`` in seconds; None when absent or zero (a
+    sender that does not stamp its messages)."""
+    t = msg.get("time_boot_ms")
+    if not isinstance(t, (int, float)) or t <= 0:
+        return None
+    return float(t) / 1000.0
 
 
 def is_guided_mode(autopilot: int, custom_mode: int, mav_type: int) -> bool:
@@ -177,23 +242,38 @@ class Pose:
         self.attitude = FreshnessGate(max_age_s)
         self.position = FreshnessGate(max_age_s)
         self.global_position = FreshnessGate(_GLOBAL_MAX_AGE_S)
-        # (arrival s, roll, pitch, yaw), oldest first.
+        # (FC s, roll, pitch, yaw), oldest first.
         self._history: deque[tuple[float, float, float, float]] = deque(
             maxlen=_ATTITUDE_HISTORY
         )
 
-    def set_attitude(self, roll: float, pitch: float, yaw: float, at_s: float) -> None:
-        """The latest ATTITUDE, and its arrival on the plugin's clock."""
+    def set_attitude(
+        self,
+        roll: float,
+        pitch: float,
+        yaw: float,
+        fc_s: float | None,
+        arrival_s: float,
+    ) -> None:
+        """The latest ATTITUDE: its FC time (None when unstamped) and its
+        arrival on the plugin's clock, which the freshness gate marks."""
         self.roll = roll
         self.pitch = pitch
         self.yaw = yaw
-        if self._history and at_s < self._history[-1][0]:
-            self._history.clear()
-        self._history.append((at_s, roll, pitch, yaw))
-        self.attitude.mark(at_s)
+        self.attitude.mark(arrival_s)
+        if fc_s is None:
+            return
+        h = self._history
+        if h and fc_s <= h[-1][0]:
+            if h[-1][0] - fc_s <= FC_RESTART_S:
+                # A duplicate or a reordered sample: not a new instant.
+                return
+            # The FC restarted: its clock went back.
+            h.clear()
+        h.append((fc_s, roll, pitch, yaw))
 
     def attitude_at(self, t_s: float) -> tuple[float, float, float]:
-        """Roll, pitch and yaw at ``t_s`` on the plugin's clock (a frame's
+        """Roll, pitch and yaw at ``t_s`` on the FC clock (a frame's
         exposure), interpolated between the samples around it; the latest
         attitude when the history does not cover that instant."""
         latest = (self.roll, self.pitch, self.yaw)
@@ -315,6 +395,14 @@ class FcStateMixin:
     _fc: FcState
     _gimbal: GimbalState
     _rangefinder: Rangefinder
+    _fc_clock: FcClock
+
+    def _note_fc_time(self, msg: dict[str, Any], arrival_s: float) -> float | None:
+        """Feed a message's ``time_boot_ms`` to the FC clock; its FC time."""
+        fc_s = fc_time_s(msg)
+        if fc_s is not None:
+            self._fc_clock.note(fc_s, arrival_s)
+        return fc_s
 
     def _on_heartbeat(self, delivery: dict[str, Any]) -> None:
         msg = mavlink_frames.decode_fields(delivery)
@@ -347,9 +435,12 @@ class FcStateMixin:
             return
         # Marked separately from position: ATTITUDE and LOCAL_POSITION_NED
         # are different messages at different rates and either can stall on
-        # its own.
+        # its own. The freshness gate marks the arrival; the history keeps
+        # the FC's own time of the sample.
+        now = monotonic()
+        fc_s = self._note_fc_time(msg, now)
         self._pose.set_attitude(
-            float(msg["roll"]), float(msg["pitch"]), float(msg["yaw"]), monotonic()
+            float(msg["roll"]), float(msg["pitch"]), float(msg["yaw"]), fc_s, now
         )
 
     def _on_local_position(self, delivery: dict[str, Any]) -> None:
@@ -363,7 +454,9 @@ class FcStateMixin:
         self._pose.vn_mps = float(msg["vx"])
         self._pose.ve_mps = float(msg["vy"])
         self._pose.vd_mps = float(msg["vz"])
-        self._pose.position.mark(monotonic())
+        now = monotonic()
+        self._note_fc_time(msg, now)
+        self._pose.position.mark(now)
 
     def _on_global_position(self, delivery: dict[str, Any]) -> None:
         # Display and barometric-AGL fallback only. lat/lon are 1e7 integer
@@ -374,7 +467,9 @@ class FcStateMixin:
         self._pose.lat_deg = float(msg["lat"]) / 1e7
         self._pose.lon_deg = float(msg["lon"]) / 1e7
         self._pose.rel_alt_m = float(msg["relative_alt"]) / 1000.0
-        self._pose.global_position.mark(monotonic())
+        now = monotonic()
+        self._note_fc_time(msg, now)
+        self._pose.global_position.mark(now)
 
     def _on_distance_sensor(self, delivery: dict[str, Any]) -> None:
         # Only a downward rangefinder measures height above ground; a

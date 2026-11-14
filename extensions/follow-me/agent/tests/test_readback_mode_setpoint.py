@@ -28,8 +28,6 @@ def _config(mode: str) -> dict:
         "orbit_radius_m": 10.5,
         "gimbal_point": False,
         "designate_camera": "uvc-0",
-        "camera_hfov_deg": 70.0,
-        "mount_pitch_deg": 45.0,
     }
 
 

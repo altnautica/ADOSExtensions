@@ -46,9 +46,23 @@ from ados.sdk.tracking import LockedTargetTracker
 from ados.sdk.vision import DetectionBatch
 
 from follow_me import fc_state
+from follow_me.camera import (
+    DEFAULT_GEOMETRY,
+    CameraGeometry,
+    configured_geometry,
+    geometry_of,
+    sensor_ts_ms,
+)
 from follow_me.coast import CoastMixin
 from follow_me.demand import DetectionLease
-from follow_me.fc_state import FcState, FcStateMixin, GimbalState, Pose, Rangefinder
+from follow_me.fc_state import (
+    FcClock,
+    FcState,
+    FcStateMixin,
+    GimbalState,
+    Pose,
+    Rangefinder,
+)
 from follow_me.loop import FollowLoopMixin, Sighting
 from follow_me.motion import LEASE_REVOKED_TOPIC, STICKS_TOPIC, Nudges
 from follow_me.ranging import Scan
@@ -126,6 +140,12 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         self._fc = FcState()
         self._gimbal = GimbalState()
         self._rangefinder = Rangefinder()
+        # The flight controller's clock on the plugin's, from the
+        # ``time_boot_ms`` of its telemetry; frames are placed on it.
+        self._fc_clock = FcClock()
+        # The follow camera's geometry for its newest batch, with the
+        # operator's settings filling what the batch does not carry.
+        self._geometry: CameraGeometry = DEFAULT_GEOMETRY
         # The last gimbal angle the plugin itself commanded (projection
         # convention), used as the boresight estimate until the FC reports a
         # real gimbal attitude.
@@ -169,6 +189,10 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
         # The newest camera-filtered batch, examined for re-acquire candidates.
         self._latest_batch: DetectionBatch | None = None
         self._latest_batch_s: float = -math.inf
+        # When the behaviour last became active (None while inactive), and
+        # whether the current camera-lost episode was logged.
+        self._active_since_s: float | None = None
+        self._camera_lost = False
         self._scan: Scan | None = None
         self._scan_at: float = -math.inf
         self._scan_subscribed = False
@@ -407,6 +431,8 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
             self._last_frame_wh = frame_wh
         self._latest_batch = batch
         self._latest_batch_s = now
+        geometry = geometry_of(batch, configured_geometry(self._cfg))
+        self._geometry = geometry
         for det in batch.detections or ():
             if det.track_id is not None and det.lock_state is not None:
                 if det.bbox is not None:
@@ -420,6 +446,8 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, CoastMixin, FollowLoopMixin):
                         confidence=float(det.confidence),
                         class_label=str(getattr(det, "class_label", "") or ""),
                         embedding=embedding_of(det),
+                        ts_sensor_ms=sensor_ts_ms(batch),
+                        geometry=geometry,
                     )
                 break
         # During a smart coast the lost track must not re-latch the gate

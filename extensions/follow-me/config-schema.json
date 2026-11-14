@@ -41,16 +41,14 @@
     "camera_hfov_deg": {
       "type": "number",
       "title": "Camera horizontal field of view (deg)",
-      "description": "Horizontal field of view of the designate camera, used by the image-to-ground projection.",
-      "default": 70,
+      "description": "Horizontal field of view of the designate camera, used by the image-to-ground projection when the agent does not report the camera's geometry. Unset uses the built-in 87 degree reference camera.",
       "minimum": 30,
       "maximum": 160
     },
     "mount_pitch_deg": {
       "type": "number",
       "title": "Camera mount pitch (deg)",
-      "description": "Fixed downward tilt of the designate camera below the horizon, used by the image-to-ground projection. A forward camera needs a positive tilt to resolve a ground point; 90 is straight down.",
-      "default": 30,
+      "description": "Fixed downward tilt of the designate camera below the horizon, used by the image-to-ground projection when the agent does not report the camera's geometry; 90 is straight down. Unset uses the built-in reference camera's 15 degrees.",
       "minimum": 0,
       "maximum": 90
     },

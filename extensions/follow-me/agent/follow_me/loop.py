@@ -31,12 +31,14 @@ from typing import Any
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 
 from follow_me import fc_state, mavlink_frames, setpoint
+from follow_me.camera import DEFAULT_GEOMETRY, CameraGeometry, exposure_fc_s
 from follow_me.motion import LEASE_RETRY_S, SKILL_ID, Nudges, lease_error_reason
 from follow_me.projection import TargetFix
 from follow_me.reacquire import Coast, Embedding, blend_template
 from follow_me.state import (
     FOLLOW_MODE_ORBIT,
     FOLLOW_STOPPED_TOPIC,
+    HOLD_CAMERA_LOST,
     HOLD_FC_DISARMED,
     HOLD_FC_STALE,
     HOLD_INACTIVE,
@@ -81,6 +83,12 @@ _GIMBAL_PERIOD_S = 0.2
 _MAX_LATENCY_MS = 10_000.0
 # Window the published goal send rate is measured over.
 SETPOINT_RATE_WINDOW_S = 2.0
+# The engine publishes a batch for every inferred frame (3 Hz by default),
+# an empty one too. With none from the follow camera for this long the camera
+# is lost; the first seconds after activation are exempt while the engine
+# starts detecting on the camera the follow just leased.
+_CAMERA_LOST_S = 2.0
+_CAMERA_START_GRACE_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,10 @@ class Sighting:
     confidence: float
     class_label: str
     embedding: Embedding | None
+    # The frame's sensor-clock stamp (ms), when the camera has one.
+    ts_sensor_ms: int | None = None
+    # The camera geometry the batch carried.
+    geometry: CameraGeometry = DEFAULT_GEOMETRY
 
 
 class FollowLoopMixin:
@@ -135,6 +147,10 @@ class FollowLoopMixin:
     _latest_batch: Any
     _latest_batch_s: float
     _commanded_gimbal: tuple[float, float] | None
+    _fc_clock: fc_state.FcClock
+    _geometry: CameraGeometry
+    _active_since_s: float | None
+    _camera_lost: bool
 
     async def _follow_loop(self) -> None:
         while True:
@@ -157,6 +173,8 @@ class FollowLoopMixin:
         cfg = await self._config_for_tick()
         if not cfg.active:
             self._coast = None
+            self._active_since_s = None
+            self._camera_lost = False
             await self._release_lease()
             self._nudges.reset_session()
             await self._hold(
@@ -164,10 +182,38 @@ class FollowLoopMixin:
             )
             return
         await self._nudges.write_back(self._ctx, now)
+        if self._active_since_s is None:
+            self._active_since_s = now
+        if (
+            now - self._active_since_s > _CAMERA_START_GRACE_S
+            and now - self._latest_batch_s > _CAMERA_LOST_S
+        ):
+            await self._on_camera_lost(cfg, now)
+            return
+        self._camera_lost = False
         if self._coast is not None:
             await self._tick_coast(cfg, now)
             return
         await self._tick_follow(cfg, now)
+
+    async def _on_camera_lost(self, cfg: FollowConfig, now: float) -> None:
+        """The follow camera's batches stopped: hold. A smart coast ends, as
+        there are no frames to re-acquire in, and the estimate stops where it
+        is rather than carry its velocity on."""
+        if not self._camera_lost:
+            self._camera_lost = True
+            self._ctx.log.warning(
+                "follow_me_camera_lost", camera=self._follow_camera()
+            )
+        self._coast = None
+        self._filter.stop(now)
+        locked_before = self._tracker.has_lock or self._filter.initialized
+        await self._hold(
+            cfg,
+            now,
+            phase=PHASE_HOLDING if locked_before else PHASE_ACQUIRING,
+            hold_reason=HOLD_CAMERA_LOST,
+        )
 
     def _gate(self, now: float) -> str | None:
         """The hold reason the vehicle side imposes, or ``None`` to command."""
@@ -249,9 +295,11 @@ class FollowLoopMixin:
         self._measured_bbox = bbox
         s = self._sighting if (self._sighting and self._sighting.bbox is bbox) else None
         frame_w, frame_h = s.frame_wh if (s and s.frame_wh) else self._frame_size()
-        # The box is projected through the attitude its frame was exposed at.
-        exposed_s = s.ts_ms / 1000.0 if (s and s.ts_ms > 0) else None
-        fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, exposed_s)
+        # The box is projected through the attitude its frame was exposed at,
+        # with the geometry of the camera that took it.
+        exposed_s = self._exposure_s(s.ts_ms, s.ts_sensor_ms) if s else None
+        geometry = s.geometry if s else self._geometry
+        fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, geometry, exposed_s)
         if fix is None:
             return
         if s is not None:
@@ -269,6 +317,11 @@ class FollowLoopMixin:
                 self._pending_latency_ts_ms = s.ts_ms
             if s.embedding is not None:
                 self._template = blend_template(self._template, s.embedding)
+
+    def _exposure_s(self, ts_ms: int, ts_sensor_ms: int | None) -> float | None:
+        """A frame's exposure on the flight-controller clock, or None (the
+        latest attitude) while that clock is not yet known."""
+        return exposure_fc_s(ts_ms, ts_sensor_ms, self._fc_clock.offset_s)
 
     def _sighted_bearing(self, now: float) -> float | None:
         """The bearing the latest sighting measured (through the attitude its

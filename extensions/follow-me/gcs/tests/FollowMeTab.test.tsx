@@ -56,6 +56,9 @@ describe("FollowMeTab", () => {
           coastRemainingS: 2.5,
           pipelineLatencyMs: 85,
           setpointRateHz: 20,
+          cameraHfovDeg: 120,
+          cameraMountPitchDeg: -90,
+          cameraGeometrySource: "settings",
         }}
       />,
     );
@@ -67,6 +70,9 @@ describe("FollowMeTab", () => {
     expect(screen.getByTestId("fm-coast-remaining").textContent).toBe("2.5 s");
     expect(screen.getByTestId("fm-latency").textContent).toBe("85 ms");
     expect(screen.getByTestId("fm-setpoint-rate").textContent).toBe("20.0 Hz");
+    expect(screen.getByTestId("fm-camera-geometry").textContent).toBe(
+      "120° · -90° · Settings",
+    );
   });
 
   it("hides the coast window outside a coast", () => {

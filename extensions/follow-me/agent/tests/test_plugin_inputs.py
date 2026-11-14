@@ -48,8 +48,6 @@ async def test_real_frame_size_from_the_batch_feeds_the_projection(
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "camera_hfov_deg": 70.0,
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -95,8 +93,6 @@ async def test_reported_gimbal_attitude_feeds_the_projection(
             "active": True,
             "gimbal_point": True,
             "designate_camera": "uvc-0",
-            "camera_hfov_deg": 70.0,
-            "mount_pitch_deg": 30.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -124,8 +120,6 @@ def _gimbal_point_ctx() -> _Ctx:
             "active": True,
             "gimbal_point": True,
             "designate_camera": "uvc-0",
-            "camera_hfov_deg": 70.0,
-            "mount_pitch_deg": 30.0,
             "follow_distance_m": 6.0,
             "follow_height_m": 4.0,
         }
@@ -187,7 +181,8 @@ async def test_a_fixed_camera_is_projected_through_its_mount_whatever_was_comman
 
     captured = await _two_sightings(plugin, clock, monkeypatch)
 
-    assert captured["mount_pitch_deg"] == 30.0
+    # The reference front camera's mount, 15° below the nose.
+    assert captured["mount_pitch_deg"] == 15.0
     assert (captured["gimbal_pitch_deg"], captured["gimbal_yaw_deg"]) == (0.0, 0.0)
 
 
@@ -200,8 +195,6 @@ async def test_coasting_holds_the_last_setpoint_without_recomputing(
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "camera_hfov_deg": 70.0,
-            "mount_pitch_deg": 45.0,
             "follow_distance_m": 6.0,
             "follow_height_m": 4.0,
         }
@@ -443,7 +436,6 @@ async def test_a_stalled_gimbal_report_falls_back_to_the_commanded_angle(
     # tracks the gimbal's real aim better than a report that predates it.
     cfg = _telemetry_config()
     cfg["gimbal_point"] = True
-    cfg["mount_pitch_deg"] = 30.0
     ctx = _Ctx(config=cfg)
     plugin = _make_plugin(ctx)
     clock = _install_clock(monkeypatch)

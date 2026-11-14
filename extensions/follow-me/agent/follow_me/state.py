@@ -84,6 +84,10 @@ HOLD_NO_RANGE = "no-range"
 # (``lease-refused``: disarmed, wrong vehicle class, no guided mode).
 HOLD_LEASE_BUSY = "lease-busy"
 HOLD_LEASE_REFUSED = "lease-refused"
+# The follow camera's detection batches stopped arriving. The engine
+# publishes a batch for every inferred frame, an empty one too, so silence
+# means the camera or its inference stopped, not that nobody is in view.
+HOLD_CAMERA_LOST = "camera-lost"
 
 
 @dataclass(frozen=True)
@@ -98,13 +102,12 @@ class FollowConfig:
     # detect camera → any camera for the detection filter), or a pinned camera
     # id. Resolved by the plugin; not a device string.
     designate_camera: str = "auto"
-    camera_hfov_deg: float = 70.0
-    # Fixed downward tilt of the designate camera below the horizon. A
-    # forward camera needs a positive tilt for its ground projection to
-    # intersect the ground plane at all, so the default is a modest
-    # forward-down angle rather than 0 (a level camera never resolves a
-    # ground point and the follow loop would never command).
-    mount_pitch_deg: float = 30.0
+    # The operator's follow-camera geometry, used where the detection batches
+    # carry none (an agent without the camera roster on its batches). None is
+    # unset: the built-in reference camera applies. ``mount_pitch_deg`` is
+    # the tilt below the horizon, positive down; 90 is straight down.
+    camera_hfov_deg: float | None = None
+    mount_pitch_deg: float | None = None
     reacquire_mode: str = REACQUIRE_SMART
     reacquire_window_s: float = 4.0
     reacquire_min_similarity: float = 0.75
@@ -151,14 +154,8 @@ class FollowConfig:
             designate_camera=str(
                 pick("designate_camera", cls.designate_camera)
             ),
-            camera_hfov_deg=_as_float(
-                pick("camera_hfov_deg", cls.camera_hfov_deg),
-                cls.camera_hfov_deg,
-            ),
-            mount_pitch_deg=_as_float(
-                pick("mount_pitch_deg", cls.mount_pitch_deg),
-                cls.mount_pitch_deg,
-            ),
+            camera_hfov_deg=_opt_float(pick("camera_hfov_deg", None)),
+            mount_pitch_deg=_opt_float(pick("mount_pitch_deg", None)),
             # An unrecognised mode resolves to strict: the conservative
             # behaviour that never re-designates on its own.
             reacquire_mode=mode if mode in _REACQUIRE_MODES else REACQUIRE_STRICT,
@@ -202,6 +199,13 @@ class FollowConfig:
                 *OBSTACLE_MARGIN_RANGE,
             ),
         )
+
+
+def _opt_float(value: object) -> float | None:
+    if value is None:
+        return None
+    v = _as_float(value, float("nan"))
+    return v if v == v else None
 
 
 def _as_float(value: object, default: float) -> float:
@@ -265,6 +269,12 @@ class FollowState:
     lease_id: str | None = None
     # The operator nudged the follow parameters with the sticks this session.
     nudged: bool = False
+    # The follow camera geometry in use: horizontal field of view, mount
+    # pitch in the roster's sign (negative below the nose), and whether they
+    # came from the camera roster or the built-in default.
+    camera_hfov_deg: float | None = None
+    camera_mount_pitch_deg: float | None = None
+    camera_geometry_source: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -309,6 +319,7 @@ __all__ = [
     "HOLD_NO_RANGE",
     "HOLD_LEASE_BUSY",
     "HOLD_LEASE_REFUSED",
+    "HOLD_CAMERA_LOST",
     "FollowConfig",
     "FollowState",
 ]

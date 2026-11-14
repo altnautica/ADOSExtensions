@@ -32,8 +32,6 @@ _CONFIG = {
     "active": True,
     "gimbal_point": False,
     "designate_camera": "uvc-0",
-    "camera_hfov_deg": 87.0,
-    "mount_pitch_deg": 15.0,
     "follow_distance_m": 8.0,
     "follow_height_m": 2.5,
 }

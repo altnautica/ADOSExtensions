@@ -12,6 +12,7 @@ from typing import Any
 
 from ados.sdk.tracking import EffectiveLock
 
+from follow_me.camera import configured_geometry, geometry_of, sensor_ts_ms
 from follow_me.reacquire import PERSON, Coast, best_candidate
 from follow_me.state import (
     FOLLOW_LOST_TOPIC,
@@ -153,12 +154,14 @@ class CoastMixin:
         fw = getattr(batch, "frame_width", None)
         fh = getattr(batch, "frame_height", None)
         frame_w, frame_h = (int(fw), int(fh)) if fw and fh else self._frame_size()
-        # The boxes are projected through the attitude their frame was exposed at.
-        ts_ms = getattr(batch, "ts_ms", 0) or 0
-        exposed_s = ts_ms / 1000.0 if ts_ms > 0 else None
+        # The boxes are projected through the attitude their frame was
+        # exposed at, with the geometry of the camera that took them.
+        ts_ms = int(getattr(batch, "ts_ms", 0) or 0)
+        exposed_s = self._exposure_s(ts_ms, sensor_ts_ms(batch))
+        geometry = geometry_of(batch, configured_geometry(cfg))
 
         def measure(bbox: Any) -> tuple[float, float, Any] | None:
-            fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, exposed_s)
+            fix = self._measure_box(cfg, now, bbox, frame_w, frame_h, geometry, exposed_s)
             if fix is None:
                 return None
             return (

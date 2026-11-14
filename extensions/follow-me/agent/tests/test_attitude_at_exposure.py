@@ -22,12 +22,14 @@ from follow_fakes import (
     _make_plugin,
 )
 
+from follow_me.camera import CameraGeometry
 from follow_me.fc_state import Pose
 from follow_me.loop import Sighting
 from follow_me.state import FollowConfig
 
 # The bench's front camera: 87° wide, 15° below the nose, 1280x720.
-_CFG = FollowConfig(camera_hfov_deg=87.0, mount_pitch_deg=15.0)
+_CFG = FollowConfig()
+_GEOM = CameraGeometry(hfov_deg=87.0, mount_pitch_deg=-15.0)
 _W, _H = 1280, 720
 # A walker 8 m ahead of a drone 2.5 m up: feet 2.4° below the optical axis.
 _WALKER = BoundingBox(x=615.0, y=250.0, width=55.0, height=138.0)
@@ -43,8 +45,8 @@ def _follow_pose(plugin: Any) -> None:
 def test_the_pose_interpolates_its_attitude_history() -> None:
     p = Pose()
     assert p.attitude_at(5.0) == (0.0, 0.0, 0.0)
-    p.set_attitude(0.0, -0.1, 3.10, 10.00)
-    p.set_attitude(0.1, -0.2, -3.12, 10.05)
+    p.set_attitude(0.0, -0.1, 3.10, 10.00, 110.00)
+    p.set_attitude(0.1, -0.2, -3.12, 10.05, 110.05)
     roll, pitch, yaw = p.attitude_at(10.025)
     assert roll == pytest.approx(0.05) and pitch == pytest.approx(-0.15)
     # Across the ±π seam the short way.
@@ -56,10 +58,13 @@ def test_the_pose_interpolates_its_attitude_history() -> None:
     assert p.attitude_at(10.12) == pytest.approx(latest)
     assert p.attitude_at(10.2) == latest
     # Inside a gap no sample bounds closely: the latest.
-    p.set_attitude(0.3, 0.0, 0.0, 10.5)
+    p.set_attitude(0.3, 0.0, 0.0, 10.5, 110.5)
     assert p.attitude_at(10.3) == (0.3, 0.0, 0.0)
-    # The clock went back (a restart of the plugin's clock): start over.
-    p.set_attitude(0.4, 0.0, 0.0, 1.0)
+    # A sample stamped a little before the newest (reordered) adds nothing.
+    p.set_attitude(0.9, 0.0, 0.0, 10.45, 110.6)
+    assert p.attitude_at(10.5) == (0.3, 0.0, 0.0)
+    # The FC clock went back by more than a second (a reboot): start over.
+    p.set_attitude(0.4, 0.0, 0.0, 1.0, 111.0)
     assert p.attitude_at(10.05) == (0.4, 0.0, 0.0)
 
 
@@ -80,13 +85,15 @@ def test_a_box_is_projected_through_the_attitude_at_its_exposure(
     clock.advance(0.05)
     plugin._on_attitude(_attitude(0.0, 0.0, 0.0))
     exposed = clock.now
-    level = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H)
+    level = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H, _GEOM)
     assert level is not None
     # The batch with that frame's box arrives 0.4 s later; the nose went
     # 0.2 rad (11.5°) down meanwhile.
     _pitch_down(plugin, clock, 0.4, 0.2)
-    stale = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H)
-    at_exposure = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H, exposed)
+    stale = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H, _GEOM)
+    at_exposure = plugin._measure_box(
+        _CFG, clock.now, _WALKER, _W, _H, _GEOM, plugin._exposure_s(int(exposed * 1000), None)
+    )
     assert stale is not None and at_exposure is not None
     assert at_exposure.offset_north_m == pytest.approx(level.offset_north_m, abs=1e-6)
     assert at_exposure.offset_east_m == pytest.approx(level.offset_east_m, abs=1e-6)
@@ -107,7 +114,7 @@ def test_a_sighting_is_measured_at_its_frames_exposure(monkeypatch: Any) -> None
     _follow_pose(plugin)
     clock.advance(0.05)
     plugin._on_attitude(_attitude(0.0, 0.0, 0.0))
-    level = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H)
+    level = plugin._measure_box(_CFG, clock.now, _WALKER, _W, _H, _GEOM)
     assert level is not None
     ts_ms = int(clock.now * 1000.0)
     _pitch_down(plugin, clock, 0.4, 0.2)

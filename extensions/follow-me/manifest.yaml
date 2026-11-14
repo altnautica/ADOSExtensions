@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.4.8"
+version: "0.4.9"
 description: "Lock onto an operator-designated subject and follow it at a distance and an angle (behind, side or lead) or orbit it, flown by the agent's pilot with obstacle avoidance. A flight Skill in the cockpit skill picker, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a set
@@ -303,6 +303,9 @@ gcs:
           label: "settings.gimbalPoint"
           group: "settings.title"
           order: 30
+      # The follow camera's geometry for an agent that does not report it on
+      # the detection batches. The agent's camera roster wins when present;
+      # unset falls back to the built-in reference camera (87°, 15° down).
       - key: camera_hfov_deg
         binding: plugin.config
         schema:
@@ -310,16 +313,12 @@ gcs:
           minimum: 30
           maximum: 160
           step: 1
-          default: 70
         ui:
           widget: number
           label: "settings.cameraHfov"
           group: "settings.title"
           order: 40
-      # Fixed downward tilt of the designate camera below the horizon. A
-      # forward camera needs a positive tilt for the image-to-ground
-      # projection to intersect; 90 is straight down. The default is a modest
-      # forward-down angle so a fresh install can resolve a ground point.
+      # Downward tilt below the horizon; 90 is straight down.
       - key: mount_pitch_deg
         binding: plugin.config
         schema:
@@ -327,9 +326,8 @@ gcs:
           minimum: 0
           maximum: 90
           step: 1
-          default: 30
         ui:
-          widget: range
+          widget: number
           label: "settings.mountPitch"
           group: "settings.title"
           order: 42

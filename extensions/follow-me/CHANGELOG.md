@@ -4,6 +4,47 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.4.9] - 2026-11-14
+
+### Added
+
+- A `camera-lost` hold reason. The vision engine publishes a batch for every
+  inferred frame, an empty one too, so with no batch from the follow camera
+  for more than 2 s (after the first 5 s of an activation) the follow holds,
+  ends a smart re-acquire, stops the subject estimate and logs the episode
+  once. It takes precedence over the lock reasons. The tab labels it
+  "Camera lost".
+- `follow.state` reports the camera geometry in use: `camera_hfov_deg`,
+  `camera_mount_pitch_deg` (negative below the nose) and
+  `camera_geometry_source` (`roster`, `settings` or `default`). The tab
+  shows it as "Camera geometry" with its source.
+
+### Changed
+
+- The camera's field of view and mount pitch come from the camera roster,
+  carried on each detection batch (`hfov_deg`, `mount_pitch_deg`), when the
+  agent sends it. Otherwise the `camera_hfov_deg` and `mount_pitch_deg`
+  settings apply, and with those unset the reference front camera: 87°
+  wide, 15° below the nose. The two settings no longer have a default of
+  their own (70° and 30° before). A reported or commanded gimbal angle still
+  replaces the mount tilt.
+
+### Fixed
+
+- The attitude history is kept on the flight controller's clock
+  (`time_boot_ms`), mapped onto the companion's clock by the least arrival
+  offset over the last 64 messages; the offset falls at once and rises no
+  faster than 5 % of the elapsed time, and restarts when the flight
+  controller's time steps back by more than 1 s. A MAVLink delivery stall
+  that hands over a burst of attitude samples at once no longer stamps them
+  all at one instant, so a frame exposed during the stall is projected
+  through the attitude at its exposure instead of the newest one.
+- A frame is placed at its exposure on the flight controller's clock: its
+  sensor stamp (`ts_sensor_ms`) when that lies within 1 s of its host stamp
+  mapped onto that clock, otherwise the mapped host stamp. A simulator
+  frame whose host stamp is its late arrival is no longer projected through
+  the attitude 0.1-0.3 s after its exposure.
+
 ## [0.4.8] - 2026-11-12
 
 ### Fixed

@@ -22,7 +22,6 @@ from follow_me.state import (
     LOCK_LOCKED,
     LOCK_LOST,
     LOCK_UNCERTAIN,
-    FollowConfig,
 )
 from follow_fakes import (
     _Ctx,
@@ -49,8 +48,6 @@ async def test_locked_and_active_sends_a_setpoint() -> None:
             "follow_height_m": 4.0,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "camera_hfov_deg": 70.0,
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -76,7 +73,6 @@ async def test_uncertain_lock_sends_no_setpoint() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -101,7 +97,6 @@ async def test_lost_lock_sends_no_setpoint_and_drops_lock() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -127,7 +122,6 @@ async def test_coast_window_expiry_is_treated_as_lost() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -149,7 +143,6 @@ async def test_inactive_sends_no_setpoint() -> None:
             "active": False,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -171,7 +164,6 @@ async def test_no_pose_yet_holds_without_commanding() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -195,8 +187,6 @@ async def test_gimbal_point_emits_a_second_frame() -> None:
             "follow_height_m": 4.0,
             "gimbal_point": True,
             "designate_camera": "uvc-0",
-            "camera_hfov_deg": 70.0,
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -227,7 +217,6 @@ async def test_a_refused_lease_holds_without_commanding() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -256,7 +245,6 @@ async def test_guided_but_disarmed_holds_without_commanding() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -282,7 +270,6 @@ async def test_px4_offboard_is_treated_as_guided() -> None:
             "active": True,
             "gimbal_point": False,
             "designate_camera": "uvc-0",
-            "mount_pitch_deg": 45.0,
         }
     )
     plugin = _make_plugin(ctx)
@@ -298,20 +285,3 @@ async def test_px4_offboard_is_treated_as_guided() -> None:
     states = _state_events(ctx)
     assert states and states[-1]["commanding"] is True
     assert states[-1]["fc_guided"] is True
-
-
-# ---------------------------------------------------------------------------
-# Config surface: mount_pitch_deg is a real, resolvable per-drone key.
-# ---------------------------------------------------------------------------
-
-
-def test_mount_pitch_default_is_a_usable_forward_tilt() -> None:
-    # A fresh install with nothing written must resolve a non-zero downward
-    # tilt, or a forward camera's ray never intersects the ground.
-    cfg = FollowConfig.resolve({}, {})
-    assert cfg.mount_pitch_deg == 30.0
-
-
-def test_mount_pitch_live_value_overrides_the_default() -> None:
-    cfg = FollowConfig.resolve({"mount_pitch_deg": 55.0}, {})
-    assert cfg.mount_pitch_deg == 55.0

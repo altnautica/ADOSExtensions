@@ -20,9 +20,23 @@ then on the agent runs a 20 Hz loop:
 1. It reads the locked subject's box from the detection stream.
 2. It casts a ray through the box **bottom-centre** (the subject's feet)
    using a pinhole model, the flight controller's attitude at the frame's
-   exposure, and the camera mount or gimbal angles. A commanded gimbal
-   angle counts only once a gimbal has reported (`MOUNT_ORIENTATION`);
-   without one the camera is fixed and the mount pitch applies.
+   exposure, and the camera mount or gimbal angles. The field of view and
+   the mount pitch come from the camera roster, carried on each detection
+   batch (`hfov_deg`, `mount_pitch_deg`). An agent that does not carry them
+   leaves them to the `camera_hfov_deg` and `mount_pitch_deg` settings, and
+   with those unset the reference front camera applies, 87° wide and 15°
+   below the nose. The tab shows which source is in use. A commanded
+   gimbal angle counts only once a gimbal has reported
+   (`MOUNT_ORIENTATION`); without one the camera is fixed and the mount
+   pitch applies.
+
+   The attitude history is kept on the flight controller's clock
+   (`time_boot_ms`), mapped onto the companion's clock by the least
+   arrival offset over the last 64 messages, so a delivery stall that
+   hands over a burst of samples at once still places each at its instant.
+   A frame's exposure is its sensor stamp (`ts_sensor_ms`) when that lies
+   within 1 s of its host stamp mapped onto the flight controller's clock,
+   otherwise the mapped host stamp.
 3. It estimates the horizontal range from up to three cues, fused by
    inverse variance:
    - **ground**: where the feet ray meets the ground. It uses the height
@@ -71,6 +85,14 @@ While the lock is uncertain that hold faces the latest sighting, and the
 subject estimate stops where it is instead of carrying its velocity on.
 Switching the skill off releases the lease and the pilot brakes to its own
 hold.
+
+Hold reasons (`hold_reason`): `inactive`, `no-lock`, `lock-uncertain`,
+`lock-lost`, `pose-stale`, `fc-stale`, `fc-disarmed`, `no-range`,
+`lease-busy`, `lease-refused` and `camera-lost`. The vision engine publishes
+a batch for every inferred frame, an empty one too, so `camera-lost` means no
+batch from the follow camera for more than 2 s (after the first 5 s of an
+activation). It ends a smart re-acquire, stops the subject estimate and takes
+precedence over the lock reasons.
 
 ### Pilot lease, sticks and stopping
 
@@ -131,9 +153,11 @@ and then gives up like Strict.
   in the host's cockpit overlay and pick **Follow this target** (hotkey `f`)
   or **Stop following** (hotkey `x`).
 - **Native settings** (`contributes.parameters`): distance, height, gimbal
-  point, camera, field of view, mount pitch, the re-acquire mode (a two-value
-  enum that hosts render as a Strict | Smart toggle), the re-acquire window and
-  similarity, the speed cap and the detector model.
+  point, camera, field of view, mount pitch, the re-acquire mode (a
+  two-value enum that hosts render as a Strict | Smart toggle), the
+  re-acquire window and similarity, the speed cap and the detector model.
+  The field of view and mount pitch apply only where the camera roster does
+  not give them.
 - **Node-detail tab** (`node.detail.tab`, drone profile): Specs and a live
   read-back covering:
   - phase and lock;
@@ -166,6 +190,8 @@ The other `follow.state` fields:
 - **Mode:** `follow_mode`, `follow_angle_deg`, `orbit_radius_m`, `orbit_rate_dps`,
   `orbit_direction`, `orbit_phase_deg`.
 - **Pilot:** `lease_id`, `nudged`.
+- **Camera:** `camera_hfov_deg`, `camera_mount_pitch_deg` (negative below the
+  nose), `camera_geometry_source` (`roster`, `settings` or `default`).
 
 ## Configuration
 
@@ -178,8 +204,8 @@ Per-drone configuration (see `config-schema.json`):
 | `follow_height_m`          | `4`           | `0`–`20`    | Follow height above the ground.                 |
 | `gimbal_point`             | `true`        | —           | Point a gimbal at the subject if present.       |
 | `designate_camera`         | `auto`        | —           | Camera the follow loop consumes; `auto` reads the designated subject's camera (any camera until one is designated). |
-| `camera_hfov_deg`          | `70`          | `30`–`160`  | Camera horizontal field of view.                |
-| `mount_pitch_deg`          | `30`          | `0`–`90`    | Camera downward tilt below the horizon.         |
+| `camera_hfov_deg`          | unset         | `30`–`160`  | Camera horizontal field of view, where the camera roster does not give it; unset is 87°. |
+| `mount_pitch_deg`          | unset         | `0`–`90`    | Camera downward tilt below the horizon, where the camera roster does not give it; unset is 15°. |
 | `reacquire_mode`           | `smart`       | `strict`, `smart` | What a lost lock does.                    |
 | `reacquire_window_s`       | `4`           | `0.5`–`15`  | How long a smart re-acquire coasts.             |
 | `reacquire_min_similarity` | `0.75`        | `0.5`–`0.99`| Appearance similarity needed to re-acquire.     |

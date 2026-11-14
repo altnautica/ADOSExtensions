@@ -92,6 +92,26 @@ describe("normalizeFollowState", () => {
     expect(s.holdReason).toBe("pose-stale");
   });
 
+  it("carries the camera-lost hold reason", () => {
+    expect(normalizeFollowState({ hold_reason: "camera-lost" }).holdReason).toBe(
+      "camera-lost",
+    );
+  });
+
+  it("carries the camera geometry in use", () => {
+    const s = normalizeFollowState({
+      camera_hfov_deg: 87,
+      camera_mount_pitch_deg: -15,
+      camera_geometry_source: "roster",
+    });
+    expect(s.cameraHfovDeg).toBe(87);
+    expect(s.cameraMountPitchDeg).toBe(-15);
+    expect(s.cameraGeometrySource).toBe("roster");
+    const none = normalizeFollowState({ camera_geometry_source: "bogus" });
+    expect(none.cameraHfovDeg).toBeNull();
+    expect(none.cameraGeometrySource).toBeNull();
+  });
+
   it("drops an unrecognized hold reason rather than rendering it raw", () => {
     expect(
       normalizeFollowState({ hold_reason: "bogus" as never }).holdReason,
@@ -112,6 +132,7 @@ describe("hold reasons", () => {
     "no-range",
     "lease-busy",
     "lease-refused",
+    "camera-lost",
   ] as const;
 
   it("has a locale label for every reason the agent can publish", () => {
@@ -164,8 +185,6 @@ describe("normalizeConfig", () => {
     expect(c.follow_height_m).toBe(4);
     expect(c.gimbal_point).toBe(true);
     expect(c.designate_camera).toBe("auto");
-    expect(c.camera_hfov_deg).toBe(70);
-    expect(c.mount_pitch_deg).toBe(30);
     expect(c.reacquire_mode).toBe("smart");
     expect(c.max_speed_mps).toBe(6);
   });
@@ -176,7 +195,7 @@ describe("normalizeConfig", () => {
   });
 
   it("coerces a numeric string", () => {
-    expect(normalizeConfig({ camera_hfov_deg: "90" }).camera_hfov_deg).toBe(90);
+    expect(normalizeConfig({ follow_distance_m: "12" }).follow_distance_m).toBe(12);
   });
 });
 

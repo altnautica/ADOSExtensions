@@ -74,8 +74,6 @@ async def _replay(monkeypatch: Any) -> _Replay:
         config={
             "active": True,
             "designate_camera": "main",
-            "camera_hfov_deg": cam["hfov_deg"],
-            "mount_pitch_deg": cam["mount_pitch_deg"],
             **data["config"],
         }
     )

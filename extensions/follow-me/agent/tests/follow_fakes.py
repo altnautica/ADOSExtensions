@@ -167,8 +167,16 @@ def _delivery(msg: Any) -> dict[str, Any]:
     }
 
 
-def _attitude(roll: float, pitch: float, yaw: float) -> dict[str, Any]:
-    return _delivery(mavlink2.MAVLink_attitude_message(0, roll, pitch, yaw, 0.0, 0.0, 0.0))
+def _attitude(
+    roll: float, pitch: float, yaw: float, time_boot_ms: int | None = None
+) -> dict[str, Any]:
+    """ATTITUDE stamped ``time_boot_ms`` on the FC clock; by default the
+    plugin's own clock, so the FC clock reads the host clock."""
+    if time_boot_ms is None:
+        time_boot_ms = int(round(follow_me.fc_state.monotonic() * 1000.0)) % (1 << 32)
+    return _delivery(
+        mavlink2.MAVLink_attitude_message(time_boot_ms, roll, pitch, yaw, 0.0, 0.0, 0.0)
+    )
 
 
 def _global_position(lat_deg: float, lon_deg: float, rel_alt_m: float) -> dict[str, Any]:
@@ -317,8 +325,6 @@ def _telemetry_config() -> dict[str, Any]:
         "active": True,
         "gimbal_point": False,
         "designate_camera": "uvc-0",
-        "camera_hfov_deg": 70.0,
-        "mount_pitch_deg": 45.0,
         "follow_distance_m": 6.0,
         "follow_height_m": 4.0,
     }
