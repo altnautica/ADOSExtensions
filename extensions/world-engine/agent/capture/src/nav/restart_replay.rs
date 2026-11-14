@@ -124,10 +124,29 @@ const SCORED_NS: u64 = 10_000_000_000;
 type PublishedPose = (u64, VioHealth, [f64; 2], f64);
 
 /// What one replay published: per scan, the newest pose after that scan,
-/// and the restarts.
+/// whether its heading was measured, the restarts and where each was
+/// placed from.
 struct Published {
     poses: Vec<Option<PublishedPose>>,
+    heading_ok: Vec<bool>,
     restarts: u32,
+    seeds: Vec<Seed>,
+}
+
+/// Where a restart was placed from, printed with its case: the newest
+/// pose and the scan that brought the restart, the FC's move and the time
+/// since the hole began then (against the matcher's 3 m and 5 s restart
+/// bounds), the last good and last measured pose (time, heading) the map
+/// then held, and the north it took; times in s, angles in degrees.
+#[derive(Clone, Copy)]
+struct Seed {
+    t_s: f64,
+    scan_t_s: f64,
+    fc_moved_m: f64,
+    since_hole_s: f64,
+    good: Option<(f64, f64)>,
+    measured: Option<(f64, f64)>,
+    north_deg: Option<f64>,
 }
 
 /// Replay with the IMU samples in `hole` (host ns, open) dropped. The FC
@@ -159,6 +178,8 @@ fn replay(
     let mut newest_imu = 0u64;
     let mut out = Vec::new();
     let mut poses = Vec::new();
+    let mut heading_ok = Vec::new();
+    let mut seeds = Vec::new();
     for (i, scan) in f.scans.iter().enumerate() {
         let until = scan.t_ns + PERIOD_NS;
         while let Some(&(t, yaw)) = atts.next_if(|(t, _)| *t <= until) {
@@ -189,17 +210,34 @@ fn replay(
         out.clear();
         p.drain_new(&mut out);
         let q = p.quality();
+        let restarted = q.map_restarts > seen;
         nav.on_matcher_poses(&out, q.map_restarts, &mut seen, Some(0.0), Some(&fc));
+        if let (true, Some(e)) = (restarted, out.last()) {
+            let at = |s: Option<Trusted>| s.map(|(t, _, h)| (t as f64 * 1e-9, h.to_degrees()));
+            let (a, b) = (fc_ned(hole.0), fc_ned(scan.t_ns));
+            seeds.push(Seed {
+                t_s: e.t_ns as f64 * 1e-9,
+                scan_t_s: scan.t_ns as f64 * 1e-9,
+                fc_moved_m: (b[0] - a[0]).hypot(b[1] - a[1]),
+                since_hole_s: scan.t_ns.saturating_sub(hole.0) as f64 * 1e-9,
+                good: at(nav.good),
+                measured: at(nav.measured),
+                north_deg: nav.map_yaw().map(f64::to_degrees),
+            });
+        }
         let published = out.last().and_then(|e| {
             let heading = fc.heading_at(e.t_ns);
             let _ = nav.on_pose(e, Some(0.0), heading, (e.t_ns / 1_000_000) as i64, 0, false);
             nav.latest.map(|(r, t)| (e.t_ns, e.health, [t[0], t[1]], frd_yaw(&r)))
         });
         poses.push(published);
+        heading_ok.push(out.last().is_some_and(|e| e.heading_ok));
     }
     Published {
         poses,
+        heading_ok,
         restarts: p.quality().map_restarts,
+        seeds,
     }
 }
 
@@ -218,6 +256,8 @@ struct Scored {
     /// The FC's heading off the map's north at the first good pose after
     /// the hole, degrees: what a north taken from it would carry.
     fc_north_deg: f64,
+    /// When the worst heading error was, s.
+    worst_deg_at_s: f64,
 }
 
 /// Replay `f` without a hole and with one of `len_ns` from `at_ns` after
@@ -275,12 +315,44 @@ fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
         [a.1[0] + w * (b.1[0] - a.1[0]) + d[0], a.1[1] + w * (b.1[1] - a.1[1]) + d[1]]
     };
     let run = replay(f, hole, &rate, &fc_ned);
+    for s in &run.seeds {
+        let deg = |p: Option<(f64, f64)>| p.map_or("-".into(), |(t, h)| format!("{t:.3} s at {h:.3} deg"));
+        eprintln!(
+            "  restart at {:.3} s (scan {:.3} s): FC moved {:.2} m in {:.2} s since the hole; last good {}, last measured {}; north {}",
+            s.t_s,
+            s.scan_t_s,
+            s.fc_moved_m,
+            s.since_hole_s,
+            deg(s.good),
+            deg(s.measured),
+            s.north_deg.map_or("-".into(), |n| format!("{n:.3} deg")),
+        );
+    }
+    // Each published pose from 0.5 s before the hole until 2 s after it is
+    // first good again: time, health, measured heading, error against the
+    // unholed replay's heading (degrees).
+    let mut first_good = None;
+    for (pose, ok) in run.poses.iter().zip(&run.heading_ok) {
+        let Some(&(t, health, _, h)) = pose.as_ref() else { continue };
+        if t + 500_000_000 < hole.0 {
+            continue;
+        }
+        if t > hole.1 && health != VioHealth::Lost {
+            first_good.get_or_insert(t);
+        }
+        if first_good.is_some_and(|g| t > g + 2_000_000_000) {
+            break;
+        }
+        let err = wrap_pi(h - lerp(t).1).to_degrees();
+        eprintln!("  trace t {:.3} s {health:?} heading_ok {ok} err {err:+.3} deg", t as f64 * 1e-9);
+    }
     let mut s = Scored {
         restarts: run.restarts,
         worst_m: 0.0,
         worst_deg: 0.0,
         fc_drift_m: 0.0,
         fc_north_deg: 0.0,
+        worst_deg_at_s: 0.0,
     };
     let mut good_at = None;
     for &(t, health, p, h) in run.poses.iter().flatten() {
@@ -298,7 +370,11 @@ fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
         }
         let (want, heading) = lerp(t);
         s.worst_m = s.worst_m.max((p[0] - want[0]).hypot(p[1] - want[1]));
-        s.worst_deg = s.worst_deg.max(wrap_pi(h - heading).to_degrees().abs());
+        let err = wrap_pi(h - heading).to_degrees().abs();
+        if err > s.worst_deg {
+            s.worst_deg = err;
+            s.worst_deg_at_s = t as f64 * 1e-9;
+        }
     }
     s
 }
