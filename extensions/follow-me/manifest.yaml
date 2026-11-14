@@ -74,8 +74,8 @@ risk: high
 
 compatibility:
   # The pilot's vantage goal and its goal status (flight.goal.status) arrive
-  # in 0.110.0.
-  ados_version: ">=0.110.0"
+  # in 0.112.1.
+  ados_version: ">=0.112.1"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 

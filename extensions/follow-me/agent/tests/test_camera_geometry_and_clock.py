@@ -83,7 +83,6 @@ def _state(plugin: Any, cfg: FollowConfig, now: float) -> dict[str, Any]:
         lock_state=None,
         commanding=False,
         hold_reason="no-range",
-        coast_remaining_s=0.0,
         predicted_bbox=None,
     ).to_dict()
 

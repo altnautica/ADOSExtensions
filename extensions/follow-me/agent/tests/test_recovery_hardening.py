@@ -91,6 +91,27 @@ async def test_smart_waiting_ignores_the_engine_reconfirming_the_old_track(monke
 
 
 @pytest.mark.asyncio
+async def test_a_camera_loss_while_waiting_leaves_the_operator_in_charge(monkeypatch: Any) -> None:
+    ctx = _Ctx(config=_cfg(reacquire_mode="strict", uncertain_mode="hold"))
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _follow_one(plugin, clock)
+    await _unsure_for(plugin, clock, 3.2)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    # The follow camera goes silent (no batch at all): the follow holds for
+    # the camera.
+    clock.advance(2.5)
+    _fresh(plugin)
+    await plugin._tick()
+    assert _state_events(ctx)[-1]["hold_reason"] == "camera-lost"
+    # Frames come back with the engine calling the lost track locked again:
+    # the follow still waits for the operator.
+    await _engine_reports(plugin, clock, 7, LOCK_LOCKED)
+    assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
+    assert plugin._tracker.has_lock is False
+
+
+@pytest.mark.asyncio
 async def test_a_designate_that_locks_after_the_budget_ran_out_is_not_followed(
     monkeypatch: Any,
 ) -> None:
@@ -109,6 +130,7 @@ async def test_a_designate_that_locks_after_the_budget_ran_out_is_not_followed(
     # The budget runs out before the engine confirms the designate.
     clock.advance(4.8)
     _fresh(plugin)
+    _feed(plugin)
     await plugin._tick()
     assert _state_events(ctx)[-1]["phase"] == PHASE_AWAIT_OPERATOR
     await _engine_reports(plugin, clock, 9, LOCK_LOCKED)

@@ -87,12 +87,14 @@ Switching the skill off releases the lease and the pilot brakes to its own
 hold.
 
 Hold reasons (`hold_reason`): `inactive`, `no-lock`, `lock-uncertain`,
-`lock-lost`, `pose-stale`, `fc-stale`, `fc-disarmed`, `no-range`,
-`lease-busy`, `lease-refused` and `camera-lost`. The vision engine publishes
-a batch for every inferred frame, an empty one too, so `camera-lost` means no
-batch from the follow camera for more than 2 s (after the first 5 s of an
-activation). It ends a smart re-acquire, stops the subject estimate and takes
-precedence over the lock reasons.
+`awaiting-operator`, `search-exhausted`, `predictive-search-off`,
+`pose-stale`, `fc-stale`, `fc-disarmed`, `no-range`, `lease-busy`,
+`lease-refused` and `camera-lost`. The vision engine publishes a batch for
+every inferred frame, an empty one too, so `camera-lost` means no batch from
+the follow camera for more than 2 s (after the first 5 s of an activation).
+It stops the subject estimate and takes precedence over the lock reasons. A
+recovery is kept through it, so a follow waiting for the operator still
+waits when the frames return.
 
 ### Pilot lease, sticks and stopping
 

@@ -274,6 +274,7 @@ async def test_a_stale_pose_mid_search_holds_and_the_budget_still_runs(monkeypat
     assert st["hold_reason"] == "pose-stale"
     clock.advance(4.2)
     _arm_guided(plugin)
+    _feed(plugin)
     await plugin._tick()
     assert _state_events(ctx)[-1]["hold_reason"] == "search-exhausted"
 

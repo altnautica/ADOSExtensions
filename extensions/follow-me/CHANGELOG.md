@@ -6,7 +6,7 @@ uses independent semantic versioning per extension.
 
 ## [0.5.0] - Unreleased
 
-Needs ADOS agent 0.110.0 or later, for the pilot's vantage goal and its
+Needs ADOS agent 0.112.1 or later, for the pilot's vantage goal and its
 goal status.
 
 ### Changed
@@ -48,6 +48,10 @@ goal status.
 - The last search step sweeps all the way round. A vantage the vehicle cannot
   settle at still gets its sweep, after hovering within 1.5 m of it for 2 s
   or once the flight there is 3 s overdue.
+- The `camera-lost` hold no longer ends a recovery. The tracks it gave up on
+  stay excluded, and a follow waiting for the operator still waits when the
+  frames return, instead of locking onto the lost track the engine reports
+  again.
 
 ### Added
 

@@ -213,15 +213,15 @@ class FollowLoopMixin:
         await self._tick_follow(cfg, now)
 
     async def _on_camera_lost(self, cfg: FollowConfig, now: float) -> None:
-        """The follow camera's batches stopped: hold. A recovery ends, as
-        there are no frames to re-acquire in, and the estimate stops where it
-        is rather than carry its velocity on."""
+        """The follow camera's batches stopped: hold, and the estimate stops
+        where it is rather than carry its velocity on. A recovery is kept, so
+        the tracks it gave up on stay excluded and a wait for the operator
+        still waits when the frames return."""
         if not self._camera_lost:
             self._camera_lost = True
             self._ctx.log.warning(
                 "follow_me_camera_lost", camera=self._follow_camera()
             )
-        self._recovery = None
         self._uncertain_since_s = None
         self._filter.stop(now)
         locked_before = self._tracker.has_lock or self._filter.initialized

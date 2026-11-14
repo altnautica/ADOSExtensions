@@ -170,7 +170,7 @@ describe("manifest 0.5 release", () => {
   });
 
   it("needs the agent with the pilot's vantage goal", () => {
-    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.110.0");
+    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.112.1");
   });
 
   it("may send commands, for the hold prompt's actions", () => {

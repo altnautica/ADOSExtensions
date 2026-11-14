@@ -56,8 +56,11 @@ async def _lose(plugin: FollowMePlugin, clock: _Clock) -> None:
 
 
 async def _step(plugin: FollowMePlugin, clock: _Clock, dt: float) -> None:
+    """One tick ``dt`` later. The camera keeps sending: the engine publishes a
+    batch for every frame, an empty one with nobody in view."""
     clock.advance(dt)
     _fresh(plugin)
+    _feed(plugin)
     await plugin._tick()
 
 
