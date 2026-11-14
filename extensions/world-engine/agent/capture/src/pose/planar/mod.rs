@@ -56,9 +56,10 @@ use crate::lidar_scan::LidarScan;
 
 /// Scans that may wait for the matcher (~0.2 s at 10 Hz).
 pub const SCAN_QUEUE_DEPTH: usize = 2;
-/// IMU, velocity and height messages that may wait beside them: the FC's
-/// arrive one sample a message (100 Hz `RAW_IMU`, 50 Hz flow, 20 Hz height),
-/// so about 6 s of them.
+/// IMU, velocity, height and FC heading and position messages that may wait
+/// beside them: the FC's arrive one sample a message (100 Hz `RAW_IMU` and
+/// its heading, 50 Hz flow, 20 Hz height and position), so about 3.5 s of
+/// them.
 pub const IMU_QUEUE_DEPTH: usize = 1024;
 /// Scans the first submap holds before the pose is trusted.
 pub const MIN_SUBMAP_SCANS: usize = 10;
@@ -110,6 +111,8 @@ enum Input {
     Height(Vec<HeightSample>),
     /// `(t_ns, heading)`: [`PoseProvider::feed_fc_heading`].
     FcHeading(u64, f64),
+    /// `(t_ns, north, east)`: [`PoseProvider::feed_fc_position`].
+    FcPosition(u64, [f64; 2]),
     Scan(ScanInput),
 }
 
@@ -294,6 +297,7 @@ fn run(
             Input::Velocity(samples) => samples.iter().for_each(|s| slam.feed_velocity(s)),
             Input::Height(samples) => samples.iter().for_each(|s| slam.feed_height(s)),
             Input::FcHeading(t_ns, heading) => slam.feed_fc_heading(t_ns, heading),
+            Input::FcPosition(t_ns, ne_m) => slam.feed_fc_position(t_ns, ne_m),
             Input::Scan(scan) => {
                 if let Some(p) = pending.take() {
                     process(&mut slam, p);
@@ -367,6 +371,13 @@ impl PoseProvider for PlanarLidarPose {
     fn feed_fc_heading(&self, t_ns: u64, heading: f64) {
         let Some(tx) = &self.tx else { return };
         if tx.try_send(Input::FcHeading(t_ns, heading)).is_err() {
+            self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn feed_fc_position(&self, t_ns: u64, ne_m: [f64; 2]) {
+        let Some(tx) = &self.tx else { return };
+        if tx.try_send(Input::FcPosition(t_ns, ne_m)).is_err() {
             self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
         }
     }

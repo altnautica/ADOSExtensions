@@ -89,10 +89,11 @@ pub enum NavSample {
     /// The optical-flow ground velocity, body FLU m/s
     /// ([`fc_flow::body_velocity`]).
     Velocity { t_ns: u64, v: [f64; 2] },
-    /// The EKF's height and climb rate (`LOCAL_POSITION_NED`), up, m and
-    /// m/s.
-    Height {
+    /// The EKF's position (`LOCAL_POSITION_NED`): north, east in its own
+    /// local frame, m, and the height and climb rate, up, m and m/s.
+    Position {
         t_ns: u64,
+        ne_m: [f64; 2],
         up_m: f64,
         up_rate_mps: f64,
     },
@@ -257,6 +258,10 @@ struct FeedInner {
     /// `(host ns, north, east)` of each estimate in the EKF's own local frame
     /// (`LOCAL_POSITION_NED`), the last [`super::TRACK_HISTORY_NS`].
     ned: VecDeque<(u64, [f64; 2])>,
+    /// `(host ns, yaw)` of each attitude, radians clockwise from north,
+    /// unwrapped (continuous across ±π), the last
+    /// [`super::TRACK_HISTORY_NS`].
+    yaws: VecDeque<(u64, f64)>,
     /// Newest downward ground range ([`fc_flow::ground_range`]): FC boot ms,
     /// metres.
     range: Option<(u32, f64)>,
@@ -371,6 +376,21 @@ impl FcEkfPose {
         }
     }
 
+    /// The FC's attitude yaw (radians clockwise from north, within ±π) at
+    /// host `t_ns`, interpolated between the attitudes around it; `None`
+    /// further than [`super::MAX_EXTRAPOLATION_NS`] outside them.
+    pub fn heading_at(&self, t_ns: u64) -> Option<f64> {
+        let g = self.inner.lock();
+        let i = g.yaws.partition_point(|(t, _)| *t <= t_ns);
+        let near = |(t, y): (u64, f64)| (t.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(y);
+        let yaw = match (i.checked_sub(1).map(|j| g.yaws[j]), g.yaws.get(i).copied()) {
+            (Some((t0, y0)), Some((t1, y1))) => Some(y0 + (t_ns - t0) as f64 / (t1 - t0) as f64 * (y1 - y0)),
+            (Some(e), None) | (None, Some(e)) => near(e),
+            (None, None) => None,
+        }?;
+        Some(crate::nav::wrap_pi(yaw))
+    }
+
     /// Fold one delivered raw frame, read at host monotonic `arrival_ns`.
     pub fn on_frame(&self, frame: &[u8], arrival_ns: u64) {
         let Some(msg) = decode(frame) else {
@@ -383,6 +403,19 @@ impl FcEkfPose {
                 g.clock.note(a.time_boot_ms as i128 * 1_000_000, arrival_ns);
                 g.fc_ms = Some(a.time_boot_ms);
                 g.attitude = Some(a);
+                if let Some((t_ns, r)) = g.host_attitude() {
+                    let yaw = crate::nav::frd_yaw(&r);
+                    let yaw = g.yaws.back().map_or(yaw, |&(_, y0)| {
+                        y0 + (yaw - y0 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                            - std::f64::consts::PI
+                    });
+                    if g.yaws.back().is_none_or(|&(t, _)| t < t_ns) {
+                        g.yaws.push_back((t_ns, yaw));
+                    }
+                    while g.yaws.front().is_some_and(|&(t, _)| t + super::TRACK_HISTORY_NS < t_ns) {
+                        g.yaws.pop_front();
+                    }
+                }
                 None
             }
             FcMessage::Origin(o) => {
@@ -430,15 +463,16 @@ impl FcEkfPose {
             FcMessage::Position(p) => {
                 g.clock.note(p.time_boot_ms as i128 * 1_000_000, arrival_ns);
                 g.fc_ms = Some(p.time_boot_ms);
-                let height = g
+                let position = g
                     .host_ns(p.time_boot_ms as i128 * 1_000_000)
-                    .map(|t_ns| NavSample::Height {
+                    .map(|t_ns| NavSample::Position {
                         t_ns,
+                        ne_m: [p.ned[0], p.ned[1]],
                         up_m: -p.ned[2],
                         up_rate_mps: -p.vel[2],
                     });
                 estimate = pair_estimate(&mut g, &p);
-                height
+                position
             }
         };
         let sink = g.sink.clone();
@@ -523,13 +557,13 @@ impl PoseProvider for FcEkfPose {
     }
 }
 
+/// MAVLink frames for tests that feed an [`FcEkfPose`].
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_frames {
     use crate::mavlink_msg::frame_v2;
-    use ados_capture_contract::{GeoAnchorDatum, GeoAnchorSource};
 
-    fn att(ms: u32, q: [f32; 4]) -> Vec<u8> {
+    /// `ATTITUDE_QUATERNION` at FC boot `ms`, `q` FRD→NED `[w, x, y, z]`.
+    pub(crate) fn att(ms: u32, q: [f32; 4]) -> Vec<u8> {
         let mut p = ms.to_le_bytes().to_vec();
         for v in q.iter().chain([0.0f32; 3].iter()) {
             p.extend_from_slice(&v.to_le_bytes());
@@ -537,13 +571,22 @@ mod tests {
         frame_v2(31, &p)
     }
 
-    fn pos(ms: u32, ned: [f32; 3]) -> Vec<u8> {
+    /// `LOCAL_POSITION_NED` at FC boot `ms`, at rest.
+    pub(crate) fn pos(ms: u32, ned: [f32; 3]) -> Vec<u8> {
         let mut p = ms.to_le_bytes().to_vec();
         for v in ned.iter().chain([0.0f32; 3].iter()) {
             p.extend_from_slice(&v.to_le_bytes());
         }
         frame_v2(32, &p)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_frames::{att, pos};
+    use super::*;
+    use crate::mavlink_msg::frame_v2;
+    use ados_capture_contract::{GeoAnchorDatum, GeoAnchorSource};
 
     #[test]
     fn level_north_facing_body_maps_to_enu_flu() {
@@ -874,10 +917,10 @@ mod tests {
         assert_eq!(velocities().len(), 2, "the range is 390 ms old");
     }
 
-    /// Every `LOCAL_POSITION_NED` reaches the sink as the EKF's height and
-    /// climb rate, up, whether or not it pairs into an estimate.
+    /// Every `LOCAL_POSITION_NED` reaches the sink as the EKF's position,
+    /// height and climb rate, up, whether or not it pairs into an estimate.
     #[test]
-    fn positions_reach_the_sink_as_heights() {
+    fn positions_reach_the_sink() {
         let p = FcEkfPose::new();
         let got = collect(&p);
         let pos_vel = |ms: u32, ned: [f32; 3], vel: [f32; 3]| {
@@ -890,23 +933,51 @@ mod tests {
         p.on_frame(&pos_vel(1_000, [0.0, 0.0, -2.5], [0.0, 0.0, -0.75]), 5_002_000_000);
         assert!(p.latest().is_none(), "no attitude: no estimate");
         p.on_frame(&att(1_010, [1.0, 0.0, 0.0, 0.0]), 5_012_000_000);
-        p.on_frame(&pos_vel(1_020, [1.0, 0.0, -2.0], [0.0, 0.0, 0.5]), 5_022_000_000);
+        p.on_frame(&pos_vel(1_020, [1.0, -3.0, -2.0], [0.0, 0.0, 0.5]), 5_022_000_000);
         assert!(p.latest().is_some());
         let got = got.lock().clone();
         assert_eq!(
             got,
             [
-                NavSample::Height {
+                NavSample::Position {
                     t_ns: 5_002_000_000,
+                    ne_m: [0.0, 0.0],
                     up_m: 2.5,
                     up_rate_mps: 0.75
                 },
-                NavSample::Height {
+                NavSample::Position {
                     t_ns: 5_022_000_000,
+                    ne_m: [1.0, -3.0],
                     up_m: 2.0,
                     up_rate_mps: -0.5
                 },
             ]
         );
+    }
+
+    /// The attitude's yaw is kept with its host time: the yaw at a past
+    /// instant through a fast turn, across the ±180° seam, is the one the FC
+    /// reported then, not the newest.
+    #[test]
+    fn the_heading_at_a_past_instant_is_the_one_reported_then() {
+        let p = FcEkfPose::new();
+        let yaw_q = |deg: f64| {
+            let h = deg.to_radians() / 2.0;
+            [h.cos() as f32, 0.0, 0.0, h.sin() as f32]
+        };
+        // 90°/s from 170°, every 20 ms, through 180° to -100° (260°).
+        for k in 0..=50u32 {
+            let ms = 1_000 + 20 * k;
+            p.on_frame(&att(ms, yaw_q(170.0 + 1.8 * k as f64)), ms as u64 * 1_000_000);
+        }
+        let deg = |t_ms: u64| p.heading_at(t_ms * 1_000_000).map(f64::to_degrees);
+        let newest = crate::nav::frd_yaw(&p.attitude().expect("attitude").1).to_degrees();
+        assert!((newest + 100.0).abs() < 1e-3, "{newest}");
+        let at = deg(1_510).expect("inside the history");
+        assert!((at - (170.0 + 45.9 - 360.0)).abs() < 1e-3, "{at}");
+        let seam = deg(1_110).expect("inside the history");
+        assert!((seam - 179.9).abs() < 1e-3, "{seam}");
+        assert!(deg(1_020 + 1_000).is_some(), "near the newest");
+        assert!(deg(3_000).is_none(), "past the newest by more than the extrapolation");
     }
 }

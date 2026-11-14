@@ -144,10 +144,14 @@ impl Engine {
         self.degrade_on_imu_feed(&mut out, now_mono_ns);
         let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
         if let Some(e) = out.last() {
-            // The matcher started a new map in flight: re-anchor its north. A
-            // new provider counts from zero again.
+            // The matcher started a new map in flight: place it from the FC,
+            // and again on each pose while it stays lost. A new provider
+            // counts from zero again.
+            let fc = self.nav_deps.fc_feed.as_ref();
             if q.map_restarts > self.nav_map_restarts {
-                self.nav.restart_in_flight(e, fc_up, heading);
+                self.nav.restart_in_flight(e, fc_up, fc);
+            } else {
+                self.nav.seat_while_lost(e, fc_up, fc);
             }
             self.nav_map_restarts = q.map_restarts;
         }

@@ -112,19 +112,28 @@ const CONFIRM_MAX_MISSES: usize = 1;
 /// no rival heading fits inside), with a bar of [`HINT_MIN_SCORE`] (a scan
 /// at the true pose of a live flight scores 0.25 to 0.55 against a submap
 /// it has moved away from), and through turns up to
-/// [`HINT_CONFIRM_MAX_TURN_RATE`].
+/// [`HINT_CONFIRM_MAX_TURN_RATE`]. A best heading within [`HINT_EDGE_RAD`]
+/// of the window's edge is no candidate: the turn was likely outside the
+/// window (the flight controller's heading stepped across the gap), and
+/// the edge is only the nearest it allows.
 const HINT_MAX_GAP_NS: u64 = 1_000_000_000;
 const HINT_HALF_RAD: f64 = 8.0 * std::f64::consts::PI / 180.0;
+const HINT_EDGE_RAD: f64 = 1.5 * std::f64::consts::PI / 180.0;
 const HINT_MIN_SCORE: f64 = 0.40;
 const HINT_CONFIRM_MAX_TURN_RATE: f64 = 90.0 * std::f64::consts::PI / 180.0;
 const FC_HEADING_MAX_AGE_NS: u64 = 200_000_000;
 const FC_HEADING_KEEP_NS: u64 = 5_000_000_000;
+/// The flight controller's position ([`LocalSlam::feed_fc_position`]) is
+/// taken at an instant when one was reported within this of it, and kept
+/// this long (past [`RESTART_MAX_NS`] after a gap of as long again).
+const FC_POSITION_MAX_AGE_NS: u64 = 500_000_000;
+const FC_POSITION_KEEP_NS: u64 = 15_000_000_000;
 /// A heading not re-confirmed within these bounds starts the map over at
 /// the current pose ([`PoseOut::map_restarted`]): [`RESTART_AFTER_GATE_NS`]
 /// after the first scan searched, [`RESTART_EMPTY_SCANS`] searched scans
-/// with no candidate, [`RESTART_MOVED_M`] from where the gap was noticed
-/// (the submap before it falls behind), or [`RESTART_MAX_NS`] after that
-/// in any case.
+/// with no candidate, [`RESTART_MOVED_M`] moved since the gap began (the
+/// submap before it falls behind, and the search around the prior misses
+/// the drone), or [`RESTART_MAX_NS`] after it was noticed in any case.
 const RESTART_AFTER_GATE_NS: u64 = 2_000_000_000;
 const RESTART_EMPTY_SCANS: usize = 15;
 const RESTART_MOVED_M: f64 = 3.0;
@@ -145,6 +154,8 @@ struct Suspect {
     /// The scan that noticed the gap, and its prior position.
     since_ns: u64,
     at: Vector2<f64>,
+    /// The flight controller's position when the gap began, when known.
+    fc_from: Option<Vector2<f64>>,
     /// The first scan searched.
     gated_ns: Option<u64>,
     /// Searched scans with no candidate.
@@ -158,12 +169,20 @@ struct Suspect {
 
 impl Suspect {
     /// Whether the scan at `t` with its prior at `xy` is past the bounds:
-    /// the map starts over.
-    fn exhausted(&self, t: u64, xy: Vector2<f64>) -> bool {
+    /// the map starts over. How far the drone moved is the flight
+    /// controller's position change since the gap began (`fc_now`) when
+    /// both ends are known: the prior is the matcher's own, carried at a
+    /// heading the gap left unmeasured, and may stay behind. Else the
+    /// prior's move since the gap was noticed.
+    fn exhausted(&self, t: u64, xy: Vector2<f64>, fc_now: Option<Vector2<f64>>) -> bool {
+        let moved = match (self.fc_from, fc_now) {
+            (Some(a), Some(b)) => (b - a).norm(),
+            _ => (xy - self.at).norm(),
+        };
         t >= self.since_ns + RESTART_MAX_NS
             || self.gated_ns.is_some_and(|g| t >= g + RESTART_AFTER_GATE_NS)
             || self.empty >= RESTART_EMPTY_SCANS
-            || (xy - self.at).norm() > RESTART_MOVED_M
+            || moved > RESTART_MOVED_M
     }
 }
 
@@ -318,6 +337,10 @@ pub struct LocalSlam {
     /// ([`Self::feed_fc_heading`]), unwrapped, the last
     /// [`FC_HEADING_KEEP_NS`], oldest first.
     fc_headings: VecDeque<(u64, f64)>,
+    /// `(t_ns, position)` the flight controller reports
+    /// ([`Self::feed_fc_position`]), the last [`FC_POSITION_KEEP_NS`],
+    /// oldest first.
+    fc_positions: VecDeque<(u64, Vector2<f64>)>,
 }
 
 impl LocalSlam {
@@ -354,6 +377,7 @@ impl LocalSlam {
             counted_gap_end_ns: None,
             confirm_pyramid: None,
             fc_headings: VecDeque::new(),
+            fc_positions: VecDeque::new(),
         }
     }
 
@@ -411,6 +435,35 @@ impl LocalSlam {
             .filter(|&(t, _)| t.abs_diff(t_ns) <= FC_HEADING_MAX_AGE_NS)
     }
 
+    /// The flight controller's own horizontal position at `t_ns`, metres in
+    /// any fixed level frame (its EKF's). Only how far it moved since a gap
+    /// in the IMU began is used, to bound the re-confirmation
+    /// ([`RESTART_MOVED_M`]); it never reaches the pose. Feed it in time
+    /// order.
+    pub fn feed_fc_position(&mut self, t_ns: u64, ne_m: [f64; 2]) {
+        if self.fc_positions.back().is_some_and(|&(t, _)| t >= t_ns) {
+            return;
+        }
+        self.fc_positions.push_back((t_ns, Vector2::new(ne_m[0], ne_m[1])));
+        while self
+            .fc_positions
+            .front()
+            .is_some_and(|&(t, _)| t + FC_POSITION_KEEP_NS < t_ns)
+        {
+            self.fc_positions.pop_front();
+        }
+    }
+
+    /// The flight controller's position reported nearest `t_ns`, within
+    /// [`FC_POSITION_MAX_AGE_NS`].
+    fn fc_position_near(&self, t_ns: u64) -> Option<Vector2<f64>> {
+        self.fc_positions
+            .iter()
+            .min_by_key(|&&(t, _)| t.abs_diff(t_ns))
+            .filter(|&&(t, _)| t.abs_diff(t_ns) <= FC_POSITION_MAX_AGE_NS)
+            .map(|&(_, p)| p)
+    }
+
     /// The heading went unmeasured for an unknown time, whatever the IMU
     /// samples say: they carried no yaw rate (a stand-in fed from a fused
     /// attitude). The map the scans built meanwhile placed them at a heading
@@ -454,12 +507,14 @@ impl LocalSlam {
                 })
             })
             .flatten();
+        let fc_from = self.fc_position_near(start_ns);
         let s = self.suspect.get_or_insert(Suspect {
             unmeasured_ns: 0,
             hint: Some(0.0),
             from_id: self.next_id,
             since_ns: t,
             at: Vector2::new(at.x, at.y),
+            fc_from,
             gated_ns: None,
             empty: 0,
             misses: 0,
@@ -542,6 +597,9 @@ impl LocalSlam {
         if let Some(h) = hint {
             // Narrow enough that no rival heading fits inside it.
             let (g, _) = search(p.th + h - HINT_HALF_RAD, p.th + h + HINT_HALF_RAD, HINT_MIN_SCORE)?;
+            if wrap(g.th - (p.th + h)).abs() > HINT_HALF_RAD - HINT_EDGE_RAD {
+                return None;
+            }
             return Some((g, wrap(g.th - p.th)));
         }
         let half = (unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE + CONFIRM_MARGIN_RAD)
@@ -756,10 +814,11 @@ impl LocalSlam {
                 self.suspect(t, prior, end_ns, len_ns);
             }
         }
+        let fc_now = self.fc_position_near(t);
         if self
             .suspect
             .as_ref()
-            .is_some_and(|s| s.exhausted(t, Vector2::new(prior.x, prior.y)))
+            .is_some_and(|s| s.exhausted(t, Vector2::new(prior.x, prior.y), fc_now))
         {
             self.heading_unmeasured();
             out.map_restarted = true;

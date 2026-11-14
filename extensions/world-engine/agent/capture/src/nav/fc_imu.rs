@@ -293,9 +293,10 @@ pub fn hold_poses_to_feed(
         .for_each(|e| e.health = VioHealth::Lost);
 }
 
-/// The FC feed's sink for one run's `pose`: each EKF height, and with the
-/// FC as the matcher's IMU (`fc_is_imu`) each `RAW_IMU` sample ([`from_raw`])
-/// and each flow velocity, all as [`FC_IMU_ID`]'s, the moment they arrive.
+/// The FC feed's sink for one run's `pose`: each EKF height and horizontal
+/// position, and with the FC as the matcher's IMU (`fc_is_imu`) each
+/// `RAW_IMU` sample ([`from_raw`]) and each flow velocity, all as
+/// [`FC_IMU_ID`]'s, the moment they arrive.
 /// Before the first `RAW_IMU` sample the matcher is told its heading went
 /// unmeasured: the attitude stand-in carried the FC's fused yaw, not a
 /// measured turn.
@@ -325,15 +326,20 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
                 tracing::info!("nav_velocity_source_optical_flow");
             }
         }
-        NavSample::Height {
+        NavSample::Position {
             t_ns,
+            ne_m,
             up_m,
             up_rate_mps,
-        } => pose.feed_height(&[HeightSample {
-            t_ns,
-            up_m,
-            up_rate_mps,
-        }]),
+        } => {
+            pose.feed_height(&[HeightSample {
+                t_ns,
+                up_m,
+                up_rate_mps,
+            }]);
+            // Only its change across a gap reaches the matcher.
+            pose.feed_fc_position(t_ns, ne_m);
+        }
         NavSample::Imu { .. } | NavSample::Velocity { .. } => {}
     })
 }
@@ -539,6 +545,7 @@ mod tests {
         Velocity(String, VelocitySample),
         Height(HeightSample),
         FcHeading(u64, f64),
+        FcPosition(u64, [f64; 2]),
     }
 
     #[derive(Default)]
@@ -568,6 +575,9 @@ mod tests {
         fn feed_fc_heading(&self, t_ns: u64, heading: f64) {
             self.got.lock().push(Got::FcHeading(t_ns, heading));
         }
+        fn feed_fc_position(&self, t_ns: u64, ne_m: [f64; 2]) {
+            self.got.lock().push(Got::FcPosition(t_ns, ne_m));
+        }
     }
 
     fn samples() -> [NavSample; 3] {
@@ -588,8 +598,9 @@ mod tests {
                 t_ns: 105_000_000,
                 v: [1.5, -0.25],
             },
-            NavSample::Height {
+            NavSample::Position {
                 t_ns: 110_000_000,
+                ne_m: [4.0, -1.0],
                 up_m: 2.5,
                 up_rate_mps: 0.75,
             },
@@ -598,7 +609,7 @@ mod tests {
 
     /// With the FC as the matcher's IMU every sample reaches the provider in
     /// arrival order: `RAW_IMU` in the FLU body with gravity from the FC's
-    /// attitude, the flow velocity, the height.
+    /// attitude, the flow velocity, the height and the horizontal position.
     #[test]
     fn the_sink_feeds_every_sample_as_it_comes() {
         let fed = Arc::new(Fed::default());
@@ -609,7 +620,7 @@ mod tests {
             sink(s);
         }
         let got = fed.got.lock().clone();
-        let [Got::FcHeading(ht, heading), Got::Imu(src, imu), Got::Velocity(vsrc, v), Got::Height(h)] =
+        let [Got::FcHeading(ht, heading), Got::Imu(src, imu), Got::Velocity(vsrc, v), Got::Height(h), Got::FcPosition(pt, ne)] =
             got.as_slice()
         else {
             panic!("{got:?}");
@@ -632,6 +643,7 @@ mod tests {
                 up_rate_mps: 0.75
             }
         );
+        assert_eq!((*pt, *ne), (110_000_000, [4.0, -1.0]));
         assert!(state.raw_imu());
         assert_eq!(state.newest_imu_ns(), Some(100_000_000));
         assert_eq!(state.take_imu_samples(), 1);
@@ -639,16 +651,16 @@ mod tests {
     }
 
     /// With another IMU the FC's IMU and flow are not the matcher's; its
-    /// height still is.
+    /// height and position still are.
     #[test]
-    fn without_the_fc_imu_only_the_height_is_fed() {
+    fn without_the_fc_imu_only_the_position_is_fed() {
         let fed = Arc::new(Fed::default());
         let state = Arc::new(FeedState::default());
         let sink = sink(fed.clone(), false, state.clone());
         for s in samples() {
             sink(s);
         }
-        assert!(matches!(fed.got.lock().as_slice(), [Got::Height(_)]));
+        assert!(matches!(fed.got.lock().as_slice(), [Got::Height(_), Got::FcPosition(..)]));
         assert!(!state.raw_imu() && state.newest_imu_ns().is_none());
     }
 }

@@ -56,6 +56,7 @@ use world_engine_protocol::atlas::{
 };
 
 use crate::lidar_scan::LidarScan;
+use crate::pose::fc_ekf::FcEkfPose;
 use crate::pose::{se3, PoseEstimate};
 use align::MapAlign;
 use budget::Budget;
@@ -177,6 +178,12 @@ pub struct NavMap {
     /// The north was re-anchored to the FC heading in flight
     /// ([`Self::restart_in_flight`]), whatever the declared take-off heading.
     north_from_fc: bool,
+    /// The last pose that was not lost: its host ns and `map_ned` north,
+    /// east ([`Self::outage_seed`] places a restarted map from it).
+    trusted: Option<(u64, [f64; 2])>,
+    /// A map restarted in flight is placed from the FC on each lost pose
+    /// until a pose is not lost ([`Self::seat_while_lost`]).
+    seating: bool,
 }
 
 /// `Rz(yaw)` about the down axis, row-major.
@@ -191,7 +198,7 @@ pub fn frd_yaw(r: &[f64; 9]) -> f64 {
 }
 
 /// An angle wrapped to `(-π, π]`.
-fn wrap_pi(a: f64) -> f64 {
+pub(crate) fn wrap_pi(a: f64) -> f64 {
     let w = a.rem_euclid(std::f64::consts::TAU);
     if w > std::f64::consts::PI {
         w - std::f64::consts::TAU
@@ -216,6 +223,8 @@ impl NavMap {
             latest: None,
             restarted_at: None,
             north_from_fc: false,
+            trusted: None,
+            seating: false,
         }
     }
 
@@ -237,25 +246,40 @@ impl NavMap {
 
     /// The matcher started a new map in flight at pose `e` (a heading a gap
     /// in the IMU left unmeasured was not re-confirmed in time,
-    /// [`crate::pose::PoseQuality::map_restarts`]): its heading against the
-    /// old map is the gyro's guess across the gap. Its north is taken from
-    /// the FC's attitude yaw now (`fc_heading`), even with a declared
-    /// take-off heading, which holds only at the take-off spot; the pose is
-    /// lost (external navigation not fused) until the new map holds enough
-    /// scans, so this yaw is the FC's own. The offset keeps `e` where the
-    /// old map placed it, so `map_ned` does not jump, and the GNSS fit
-    /// starts over (it fitted the old map). Without an FC heading the old
-    /// north stays.
-    pub fn restart_in_flight(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc_heading: Option<f64>) {
+    /// [`crate::pose::PoseQuality::map_restarts`]): its heading and position
+    /// against the old map are the matcher's guess across the gap, tracked
+    /// without a measured heading. The pose has been lost (external
+    /// navigation not fused) since the gap and stays lost until the new map
+    /// holds enough scans, so the flight controller (`fc`) ran on its other
+    /// sources meanwhile, and the new map is placed from it once:
+    /// - its north is the FC's attitude yaw at `e`'s own time
+    ///   ([`FcEkfPose::heading_at`]; `e` describes its scan's first return,
+    ///   a revolution or more before now), even with a declared take-off
+    ///   heading, which holds only at the take-off spot;
+    /// - `e` is placed at [`Self::outage_seed`]; without it, where the old
+    ///   map placed `e`. While the pose stays lost (the new map's warm-up)
+    ///   each later lost pose is placed there again
+    ///   ([`Self::seat_while_lost`]): the new map's first scans track the
+    ///   drone poorly, and only a pose that is not lost is trusted.
+    ///
+    /// The GNSS fit starts over (it fitted the old map). Without an FC
+    /// heading at `e`'s time the old north stays.
+    pub fn restart_in_flight(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
-        let Some(heading) = fc_heading else {
+        let Some(heading) = fc.and_then(|fc| fc.heading_at(e.t_ns)) else {
             tracing::warn!("nav_map_restart_without_fc_heading");
             return;
         };
-        let old = self.ned_of(&r_frd, t_frd).map(|(_, t)| t);
+        let seed = fc.and_then(|fc| self.outage_seed(e.t_ns, fc));
+        if seed.is_none() {
+            tracing::warn!("nav_map_restart_without_fc_position");
+        }
+        let old = self.ned_of(&r_frd, t_frd).map(|(_, t)| [t[0], t[1]]);
         let yaw0 = wrap_pi(heading - frd_yaw(&r_frd));
         let placed = se3::mat_vec(&rz(yaw0), t_frd);
-        self.offset = old.map_or([0.0; 2], |t| [t[0] - placed[0], t[1] - placed[1]]);
+        self.offset = seed
+            .or(old)
+            .map_or([0.0; 2], |t| [t[0] - placed[0], t[1] - placed[1]]);
         self.yaw0 = Some(yaw0);
         self.spot = None;
         self.left_spot = true;
@@ -267,8 +291,39 @@ impl NavMap {
             yaw0_rad = yaw0,
             offset_n_m = self.offset[0],
             offset_e_m = self.offset[1],
+            seeded = seed.is_some(),
             "nav_map_north_restarted"
         );
+        self.seating = seed.is_some();
+    }
+
+    /// After [`Self::restart_in_flight`], while the pose `e` is still lost,
+    /// place it at [`Self::outage_seed`] again (the north stays latched).
+    /// Nothing once a pose was not lost, or without the FC's position.
+    pub fn seat_while_lost(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
+        if !self.seating || e.health != VioHealth::Lost {
+            return;
+        }
+        let (Some(yaw0), Some(seed)) = (self.yaw0, fc.and_then(|fc| self.outage_seed(e.t_ns, fc))) else {
+            return;
+        };
+        let (_, t_frd) = self.place_frd(&e.r, e.t, fc_up);
+        let placed = se3::mat_vec(&rz(yaw0), t_frd);
+        self.offset = [seed[0] - placed[0], seed[1] - placed[1]];
+    }
+
+    /// Where a pose at host `t_ns` is in `map_ned` (north, east) after an
+    /// outage of the pose, for placing a map started over for any reason:
+    /// the last pose that was not lost, moved by the FC's own position change
+    /// (`LOCAL_POSITION_NED`, `fc`) from that pose's time to `t_ns`. Only the
+    /// change over the outage is taken, never the FC's position: while the
+    /// pose was lost the FC fused no external navigation and ran on its other
+    /// sources. `None` before a pose that was not lost, or without the FC's
+    /// position at both ends.
+    pub fn outage_seed(&self, t_ns: u64, fc: &FcEkfPose) -> Option<[f64; 2]> {
+        let (t, ne) = self.trusted?;
+        let (then, now) = (fc.ned_at(t)?, fc.ned_at(t_ns)?);
+        Some([ne[0] + now[0] - then[0], ne[1] + now[1] - then[1]])
     }
 
     pub fn settings(&self) -> &NavSettings {
@@ -448,6 +503,10 @@ impl NavMap {
         self.follow_heading(&r_frd, t_frd, fc_heading);
         let (r, t) = self.ned_of(&r_frd, t_frd)?;
         self.latest = Some((r, t));
+        if e.health != VioHealth::Lost {
+            self.trusted = Some((e.t_ns, [t[0], t[1]]));
+            self.seating = false;
+        }
         if !self.active(session_open) {
             return None;
         }

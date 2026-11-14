@@ -524,19 +524,37 @@ All notable changes to the World Engine extension.
   under external navigation it fuses this pose's heading) less the gyro's
   is the turn the gap hid: each scan, while the drone turns slower than
   90°/s, searches the submap built before the gap within 8° of it and
-  ±3 m, and a heading counts at a score of 0.40. Otherwise each scan,
+  ±3 m, and a heading counts at a score of 0.40 unless it lies within
+  1.5° of that window's edge (the flight controller's heading stepped
+  across the gap: the turn is outside the window, and the edge is only
+  the nearest it allows). Otherwise each scan,
   while the drone turns slower than 20°/s, searches over every turn the
   gap could have hidden (180°/s times the gap plus 5°), and a heading
   counts only when it scores at least the loop-closure minimum and no
   heading more than 10° from it scores within 0.1 of it. Three scans
   agreeing within 1° (one scan between them may find none) re-seed the
   heading there. A heading not re-confirmed 2 s after the first scan
-  searched, after 15 searched scans with none, 3 m from where the gap was
-  noticed or 5 s after it starts the map over at the current pose
-  (`PoseOut::map_restarted`, `nav_map_restarted_unconfirmed`): the capture
-  takes the new map's north from the FC heading then (the pose is lost, so
-  the FC is not fusing it), keeps the position where it was and starts the
-  GNSS fit over; the pose is lost until the new map holds 10 scans. A gap
+  searched, after 15 searched scans with none, once the drone has moved
+  3 m since the gap began (the flight controller's own position change,
+  `LocalSlam::feed_fc_position`, else the matcher's prior since the gap was
+  noticed) or 5 s after it starts the map over at the current pose
+  (`PoseOut::map_restarted`, `nav_map_restarted_unconfirmed`). The pose
+  was lost since the gap (the FC fused none of it and ran on its other
+  sources), so the capture places the new map from the FC
+  (`nav_map_north_restarted`): its north is the FC heading at the
+  restart pose's own time (`FcEkfPose::heading_at`; the pose describes
+  its scan's first return, a revolution or more before the newest
+  attitude), latched once; its position is the last pose that was not
+  lost, moved by the FC's `LOCAL_POSITION_NED` change since
+  (`NavMap::outage_seed`; only the change, never the FC's position), on
+  the restart pose and on each pose while the new map warms up lost
+  (`NavMap::seat_while_lost`). The GNSS fit starts over; the pose is lost
+  until the new map holds 10 scans. Before, the restarted map kept the
+  position the matcher had carried blind through the gap (2.6 m off on
+  the recorded room, 6.9 to 24 m on the warehouse with 1.5 and 5 s
+  holes), which the flight controller's EKF resets onto when it takes the
+  pose again, and its north was the newest FC heading, off by the turn
+  since the pose (9° or more at 90°/s). A gap
   whose samples arrive late in a burst keeps them and needs no
   re-confirmation. Before, the pose came back from lost at the heading the
   gyro held, off by the turn the gap hid (90° in a 4 s gap, reported

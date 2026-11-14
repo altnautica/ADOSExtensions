@@ -132,36 +132,103 @@ fn a_restarted_map_latches_its_north_afresh_once() {
     assert_eq!(nav.map_yaw(), Some(1.0), "the same restart is taken once");
 }
 
+/// The FC during an outage of the pose, as [`FcEkfPose`] receives it at
+/// 50 Hz until 1.7 s: heading 30° until 1 s, then turning right at 90°/s
+/// (its yaw at `ms`, radians, is returned too); with `moving` its EKF goes
+/// 3 m north and 4 m east from 0.1 s to 1.5 s, else it reports no position.
+fn fc_through_an_outage(moving: bool) -> (FcEkfPose, impl Fn(u32) -> f64) {
+    use crate::pose::fc_ekf::test_frames::{att, pos};
+    let yaw = |ms: u32| (30.0 + 90.0 * ms.saturating_sub(1_000) as f64 / 1e3).to_radians();
+    let fc = FcEkfPose::new();
+    for ms in (0..=1_700u32).step_by(20) {
+        let h = yaw(ms) / 2.0;
+        fc.on_frame(&att(ms, [h.cos() as f32, 0.0, 0.0, h.sin() as f32]), ms as u64 * 1_000_000);
+        if moving {
+            let k = (ms.clamp(100, 1_500) - 100) as f32 / 1_400.0;
+            fc.on_frame(&pos(ms, [20.0 + 3.0 * k, -7.0 + 4.0 * k, -2.0]), ms as u64 * 1_000_000);
+        }
+    }
+    (fc, yaw)
+}
+
 /// The matcher's map starting over in flight (a heading a gap left
-/// unmeasured was not re-confirmed in time) takes its north from the FC
-/// heading then, even with a declared take-off heading, and keeps the pose
-/// where the old map had it: `map_ned` does not jump, and the new north
-/// stays fixed after.
+/// unmeasured was not re-confirmed in time) is placed from the FC, even
+/// with a declared take-off heading. Its north is the FC heading at the
+/// restart pose's own time: mid-turn at 90°/s, with the newest attitude
+/// 0.5 s (45°) later. The pose is the last one not lost, moved by the FC's
+/// position change since, not where the matcher carried it blind; and so
+/// is each pose while the new map warms up lost, wherever the matcher
+/// tracks it. The new north stays fixed after, and a pose that is not lost
+/// ends the placing.
 #[test]
-fn a_map_restarted_in_flight_takes_the_fc_north_without_a_jump() {
+fn a_map_restarted_in_flight_is_placed_from_the_fc_over_the_outage() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
         ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
     });
-    let pose = |nav: &mut NavMap, x: f64, heading: f64, t_ms: i64| {
-        nav.on_pose(&at(estimate(x, 0.0, 0.0), t_ms), Some(0.0), Some(heading), t_ms, 0, false)
-            .expect("due")
+    let pose = |nav: &mut NavMap, e: &PoseEstimate| {
+        let t_ms = (e.t_ns / 1_000_000) as i64;
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
     };
-    pose(&mut nav, 0.0, 0.0, 0);
-    let before = pose(&mut nav, 10.0, 0.0, 100).pose.t;
+    pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
+    let before = pose(&mut nav, &at(estimate(10.0, 0.0, 0.0), 100)).pose.t;
     assert!((before[0]).abs() < 1e-9 && (before[1] - 10.0).abs() < 1e-9, "{before:?}");
-    // The new map's heading is the gyro's guess, 0.1 rad off the FC's.
-    let heading = PI / 2.0 + 0.1;
-    nav.restart_in_flight(&at(estimate(10.0, 0.0, 0.0), 150), Some(0.0), Some(heading));
-    assert_eq!(nav.map_yaw(), Some(heading));
+    let (fc, fc_yaw) = fc_through_an_outage(true);
+    // The restart pose describes its scan at 1.2 s; the matcher carried it
+    // blind and left it where it was at 0.1 s.
+    let mut lost = at(estimate(10.0, 0.0, 0.0), 1_200);
+    lost.health = VioHealth::Lost;
+    nav.restart_in_flight(&lost, Some(0.0), Some(&fc));
+    let yaw0 = nav.map_yaw().expect("a north");
+    let off = wrap_pi(yaw0 - fc_yaw(1_200)).to_degrees();
+    assert!(off.abs() < 1.0, "north {off:+.2}° off the FC heading at the pose");
     assert_eq!(nav.north(), Some(MapNorth::FcHeading));
-    let still = pose(&mut nav, 10.0, heading + 0.5, 200);
+    let near = |got: [f64; 3], want: [f64; 2]| {
+        assert!((got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3, "at {got:?}, not {want:?}");
+    };
+    let f = 1_100.0 / 1_400.0;
+    near(pose(&mut nav, &lost).pose.t, [before[0] + 3.0 * f, before[1] + 4.0 * f]);
+    // Warming up, the new map tracks the drone 0.5 m short: placed from the
+    // FC again.
+    let mut warm = at(estimate(10.5, 0.0, 0.0), 1_500);
+    warm.health = VioHealth::Lost;
+    nav.seat_while_lost(&warm, Some(0.0), Some(&fc));
+    let want = [before[0] + 3.0, before[1] + 4.0];
+    near(pose(&mut nav, &warm).pose.t, want);
+    let good = at(estimate(11.5, 0.0, 0.0), 1_600);
+    nav.seat_while_lost(&good, Some(0.0), Some(&fc));
+    near(pose(&mut nav, &good).pose.t, [want[0] + yaw0.cos(), want[1] + yaw0.sin()]);
+    // Lost again later: the map is not placed again.
+    let mut later = at(estimate(12.5, 0.0, 0.0), 1_700);
+    later.health = VioHealth::Lost;
+    nav.seat_while_lost(&later, Some(0.0), Some(&fc));
+    near(pose(&mut nav, &later).pose.t, [want[0] + 2.0 * yaw0.cos(), want[1] + 2.0 * yaw0.sin()]);
+    assert_eq!(nav.map_yaw(), Some(yaw0), "fixed: the north does not follow the FC");
+}
+
+/// Without the FC's position over the outage, the restarted map keeps the
+/// pose where the old map had it: `map_ned` does not jump.
+#[test]
+fn a_map_restarted_without_the_fc_position_keeps_the_pose() {
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    });
+    let pose = |nav: &mut NavMap, e: &PoseEstimate| {
+        let t_ms = (e.t_ns / 1_000_000) as i64;
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+    };
+    pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
+    let before = pose(&mut nav, &at(estimate(10.0, 0.0, 0.0), 100)).pose.t;
+    let (fc, fc_yaw) = fc_through_an_outage(false);
+    let mut lost = at(estimate(10.0, 0.0, 0.0), 1_500);
+    lost.health = VioHealth::Lost;
+    nav.restart_in_flight(&lost, Some(0.0), Some(&fc));
+    assert!(wrap_pi(nav.map_yaw().expect("a north") - fc_yaw(1_500)).abs() < 1.0f64.to_radians());
+    let still = pose(&mut nav, &lost).pose.t;
     for k in 0..2 {
-        assert!((still.pose.t[k] - before[k]).abs() < 1e-9, "jumped to {:?}", still.pose.t);
+        assert!((still[k] - before[k]).abs() < 1e-9, "jumped to {still:?}");
     }
-    let on = pose(&mut nav, 11.0, heading + 0.5, 300).pose.t;
-    assert!((on[0] - heading.cos()).abs() < 1e-9 && (on[1] - 10.0 - heading.sin()).abs() < 1e-9);
-    assert_eq!(nav.map_yaw(), Some(heading), "fixed: the north does not follow the FC");
 }
 
 /// The descriptor carries the time the pose describes, not the time it is

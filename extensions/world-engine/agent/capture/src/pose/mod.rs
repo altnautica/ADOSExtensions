@@ -291,6 +291,12 @@ pub trait PoseProvider: Send + Sync {
     /// as the turn the gap hid, never its value.
     fn feed_fc_heading(&self, _t_ns: u64, _heading: f64) {}
 
+    /// The flight controller's horizontal position (its EKF's own local
+    /// north, east, m) at host `t_ns`: the planar matcher takes only how far
+    /// it moved over a gap in the IMU, to bound the re-confirmation, never
+    /// its value.
+    fn feed_fc_position(&self, _t_ns: u64, _ne_m: [f64; 2]) {}
+
     /// The pose holds one floor only (a planar LiDAR cannot see a level
     /// change); the capture HUD says so.
     fn single_floor(&self) -> bool {
