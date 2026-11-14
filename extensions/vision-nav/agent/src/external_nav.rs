@@ -176,6 +176,10 @@ pub enum ImuFeed {
     /// The pose is lost until it has: no `ODOMETRY`, and the EKF stays on
     /// its fallback source.
     HeadingUnconfirmed,
+    /// The publisher's map started over in flight without the flight
+    /// controller's turn since its last trusted pose: the new map's north
+    /// is unknown, and the pose is lost until the map restarts with one.
+    NorthUnknown,
 }
 
 impl ImuFeed {
@@ -185,6 +189,7 @@ impl ImuFeed {
             "stalled" => ImuFeed::Stalled,
             "starved" => ImuFeed::Starved,
             "heading_unconfirmed" => ImuFeed::HeadingUnconfirmed,
+            "north_unknown" => ImuFeed::NorthUnknown,
             _ => return None,
         })
     }
@@ -198,6 +203,10 @@ impl ImuFeed {
             ImuFeed::HeadingUnconfirmed => {
                 "re-confirming the heading against the map after a gap in the flight \
                  controller's RAW_IMU"
+            }
+            ImuFeed::NorthUnknown => {
+                "heading unconfirmed after a map restart: the flight controller's turn \
+                 since the last trusted pose is unknown"
             }
         }
     }

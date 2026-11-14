@@ -297,6 +297,33 @@ fn a_map_restarted_long_after_its_last_good_pose_keeps_the_north() {
     assert!(wrap_pi(heading - want).abs() < 0.1f64.to_radians(), "heading {:.2}°", heading.to_degrees());
 }
 
+/// While the FC's attitude history reaches back to the last good pose, a
+/// restart is placed from it, not from a later degraded pose whose heading
+/// was measured but matched 3° off on a degenerate scan.
+#[test]
+fn a_map_restarted_within_the_fc_history_is_placed_from_the_last_good_pose() {
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    });
+    let pose = |nav: &mut NavMap, e: &PoseEstimate| {
+        let t_ms = (e.t_ns / 1_000_000) as i64;
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+    };
+    pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
+    pose(&mut nav, &at(estimate(10.0, 0.0, 0.0), 100));
+    let mut slid = at(estimate(10.5, 0.0, 3f64.to_radians()), 150);
+    slid.health = VioHealth::Degraded;
+    pose(&mut nav, &slid);
+    let (fc, fc_yaw) = fc_through_an_outage(false);
+    let mut lost = at(estimate(10.5, 0.0, 0.0), 1_500);
+    lost.health = VioHealth::Lost;
+    nav.on_matcher_pose(&lost, true, Some(0.0), Some(&fc));
+    let want = PI / 2.0 + fc_yaw(1_500) - fc_yaw(100);
+    let off = wrap_pi(nav.map_yaw().expect("a north") - want).to_degrees();
+    assert!(off.abs() < 0.1, "north {off:+.2}° off the last good pose's carried over");
+}
+
 /// Without the FC's turn since the trusted pose the restarted map's north
 /// is unknown: its poses are lost, never fused, and it is never painted.
 #[test]
@@ -313,11 +340,18 @@ fn a_map_restarted_without_the_fc_turn_stays_lost() {
     let mut lost = at(estimate(1.0, 0.0, 0.0), 1_000);
     lost.health = VioHealth::Lost;
     nav.on_matcher_pose(&lost, true, Some(0.0), None);
+    assert!(nav.north_unknown(), "blind after a restart without the FC");
     for (t_ms, health) in [(1_100, VioHealth::Degraded), (1_200, VioHealth::Good)] {
         let mut e = at(estimate(1.5, 0.0, 0.0), t_ms);
         e.health = health;
         assert_eq!(pose(&mut nav, &e).health, VioHealth::Lost, "{health:?} at {t_ms} ms");
     }
+    // The GNSS fit takes none of its poses.
+    for k in 0..50 {
+        nav.on_gnss_ref(&at(estimate(2.0 + k as f64, 0.0, 0.0), 1_300 + k * 100), [k as f64, 0.0]);
+    }
+    assert!(nav.align.fit().is_none(), "a blind map's poses fed the GNSS fit");
+    assert!(nav.north_unknown());
 }
 
 /// Without the FC's position over the outage, the restarted map keeps the

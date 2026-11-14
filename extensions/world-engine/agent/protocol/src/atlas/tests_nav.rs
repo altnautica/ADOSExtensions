@@ -179,6 +179,9 @@ fn map_status_carries_the_fc_imu_feed() {
     assert_eq!(ImuFeedReason::AttitudeStandIn.state(), ImuFeedState::Lost);
     assert_eq!(ImuFeedReason::Stalled.state(), ImuFeedState::Lost);
     assert_eq!(ImuFeedReason::Starved.state(), ImuFeedState::Degraded);
+    assert_eq!(ImuFeedReason::NorthUnknown.state(), ImuFeedState::Lost);
+    assert_eq!(ImuFeedReason::NorthUnknown.as_str(), "north_unknown");
+    assert_eq!(serde_json::to_value(ImuFeedReason::NorthUnknown).unwrap(), "north_unknown");
     let mut old = serde_json::to_value(MapStatus::default()).unwrap();
     old.as_object_mut().unwrap().remove("imu_feed");
     let back: MapStatus = serde_json::from_value(old).unwrap();

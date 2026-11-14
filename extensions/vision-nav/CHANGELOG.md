@@ -2,6 +2,15 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.8.5]
+
+### Changed
+
+- External navigation: when a planar LiDAR map starts over in flight
+  without the flight controller's turn since its last trusted pose, the
+  pose stays lost and the `extnav_health` row says the heading is
+  unconfirmed after a map restart (`north_unknown`).
+
 ## [0.8.4]
 
 ### Changed

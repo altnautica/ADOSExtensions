@@ -148,11 +148,10 @@ impl Engine {
         self.nav
             .on_matcher_poses(&out, q.map_restarts, &mut self.nav_map_restarts, fc_up, fc);
         self.fold_gnss_alignment(&out);
-        // A pose the feed left alone but whose heading the matcher has yet
-        // to re-confirm after the feed's gap says so.
-        let imu_feed = self.imu_feed_degraded.or(q
-            .heading_unconfirmed
-            .then_some(world_engine_protocol::atlas::ImuFeedReason::HeadingUnconfirmed));
+        // A pose the feed left alone says why it is lost: a map restarted
+        // without the FC's turn has no north, and a heading the feed's gap
+        // left unmeasured is not yet re-confirmed.
+        let imu_feed = self.imu_feed_degraded.or(self.nav_imu_reason(q.heading_unconfirmed));
         let due = out
             .last()
             .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns, open))

@@ -314,16 +314,23 @@ fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
 fn a_map_restarted_in_flight_is_published_where_the_drone_is() {
     let f = flight(include_str!("../../../scan2d/tests/data/warehouse_return_leg.txt"));
     let (s, ms) = (1_000_000_000u64, 1_000_000u64);
-    for (at, len, restarts) in [
+    let scored: Vec<_> = [
         (22 * s, 300 * ms, false),
         (30 * s, 300 * ms, false),
         (22 * s, 1_500 * ms, true),
         (30 * s, 1_500 * ms, true),
         (30 * s, 5_000 * ms, true),
-    ] {
+    ]
+    .into_iter()
+    .map(|(at, len, restarts)| {
         let r = holed(&f, at, len);
         let name = format!("{} s, {} s hole", at / s, len as f64 * 1e-9);
         eprintln!("{name}: {r:?}");
+        (name, r, restarts)
+    })
+    .collect();
+    // Every case is scored before any is asserted, so a failure shows them all.
+    for (name, r, restarts) in scored {
         assert_eq!(r.restarts > 0, restarts, "{name}: restarts {}", r.restarts);
         let bound = r.fc_drift_m + SLACK_M;
         assert!(r.worst_m <= bound, "{name}: {:.2} m off (bound {bound:.2} m)", r.worst_m);

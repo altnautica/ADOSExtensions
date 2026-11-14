@@ -141,14 +141,16 @@ All notable changes to the World Engine extension.
 - **A map the planar matcher starts over in flight keeps the map's own
   north.** Its heading was the FC's absolute heading, degrees off the
   map's (2.8 to 7.5° at the recorded warehouse's restarts); it is now the
-  last trusted pose's turned by the FC's turn since, and the FC's position
+  last good pose's turned by the FC's turn since, and the FC's position
   change is turned into the map's north (see the re-confirmation entry
   below). A pose whose heading went unmeasured (a scan the IMU did not
   reach) is never placed from: one inside a 1.5 s hole put a replayed
-  restart 85° and 23 m off. A degraded pose with a measured heading is, so
-  a restart deep in a featureless corridor keeps the north; without the
-  FC's turn since, the restarted map stays lost rather than fused on the
-  matcher's guess.
+  restart 85° and 23 m off. Once the last good pose is older than the
+  FC's attitude history, the last pose not lost with a measured heading
+  is taken instead, so a restart deep in a featureless corridor keeps the
+  north. Without the FC's turn since either, the restarted map stays lost
+  (`imu_feed: north_unknown`) rather than fused on the matcher's guess,
+  and its poses stay out of the GNSS fit.
   The FC-turn window that re-confirms a short gap widens from 8° to 10°,
   with a rival check inside it, so an honest FC turn 7 to 9° off is no
   longer rejected at its edge. 2.2.3.

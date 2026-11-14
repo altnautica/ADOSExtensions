@@ -259,6 +259,12 @@ pub enum ImuFeedReason {
     /// unmeasured against its map. Only on the pose topic (the feed itself
     /// is fine); `map_status` reports the feed.
     HeadingUnconfirmed,
+    /// The matcher started its map over in flight, and the flight
+    /// controller's turn since the last trusted pose is unknown (no
+    /// attitude, or none that old): the new map's north is unknown, and the
+    /// pose is lost until the map restarts with one. Only on the pose topic
+    /// and in `map_status`; the feed itself may be fine.
+    NorthUnknown,
 }
 
 impl ImuFeedReason {
@@ -268,17 +274,20 @@ impl ImuFeedReason {
             ImuFeedReason::Stalled => "stalled",
             ImuFeedReason::Starved => "starved",
             ImuFeedReason::HeadingUnconfirmed => "heading_unconfirmed",
+            ImuFeedReason::NorthUnknown => "north_unknown",
         }
     }
 
     /// The feed's state for this reason: lost when no yaw rate reaches the
-    /// matcher or the heading it left unmeasured is not yet re-confirmed,
-    /// degraded while it is live but starved.
+    /// matcher, the heading it left unmeasured is not yet re-confirmed or a
+    /// restarted map's north is unknown, degraded while it is live but
+    /// starved.
     pub fn state(self) -> ImuFeedState {
         match self {
             ImuFeedReason::AttitudeStandIn
             | ImuFeedReason::Stalled
-            | ImuFeedReason::HeadingUnconfirmed => ImuFeedState::Lost,
+            | ImuFeedReason::HeadingUnconfirmed
+            | ImuFeedReason::NorthUnknown => ImuFeedState::Lost,
             ImuFeedReason::Starved => ImuFeedState::Degraded,
         }
     }

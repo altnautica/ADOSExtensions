@@ -328,18 +328,27 @@ impl Engine {
             return None;
         }
         let now = crate::clock::mono_ns();
-        // The feed first; with it measuring, a heading its gap left
-        // unmeasured that the matcher has yet to re-confirm.
-        let reason = self.fc_nav.degraded(now).or(self
-            .pose
-            .quality()
-            .heading_unconfirmed
-            .then_some(ImuFeedReason::HeadingUnconfirmed));
+        // The feed first; with it measuring, a restarted map's unknown north
+        // or a heading its gap left unmeasured.
+        let unconfirmed = self.pose.quality().heading_unconfirmed;
+        let reason = self.fc_nav.degraded(now).or(self.nav_imu_reason(unconfirmed));
         Some(ImuFeedStatus {
             state: reason.map_or(ImuFeedState::Ok, ImuFeedReason::state),
             reason,
             rate_hz: self.fc_nav.raw_rate_hz(now),
         })
+    }
+
+    /// Why the pose is lost with the FC IMU feed measuring: the map was
+    /// restarted without the FC's turn and has no north
+    /// ([`crate::nav::NavMap::north_unknown`]), or the matcher has yet to
+    /// re-confirm a heading the feed's gap left unmeasured (`unconfirmed`).
+    pub(super) fn nav_imu_reason(&self, unconfirmed: bool) -> Option<ImuFeedReason> {
+        if self.nav.north_unknown() {
+            Some(ImuFeedReason::NorthUnknown)
+        } else {
+            unconfirmed.then_some(ImuFeedReason::HeadingUnconfirmed)
+        }
     }
 
     /// Save the live map into a closing session's directory, before its

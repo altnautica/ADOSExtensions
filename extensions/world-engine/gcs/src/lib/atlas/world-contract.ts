@@ -198,7 +198,7 @@ export interface MapStatus {
    * starved one. */
   imu_feed?: {
     state: "ok" | "degraded" | "lost";
-    reason: "attitude_stand_in" | "stalled" | "starved" | "heading_unconfirmed" | null;
+    reason: "attitude_stand_in" | "stalled" | "starved" | "heading_unconfirmed" | "north_unknown" | null;
     /** RAW_IMU samples over the last second; null before RAW_IMU. */
     rate_hz: number | null;
   } | null;
