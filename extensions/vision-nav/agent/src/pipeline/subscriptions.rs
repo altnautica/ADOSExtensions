@@ -211,6 +211,13 @@ pub fn apply(
         MavMessage::COMMAND_ACK(d) if is_fc(sinks, system, component) => sinks
             .fc_nav
             .on_command_ack(d.command as u16, d.result as u8),
+        // The flight controller re-sends its flow sensor's samples as its
+        // own OPTICAL_FLOW. A flow module talking MAVLink straight on the
+        // bus (its own system id) and this plugin's camera flow (component
+        // 198) are not the flight controller's.
+        MavMessage::OPTICAL_FLOW(d) if is_fc(sinks, system, component) => {
+            sinks.fc_nav.on_flow(d.quality, now_ns)
+        }
         MavMessage::PARAM_VALUE(d) => {
             if let Ok(id) = d.param_id.to_str() {
                 if WATCHED_FC_PARAMS.contains(&id) {
@@ -257,6 +264,7 @@ pub const EXTERNAL_NAV_SUBSCRIBED: &[&str] = &[
     "ATTITUDE",
     "GPS_GLOBAL_ORIGIN",
     "COMMAND_ACK",
+    "OPTICAL_FLOW",
 ];
 
 /// Subscribe to every [`SUBSCRIBED`] stream plus `extra`. Returns one
@@ -424,6 +432,28 @@ mod tests {
         });
         deliver(&s, &delivery(1, 1, &pos), 0);
         assert_eq!(s.fc_nav.snapshot(0).local.unwrap().z, -4.0);
+    }
+
+    #[test]
+    fn only_the_flight_controllers_optical_flow_reaches_the_nav_sink() {
+        use ados_protocol::mavlink::ardupilotmega::OPTICAL_FLOW_DATA;
+        const MS: i64 = 1_000_000;
+        let s = sinks();
+        let flow = |quality| {
+            MavMessage::OPTICAL_FLOW(OPTICAL_FLOW_DATA {
+                quality,
+                ..OPTICAL_FLOW_DATA::DEFAULT
+            })
+        };
+        // A flow module on the bus under its own system id, and this
+        // plugin's own camera flow (component 198), are not the FC's.
+        deliver(&s, &delivery(200, 158, &flow(255)), 0);
+        deliver(&s, &delivery(1, 198, &flow(255)), 0);
+        assert_eq!(s.fc_nav.snapshot(0).flow, None);
+        deliver(&s, &delivery(1, 1, &flow(180)), 10 * MS);
+        let f = s.fc_nav.snapshot(60 * MS).flow.unwrap();
+        assert_eq!((f.quality, f.age_ns), (180, 50 * MS));
+        assert!(EXTERNAL_NAV_SUBSCRIBED.contains(&"OPTICAL_FLOW"));
     }
 
     fn heartbeat(autopilot: MavAutopilot, mavtype: MavType) -> MavMessage {

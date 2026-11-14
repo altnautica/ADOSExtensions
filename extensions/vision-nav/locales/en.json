@@ -173,6 +173,7 @@
       "ekf_source": "EKF source set",
       "fc_params": "Flight controller parameters",
       "viso_delay": "Pose delay",
+      "fc_flow": "Flight controller optical flow",
       "obstacle_feed": "Obstacle feed"
     },
     "legacy": {

@@ -15,11 +15,16 @@
 //!   takes its yaw from the pose only when the map's north is held
 //!   independently of the flight controller ([`MapNorth::holds_yaw`]).
 //! * `viso_delay`: `VISO_DELAY_MS` matches how old poses are when sent.
+//! * `fc_flow` (when `FLOW_TYPE` is set and a source set fuses flow
+//!   velocity): the flight controller's own `OPTICAL_FLOW` arrives. It sends
+//!   none while its flow sensor is unhealthy (no sample for 0.5 s,
+//!   `GCS_Common.cpp` `send_opticalflow`), so a stale flow is a lost sensor.
 //! * `obstacle_feed` (when the obstacle feed is enabled): scans arrive.
 
 use std::collections::BTreeMap;
 
 use crate::external_nav::{ExtnavHealth, ImuFeed, MapNorth};
+use crate::fc_nav::FcFlow;
 use crate::nav_commands::extnav_fc_params;
 use crate::nav_config::ExternalNavConfig;
 use crate::pre_arm::PreArmCheck;
@@ -36,6 +41,12 @@ pub const VISO_DELAY_TOLERANCE_MS: f32 = 50.0;
 pub const EKF_MAX_EXTNAV_DELAY_MS: f32 = 250.0;
 /// `AHRS_OPTIONS` bit 4: set the EKF origin at boot from `AHRS_ORIGIN_*`.
 const AHRS_OPTION_RECORDED_ORIGIN: i64 = 16;
+/// No flight-controller `OPTICAL_FLOW` for this long blocks: the flow
+/// sensor is lost, or the flight controller is not streaming it.
+pub const FC_FLOW_STALE_NS: i64 = 1_000_000_000;
+/// None at all this long after the flight controller was first heard
+/// blocks; before that the row waits for the stream request to take.
+pub const FC_FLOW_FIRST_NS: i64 = 5_000_000_000;
 
 /// The obstacle feed's state for its pre-arm row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +89,12 @@ pub struct ExtnavPreArmInputs {
     pub pose_age_ms: Option<f32>,
     /// `None` when the obstacle feed is disabled.
     pub obstacle: Option<ObstacleFeed>,
+    /// The flight controller's last `OPTICAL_FLOW` and its age; `None`
+    /// when none has arrived this boot.
+    pub fc_flow: Option<FcFlow>,
+    /// How long this flight-controller boot has been heard; `None` before
+    /// its first heartbeat.
+    pub fc_heard_ns: Option<i64>,
 }
 
 impl ExtnavPreArmInputs {
@@ -134,6 +151,7 @@ pub(crate) fn extnav_checks(inputs: Option<&ExtnavPreArmInputs>) -> Vec<PreArmCh
         fc_params_check(i),
         viso_delay_check(i),
     ];
+    checks.extend(fc_flow_check(i));
     match i.obstacle {
         None => {}
         Some(ObstacleFeed::Live) => checks.push(PreArmCheck::ok("obstacle_feed", "")),
@@ -344,6 +362,44 @@ fn fc_params_check(i: &ExtnavPreArmInputs) -> PreArmCheck {
         );
     }
     PreArmCheck::ok(ID, "")
+}
+
+/// `fc_flow`: present only once `FLOW_TYPE` is read as set and a source set
+/// the EKF can run on fuses flow velocity (the external-nav set, or the
+/// fallback set without GPS primary); `fc_params` covers the rest.
+fn fc_flow_check(i: &ExtnavPreArmInputs) -> Option<PreArmCheck> {
+    const ID: &str = "fc_flow";
+    if i.int("FLOW_TYPE").unwrap_or(0) == 0 {
+        return None;
+    }
+    let velxy = |set: u8| i.int(&format!("EK3_SRC{set}_VELXY"));
+    let fuses =
+        velxy(i.extnav_set) == Some(5) || (!i.gps_primary && velxy(i.fallback_set) == Some(5));
+    if !fuses {
+        return None;
+    }
+    Some(match i.fc_flow {
+        None if i.fc_heard_ns.is_some_and(|t| t >= FC_FLOW_FIRST_NS) => PreArmCheck::blocking(
+            ID,
+            "No OPTICAL_FLOW from the flight controller: it sends none while its flow sensor is \
+             unhealthy. Check the flow sensor, its serial port and FLOW_TYPE.",
+        ),
+        None => PreArmCheck::pending(ID, "Awaiting OPTICAL_FLOW from the flight controller."),
+        Some(f) if f.age_ns > FC_FLOW_STALE_NS => PreArmCheck::blocking(
+            ID,
+            format!(
+                "No OPTICAL_FLOW from the flight controller for {:.1} s: the flow sensor is lost \
+                 and the EKF has no flow velocity. Check the flow sensor and its serial port.",
+                f.age_ns as f64 / 1e9
+            ),
+        ),
+        Some(f) if f.quality == 0 => PreArmCheck::pending(
+            ID,
+            "Flow quality 0: the EKF fuses no flow. The sensor needs light, texture under it and \
+             a height inside its working range.",
+        ),
+        Some(f) => PreArmCheck::ok(ID, format!("Quality {}/255.", f.quality)),
+    })
 }
 
 fn viso_delay_check(i: &ExtnavPreArmInputs) -> PreArmCheck {

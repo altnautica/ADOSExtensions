@@ -2,9 +2,10 @@
 //!
 //! The MAVLink subscription callbacks write the latest `LOCAL_POSITION_NED`,
 //! `ATTITUDE`, `GPS_RAW_INT` fix and accuracy, `GPS_GLOBAL_ORIGIN`,
-//! `HEARTBEAT` armed state and source-set `COMMAND_ACK` here; the
-//! external-nav ticks read a [`FcNavSnapshot`] with every stale field
-//! already dropped.
+//! `HEARTBEAT` armed state, source-set `COMMAND_ACK` and the flight
+//! controller's own `OPTICAL_FLOW` here; the external-nav ticks read a
+//! [`FcNavSnapshot`] with every stale field already dropped (the flow keeps
+//! its age, so a stale flow reads differently from one never heard).
 //!
 //! A heartbeat after [`FC_SILENCE_NS`] of silence (or the first one ever)
 //! starts a new flight-controller boot: the boot time and epoch move on and
@@ -42,6 +43,14 @@ pub struct Attitude {
     pub yawspeed: f32,
 }
 
+/// The flight controller's last `OPTICAL_FLOW`: its flow sensor's quality
+/// (0-255; EKF3 fuses no sample of quality 0) and how long ago it arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FcFlow {
+    pub quality: u8,
+    pub age_ns: i64,
+}
+
 /// What the ticks read: fresh values only.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct FcNavSnapshot {
@@ -63,6 +72,9 @@ pub struct FcNavSnapshot {
     pub boot_ns: Option<i64>,
     /// Incremented on each new flight-controller boot.
     pub boot_epoch: u64,
+    /// The flight controller's last `OPTICAL_FLOW`, however old; `None`
+    /// when none has arrived this boot.
+    pub flow: Option<FcFlow>,
 }
 
 #[derive(Default)]
@@ -70,6 +82,7 @@ struct Inner {
     local: Option<(LocalPosition, i64)>,
     attitude: Option<(Attitude, i64)>,
     gps: Option<(u8, Option<u32>, i64)>,
+    flow: Option<(u8, i64)>,
     origin_seen: bool,
     source_set_ack: Option<u8>,
     armed: bool,
@@ -97,6 +110,11 @@ impl FcNavSink {
         self.lock().gps = Some((fix_type, h_acc, now_ns));
     }
 
+    /// The flight controller's own `OPTICAL_FLOW` quality.
+    pub fn on_flow(&self, quality: u8, now_ns: i64) {
+        self.lock().flow = Some((quality, now_ns));
+    }
+
     /// The flight controller's `HEARTBEAT`. The first one, or one after
     /// [`FC_SILENCE_NS`] of silence, starts a new boot and clears the origin.
     pub fn on_heartbeat(&self, armed: bool, now_ns: i64) {
@@ -105,6 +123,7 @@ impl FcNavSink {
             g.boot_ns = Some(now_ns);
             g.boot_epoch += 1;
             g.origin_seen = false;
+            g.flow = None;
         }
         g.last_heartbeat = Some(now_ns);
         g.armed = armed;
@@ -140,6 +159,10 @@ impl FcNavSink {
                 .map(|(v, _)| v),
             gps_fix: gps.map_or(0, |(f, _, _)| f),
             gps_h_acc_mm: gps.and_then(|(_, a, _)| a),
+            flow: g.flow.map(|(quality, t)| FcFlow {
+                quality,
+                age_ns: (now_ns - t).max(0),
+            }),
             origin_seen: g.origin_seen,
             source_set_ack: g.source_set_ack,
             armed: g.armed,
@@ -173,6 +196,19 @@ mod tests {
         // An h_acc of 0 is "unknown", not a perfect fix.
         s.on_gps_fix(3, 0, 3_000_000_000);
         assert_eq!(s.snapshot(3_000_000_000).gps_h_acc_mm, None);
+    }
+
+    #[test]
+    fn the_flow_keeps_its_age_and_a_reboot_forgets_it() {
+        const S: i64 = 1_000_000_000;
+        let s = FcNavSink::default();
+        s.on_heartbeat(false, 0);
+        assert_eq!(s.snapshot(0).flow, None);
+        s.on_flow(150, S);
+        let flow = s.snapshot(4 * S).flow.unwrap();
+        assert_eq!((flow.quality, flow.age_ns), (150, 3 * S));
+        s.on_heartbeat(false, 10 * S);
+        assert_eq!(s.snapshot(10 * S).flow, None);
     }
 
     #[test]

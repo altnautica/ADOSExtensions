@@ -48,9 +48,10 @@ pub const RAW_IMU_ID: u32 = 27;
 pub const DISTANCE_SENSOR_ID: u32 = 132;
 pub const RAW_IMU_INTERVAL_US: f32 = 10_000.0;
 pub const DISTANCE_SENSOR_INTERVAL_US: f32 = 50_000.0;
-/// The FC's own `OPTICAL_FLOW` (its flow sensor, body rate removed): with the
-/// downward range it is the ground velocity the world-engine lidar SLAM
-/// follows along a corridor its scans leave unconstrained.
+/// The FC's own `OPTICAL_FLOW` (its flow sensor, body rate removed): the
+/// external-nav `fc_flow` pre-arm row reads it to tell a lost flow sensor,
+/// and with the downward range it is the ground velocity the world-engine
+/// lidar SLAM follows along a corridor its scans leave unconstrained.
 pub const OPTICAL_FLOW_INTERVAL_US: f32 = 50_000.0;
 
 const EMIT_ERROR_LOG_EVERY: Duration = Duration::from_secs(5);

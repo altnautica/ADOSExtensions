@@ -58,6 +58,11 @@ fn ready() -> ExtnavPreArmInputs {
         params: good_params(),
         pose_age_ms: Some(118.0),
         obstacle: Some(ObstacleFeed::Live),
+        fc_flow: Some(FcFlow {
+            quality: 200,
+            age_ns: 30_000_000,
+        }),
+        fc_heard_ns: Some(10_000_000_000),
     }
 }
 
@@ -95,9 +100,90 @@ fn ready_external_nav_is_armable() {
             "ekf_origin",
             "fc_params",
             "viso_delay",
+            "fc_flow",
             "obstacle_feed"
         ]
     );
+}
+
+#[test]
+fn fc_flow_stale_blocks_while_a_source_set_fuses_flow() {
+    let stale = eval(ExtnavPreArmInputs {
+        fc_flow: Some(FcFlow {
+            quality: 200,
+            age_ns: 2_500_000_000,
+        }),
+        ..ready()
+    });
+    let (sev, detail) = check(&stale, "fc_flow");
+    assert_eq!(sev, Severity::Blocking);
+    assert!(detail.contains("2.5 s"), "{detail}");
+    assert!(!stale.armable);
+    assert_eq!(
+        check(&eval(ready()), "fc_flow"),
+        (Severity::Ok, "Quality 200/255.")
+    );
+    // Quality 0: the EKF fuses nothing, so the row waits.
+    let dark = eval(ExtnavPreArmInputs {
+        fc_flow: Some(FcFlow {
+            quality: 0,
+            age_ns: 30_000_000,
+        }),
+        ..ready()
+    });
+    assert_eq!(check(&dark, "fc_flow").0, Severity::Pending);
+}
+
+#[test]
+fn fc_flow_never_heard_waits_then_blocks() {
+    let early = eval(ExtnavPreArmInputs {
+        fc_flow: None,
+        fc_heard_ns: Some(2_000_000_000),
+        ..ready()
+    });
+    assert_eq!(check(&early, "fc_flow").0, Severity::Pending);
+    let no_fc = eval(ExtnavPreArmInputs {
+        fc_flow: None,
+        fc_heard_ns: None,
+        ..ready()
+    });
+    assert_eq!(check(&no_fc, "fc_flow").0, Severity::Pending);
+    let never = eval(ExtnavPreArmInputs {
+        fc_flow: None,
+        fc_heard_ns: Some(FC_FLOW_FIRST_NS),
+        ..ready()
+    });
+    let (sev, detail) = check(&never, "fc_flow");
+    assert_eq!(sev, Severity::Blocking);
+    assert!(detail.contains("FLOW_TYPE"), "{detail}");
+}
+
+#[test]
+fn fc_flow_row_only_when_a_source_set_fuses_flow() {
+    let has_row = |i: ExtnavPreArmInputs| eval(i).checks.iter().any(|c| c.id == "fc_flow");
+    let no_flow = |mut i: ExtnavPreArmInputs| {
+        i.fc_flow = None;
+        i
+    };
+    // No flow sensor: fc_params speaks for VELXY 5 without FLOW_TYPE.
+    assert!(!has_row(no_flow(with_param("FLOW_TYPE", 0.0))));
+    assert!(!has_row(no_flow(without_param("FLOW_TYPE"))));
+    // GPS primary with a GPS fallback and SLAM-only velocity: flow unused.
+    let mut gps = no_flow(with_param("EK3_SRC1_VELXY", 0.0));
+    gps.gps_primary = true;
+    gps.params.insert("EK3_SRC2_VELXY".into(), 3.0);
+    assert!(!has_row(gps));
+    // GPS primary: the fallback set's flow does not count, even on VELXY 5.
+    let mut gps_flow_fallback = no_flow(with_param("EK3_SRC1_VELXY", 0.0));
+    gps_flow_fallback.gps_primary = true;
+    assert_eq!(gps_flow_fallback.int("EK3_SRC2_VELXY"), Some(5));
+    assert!(!has_row(gps_flow_fallback));
+    // GPS primary with flow in the external-nav set: the row stays.
+    let mut gps_flow_extnav = no_flow(with_param("EK3_SRC1_VELXY", 5.0));
+    gps_flow_extnav.gps_primary = true;
+    assert!(has_row(gps_flow_extnav));
+    // SLAM-only velocity in the external-nav set, flow in the fallback set.
+    assert!(has_row(no_flow(with_param("EK3_SRC1_VELXY", 0.0))));
 }
 
 #[test]
@@ -133,7 +219,9 @@ fn lost_blocks_degraded_and_origin_wait() {
     });
     assert_eq!(check(&degraded, "extnav_health").0, Severity::Pending);
     assert_eq!(check(&degraded, "ekf_origin").0, Severity::Pending);
-    assert_eq!(degraded.checks.len(), 5);
+    // No obstacle row with the feed off; the flow row stays.
+    assert!(degraded.checks.iter().all(|c| c.id != "obstacle_feed"));
+    assert_eq!(degraded.checks.len(), 6);
     assert!(!degraded.armable);
 }
 

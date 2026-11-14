@@ -11,9 +11,10 @@ flow message for the configured firmware (`OPTICAL_FLOW` for ArduPilot
 and iNav, `OPTICAL_FLOW_RAD` for PX4; plus `DISTANCE_SENSOR` when the
 rangefinder is companion-wired) that the flight controller fuses into
 its estimator. It asks the flight controller for `RAW_IMU` at 100 Hz,
-`DISTANCE_SENSOR` at 20 Hz and its own `OPTICAL_FLOW` at 20 Hz (the
-world-engine lidar SLAM follows that ground velocity along a corridor its
-scans leave unconstrained). The GCS half mounts a node-detail tab with the mode
+`DISTANCE_SENSOR` at 20 Hz and its own `OPTICAL_FLOW` at 20 Hz. External
+navigation reads that flow for its `fc_flow` pre-arm row, and the
+world-engine lidar SLAM follows its ground velocity along a corridor its
+scans leave unconstrained. The GCS half mounts a node-detail tab with the mode
 list, sensors card, estimator card, telemetry charts, pre-arm status,
 and a fallback banner that fires when the estimator goes degraded or
 fails.
@@ -147,6 +148,14 @@ is a new boot), is disarmed, and GPS is not primary.
   median age of a pose when its `ODOMETRY` is sent (telemetry
   `navigation.poseAgeMs`), and while poses are older than the 250 ms
   EKF3 can place in time, which no `VISO_DELAY_MS` covers.
+- `fc_flow`, when `FLOW_TYPE` is set and the external-nav set (or,
+  without `gps_primary`, the fallback set) takes its velocity from
+  optical flow (`VELXY 5`): the flight controller's own `OPTICAL_FLOW`
+  arrives. ArduPilot sends none while its flow sensor is unhealthy (no
+  sample for 0.5 s), so no flow for 1 s blocks as a lost sensor, and so
+  does none at all 5 s after the flight controller is first heard. A
+  quality of 0 (no light or texture, or out of the sensor's range) waits:
+  EKF3 fuses no such sample. The row reads `Quality q/255` when fresh.
 
 ## Obstacle feed
 

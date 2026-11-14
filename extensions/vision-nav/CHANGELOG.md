@@ -2,6 +2,22 @@
 
 All notable changes to the Vision Navigation extension.
 
+## [0.8.3]
+
+### Fixed
+
+- External navigation reads the flight controller's own `OPTICAL_FLOW`,
+  which the plugin has asked for at 20 Hz since 0.8.0 without reading it.
+  A new `fc_flow` pre-arm row appears when `FLOW_TYPE` is set and a source
+  set the EKF can run on fuses flow velocity (`EK3_SRC1_VELXY 5`, or a
+  GNSS-denied fallback set on flow, the sets the 0.8.0 `fc_params` row
+  asks for). ArduPilot stops sending `OPTICAL_FLOW` while its flow sensor
+  is unhealthy, so no flow for 1 s blocks as a lost sensor, as does none
+  at all 5 s after the flight controller is first heard; quality 0 waits,
+  since EKF3 fuses none of it. Before, a dead or unplugged flow sensor
+  passed the pre-arm. Only the flight controller's message counts: a flow
+  module's own frames on the bus and the plugin's camera flow do not.
+
 ## [0.8.2]
 
 ### Changed

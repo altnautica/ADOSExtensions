@@ -235,6 +235,8 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                     obstacle: task
                         .obstacle_enabled
                         .then(|| task.shared.obstacle_feed(now)),
+                    fc_flow: fc.flow,
+                    fc_heard_ns: fc.boot_ns.map(|b| now - b),
                 }),
             });
             {
