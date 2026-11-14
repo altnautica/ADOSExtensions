@@ -148,10 +148,18 @@ All notable changes to the World Engine extension.
   block cap sized from the VRAM free just before it: an out-of-memory grid
   left the process's CUDA context unusable, so the coarser retry failed
   ("invalid device ordinal") and the stage ended in an abort. An
-  out-of-memory or aborted attempt, and an allocation failure while
-  extracting the mesh, now retries coarser in a fresh process, on the GPU.
-  The stage detail lists `device`, `voxel_m`, `attempt`,
-  `views_capped` and `budget_mb` at its top level. 2.2.2.
+  out-of-memory or aborted attempt, and a checked allocation failure, now
+  retries coarser in a fresh process, on the GPU. Large volumes no longer
+  crash Open3D, whose grid code uses 32-bit offsets that wrap past 174,762
+  blocks in fusion and past 32,768 blocks in marching cubes (a segfault on
+  the CPU, a GPU MMU fault on the GPU, on a 300-view warehouse session).
+  Depth past 30 m is not fused, the voxel is coarsened from the requested
+  one until the estimated grid fits under the fusion bound (fusing on the
+  CPU, preallocated, when it exceeds the GPU budget), no grid grows past
+  it, and the surface is extracted on the CPU in chunks under the marching
+  cubes bound. The stage detail lists `device`, `voxel_m`, `attempt`,
+  `views_capped`, `estimated_blocks` and `budget_mb` at its top level.
+  2.2.2.
 - **A planar LiDAR session's cloud is registered and coloured.** A planar
   LiDAR records its compact polar stream (`lidar/<id>.polar.zst`) instead of
   Cartesian point clouds, and `prepare` read only the latter, so a drone

@@ -4,6 +4,7 @@ the block cap and cluster cleanup."""
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import types
@@ -97,12 +98,134 @@ def test_an_open3d_allocation_failure_counts_as_out_of_memory() -> None:
     assert not fuse.is_out_of_memory(RuntimeError("no view had usable depth"))
 
 
+def test_surface_extraction_never_runs_on_the_gpu_grid() -> None:
+    class Mesh:
+        def to_legacy(self):
+            return "mesh"
+
+    class Hashmap:
+        def __init__(self, cuda):
+            self.is_cuda = cuda
+
+        def size(self):
+            return 1
+
+    class CpuGrid:
+        def hashmap(self):
+            return Hashmap(False)
+
+        def extract_triangle_mesh(self, weight_threshold):
+            return Mesh()
+
+    class CudaGrid:
+        def hashmap(self):
+            return Hashmap(True)
+
+        def cpu(self):
+            return CpuGrid()
+
+        def extract_triangle_mesh(self, weight_threshold):
+            raise AssertionError("marching cubes ran on the CUDA grid")
+
+    fuser = fuse.TsdfFuser.__new__(fuse.TsdfFuser)
+    fuser.o3d = fuser.o3c = None
+    fuser.voxel = 0.02
+    fuser.grid = CudaGrid()
+    assert fuser.mesh() == "mesh"
+
+
+def test_no_grid_grows_past_the_integrate_index_bound() -> None:
+    assert fuse.TsdfFuser(0.02, "CPU:0").max_blocks == fuse.INTEGRATE_MAX_BLOCKS
+    assert fuse.TsdfFuser(0.02, "CPU:0", max_blocks=10 ** 9).max_blocks == fuse.INTEGRATE_MAX_BLOCKS
+    assert fuse.INTEGRATE_MAX_BLOCKS * 3 * 16 ** 3 < 2 ** 31
+    assert fuse.MC_MAX_BLOCKS * 16 ** 3 * 16 < 2 ** 31
+
+
+def test_extraction_chunks_stay_under_the_marching_cubes_bound() -> None:
+    g = np.stack(np.meshgrid(np.arange(40), np.arange(40), np.arange(3), indexing="ij"), -1).reshape(-1, 3)
+    chunks = fuse.chunk_blocks(g, limit=600, tile=4)
+    assert len(chunks) > 1 and all(len(c) <= 600 for c in chunks)
+    covered = np.zeros(len(g), int)
+    for c in chunks:
+        covered[c] += 1
+    assert covered.min() >= 1  # every block is in some chunk, as core or halo
+
+
+def test_chunked_extraction_matches_one_pass() -> None:
+    fuser = fuse.TsdfFuser(0.02, "CPU:0")
+    for tx, yaw in [(-0.3, 5.0), (-0.1, 2.0), (0.1, -2.0), (0.3, -5.0)]:
+        assert fuser.integrate(*_view(tx, yaw))
+    whole = fuse.extract_chunked(fuser.o3d, fuser.o3c, fuser.grid, 0.02)
+    n = fuser.grid.hashmap().size()
+    parts = fuse.extract_chunked(fuser.o3d, fuser.o3c, fuser.grid, 0.02, limit=n // 4)
+    assert len(whole.triangles) > 1000
+    assert len(parts.triangles) == len(whole.triangles)
+    a = np.unique(np.round(np.asarray(whole.vertices), 6), axis=0)
+    b = np.unique(np.round(np.asarray(parts.vertices), 6), axis=0)
+    assert a.shape == b.shape and np.allclose(a, b)
+
+
+def test_far_depth_is_cut_at_the_depth_range() -> None:
+    assert fuse.depth_max_for(np.array([1.0, 2.0, 3.0]), 0.02) < 3.1
+    assert fuse.depth_max_for(np.array([50.0, 90.0, 120.0]), 0.02) == fuse.DEPTH_MAX_M
+
+
+def test_the_voxel_coarsens_until_the_estimated_grid_fits(monkeypatch) -> None:
+    monkeypatch.setattr(fuse, "estimate_blocks", lambda sets, vxs: {vx: int(1e6 * (0.02 / vx) ** 2) for vx in vxs})
+    vx, est = fuse.voxel_for([], 0.02, 170_000)
+    assert est <= fuse.ESTIMATE_HEADROOM * 170_000
+    assert vx == 0.02 * min(m for m in fuse.VOXEL_LADDER if 1e6 / m ** 2 <= fuse.ESTIMATE_HEADROOM * 170_000)
+
+
+def test_the_block_estimate_tracks_the_real_grid(tmp_path) -> None:
+    _wall_depthset(tmp_path / "ds")
+    root, views = tmp_path / "ds", depthset.read_depthset(tmp_path / "ds")[1]
+    est = fuse.estimate_blocks([(root, views)], [0.02])[0.02]
+    fuser = fuse.TsdfFuser(0.02, "CPU:0")
+    for v in views:
+        fuser.integrate(depthset.load_rgb(root, v).astype(np.float32) / 255.0, depthset.load_depth(root, v), v.K, v.w2c)
+    real = fuser.grid.hashmap().size()
+    assert 0.5 * real <= est <= 2.0 * real, (est, real)
+
+
+_PLANE_GRID = """
+import numpy as np, open3d as o3d, open3d.core as o3c
+
+def plane_grid(n):
+    # n fully observed blocks in one z layer, a plane at z voxel 7.5 in each (as the RCA repro)
+    g = o3d.t.geometry.VoxelBlockGrid(attr_names=("tsdf", "weight", "color"),
+        attr_dtypes=(o3c.float32, o3c.float32, o3c.float32), attr_channels=((1), (1), (3)),
+        voxel_size=0.02, block_resolution=16, block_count=n, device=o3c.Device("CPU:0"))
+    i = np.arange(n, dtype=np.int32)
+    g.hashmap().activate(o3c.Tensor(np.stack([i % 256, i // 256, np.zeros_like(i)], 1).astype(np.int32)))
+    g.attribute("tsdf").numpy()[:] = np.clip((np.arange(16, dtype=np.float32) - 7.5) / 4.0, -1, 1)[None, :, None, None, None]
+    g.attribute("weight").numpy()[:] = 10.0
+    g.attribute("color").numpy()[:] = 128.0
+    return g
+"""
+
+
+@pytest.mark.skipif(not os.environ.get("FUSE_HEAVY_TESTS"), reason="about 6 GB of RAM; set FUSE_HEAVY_TESTS=1")
+def test_marching_cubes_past_its_index_bound_is_chunked_not_crashed() -> None:
+    n = 32_769  # one block past Open3D 0.20's 32-bit marching-cubes table offset
+    one_pass = subprocess.run([sys.executable, "-c", _PLANE_GRID + f"plane_grid({n}).extract_triangle_mesh(weight_threshold=3.0)"],
+                              capture_output=True, text=True)
+    assert one_pass.returncode != 0  # SIGSEGV: why extract_chunked exists
+    ns: dict = {}
+    exec(_PLANE_GRID, ns)
+    import open3d as o3d
+    import open3d.core as o3c
+
+    mesh = fuse.extract_chunked(o3d, o3c, ns["plane_grid"](n), 0.02)
+    assert len(mesh.vertices) == n * 16 * 16  # one plane crossing per voxel column, none lost or doubled at seams
+
+
 def test_cuda_out_of_memory_retries_coarser_on_the_gpu_never_the_cpu(tmp_path, monkeypatch) -> None:
     _wall_depthset(tmp_path / "ds")
     calls = []
 
     class FakeFuser:
-        def __init__(self, voxel, device, max_blocks):
+        def __init__(self, voxel, device, max_blocks, block_count=None):
             calls.append((voxel, device, max_blocks))
             self.device, self.used, self.capped = device, 0, 2
             self.oom = len(calls) < 3
@@ -116,7 +239,7 @@ def test_cuda_out_of_memory_retries_coarser_on_the_gpu_never_the_cpu(tmp_path, m
         def mesh(self):
             return "mesh"
 
-        def point_cloud(self):
+        def point_cloud(self, m=None):
             return "cloud"
 
     monkeypatch.setattr(fuse, "TsdfFuser", FakeFuser)
@@ -127,10 +250,11 @@ def test_cuda_out_of_memory_retries_coarser_on_the_gpu_never_the_cpu(tmp_path, m
     assert [c[0] for c in calls] == pytest.approx([0.02, 0.03, 0.04])
     assert [c[1:] for c in calls] == [("CUDA:0", cap)] * 3
     assert info == {"device": "CUDA:0", "voxel_m": pytest.approx(0.04), "attempt": 3, "views_capped": 2,
-                    "budget_mb": 100}
+                    "budget_mb": 100, "estimated_blocks": info["estimated_blocks"]}
+    assert 0 < info["estimated_blocks"] < fuse.max_blocks_for(100)
 
     # Without a budget each attempt's cap comes from the VRAM free just before it.
-    free = iter([1000, 500, 250])
+    free = iter([1000, 1000, 500, 250])  # the first is the estimate's GPU check
     monkeypatch.setattr(fuse.vram, "free_vram_mb", lambda device=0: next(free))
     calls.clear()
     with pytest.raises(RuntimeError, match="out of memory"):
@@ -230,6 +354,7 @@ def test_a_gpu_retry_after_a_real_cuda_out_of_memory_completes_on_cuda(tmp_path,
     hog = torch.empty(max(free - (1 << 30), 0), dtype=torch.uint8, device="cuda")
     _wall_depthset(tmp_path / "ds")
     monkeypatch.setattr(fuse, "COARSER", (1.0, 1000.0))
+    monkeypatch.setattr(fuse, "voxel_for", lambda sets, voxel, cap: (voxel, 0))  # the forced OOM needs the fine voxel
     try:
         mesh, cloud, info = fuse.fuse_depthset([tmp_path / "ds"], 0.00005, "CUDA:0", budget_mb=1 << 20)
     finally:
