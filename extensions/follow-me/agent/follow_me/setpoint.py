@@ -9,7 +9,10 @@ the vehicle to be:
   (slewed) travel heading, so 180° trails it, 90° sits on its right and 0°
   leads it.
 * **Orbit.** ``goal = centre + R·(cos φ, sin φ)``; the phase ``φ`` advances
-  at the orbit rate (``s = +1`` clockwise, bearing increasing north to east).
+  at the orbit rate (``s = +1`` clockwise, bearing increasing north to east)
+  while it leads the vehicle's bearing from the subject by at most
+  ``ORBIT_MAX_LEAD_DEG``. A radial offset, a detour or a vehicle ahead of
+  the phase never stops it.
 * **Velocity feed-forward.** The subject's velocity (plus, for an orbit, the
   ring's tangential velocity), the total clamped to ``max_speed_mps`` and
   scaled by ``ff_scale`` (1 on a live lock, at most 0.5 while coasting).
@@ -28,9 +31,9 @@ MOVING_SPEED_MPS = 0.5
 # The follow reference heading slews toward the travel heading at most this
 # fast, so a subject turning on the spot does not swing the vehicle round.
 REF_SLEW_DPS = 45.0
-# The orbit phase advances only while the vehicle is this close to the ring
-# point, so it converges onto the ring before it starts to circle.
-ORBIT_CAPTURE_M = 2.0
+# The orbit phase waits once it leads the vehicle's bearing by more than
+# this, so the ring point stays inside the pilot's ±60° orbit detour span.
+ORBIT_MAX_LEAD_DEG = 45.0
 
 
 @dataclass(frozen=True)
@@ -141,27 +144,27 @@ def advance_orbit_phase(
     *,
     center_n: float,
     center_e: float,
-    radius_m: float,
     rate_dps: float,
     direction: str,
     drone_n: float,
     drone_e: float,
     dt_s: float,
 ) -> float:
-    """The orbit phase after ``dt_s``: advanced at the orbit rate while the
-    vehicle is within ORBIT_CAPTURE_M of the ring point, held otherwise."""
-    rn = center_n + radius_m * math.cos(phase_rad)
-    re = center_e + radius_m * math.sin(phase_rad)
-    if math.hypot(drone_n - rn, drone_e - re) > ORBIT_CAPTURE_M:
-        return phase_rad
+    """The orbit phase after ``dt_s``: advanced at the orbit rate unless it
+    leads the vehicle's bearing from the centre by more than
+    ORBIT_MAX_LEAD_DEG in the orbit direction (a vehicle the pilot is holding
+    back), held then."""
     s = 1.0 if direction == "cw" else -1.0
+    here = bearing(center_n, center_e, drone_n, drone_e)
+    if here is not None and s * wrap_pi(phase_rad - here) > math.radians(ORBIT_MAX_LEAD_DEG):
+        return phase_rad
     return wrap_pi(phase_rad + s * math.radians(rate_dps) * max(0.0, dt_s))
 
 
 __all__ = [
     "Goal",
     "MOVING_SPEED_MPS",
-    "ORBIT_CAPTURE_M",
+    "ORBIT_MAX_LEAD_DEG",
     "REF_SLEW_DPS",
     "advance_orbit_phase",
     "bearing",

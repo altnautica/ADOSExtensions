@@ -65,8 +65,9 @@ then on the agent runs a 20 Hz loop:
      travel heading at up to 45 °/s while the subject moves faster than
      0.5 m/s;
    - **orbit** mode: the point on a circle of `orbit_radius_m` around the
-     subject, advancing at `orbit_rate_dps` in `orbit_direction` once the
-     drone is within 2 m of it;
+     subject, advancing at `orbit_rate_dps` in `orbit_direction` while it
+     leads the drone's bearing from the subject by at most 45°, so a detour
+     round an obstacle or a radial offset slows the orbit but never stops it;
    - the subject's velocity (plus the orbit's tangential velocity) as
      feed-forward, clamped to `max_speed_mps`;
    - yaw along the latest sighting's measured bearing (the estimate's

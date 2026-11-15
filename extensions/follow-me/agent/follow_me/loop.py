@@ -509,7 +509,6 @@ class FollowLoopMixin:
                     self._orbit_phase,
                     center_n=tn,
                     center_e=te,
-                    radius_m=cfg.orbit_radius_m,
                     rate_dps=cfg.orbit_rate_dps,
                     direction=cfg.orbit_direction,
                     drone_n=dn,

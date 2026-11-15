@@ -101,14 +101,56 @@ def test_orbit_velocity_is_capped() -> None:
     assert math.hypot(g.vn_mps, g.ve_mps) == pytest.approx(6.0)
 
 
-def test_orbit_phase_advances_only_near_the_ring_point() -> None:
-    kw = dict(center_n=0.0, center_e=0.0, radius_m=8.0, rate_dps=10.0, dt_s=1.0)
-    on = setpoint.advance_orbit_phase(0.0, direction="cw", drone_n=8.0, drone_e=0.5, **kw)
-    assert on == pytest.approx(math.radians(10.0))
-    off = setpoint.advance_orbit_phase(0.0, direction="cw", drone_n=0.0, drone_e=0.0, **kw)
-    assert off == 0.0
-    back = setpoint.advance_orbit_phase(0.0, direction="ccw", drone_n=8.0, drone_e=0.0, **kw)
-    assert back == pytest.approx(-math.radians(10.0))
+def _advance(phase_deg: float, drone_bearing_deg: float, drone_r: float, direction: str) -> float:
+    """The phase (degrees) after one second at 10 °/s around a subject at the
+    origin, the vehicle `drone_r` metres out at `drone_bearing_deg`."""
+    b = math.radians(drone_bearing_deg)
+    out = setpoint.advance_orbit_phase(
+        math.radians(phase_deg),
+        center_n=0.0,
+        center_e=0.0,
+        rate_dps=10.0,
+        direction=direction,
+        drone_n=drone_r * math.cos(b),
+        drone_e=drone_r * math.sin(b),
+        dt_s=1.0,
+    )
+    return math.degrees(out)
+
+
+# (phase °, vehicle bearing °, vehicle range m, phase after 1 s °), clockwise.
+# A ccw orbit is the mirror image: every angle negated.
+_ORBIT_CASES = {
+    # A detour holds the vehicle 24° behind and 1 m inside the ring, 3.4 m
+    # from the ring point.
+    "trailing-inside-the-ring": (24.0, 0.0, 7.06, 34.0),
+    # On the phase's bearing, 2.5 m outside the ring (a range error).
+    "radial-offset": (0.0, 0.0, 10.5, 10.0),
+    # The vehicle ran 20° ahead of the phase.
+    "vehicle-ahead": (0.0, 20.0, 8.0, 10.0),
+    # The vehicle over the subject estimate has no bearing to lag by.
+    "vehicle-at-the-centre": (0.0, 0.0, 0.0, 10.0),
+    # Guard: a phase more than ORBIT_MAX_LEAD_DEG ahead waits.
+    "beyond-the-max-lead": (50.0, 0.0, 8.0, 50.0),
+}
+
+
+@pytest.mark.parametrize("case", list(_ORBIT_CASES), ids=list(_ORBIT_CASES))
+def test_orbit_phase_advances_on_the_vehicle_bearing(case: str) -> None:
+    phase, bearing, r, want = _ORBIT_CASES[case]
+    assert _advance(phase, bearing, r, "cw") == pytest.approx(want)
+
+
+@pytest.mark.parametrize("case", list(_ORBIT_CASES), ids=list(_ORBIT_CASES))
+def test_orbit_phase_ccw_mirrors_cw(case: str) -> None:
+    phase, bearing, r, want = _ORBIT_CASES[case]
+    assert _advance(-phase, -bearing, r, "ccw") == pytest.approx(-want)
+
+
+def test_orbit_max_lead_sits_inside_the_detour_span() -> None:
+    # The pilot's orbit detour candidates reach ±60° around the phase, so a
+    # vehicle held back at the max lead still has candidates around it.
+    assert 0.0 < setpoint.ORBIT_MAX_LEAD_DEG < 60.0
 
 
 def test_reference_heading_slews_while_moving_and_holds_when_still() -> None:

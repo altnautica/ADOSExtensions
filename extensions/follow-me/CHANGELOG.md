@@ -57,6 +57,12 @@ recovery phases and the waiting prompt.
   offers no resume until the frames return.
 - The follow tab offers no resume in Strict mode, where a resumed search
   gives up again at once.
+- Orbit mode keeps circling when obstacles or a detour make the drone lag.
+  The orbit point advances while it leads the drone's bearing from the
+  subject by at most 45°, instead of only while the drone is within 2 m of
+  it, so a detour round a tree, a drone held inside or outside the circle,
+  or an error in the subject's range no longer stops the orbit, and a drone
+  ahead of the orbit point is no longer pulled back.
 
 ### Added
 
