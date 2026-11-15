@@ -176,7 +176,8 @@ All notable changes to the World Engine extension.
   drone), and the bias is learned only from scans whose heading is not
   suspect. The replay now comes back 1.42° off on both, and moving every
   LiDAR point through the hole by one ulp moves the restarted map by less
-  than 0.01°. 2.2.3.
+  than 0.01°. Its holes at 30 s, of 1.5 s and 5 s, now come back 1.10° and
+  1.15° off (0.76° and 1.01° before), within its 2.0° bound. 2.2.3.
 
 - **TSDF meshing no longer aborts on newer GPUs.** Fusion shared a process
   with the splat renderer, and Open3D's cached CUDA allocator aborted the
