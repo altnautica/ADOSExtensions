@@ -5,6 +5,7 @@ synthetic batches.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import pytest
@@ -194,6 +195,76 @@ async def test_switching_off_releases_the_lease_and_sends_nothing_more(
     assert ctx.flight.setpoints[sent:] == []
     assert ctx.flight.releases == [7]
     assert _state_events(ctx)[-1]["phase"] == "idle"
+
+
+async def _stop_then_reactivate(
+    plugin: follow_me.FollowMePlugin, ctx: _Ctx, clock: _Clock, stop: str
+) -> dict[str, Any]:
+    """Switch the follow off (``switch-off``) or have the pilot revoke the
+    lease (``revoke``), then switch it back on with the same track still
+    locked; the first goal after re-activation."""
+    if stop == "revoke":
+        plugin._on_lease_revoked({"lease_id": 7, "reason": "takeover"})
+    else:
+        await ctx.config_kv.set("active", False)
+    clock.advance(0.05)
+    _fresh(plugin)
+    await plugin._tick()
+    assert ctx.config_kv._values["active"] is False
+    await ctx.config_kv.set("active", True)
+    clock.advance(0.05)
+    sent = len(ctx.flight.setpoints)
+    await _follow_one(plugin, clock)
+    (goal,) = ctx.flight.setpoints[sent:]
+    return goal
+
+
+def _drone_bearing(plugin: follow_me.FollowMePlugin, goal: dict[str, Any]) -> float:
+    cn, ce = goal["candidates"]["ring_center_ne"]
+    here = follow_me.setpoint.bearing(cn, ce, plugin._pose.north_m, plugin._pose.east_m)
+    assert here is not None
+    return here
+
+
+def _off_by_deg(angle_deg: float, here_rad: float) -> float:
+    return abs(math.degrees(follow_me.setpoint.wrap_pi(math.radians(angle_deg) - here_rad)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["switch-off", "revoke"])
+async def test_reactivating_restarts_the_orbit_at_the_drone(monkeypatch: Any, stop: str) -> None:
+    # The pilot flew the drone elsewhere while the follow was off, so the
+    # phase from before lies far ahead of it. Re-activation starts the orbit
+    # where the drone is, as engaging does.
+    ctx = _Ctx(config=_follow_config(follow_mode="orbit"))
+    plugin = _make_plugin(ctx)
+    plugin._active_camera = "uvc-0"
+    clock = _install_clock(monkeypatch)
+    await _follow_one(plugin, clock)
+    assert plugin._orbit_phase is not None
+    plugin._orbit_phase = follow_me.setpoint.wrap_pi(plugin._orbit_phase + math.radians(150.0))
+    goal = await _stop_then_reactivate(plugin, ctx, clock, stop)
+    assert goal["kind"] == "orbit"
+    # Within one rate step (10 °/s over the 0.5 s longest step).
+    assert _off_by_deg(goal["candidates"]["angle_deg"], _drone_bearing(plugin, goal)) <= 5.0 + 1e-6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["switch-off", "revoke"])
+async def test_reactivating_reseeds_the_follow_reference_without_a_swing(
+    monkeypatch: Any, stop: str
+) -> None:
+    ctx = _Ctx(config=_follow_config(follow_mode="follow"))
+    plugin = _make_plugin(ctx)
+    plugin._active_camera = "uvc-0"
+    clock = _install_clock(monkeypatch)
+    await _follow_one(plugin, clock)
+    assert plugin._ref_heading is not None
+    plugin._ref_heading = follow_me.setpoint.wrap_pi(plugin._ref_heading + math.radians(150.0))
+    goal = await _stop_then_reactivate(plugin, ctx, clock, stop)
+    assert goal["kind"] == "follow"
+    # The follow angle is measured from where the drone already is.
+    assert _off_by_deg(goal["candidates"]["angle_deg"], _drone_bearing(plugin, goal)) <= 1e-6
 
 
 @pytest.mark.asyncio

@@ -189,6 +189,11 @@ class FollowLoopMixin:
             await self._on_revoked_stop(now)
         cfg = await self._config_for_tick()
         if not cfg.active:
+            # A STOP or a lease revoke (which switches the follow off first)
+            # ends here. The drone may be flown elsewhere before the follow is
+            # switched on again on the same track, so it restarts its geometry
+            # where the drone is then, as engaging does.
+            self._reset_geometry()
             self._recovery = None
             self._uncertain_since_s = None
             self._active_since_s = None
@@ -483,14 +488,19 @@ class FollowLoopMixin:
 
     # -- commanding and holding ----------------------------------------
 
+    def _reset_geometry(self) -> None:
+        """Forget the follow reference and orbit phase: the next goal seeds
+        them from where the drone is."""
+        self._ref_heading = None
+        self._orbit_phase = None
+        self._geom_tick_s = None
+
     def _geometry_dt(self, cfg: FollowConfig, now: float) -> float:
         """Seconds since the previous goal, resetting the follow reference
         and orbit phase on a mode change."""
         if self._geom_mode != cfg.follow_mode:
             self._geom_mode = cfg.follow_mode
-            self._ref_heading = None
-            self._orbit_phase = None
-            self._geom_tick_s = None
+            self._reset_geometry()
         dt = 0.0 if self._geom_tick_s is None else now - self._geom_tick_s
         self._geom_tick_s = now
         return max(0.0, min(dt, 0.5))

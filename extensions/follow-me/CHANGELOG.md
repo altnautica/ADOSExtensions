@@ -64,7 +64,10 @@ recovery phases and the waiting prompt.
   or an error in the subject's range no longer stops the orbit, and a drone
   ahead of the orbit point is no longer pulled back. After a re-acquire the
   orbit restarts from where the drone is, instead of heading for an orbit
-  point the search may have left across the circle.
+  point the search may have left across the circle. Switching the follow
+  back on after a stop or after the pilot took the drone back does the same,
+  and the follow angle is again measured from where the drone is, instead
+  of swinging the drone back to where it was.
 
 ### Added
 
