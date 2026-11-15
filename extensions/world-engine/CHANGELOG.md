@@ -197,6 +197,15 @@ All notable changes to the World Engine extension.
   than 0.01°. Its holes at 30 s, of 1.5 s and 5 s, now come back 1.10° and
   1.15° off (0.76° and 1.01° before), within its 2.0° bound. 2.2.3.
 
+- **A map started over in flight forgets its starting velocity once it has
+  its own.** The velocity a restarted map moves at until it has matched two
+  poses was kept for the rest of that map, so after a heading re-confirmed
+  later (which clears the matched poses) the next scan predicted at the
+  velocity of a restart minutes old. It is now dropped once the new map has
+  matched two poses. A drone that stops or turns back at the very scan that
+  starts the map over is tracked within the velocity change over one
+  revolution. 2.2.5.
+
 - **TSDF meshing no longer aborts on newer GPUs.** Fusion shared a process
   with the splat renderer, and Open3D's cached CUDA allocator aborted the
   mesh stage ("Block ... should have been recorded") at the first fused

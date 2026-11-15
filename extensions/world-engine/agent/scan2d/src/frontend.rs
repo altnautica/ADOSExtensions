@@ -1104,6 +1104,12 @@ impl LocalSlam {
         while self.history.len() > 2 && t.saturating_sub(self.history[1].0) >= VELOCITY_WINDOW_NS {
             self.history.pop_front();
         }
+        // Two matched poses tell a restarted map its own motion: the
+        // velocity it started with is spent, and a later reset of the
+        // history (a heading re-confirmed) never falls back to it.
+        if self.history.len() >= 2 {
+            self.restart_vel = None;
+        }
     }
 
     fn should_insert(&self, t: u64, pose: Pose2) -> bool {
@@ -1154,5 +1160,31 @@ impl LocalSlam {
             submaps,
             nodes: self.nodes,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A restarted map's starting velocity serves its warm-up only: once it
+    /// has matched two poses, a history cleared later (a heading
+    /// re-confirmed) predicts from no velocity, not that stale one.
+    #[test]
+    fn a_restarted_maps_velocity_is_spent_after_its_warm_up() {
+        let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
+        slam.restart_vel = Some([1.2, 0.0]);
+        slam.advance(1_000_000_000, Pose2::new(0.0, 0.0, 0.0), 0.0);
+        let (_, warm, _, _) = slam.predict(1_100_000_000, 0.0, 0);
+        assert_eq!(
+            warm,
+            [1.2, 0.0],
+            "the warm-up moves at the starting velocity"
+        );
+        slam.advance(1_100_000_000, Pose2::new(0.12, 0.0, 0.0), 0.0);
+        // Matched poses of its own; then the heading is re-confirmed in place.
+        slam.history.clear();
+        let (_, vel, _, _) = slam.predict(1_200_000_000, 0.0, 0);
+        assert_eq!(vel, [0.0, 0.0], "predicted at the stale starting velocity");
     }
 }
