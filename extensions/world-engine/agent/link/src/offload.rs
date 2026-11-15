@@ -328,14 +328,15 @@ impl Reconciler {
 
 /// The cameras whose frames are the `main` leg the offload session streams,
 /// best first: the vision engine's tap on `main` (a primary it does not
-/// capture), then the capture camera `atlas.cameras` declares primary. A
-/// camera of any other role is never a candidate, whatever its id.
+/// capture), then the capture camera `atlas.cameras` declares primary (an
+/// entry without a role is primary, as the capture reads it). A camera of
+/// any other role is never a candidate, whatever its id.
 fn main_leg_cameras(atlas_cameras: &serde_json::Value) -> Vec<String> {
     let mut out = vec![MAIN_LEG_CAMERA.to_string()];
-    let primary =
-        atlas_cameras.as_array().into_iter().flatten().find(|c| {
-            c["role"].as_str() == Some("primary") && c["enabled"].as_bool() != Some(false)
-        });
+    let primary = atlas_cameras.as_array().into_iter().flatten().find(|c| {
+        let role = c.get("role").filter(|r| !r.is_null());
+        role.is_none_or(|r| r.as_str() == Some("primary")) && c["enabled"].as_bool() != Some(false)
+    });
     if let Some(id) = primary.and_then(|c| c["id"].as_str()).map(str::trim) {
         if !id.is_empty() && id != MAIN_LEG_CAMERA {
             out.push(id.to_string());
@@ -563,6 +564,9 @@ mod tests {
         assert_eq!(main_leg_cameras(&cams), vec!["main", "nose"]);
         let off = json!([{"id": "nose", "role": "primary", "enabled": false}]);
         assert_eq!(main_leg_cameras(&off), vec!["main"]);
+        // No role reads as primary, as the capture's own config does.
+        let bare = json!([{"id": "down", "role": "down"}, {"id": "nose"}]);
+        assert_eq!(main_leg_cameras(&bare), vec!["main", "nose"]);
     }
 
     #[tokio::test]

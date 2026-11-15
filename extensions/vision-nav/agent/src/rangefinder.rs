@@ -61,6 +61,9 @@ pub struct RelayDistanceSensor {
 
 struct RelayInner {
     latest: Option<RangeReading>,
+    /// The newest reading the flight controller reported for a downward
+    /// rangefinder (orientation `MAV_SENSOR_ROTATION_PITCH_270`).
+    ground: Option<RangeReading>,
     last_min_m: Option<f32>,
     last_max_m: Option<f32>,
 }
@@ -70,6 +73,7 @@ impl Default for RelayDistanceSensor {
         Self {
             inner: Mutex::new(RelayInner {
                 latest: None,
+                ground: None,
                 last_min_m: None,
                 last_max_m: None,
             }),
@@ -86,13 +90,23 @@ impl RelayDistanceSensor {
     /// state is a mutex, so a shared reference is enough). Used by the
     /// pipeline's `Arc<RelayDistanceSensor>` wrapper.
     pub fn read_shared(&self) -> Option<RangeReading> {
-        let g = self.inner.lock().expect("relay lock");
-        let latest = g.latest?;
-        let age = crate::mavlink_emit::monotonic_ns() - latest.timestamp_monotonic_ns;
-        if age > RELAY_STALE_AFTER_NS {
-            return None;
-        }
-        Some(latest)
+        fresh(self.inner.lock().expect("relay lock").latest)
+    }
+
+    /// The flight controller's fresh downward range ([`Self::on_ground_range`]),
+    /// the height the obstacle feed's floor test needs.
+    pub fn read_ground(&self) -> Option<RangeReading> {
+        fresh(self.inner.lock().expect("relay lock").ground)
+    }
+
+    /// Record a downward rangefinder reading from the flight controller
+    /// (the caller checks the orientation and the sender).
+    pub fn on_ground_range(&self, current_cm: i64, covariance: i64, now_ns: i64) {
+        self.inner.lock().expect("relay lock").ground = Some(RangeReading {
+            distance_m: current_cm as f32 / 100.0,
+            quality: (100 - covariance).clamp(0, 100) as i32,
+            timestamp_monotonic_ns: now_ns,
+        });
     }
 
     /// Feed a decoded `DISTANCE_SENSOR`: distances in centimetres,
@@ -120,6 +134,13 @@ impl RelayDistanceSensor {
             timestamp_monotonic_ns: now_ns,
         });
     }
+}
+
+/// `reading` when it is no older than [`RELAY_STALE_AFTER_NS`].
+fn fresh(reading: Option<RangeReading>) -> Option<RangeReading> {
+    let r = reading?;
+    let age = crate::mavlink_emit::monotonic_ns() - r.timestamp_monotonic_ns;
+    (age <= RELAY_STALE_AFTER_NS).then_some(r)
 }
 
 impl Rangefinder for RelayDistanceSensor {

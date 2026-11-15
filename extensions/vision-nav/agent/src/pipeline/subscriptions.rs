@@ -10,12 +10,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
-use ados_protocol::mavlink::ardupilotmega::{MavAutopilot, MavType};
+use ados_protocol::mavlink::ardupilotmega::{MavAutopilot, MavSensorOrientation, MavType};
 use ados_protocol::mavlink::{parse_v1, parse_v2, MavMessage};
 use ados_sdk::context::PluginContext;
 use rmpv::Value;
 
 use crate::clock_align::ClockAlign;
+use crate::config::Mode;
 use crate::fc_nav::{Attitude, FcNavSink, MODE_FLAG_ARMED};
 use crate::imu::ImuBuffer;
 use crate::mavlink_emit::monotonic_ns;
@@ -165,13 +166,26 @@ pub fn apply(
                 d.zacc as f32,
             );
         }
-        MavMessage::DISTANCE_SENSOR(d) => sinks.relay.on_distance(
-            i64::from(d.current_distance),
-            Some(i64::from(d.min_distance)),
-            Some(i64::from(d.max_distance)),
-            i64::from(d.covariance),
-            now_ns,
-        ),
+        MavMessage::DISTANCE_SENSOR(d) => {
+            sinks.relay.on_distance(
+                i64::from(d.current_distance),
+                Some(i64::from(d.min_distance)),
+                Some(i64::from(d.max_distance)),
+                i64::from(d.covariance),
+                now_ns,
+            );
+            // The obstacle feed's floor test takes only the FC's downward
+            // rangefinder as the height.
+            if d.orientation == MavSensorOrientation::MAV_SENSOR_ROTATION_PITCH_270
+                && is_fc(sinks, system, component)
+            {
+                sinks.relay.on_ground_range(
+                    i64::from(d.current_distance),
+                    i64::from(d.covariance),
+                    now_ns,
+                );
+            }
+        }
         MavMessage::TIMESYNC(d) => sinks.clock.handle_response(d.tc1, d.ts1),
         MavMessage::GLOBAL_POSITION_INT(d) => sinks
             .ladder
@@ -267,6 +281,21 @@ pub const EXTERNAL_NAV_SUBSCRIBED: &[&str] = &[
     "OPTICAL_FLOW",
 ];
 
+/// The extra stream the obstacle feed's floor test consumes in any mode.
+pub const OBSTACLE_SUBSCRIBED: &[&str] = &["ATTITUDE"];
+
+/// The streams beyond [`SUBSCRIBED`] that `mode` and the obstacle feed
+/// consume.
+pub fn extra_subscriptions(mode: Mode, obstacle_active: bool) -> &'static [&'static str] {
+    if mode == Mode::ExternalNav {
+        EXTERNAL_NAV_SUBSCRIBED
+    } else if obstacle_active {
+        OBSTACLE_SUBSCRIBED
+    } else {
+        &[]
+    }
+}
+
 /// Subscribe to every [`SUBSCRIBED`] stream plus `extra`. Returns one
 /// `mavlink_subscribe_denied:<MSG>` entry per refused subscription.
 pub async fn subscribe_all(ctx: &PluginContext, sinks: &Sinks, extra: &[&str]) -> Vec<String> {
@@ -349,6 +378,60 @@ mod tests {
         deliver(&s, &delivery(1, 1, &msg), monotonic_ns());
         let r = s.relay.read_shared().unwrap();
         assert!((r.distance_m - 1.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn only_the_fcs_downward_range_is_the_floor_tests_height() {
+        let s = sinks();
+        let range = |cm, orientation| {
+            MavMessage::DISTANCE_SENSOR(DISTANCE_SENSOR_DATA {
+                current_distance: cm,
+                orientation,
+                ..DISTANCE_SENSOR_DATA::DEFAULT
+            })
+        };
+        let now = monotonic_ns();
+        // A forward rangefinder, and a downward one on another system.
+        deliver(
+            &s,
+            &delivery(
+                1,
+                1,
+                &range(400, MavSensorOrientation::MAV_SENSOR_ROTATION_NONE),
+            ),
+            now,
+        );
+        deliver(
+            &s,
+            &delivery(
+                9,
+                1,
+                &range(300, MavSensorOrientation::MAV_SENSOR_ROTATION_PITCH_270),
+            ),
+            now,
+        );
+        assert!(s.relay.read_ground().is_none());
+        deliver(
+            &s,
+            &delivery(
+                1,
+                1,
+                &range(150, MavSensorOrientation::MAV_SENSOR_ROTATION_PITCH_270),
+            ),
+            now,
+        );
+        assert!((s.relay.read_ground().unwrap().distance_m - 1.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn the_obstacle_feed_subscribes_attitude_in_every_mode() {
+        for mode in [Mode::OpticalFlow, Mode::ExternalNav] {
+            assert!(
+                extra_subscriptions(mode, true).contains(&"ATTITUDE"),
+                "{mode:?}"
+            );
+        }
+        assert!(extra_subscriptions(Mode::OpticalFlow, false).is_empty());
     }
 
     #[test]

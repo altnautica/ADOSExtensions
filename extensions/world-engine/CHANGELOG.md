@@ -703,8 +703,9 @@ All notable changes to the World Engine extension.
   now reads the roster `fov_deg` and `mount_pitch_deg` from the frame
   descriptors (descriptors only; the pixels are not read) of the camera the
   offloaded `main` leg streams: the vision engine's `main` tap, else the
-  `atlas.cameras` entry with role `primary`, never a camera of another
-  role. They are stamped on every returned batch while a session runs.
+  `atlas.cameras` entry with role `primary` (or no role, which the capture
+  reads as primary), never a camera of another role. They are stamped on
+  every returned batch while a session runs.
   The agent has no route to end a frame subscription, so once offload has
   started the host keeps forwarding those descriptors over IPC for the
   plugin connection's life; between sessions the link drops them. Built

@@ -10,10 +10,11 @@ All notable changes to the Vision Navigation extension.
   floor as obstacles. Before binning, the conversion drops returns nearer
   than 0.35 m, the bins the shared scan lists as `blocked_bins` (the rig
   LiDAR's blocked sectors), and, with the flight controller's fresh
-  `ATTITUDE` and downward `DISTANCE_SENSOR`, returns that a tilted scan
-  plane takes off the floor (within 0.25 m of the ground). The shared scan
-  itself stays raw, since the agent pilot reads a bin with no return as
-  free space.
+  `ATTITUDE` and its own downward (orientation 25) `DISTANCE_SENSOR`,
+  returns that a tilted scan plane takes off the floor (within 0.25 m of
+  the ground). With the obstacle feed on, `ATTITUDE` is subscribed in
+  every mode. The shared scan itself stays raw, since the agent pilot
+  reads a bin with no return as free space.
 
 ## [0.8.5]
 

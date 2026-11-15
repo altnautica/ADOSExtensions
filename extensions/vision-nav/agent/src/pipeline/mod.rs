@@ -63,7 +63,7 @@ use crate::pre_arm::PreArmGate;
 use crate::rangefinder::{Rangefinder, RelayDistanceSensor, TfLunaUart};
 use crate::scale::ScaleLadder;
 use status::{mark_frames_stale, publish_health, update_companion, TickInputs};
-use subscriptions::{FcTarget, Sinks, EXTERNAL_NAV_SUBSCRIBED};
+use subscriptions::{FcTarget, Sinks};
 
 const SENSOR_ID: u8 = 0;
 const DEGRADED_GRACE_NS: i64 = 2_000_000_000;
@@ -154,11 +154,7 @@ impl Plugin for VisionNavPlugin {
             }
         }
 
-        let extra: &[&str] = if mode == Mode::ExternalNav {
-            EXTERNAL_NAV_SUBSCRIBED
-        } else {
-            &[]
-        };
+        let extra = subscriptions::extra_subscriptions(mode, nav_shared::obstacle_active(&cfg));
         let mut denied = subscriptions::subscribe_all(ctx, &sinks, extra).await;
         let shared = Arc::new(nav_shared::NavShared::new(mode));
         denied.extend(nav_shared::subscribe_topics(ctx, &shared, &cfg).await);

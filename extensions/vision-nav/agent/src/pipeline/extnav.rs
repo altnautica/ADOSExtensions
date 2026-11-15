@@ -258,12 +258,13 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
 }
 
 /// The floor test's inputs: the FC's fresh `ATTITUDE` and its fresh, valid
-/// downward `DISTANCE_SENSOR`; without both no return is taken for floor.
+/// downward (`MAV_SENSOR_ROTATION_PITCH_270`) `DISTANCE_SENSOR`; without
+/// both no return is taken for floor.
 fn obstacle_filter(sinks: &Sinks, now: i64) -> ObstacleFilter {
     let attitude = sinks.fc_nav.snapshot(now).attitude;
     let range = sinks
         .relay
-        .read_shared()
+        .read_ground()
         .filter(|r| r.quality > 0 && r.distance_m.is_finite() && r.distance_m > 0.0);
     ObstacleFilter {
         ground: attitude.zip(range).map(|(a, r)| Ground {
