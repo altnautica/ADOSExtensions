@@ -258,19 +258,33 @@ struct Scored {
     fc_north_deg: f64,
     /// When the worst heading error was, s.
     worst_deg_at_s: f64,
+    /// When the pose was first good after the hole, host ns.
+    good_at_ns: Option<u64>,
 }
 
-/// Replay `f` without a hole and with one of `len_ns` from `at_ns` after
-/// the first scan, and score the holed one against the unholed. The FC's
-/// position is the unholed replay's, in the FC's own north (its heading's
-/// error against the map turns its dead reckoning), off by
+/// The unholed replay's published poses: time, `map_ned` position and
+/// heading.
+type Refs = Vec<(u64, [f64; 2], f64)>;
+
+/// Replay `f` without a hole: what [`holed`] scores against.
+fn reference(f: &Flight) -> Refs {
+    let run = replay(f, (0, 0), &|_| 0.0, &|_| [0.0; 2]);
+    run.poses
+        .iter()
+        .flatten()
+        .map(|&(t, _, p, h)| (t, p, h))
+        .collect()
+}
+
+/// Replay `f` with a hole of `len_ns` from `at_ns` after the first scan,
+/// and score it against `refs`, the unholed replay ([`reference`]). The
+/// FC's position is the unholed replay's, in the FC's own north (its
+/// heading's error against the map turns its dead reckoning), off by
 /// [`FC_DRIFT_MPS`] from the hole's start; its heading rate is the unholed
 /// replay's turn rate.
-fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
+fn holed(f: &Flight, refs: &Refs, at_ns: u64, len_ns: u64) -> (Scored, Published) {
     let t0 = f.scans[0].t_ns;
     let hole = (t0 + at_ns, t0 + at_ns + len_ns);
-    let reference = replay(f, (0, 0), &|_| 0.0, &|_| [0.0; 2]);
-    let refs: Vec<(u64, [f64; 2], f64)> = reference.poses.iter().flatten().map(|&(t, _, p, h)| (t, p, h)).collect();
     let k_at = |t: u64| refs.partition_point(|r| r.0 <= t).clamp(1, refs.len() - 1);
     let lerp = |t: u64| {
         let k = k_at(t);
@@ -353,6 +367,7 @@ fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
         fc_drift_m: 0.0,
         fc_north_deg: 0.0,
         worst_deg_at_s: 0.0,
+        good_at_ns: None,
     };
     let mut good_at = None;
     for &(t, health, p, h) in run.poses.iter().flatten() {
@@ -376,7 +391,47 @@ fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
             s.worst_deg_at_s = t as f64 * 1e-9;
         }
     }
-    s
+    s.good_at_ns = good_at;
+    (s, run)
+}
+
+/// `f` with every LiDAR point of the scans from `from_ns` to `to_ns` moved
+/// one ulp away from zero in x.
+fn nudged(f: &Flight, from_ns: u64, to_ns: u64) -> Flight {
+    let scans = f.scans.iter().map(|s| {
+        let mut s = s.clone();
+        if (from_ns..to_ns).contains(&s.t_ns) {
+            s.points
+                .iter_mut()
+                .for_each(|p| p[0] = f32::from_bits(p[0].to_bits() + 1));
+        }
+        s
+    });
+    Flight {
+        imu: f.imu.clone(),
+        fc_yaw: f.fc_yaw.clone(),
+        scans: scans.collect(),
+    }
+}
+
+/// How far apart two replays of one flight publish over the span [`holed`]
+/// scores from `from_ns`: the largest heading difference, degrees, and
+/// position difference, m, and the poses compared.
+fn apart(a: &Published, b: &Published, from_ns: u64) -> (f64, f64, usize) {
+    let mut worst = (0.0f64, 0.0f64, 0);
+    for (pa, pb) in a.poses.iter().zip(&b.poses) {
+        let (Some((ta, _, xa, ha)), Some((tb, _, xb, hb))) = (pa, pb) else {
+            continue;
+        };
+        if *ta < from_ns || *ta > from_ns + SCORED_NS {
+            continue;
+        }
+        assert_eq!(ta, tb, "the replays published different scans");
+        let deg = wrap_pi(ha - hb).to_degrees().abs();
+        let m = (xa[0] - xb[0]).hypot(xa[1] - xb[1]);
+        worst = (worst.0.max(deg), worst.1.max(m), worst.2 + 1);
+    }
+    worst
 }
 
 /// Holes in the warehouse's turns: 1.5 s at 22 and 30 s and 5 s at 30 s,
@@ -386,11 +441,19 @@ fn holed(f: &Flight, at_ns: u64, len_ns: u64) -> Scored {
 /// of the unholed replay's, and its heading within 2° of it, both in the
 /// map's north from before the gap: there the FC's own heading is degrees
 /// off that north (`fc_north_deg`), and a restarted map does not take it.
+///
+/// The 22 s, 1.5 s hole is flown again with every LiDAR point through the
+/// hole moved by one ulp. Matched on a stale prior, the scans through the
+/// hole grow a last-bit difference to centimetres (aarch64's `hypot`,
+/// which rounds a last bit differently from x86's, did), and the map
+/// started over after it must not take that on: both replays publish
+/// within [`NUDGE_DEG`] and [`NUDGE_M`] of each other over the scored span.
 #[test]
 fn a_map_restarted_in_flight_is_published_where_the_drone_is() {
     let f = flight(include_str!("../../../scan2d/tests/data/warehouse_return_leg.txt"));
+    let refs = reference(&f);
     let (s, ms) = (1_000_000_000u64, 1_000_000u64);
-    let scored: Vec<_> = [
+    let mut scored: Vec<_> = [
         (22 * s, 300 * ms, false),
         (30 * s, 300 * ms, false),
         (22 * s, 1_500 * ms, true),
@@ -399,20 +462,41 @@ fn a_map_restarted_in_flight_is_published_where_the_drone_is() {
     ]
     .into_iter()
     .map(|(at, len, restarts)| {
-        let r = holed(&f, at, len);
+        let (r, run) = holed(&f, &refs, at, len);
         let name = format!("{} s, {} s hole", at / s, len as f64 * 1e-9);
         eprintln!("{name}: {r:?}");
-        (name, r, restarts)
+        (name, r, restarts, run)
     })
     .collect();
+    let (at, len) = (22 * s, 1_500 * ms);
+    let t0 = f.scans[0].t_ns;
+    let (r, run) = holed(&nudged(&f, t0 + at, t0 + at + len), &refs, at, len);
+    let name = "22 s, 1.5 s hole, nudged".to_string();
+    eprintln!("{name}: {r:?}");
+    let (_, plain, _, plain_run) = &scored[2];
+    let from = plain
+        .good_at_ns
+        .expect("the 22 s, 1.5 s hole's pose is good again");
+    let (deg, m, n) = apart(plain_run, &run, from);
+    eprintln!("{name}: {deg:.6} deg and {m:.6} m apart from the unnudged replay over {n} poses");
+    scored.push((name, r, true, run));
     // Every case is scored before any is asserted, so a failure shows them all.
-    for (name, r, restarts) in scored {
-        assert_eq!(r.restarts > 0, restarts, "{name}: restarts {}", r.restarts);
+    for (name, r, restarts, _) in &scored {
+        assert_eq!(r.restarts > 0, *restarts, "{name}: restarts {}", r.restarts);
         let bound = r.fc_drift_m + SLACK_M;
         assert!(r.worst_m <= bound, "{name}: {:.2} m off (bound {bound:.2} m)", r.worst_m);
         assert!(r.worst_deg <= 2.0, "{name}: {:.2} deg off the map's north", r.worst_deg);
     }
+    assert!(n > 0, "no poses compared");
+    assert!(
+        deg <= NUDGE_DEG && m <= NUDGE_M,
+        "a one-ulp nudge moved the restarted map {deg:.3} deg, {m:.3} m"
+    );
 }
 
 /// The position slack over the FC's drift: the matcher's own error.
 const SLACK_M: f64 = 1.0;
+/// How far a one-ulp nudge to the scans through the hole may move the map
+/// published after it ([`a_map_restarted_in_flight_is_published_where_the_drone_is`]).
+const NUDGE_DEG: f64 = 0.01;
+const NUDGE_M: f64 = 0.01;
