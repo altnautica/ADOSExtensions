@@ -295,7 +295,13 @@ impl NavMap {
     /// flight: `restarted` when the matcher's restart count rose since the
     /// last pose ([`crate::pose::PoseQuality::map_restarts`]), so
     /// [`Self::restart_in_flight`], else [`Self::seat_while_lost`].
-    pub fn on_matcher_pose(&mut self, e: &PoseEstimate, restarted: bool, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
+    pub fn on_matcher_pose(
+        &mut self,
+        e: &PoseEstimate,
+        restarted: bool,
+        fc_up: Option<f64>,
+        fc: Option<&FcEkfPose>,
+    ) {
         if restarted {
             self.restart_in_flight(e, fc_up, fc);
         } else {
@@ -350,7 +356,12 @@ impl NavMap {
     /// the north afresh: on the take-off spot as at the first pose, off it
     /// from the FC heading even with a declared take-off heading, which holds
     /// only on that spot.
-    pub fn restart_in_flight(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
+    pub fn restart_in_flight(
+        &mut self,
+        e: &PoseEstimate,
+        fc_up: Option<f64>,
+        fc: Option<&FcEkfPose>,
+    ) {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
         if self.good.is_none() && self.measured.is_none() {
             // The restart pose may have left the spot since the last pose.
@@ -405,11 +416,17 @@ impl NavMap {
     /// After [`Self::restart_in_flight`], while the pose `e` is still lost,
     /// place it at [`Self::outage_seed`] again (the north stays latched).
     /// Nothing once a pose was not lost, or without the FC's position.
-    pub fn seat_while_lost(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
+    pub fn seat_while_lost(
+        &mut self,
+        e: &PoseEstimate,
+        fc_up: Option<f64>,
+        fc: Option<&FcEkfPose>,
+    ) {
         if !self.seating || e.health != VioHealth::Lost {
             return;
         }
-        let (Some(yaw0), Some(seed)) = (self.yaw0, fc.and_then(|fc| self.outage_seed(e.t_ns, fc))) else {
+        let (Some(yaw0), Some(seed)) = (self.yaw0, fc.and_then(|fc| self.outage_seed(e.t_ns, fc)))
+        else {
             return;
         };
         let (_, t_frd) = self.place_frd(&e.r, e.t, fc_up);
@@ -652,7 +669,11 @@ impl NavMap {
         self.follow_heading(&r_frd, t_frd, fc_heading);
         let (r, t) = self.ned_of(&r_frd, t_frd)?;
         self.latest = Some((r, t));
-        let health = if self.blind { VioHealth::Lost } else { e.health };
+        let health = if self.blind {
+            VioHealth::Lost
+        } else {
+            e.health
+        };
         if health != VioHealth::Lost && e.heading_ok {
             let at = Some((e.t_ns, [t[0], t[1]], frd_yaw(&r)));
             self.measured = at;
@@ -706,8 +727,7 @@ impl NavMap {
         true
     }
 
-    /// Fold one LiDAR scan: the body-frame scan (the default
-    /// [`frames::ScanFilter`]) and the placed polar record
+    /// Fold one LiDAR scan: the body-frame scan and the placed polar record
     /// ([`Self::body_scan`], [`Self::place_scan`]) at once.
     pub fn on_scan(
         &mut self,
@@ -718,7 +738,7 @@ impl NavMap {
         session_open: bool,
     ) -> ScanOut {
         ScanOut {
-            scan: self.body_scan(scan, t_body_sensor, &frames::ScanFilter::default(), session_open),
+            scan: self.body_scan(scan, t_body_sensor, &[], session_open),
             polar: self.place_scan(scan, t_body_sensor, world, fc_up, session_open),
         }
     }
@@ -728,11 +748,11 @@ impl NavMap {
         &self,
         scan: &LidarScan,
         t_body_sensor: &[f64; 16],
-        filter: &frames::ScanFilter,
+        blocked_azimuth_deg: &[[f64; 2]],
         session_open: bool,
     ) -> Option<ScanDescriptor> {
         self.active(session_open)
-            .then(|| frames::body_scan(scan, t_body_sensor, filter))
+            .then(|| frames::body_scan(scan, t_body_sensor, blocked_azimuth_deg))
     }
 
     /// Place one LiDAR scan. `world` is the provider's body pose at the scan
@@ -758,7 +778,11 @@ impl NavMap {
             t_frd[2] = -(up - up0) - off[2];
         }
         let (r_map, t_map) = self.ned_of(&r_frd, t_frd)?;
-        let health = if self.blind { VioHealth::Lost } else { e.health };
+        let health = if self.blind {
+            VioHealth::Lost
+        } else {
+            e.health
+        };
         let polar = frames::polar_scan(scan, scan.t_ns, &r_map, t_map, health);
         if self.active(session_open) {
             self.map.insert(&polar);

@@ -8,7 +8,6 @@ use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus};
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
-use crate::nav::frames::{ScanFilter, SELF_RETURN_M};
 use crate::nav::{fc_imu, TickInputs};
 use crate::pose::{se3, PoseEstimate, PoseProvider};
 use crate::quality::lidar_depth::LidarDepth;
@@ -16,9 +15,6 @@ use crate::recorder::Item;
 
 /// How often `nav_imu_feed` reports the FC IMU feed.
 const NAV_FEED_LOG_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
-/// The FC attitude and ground range a shared scan's floor test uses must
-/// be no further than this from the scan.
-const SCAN_GROUND_MAX_SKEW_NS: u64 = 300_000_000;
 
 /// The scans since the last `nav_imu_feed` log and, for each, the gap
 /// between its last point and the newest FC IMU sample handed to the pose
@@ -108,28 +104,14 @@ impl Engine {
         }
     }
 
-    /// What the shared scan of `scan` drops ([`ScanFilter`]): the rig
-    /// LiDAR's range limits (never nearer than the airframe) and blocked
-    /// sectors, and the floor under the flight controller's attitude and
-    /// downward range when both are as recent as the scan.
-    fn scan_filter(&self, scan: &LidarScan) -> ScanFilter {
-        let model = self
-            .rig
+    /// The rig LiDAR's blocked sectors (sensor frame), which the shared scan
+    /// lists as `blocked_bins` while keeping every range raw.
+    fn blocked_azimuth_deg(&self, sensor: &str) -> Vec<[f64; 2]> {
+        self.rig
             .as_ref()
-            .and_then(|r| crate::rig_source::lidar_sensor(r, &scan.sensor_id))
-            .map(|(_, m)| m);
-        let near = |t: u64| t.abs_diff(scan.t_ns) <= SCAN_GROUND_MAX_SKEW_NS;
-        let ground = self.nav_deps.fc_feed.as_ref().and_then(|fc| {
-            let (_, r) = fc.attitude().filter(|(t, _)| near(*t))?;
-            let (_, agl) = fc.ground_range().filter(|(t, _)| near(*t))?;
-            Some((r, agl))
-        });
-        ScanFilter {
-            min_range_m: model.map_or(SELF_RETURN_M, |m| m.min_range_m.max(SELF_RETURN_M)),
-            max_range_m: model.map_or(f64::INFINITY, |m| m.max_range_m),
-            blocked_azimuth_deg: model.map(|m| m.blocked_azimuth_deg.clone()).unwrap_or_default(),
-            ground,
-        }
+            .and_then(|r| crate::rig_source::lidar_sensor(r, sensor))
+            .map(|(_, m)| m.blocked_azimuth_deg.clone())
+            .unwrap_or_default()
     }
 
     fn lidar_mount(&self, sensor: &str) -> [f64; 16] {
@@ -161,8 +143,11 @@ impl Engine {
         }
         self.pose.feed_lidar(&scan);
         let mount = self.lidar_mount(&scan.sensor_id);
-        let filter = self.scan_filter(&scan);
-        if let Some(d) = self.nav.body_scan(&scan, &mount, &filter, self.session.is_some()) {
+        let blocked = self.blocked_azimuth_deg(&scan.sensor_id);
+        if let Some(d) = self
+            .nav
+            .body_scan(&scan, &mount, &blocked, self.session.is_some())
+        {
             self.publisher.publish_scan(&d).await;
         }
         if let Some(oldest) = self.scan_wait.push(scan) {
@@ -360,7 +345,10 @@ impl Engine {
         // The feed first; with it measuring, a restarted map's unknown north
         // or a heading its gap left unmeasured.
         let unconfirmed = self.pose.quality().heading_unconfirmed;
-        let reason = self.fc_nav.degraded(now).or(self.nav_imu_reason(unconfirmed));
+        let reason = self
+            .fc_nav
+            .degraded(now)
+            .or(self.nav_imu_reason(unconfirmed));
         Some(ImuFeedStatus {
             state: reason.map_or(ImuFeedState::Ok, ImuFeedReason::state),
             reason,

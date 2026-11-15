@@ -163,8 +163,12 @@ With `obstacle.enabled`, the plugin turns the shared planar scan
 (default `plugin.world-engine.scan`, body FRD, clockwise from forward)
 into `OBSTACLE_DISTANCE` (#330) at up to 10 Hz on component 197: 72
 sectors of 5°, `MAV_FRAME_BODY_FRD`, the nearest return per sector in
-cm (5-1200), `max_distance + 1` for a sector with no return. Set
-`PRX1_TYPE 2` and `AVOID_ENABLE` on the flight controller.
+cm (5-1200), `max_distance + 1` for a sector with no return. Before
+binning it drops returns nearer than 0.35 m (the airframe), the bins the
+scan lists as `blocked_bins`, and, with the flight controller's fresh
+`ATTITUDE` and downward `DISTANCE_SENSOR`, returns a tilted scan plane
+takes off the floor (within 0.25 m of the ground). Set `PRX1_TYPE 2` and
+`AVOID_ENABLE` on the flight controller.
 
 ## `nav.state`
 

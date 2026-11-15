@@ -125,10 +125,21 @@ fn scan_and_map_status_use_the_documented_keys() {
         angle_start_rad: 0.0,
         angle_increment_rad: std::f32::consts::PI / 180.0,
         ranges_m: vec![0.0; nav::SCAN_BINS],
+        blocked_bins: Vec::new(),
     };
     let v = serde_json::to_value(&scan).unwrap();
     assert_eq!(v["frame"], "body_frd");
     assert_eq!(v["ranges_m"].as_array().unwrap().len(), 360);
+    assert!(v.get("blocked_bins").is_none(), "no blocked sector, no key");
+    let blocked = ScanDescriptor {
+        blocked_bins: vec![179, 180],
+        ..scan.clone()
+    };
+    let v = serde_json::to_value(&blocked).unwrap();
+    assert_eq!(v["blocked_bins"], serde_json::json!([179, 180]));
+    let back: ScanDescriptor =
+        serde_json::from_value(serde_json::to_value(&scan).unwrap()).unwrap();
+    assert_eq!(back, scan);
 
     let st = MapStatus {
         placement: ComputePlacement::PostFlight,
@@ -181,7 +192,10 @@ fn map_status_carries_the_fc_imu_feed() {
     assert_eq!(ImuFeedReason::Starved.state(), ImuFeedState::Degraded);
     assert_eq!(ImuFeedReason::NorthUnknown.state(), ImuFeedState::Lost);
     assert_eq!(ImuFeedReason::NorthUnknown.as_str(), "north_unknown");
-    assert_eq!(serde_json::to_value(ImuFeedReason::NorthUnknown).unwrap(), "north_unknown");
+    assert_eq!(
+        serde_json::to_value(ImuFeedReason::NorthUnknown).unwrap(),
+        "north_unknown"
+    );
     let mut old = serde_json::to_value(MapStatus::default()).unwrap();
     old.as_object_mut().unwrap().remove("imu_feed");
     let back: MapStatus = serde_json::from_value(old).unwrap();

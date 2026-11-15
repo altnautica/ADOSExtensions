@@ -9,6 +9,13 @@
 //! `sectors` read `UINT16_MAX` (unused). The message goes out in
 //! `MAV_FRAME_BODY_FRD` with `increment_f` set, which ArduPilot's MAVLink
 //! proximity backend reads ahead of the integer `increment`.
+//!
+//! The shared scan keeps every return (the agent pilot reads an empty bin
+//! as free space). Before binning, this conversion drops what the flight
+//! controller must not avoid: returns nearer than the airframe
+//! ([`SELF_RETURN_M`]), the bins the scan lists as `blocked_bins`, and,
+//! with a fresh attitude and downward range ([`ObstacleFilter`]), returns
+//! a tilted scan plane takes off the floor.
 
 use rmpv::Value;
 
@@ -25,6 +32,11 @@ pub const MIN_DISTANCE_CM: u16 = 5;
 pub const MAX_DISTANCE_CM: u16 = 1200;
 const MAV_FRAME_BODY_FRD: u8 = 12;
 const MAV_DISTANCE_SENSOR_LASER: u8 = 0;
+/// Returns closer than this are the airframe itself (props, legs, the
+/// mast); the planar matcher drops them the same way.
+pub const SELF_RETURN_M: f64 = 0.35;
+/// A return that levels to within this of the ground is the ground.
+pub const FLOOR_MARGIN_M: f64 = 0.25;
 
 /// One decoded scan.
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +45,42 @@ pub struct Scan {
     pub angle_start_rad: f64,
     pub angle_increment_rad: f64,
     pub ranges_m: Vec<f32>,
+    /// Bin indices the airframe occludes.
+    pub blocked_bins: Vec<usize>,
+}
+
+/// The flight controller's roll and pitch (radians, `ATTITUDE`) and the
+/// downward range to the ground (metres), both fresh.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Ground {
+    pub roll: f64,
+    pub pitch: f64,
+    pub agl_m: f64,
+}
+
+/// What [`sectorise`] drops beyond the airframe and the blocked bins.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ObstacleFilter {
+    /// `None` (no fresh attitude or range) drops no floor return.
+    pub ground: Option<Ground>,
+}
+
+impl ObstacleFilter {
+    /// Whether a return at horizontal range `r` and FRD bearing `bearing`
+    /// levels to the floor: its depth below the body in NED (the body
+    /// point `(r cos b, r sin b, 0)` through the attitude's down row)
+    /// reaches within [`FLOOR_MARGIN_M`] of the ground.
+    fn is_floor(&self, r: f64, bearing: f64) -> bool {
+        let Some(g) = self.ground else {
+            return false;
+        };
+        if !(g.agl_m.is_finite() && g.agl_m > FLOOR_MARGIN_M) {
+            return false;
+        }
+        let (x, y) = (r * bearing.cos(), r * bearing.sin());
+        let down = -g.pitch.sin() * x + g.roll.sin() * g.pitch.cos() * y;
+        down >= g.agl_m - FLOOR_MARGIN_M
+    }
 }
 
 fn get<'a>(v: &'a Value, key: &str) -> Option<&'a Value> {
@@ -67,6 +115,14 @@ pub fn parse_scan_event(args: &Value) -> Option<Scan> {
             .iter()
             .map(|v| as_f64(v).unwrap_or(0.0) as f32)
             .collect(),
+        blocked_bins: match get(p, "blocked_bins") {
+            Some(Value::Array(b)) => b
+                .iter()
+                .filter_map(Value::as_u64)
+                .map(|i| i as usize)
+                .collect(),
+            _ => Vec::new(),
+        },
     })
 }
 
@@ -113,24 +169,33 @@ impl ObstacleDistance {
     }
 }
 
-/// Bin a scan into `sectors` equal sectors (1-72).
-pub fn sectorise(scan: &Scan, sectors: u8, time_usec: u64) -> ObstacleDistance {
+/// Bin a scan into `sectors` equal sectors (1-72), after dropping the
+/// airframe, the blocked bins and, per `filter`, the floor.
+pub fn sectorise(
+    scan: &Scan,
+    sectors: u8,
+    time_usec: u64,
+    filter: &ObstacleFilter,
+) -> ObstacleDistance {
     let sectors = sectors.clamp(1, MAX_SECTORS) as usize;
     let width = 360.0 / sectors as f64;
     let no_return = MAX_DISTANCE_CM + 1;
     let mut distances = [u16::MAX; 72];
     distances[..sectors].fill(no_return);
     let (min_m, max_m) = (
-        f64::from(MIN_DISTANCE_CM) / 100.0,
+        (f64::from(MIN_DISTANCE_CM) / 100.0).max(SELF_RETURN_M),
         f64::from(MAX_DISTANCE_CM) / 100.0,
     );
     for (i, &r) in scan.ranges_m.iter().enumerate() {
         let r = f64::from(r);
-        if !(r.is_finite() && r >= min_m && r <= max_m) {
+        if !(r.is_finite() && r >= min_m && r <= max_m) || scan.blocked_bins.contains(&i) {
             continue;
         }
-        let deg = (scan.angle_start_rad + i as f64 * scan.angle_increment_rad).to_degrees();
-        let shifted = (deg + width / 2.0).rem_euclid(360.0);
+        let bearing = scan.angle_start_rad + i as f64 * scan.angle_increment_rad;
+        if filter.is_floor(r, bearing) {
+            continue;
+        }
+        let shifted = (bearing.to_degrees() + width / 2.0).rem_euclid(360.0);
         let k = ((shifted / width) as usize).min(sectors - 1);
         let cm = (r * 100.0).round() as u16;
         distances[k] = distances[k].min(cm);
@@ -155,12 +220,13 @@ mod tests {
             angle_start_rad: 0.0,
             angle_increment_rad: std::f64::consts::TAU / n,
             ranges_m: ranges,
+            blocked_bins: Vec::new(),
         }
     }
 
     #[test]
     fn empty_scan_reads_no_return_everywhere() {
-        let o = sectorise(&scan(vec![0.0; 360]), 72, 0);
+        let o = sectorise(&scan(vec![0.0; 360]), 72, 0, &ObstacleFilter::default());
         assert!(o.distances.iter().all(|&d| d == MAX_DISTANCE_CM + 1));
         assert_eq!(o.min_obstacle_m(), None);
         assert_eq!(o.increment_deg, 5.0);
@@ -174,7 +240,7 @@ mod tests {
         r[358] = 2.0; // 2 deg left of ahead: still sector 0
         r[183] = 20.0; // beyond range: ignored
         r[270] = 0.02; // under min range: ignored
-        let o = sectorise(&scan(r), 72, 7);
+        let o = sectorise(&scan(r), 72, 7, &ObstacleFilter::default());
         assert_eq!(o.distances[0], 200);
         assert_eq!(o.distances[18], 150);
         assert_eq!(o.distances[36], MAX_DISTANCE_CM + 1);
@@ -184,7 +250,7 @@ mod tests {
         let mut edge = vec![0.0; 720];
         edge[6] = 4.0; // 3 deg
         edge[714] = 4.5; // -3 deg
-        let o = sectorise(&scan(edge), 72, 0);
+        let o = sectorise(&scan(edge), 72, 0, &ObstacleFilter::default());
         assert_eq!(o.distances[1], 400);
         assert_eq!(o.distances[71], 450);
         assert_eq!(o.distances[0], MAX_DISTANCE_CM + 1);
@@ -194,10 +260,65 @@ mod tests {
     fn fewer_sectors_leave_unused_slots() {
         let mut r = vec![0.0; 360];
         r[100] = 5.0;
-        let o = sectorise(&scan(r), 8, 0);
+        let o = sectorise(&scan(r), 8, 0, &ObstacleFilter::default());
         assert_eq!(o.increment_deg, 45.0);
         assert_eq!(o.distances[2], 500); // 100 deg -> sector centred on 90
         assert!(o.distances[8..].iter().all(|&d| d == u16::MAX));
+    }
+
+    #[test]
+    fn the_airframe_and_blocked_bins_never_reach_the_flight_controller() {
+        let mut r = vec![0.0; 360];
+        r[0] = 0.2; // a prop ahead
+        r[90] = 3.0; // a wall on the right
+        r[180] = 1.0; // a leg behind, in a blocked sector
+        let mut s = scan(r);
+        s.blocked_bins = vec![179, 180, 181];
+        let o = sectorise(&s, 72, 0, &ObstacleFilter::default());
+        assert_eq!(o.distances[0], MAX_DISTANCE_CM + 1, "the prop is airframe");
+        assert_eq!(o.distances[18], 300);
+        assert_eq!(o.distances[36], MAX_DISTANCE_CM + 1, "the leg is blocked");
+    }
+
+    /// Pitched 10° nose-down 1.5 m up, the scan plane meets the floor
+    /// about 8.5 m ahead: that return is floor, while a wall 3 m ahead and
+    /// one 4 m to the right stay.
+    #[test]
+    fn a_tilted_scans_floor_return_is_dropped() {
+        let pitch = (-10f64).to_radians();
+        let floor_x = 1.5 / 10f64.to_radians().tan();
+        let mut r = vec![0.0; 360];
+        r[0] = floor_x as f32;
+        r[90] = 4.0;
+        r[350] = 3.0;
+        let tilted = ObstacleFilter {
+            ground: Some(Ground {
+                roll: 0.0,
+                pitch,
+                agl_m: 1.5,
+            }),
+        };
+        let o = sectorise(&scan(r.clone()), 72, 0, &tilted);
+        assert_eq!(
+            o.distances[0],
+            MAX_DISTANCE_CM + 1,
+            "the floor ahead is dropped"
+        );
+        assert_eq!(o.distances[18], 400, "the side wall stays");
+        assert_eq!(o.distances[70], 300, "a near wall ahead stays");
+        // No attitude or range: nothing is taken for floor.
+        let o = sectorise(&scan(r.clone()), 72, 0, &ObstacleFilter::default());
+        assert_eq!(o.distances[0], (floor_x * 100.0).round() as u16);
+        // On the ground (height inside the margin) nothing is dropped.
+        let landed = ObstacleFilter {
+            ground: Some(Ground {
+                roll: 0.0,
+                pitch,
+                agl_m: 0.1,
+            }),
+        };
+        let o = sectorise(&scan(r), 72, 0, &landed);
+        assert_eq!(o.distances[0], (floor_x * 100.0).round() as u16);
     }
 
     #[test]
@@ -214,11 +335,16 @@ mod tests {
                         Value::from("ranges_m"),
                         Value::Array(vec![Value::F32(1.0), Value::F64(2.0)]),
                     ),
+                    (
+                        Value::from("blocked_bins"),
+                        Value::Array(vec![Value::from(1u16)]),
+                    ),
                 ]),
             )])
         };
         let s = parse_scan_event(&payload("body_frd")).unwrap();
         assert_eq!(s.ranges_m, vec![1.0, 2.0]);
+        assert_eq!(s.blocked_bins, vec![1]);
         assert_eq!(s.t_ns, 5);
         assert!(parse_scan_event(&payload("body_flu")).is_none());
     }
@@ -227,7 +353,7 @@ mod tests {
     fn obstacle_frame_packs_extension_fields() {
         let mut r = vec![0.0; 360];
         r[0] = 3.0;
-        let frame = sectorise(&scan(r), 72, 99).encode(3);
+        let frame = sectorise(&scan(r), 72, 99, &ObstacleFilter::default()).encode(3);
         assert_eq!(frame[1] as usize, OBSTACLE_DISTANCE_LEN);
         assert_eq!(frame[6], COMPONENT_EXTNAV);
         assert_eq!(u32::from_le_bytes([frame[7], frame[8], frame[9], 0]), 330);

@@ -378,14 +378,6 @@ impl FcEkfPose {
         self.inner.lock().host_attitude()
     }
 
-    /// The newest downward range to the ground ([`fc_flow::ground_range`])
-    /// on the host clock: `(host ns, metres)`.
-    pub fn ground_range(&self) -> Option<(u64, f64)> {
-        let g = self.inner.lock();
-        let (ms, m) = g.range?;
-        Some((g.host_ns(i128::from(ms) * 1_000_000)?, m))
-    }
-
     /// Hand every `RAW_IMU` sample, flow velocity and EKF height to `sink`
     /// as its frame arrives ([`NavSample`]); `None` stops it. A run sets it
     /// while it runs: nothing is queued for a run that is not there.
@@ -412,7 +404,9 @@ impl FcEkfPose {
     pub fn ned_at(&self, t_ns: u64) -> Option<[f64; 2]> {
         let g = self.inner.lock();
         let i = g.ned.partition_point(|(t, _)| *t <= t_ns);
-        let near = |(t, p): (u64, [f64; 2])| (t.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(p);
+        let near = |(t, p): (u64, [f64; 2])| {
+            (t.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(p)
+        };
         match (i.checked_sub(1).map(|j| g.ned[j]), g.ned.get(i).copied()) {
             (Some((t0, p0)), Some((t1, p1))) => {
                 let a = (t_ns - t0) as f64 / (t1 - t0) as f64;
@@ -429,7 +423,10 @@ impl FcEkfPose {
     fn heading_near(&self, t_ns: u64) -> Option<Heading> {
         let g = self.inner.lock();
         let i = g.headings.partition_point(|h| h.t_ns <= t_ns);
-        match (i.checked_sub(1).map(|j| g.headings[j]), g.headings.get(i).copied()) {
+        match (
+            i.checked_sub(1).map(|j| g.headings[j]),
+            g.headings.get(i).copied(),
+        ) {
             (Some(a), Some(b)) => {
                 let w = (t_ns - a.t_ns) as f64 / (b.t_ns - a.t_ns) as f64;
                 Some(Heading {
@@ -440,7 +437,9 @@ impl FcEkfPose {
                     bridged: b.bridged,
                 })
             }
-            (Some(h), None) | (None, Some(h)) => (h.t_ns.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(h),
+            (Some(h), None) | (None, Some(h)) => {
+                (h.t_ns.abs_diff(t_ns) <= super::MAX_EXTRAPOLATION_NS).then_some(h)
+            }
             (None, None) => None,
         }
     }
@@ -489,7 +488,11 @@ impl FcEkfPose {
                         Some(_) => None,
                     };
                     g.headings.extend(next);
-                    while g.headings.front().is_some_and(|h| h.t_ns + super::TRACK_HISTORY_NS < t_ns) {
+                    while g
+                        .headings
+                        .front()
+                        .is_some_and(|h| h.t_ns + super::TRACK_HISTORY_NS < t_ns)
+                    {
                         g.headings.pop_front();
                     }
                 }
@@ -505,12 +508,13 @@ impl FcEkfPose {
             }
             FcMessage::Imu(s) => {
                 g.clock.note(s.time_usec as i128 * 1_000, arrival_ns);
-                g.host_ns(s.time_usec as i128 * 1_000).map(|t_ns| NavSample::Imu {
-                    t_ns,
-                    arrival_ns,
-                    imu: s,
-                    attitude: g.host_attitude(),
-                })
+                g.host_ns(s.time_usec as i128 * 1_000)
+                    .map(|t_ns| NavSample::Imu {
+                        t_ns,
+                        arrival_ns,
+                        imu: s,
+                        attitude: g.host_attitude(),
+                    })
             }
             FcMessage::Range(r) => {
                 if let Some(m) = fc_flow::ground_range(&r) {
@@ -540,14 +544,14 @@ impl FcEkfPose {
             FcMessage::Position(p) => {
                 g.clock.note(p.time_boot_ms as i128 * 1_000_000, arrival_ns);
                 g.fc_ms = Some(p.time_boot_ms);
-                let position = g
-                    .host_ns(p.time_boot_ms as i128 * 1_000_000)
-                    .map(|t_ns| NavSample::Position {
-                        t_ns,
-                        ne_m: [p.ned[0], p.ned[1]],
-                        up_m: -p.ned[2],
-                        up_rate_mps: -p.vel[2],
-                    });
+                let position =
+                    g.host_ns(p.time_boot_ms as i128 * 1_000_000)
+                        .map(|t_ns| NavSample::Position {
+                            t_ns,
+                            ne_m: [p.ned[0], p.ned[1]],
+                            up_m: -p.ned[2],
+                            up_rate_mps: -p.vel[2],
+                        });
                 estimate = pair_estimate(&mut g, &p);
                 position
             }
@@ -572,7 +576,9 @@ fn pair_estimate(g: &mut FeedInner, p: &LocalPositionNed) -> Option<PoseEstimate
     if (fc_ns(p.time_boot_ms) - fc_ns(att.time_boot_ms)).unsigned_abs() > MAX_PAIR_NS as u128 {
         return None;
     }
-    let t_ns = g.host_ns(fc_ns(p.time_boot_ms)).expect("offset noted before pairing");
+    let t_ns = g
+        .host_ns(fc_ns(p.time_boot_ms))
+        .expect("offset noted before pairing");
     let steady = g
         .fix3d_since_ms
         .is_some_and(|s| p.time_boot_ms.saturating_sub(s) >= GNSS_SETTLE_MS);
@@ -748,7 +754,11 @@ mod tests {
         assert_eq!(e.t_ns, 5_020_000_000);
         assert_eq!(e.source, PoseSource::FcEkf);
         assert_eq!(e.t, [0.0, 1.0, 0.0]);
-        assert_eq!(p.ned_at(5_020_000_000), Some([1.0, 0.0]), "the EKF's own NED");
+        assert_eq!(
+            p.ned_at(5_020_000_000),
+            Some([1.0, 0.0]),
+            "the EKF's own NED"
+        );
         assert_eq!(p.ned_at(5_060_000_000), Some([1.0, 0.0]));
         assert_eq!(p.ned_at(5_100_000_000), None, "no extrapolation past 50 ms");
         // An attitude too old to pair yields nothing.
@@ -795,14 +805,23 @@ mod tests {
         assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS - 1)));
         step(GNSS_SETTLE_MS + 100);
         assert!(p.gnss_steady_at(host(GNSS_SETTLE_MS + 100)));
-        assert!(p.gnss_steady_at(host(GNSS_SETTLE_MS + 150)), "until the next estimate");
-        assert!(!p.gnss_steady_at(host(5_000)), "earlier estimates keep their state");
+        assert!(
+            p.gnss_steady_at(host(GNSS_SETTLE_MS + 150)),
+            "until the next estimate"
+        );
+        assert!(
+            !p.gnss_steady_at(host(5_000)),
+            "earlier estimates keep their state"
+        );
         p.on_frame(&gps(1), host(GNSS_SETTLE_MS + 200));
         step(GNSS_SETTLE_MS + 300);
         assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS + 300)));
         p.on_frame(&gps(3), host(GNSS_SETTLE_MS + 400));
         step(GNSS_SETTLE_MS + 500);
-        assert!(!p.gnss_steady_at(host(GNSS_SETTLE_MS + 500)), "the settle time restarts");
+        assert!(
+            !p.gnss_steady_at(host(GNSS_SETTLE_MS + 500)),
+            "the settle time restarts"
+        );
         step(2 * GNSS_SETTLE_MS + 400);
         assert!(p.gnss_steady_at(host(2 * GNSS_SETTLE_MS + 400)));
     }
@@ -833,7 +852,11 @@ mod tests {
         p.on_frame(&imu(1_005_000, 400), 5_008_000_000);
         let fed = collect(&p);
         p.on_frame(&imu(1_010_000, 500), 5_015_000_000);
-        assert_eq!(fed.lock().len(), 1, "handed on at arrival, the earlier one never");
+        assert_eq!(
+            fed.lock().len(),
+            1,
+            "handed on at arrival, the earlier one never"
+        );
         p.on_frame(&imu(1_020_000, 600), 5_022_000_000);
         let got = fed.lock().clone();
         let times: Vec<u64> = got
@@ -870,7 +893,9 @@ mod tests {
         got.lock()
             .iter()
             .filter_map(|s| match s {
-                NavSample::Imu { t_ns, arrival_ns, .. } => Some((*t_ns, *arrival_ns)),
+                NavSample::Imu {
+                    t_ns, arrival_ns, ..
+                } => Some((*t_ns, *arrival_ns)),
                 _ => None,
             })
             .collect()
@@ -894,9 +919,15 @@ mod tests {
             .map(|(t, a)| a.saturating_sub(*t) as f64 * 1e-6)
             .collect();
         let worst = late.iter().copied().fold(0.0, f64::max);
-        assert!(worst < 50.0, "a sample placed {worst:.0} ms before its arrival");
+        assert!(
+            worst < 50.0,
+            "a sample placed {worst:.0} ms before its arrival"
+        );
         let spacing = times[999].0 - times[998].0;
-        assert!((spacing as i64 - 12_500_000).abs() < 2_000_000, "spacing {spacing} ns");
+        assert!(
+            (spacing as i64 - 12_500_000).abs() < 2_000_000,
+            "spacing {spacing} ns"
+        );
     }
 
     /// A delivery stall that bursts keeps the FC's spacing, drift or not.
@@ -928,7 +959,10 @@ mod tests {
         let got = collect(&p);
         // 8 s at 0.8 of real time: the drift is measured.
         for k in 0..640u64 {
-            p.on_frame(&raw_imu_frame(60_000_000 + k * 10_000), 5_002_000_000 + k * 12_500_000);
+            p.on_frame(
+                &raw_imu_frame(60_000_000 + k * 10_000),
+                5_002_000_000 + k * 12_500_000,
+            );
         }
         // Reboot: FC time back to 1 s, read at the host's 20 s. The first
         // frame after a step is the only offset known, so it is placed at
@@ -943,12 +977,18 @@ mod tests {
         // With the drift started over, a stall and burst keep the spacing:
         // 100 samples 10 ms apart on the FC clock, read within 100 µs.
         for j in 1..=100u64 {
-            p.on_frame(&raw_imu_frame(31_010_000 + j * 10_000), 21_500_000_000 + j * 1_000);
+            p.on_frame(
+                &raw_imu_frame(31_010_000 + j * 10_000),
+                21_500_000_000 + j * 1_000,
+            );
         }
         let times = imu_times(&got);
         let n = times.len();
         let spacing = (times[n - 1].0 - times[n - 100].0) as f64 / 99.0;
-        assert!((spacing - 10e6).abs() < 1e6, "burst spacing {spacing} ns after the step");
+        assert!(
+            (spacing - 10e6).abs() < 1e6,
+            "burst spacing {spacing} ns after the step"
+        );
     }
 
     /// `OPTICAL_FLOW` (ArduPilot: boot ms in `time_usec`) is scaled by the
@@ -996,7 +1036,10 @@ mod tests {
         assert_eq!(v.len(), 2, "{v:?}");
         assert_eq!(v[0].0, 5_022_000_000);
         assert!((v[0].1[0] - 2.0).abs() < 1e-6 && (v[0].1[1] + 1.0).abs() < 1e-6);
-        assert!((v[1].1[0] - 4.0).abs() < 1e-6, "the out-of-band reading is skipped");
+        assert!(
+            (v[1].1[0] - 4.0).abs() < 1e-6,
+            "the out-of-band reading is skipped"
+        );
         p.on_frame(&att(1_400, [1.0, 0.0, 0.0, 0.0]), 5_402_000_000);
         p.on_frame(&flow(1_400, [0.0, 1.0]), 5_405_000_000);
         assert_eq!(velocities().len(), 2, "the range is 390 ms old");
@@ -1015,10 +1058,16 @@ mod tests {
             }
             frame_v2(32, &b)
         };
-        p.on_frame(&pos_vel(1_000, [0.0, 0.0, -2.5], [0.0, 0.0, -0.75]), 5_002_000_000);
+        p.on_frame(
+            &pos_vel(1_000, [0.0, 0.0, -2.5], [0.0, 0.0, -0.75]),
+            5_002_000_000,
+        );
         assert!(p.latest().is_none(), "no attitude: no estimate");
         p.on_frame(&att(1_010, [1.0, 0.0, 0.0, 0.0]), 5_012_000_000);
-        p.on_frame(&pos_vel(1_020, [1.0, -3.0, -2.0], [0.0, 0.0, 0.5]), 5_022_000_000);
+        p.on_frame(
+            &pos_vel(1_020, [1.0, -3.0, -2.0], [0.0, 0.0, 0.5]),
+            5_022_000_000,
+        );
         assert!(p.latest().is_some());
         let got = got.lock().clone();
         assert_eq!(
@@ -1053,7 +1102,10 @@ mod tests {
         // 90°/s from 170°, every 20 ms, through 180° to -100° (260°).
         for k in 0..=50u32 {
             let ms = 1_000 + 20 * k;
-            p.on_frame(&att(ms, yaw_q(170.0 + 1.8 * k as f64)), ms as u64 * 1_000_000);
+            p.on_frame(
+                &att(ms, yaw_q(170.0 + 1.8 * k as f64)),
+                ms as u64 * 1_000_000,
+            );
         }
         let deg = |t_ms: u64| p.heading_at(t_ms * 1_000_000).map(f64::to_degrees);
         let newest = crate::nav::frd_yaw(&p.attitude().expect("attitude").1).to_degrees();
@@ -1063,7 +1115,10 @@ mod tests {
         let seam = deg(1_110).expect("inside the history");
         assert!((seam - 179.9).abs() < 1e-3, "{seam}");
         assert!(deg(1_020 + 1_000).is_some(), "near the newest");
-        assert!(deg(3_000).is_none(), "past the newest by more than the extrapolation");
+        assert!(
+            deg(3_000).is_none(),
+            "past the newest by more than the extrapolation"
+        );
     }
 
     /// The FC's turn is its heading rate integrated: a 7° EKF yaw reset at
@@ -1074,17 +1129,34 @@ mod tests {
         use super::test_frames::att_turning;
         let p = FcEkfPose::new();
         let rate = 30f64.to_radians();
-        let yaw = |ms: u32| 30f64.to_radians() * (ms - 1_000) as f64 / 1e3 + if ms >= 1_500 { 7f64.to_radians() } else { 0.0 };
+        let yaw = |ms: u32| {
+            30f64.to_radians() * (ms - 1_000) as f64 / 1e3
+                + if ms >= 1_500 { 7f64.to_radians() } else { 0.0 }
+        };
         let q = |y: f64| [(y / 2.0).cos() as f32, 0.0, 0.0, (y / 2.0).sin() as f32];
-        for ms in (1_000..=2_000u32).step_by(20).chain((3_000..=3_200).step_by(20)) {
-            p.on_frame(&att_turning(ms, q(yaw(ms)), rate as f32), ms as u64 * 1_000_000);
+        for ms in (1_000..=2_000u32)
+            .step_by(20)
+            .chain((3_000..=3_200).step_by(20))
+        {
+            p.on_frame(
+                &att_turning(ms, q(yaw(ms)), rate as f32),
+                ms as u64 * 1_000_000,
+            );
         }
         let ms = |v: u64| v * 1_000_000;
         let (turn, bridged) = p.turn_between(ms(1_100), ms(1_900)).expect("both ends");
-        assert!((turn.to_degrees() - 24.0).abs() < 0.05, "{}", turn.to_degrees());
+        assert!(
+            (turn.to_degrees() - 24.0).abs() < 0.05,
+            "{}",
+            turn.to_degrees()
+        );
         assert!(!bridged);
         let (turn, bridged) = p.turn_between(ms(1_900), ms(3_100)).expect("both ends");
-        assert!((turn.to_degrees() - 36.0).abs() < 0.05, "{}", turn.to_degrees());
+        assert!(
+            (turn.to_degrees() - 36.0).abs() < 0.05,
+            "{}",
+            turn.to_degrees()
+        );
         assert!(bridged, "the 1 s gap is flagged");
         assert!(p.turn_between(ms(500), ms(1_100)).is_none());
     }

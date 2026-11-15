@@ -33,7 +33,7 @@ use crate::nav_commands::{
 };
 use crate::nav_config::{ExternalNavConfig, ObstacleConfig};
 use crate::nav_state::{AgeWindow, RateMeter, NAV_STATE_TOPIC};
-use crate::obstacle::sectorise;
+use crate::obstacle::{sectorise, Ground, ObstacleFilter};
 use crate::origin::OriginRule;
 use crate::pre_arm::{ExtnavPreArmInputs, PreArmGate, PreArmInputs};
 use crate::source_set::{gps_usable, SourceSwitch};
@@ -257,6 +257,23 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
     })
 }
 
+/// The floor test's inputs: the FC's fresh `ATTITUDE` and its fresh, valid
+/// downward `DISTANCE_SENSOR`; without both no return is taken for floor.
+fn obstacle_filter(sinks: &Sinks, now: i64) -> ObstacleFilter {
+    let attitude = sinks.fc_nav.snapshot(now).attitude;
+    let range = sinks
+        .relay
+        .read_shared()
+        .filter(|r| r.quality > 0 && r.distance_m.is_finite() && r.distance_m > 0.0);
+    ObstacleFilter {
+        ground: attitude.zip(range).map(|(a, r)| Ground {
+            roll: f64::from(a.roll),
+            pitch: f64::from(a.pitch),
+            agl_m: f64::from(r.distance_m),
+        }),
+    }
+}
+
 /// The obstacle tick.
 pub fn spawn_obstacle(
     ctx: &PluginContext,
@@ -278,7 +295,8 @@ pub fn spawn_obstacle(
             match shared.fresh_scan(now) {
                 Some((scan, recv, seq)) if seq != last_seq => {
                     last_seq = seq;
-                    let msg = sectorise(&scan, cfg.sectors, sinks.clock.fc_time_us(recv));
+                    let filter = obstacle_filter(&sinks, now);
+                    let msg = sectorise(&scan, cfg.sectors, sinks.clock.fc_time_us(recv), &filter);
                     min_obstacle = msg.min_obstacle_m();
                     let frame = msg.encode(next_sequence(COMPONENT_EXTNAV));
                     if router.send_as(&ctx, COMPONENT_EXTNAV, &frame).await {

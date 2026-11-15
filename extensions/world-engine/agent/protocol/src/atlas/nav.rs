@@ -95,8 +95,14 @@ pub struct ScanDescriptor {
     /// Angle of bin 0, radians, clockwise from body +x toward +y.
     pub angle_start_rad: f32,
     pub angle_increment_rad: f32,
-    /// Nearest horizontal range per bin, metres; `0.0` = no return.
+    /// Nearest horizontal range per bin, metres; `0.0` = no return. Every
+    /// return is kept, airframe and floor included: a consumer that wants
+    /// obstacles only filters them itself.
     pub ranges_m: Vec<f32>,
+    /// Bins the airframe occludes (the rig's blocked sectors). Their ranges
+    /// stay raw; a listed bin is not free space.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_bins: Vec<u16>,
 }
 
 /// One changed live occupancy tile.

@@ -33,86 +33,25 @@ fn frd_azimuth(x: f32, y_flu: f32) -> f32 {
     (-y_flu).atan2(x).rem_euclid(TAU)
 }
 
-/// Returns closer than this are the airframe itself (props, legs, the
-/// mast), whatever the sensor's own minimum; the planar matcher drops them
-/// the same way.
-pub const SELF_RETURN_M: f64 = 0.35;
-/// A return that levels to within this of the ground is the ground.
-pub const FLOOR_MARGIN_M: f64 = 0.25;
-
-/// What the shared scan leaves out before it is binned, so a consumer that
-/// takes every bin as an obstacle (the flight controller's proximity
-/// avoidance through `OBSTACLE_DISTANCE`) sees no airframe and no floor.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScanFilter {
-    /// Returns nearer than this (sensor range) are dropped.
-    pub min_range_m: f64,
-    /// Returns farther than this are dropped.
-    pub max_range_m: f64,
-    /// Sensor-frame sectors `[start, end]`, degrees counter-clockwise from
-    /// the sensor's +x, the airframe occludes (the rig's
-    /// `blocked_azimuth_deg`).
-    pub blocked_azimuth_deg: Vec<[f64; 2]>,
-    /// The flight controller's attitude near the scan (`R_ned_frd`) and the
-    /// body's height above the ground, metres: a tilted scan's returns that
-    /// level to the ground are dropped. `None` drops no ground return.
-    pub ground: Option<([f64; 9], f64)>,
-}
-
-impl Default for ScanFilter {
-    fn default() -> Self {
-        Self {
-            min_range_m: SELF_RETURN_M,
-            max_range_m: f64::INFINITY,
-            blocked_azimuth_deg: Vec::new(),
-            ground: None,
-        }
-    }
-}
-
-impl ScanFilter {
-    /// Whether a sensor-frame point `p` and its body-frame (FLU) position
-    /// `b` survive the filter.
-    fn keeps(&self, p: [f64; 3], b: [f64; 3]) -> bool {
-        let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
-        if !r.is_finite() || r < self.min_range_m || r > self.max_range_m {
-            return false;
-        }
-        if ados_scan2d::scan::is_blocked(p[1].atan2(p[0]).to_degrees(), &self.blocked_azimuth_deg)
-        {
-            return false;
-        }
-        match self.ground {
-            // Its depth below the body in NED: the FRD point (x, -y, -z)
-            // through the attitude's down row.
-            Some((r_ned_frd, agl_m)) if agl_m > FLOOR_MARGIN_M => {
-                let down = r_ned_frd[6] * b[0] - r_ned_frd[7] * b[1] - r_ned_frd[8] * b[2];
-                down < agl_m - FLOOR_MARGIN_M
-            }
-            _ => true,
-        }
-    }
-}
-
 /// The scan binned to [`SCAN_BINS`] 1° bins in the body FRD frame, nearest
-/// horizontal range per bin, after [`ScanFilter`]. `t_body_sensor` is the
-/// LiDAR mount (FLU).
+/// horizontal range per bin. Every return is kept, airframe, blocked
+/// sectors and floor included: the agent pilot reads a bin with no return
+/// as free space out to its horizon, so such a return must stay a bound.
+/// A consumer that wants obstacles only (vision-nav's `OBSTACLE_DISTANCE`)
+/// filters them itself. `t_body_sensor` is the LiDAR mount (FLU);
+/// `blocked_azimuth_deg` the rig's sensor-frame blocked sectors, published
+/// as [`ScanDescriptor::blocked_bins`].
 pub fn body_scan(
     scan: &LidarScan,
     t_body_sensor: &[f64; 16],
-    filter: &ScanFilter,
+    blocked_azimuth_deg: &[[f64; 2]],
 ) -> ScanDescriptor {
     let (r, t) = se3::from_mat4(t_body_sensor);
     let mut ranges = vec![0.0f32; SCAN_BINS];
     let inc = TAU / SCAN_BINS as f32;
     for p in &scan.points {
-        let p = [p[0] as f64, p[1] as f64, p[2] as f64];
-        let b = se3::mat_vec(&r, p);
-        let b = [b[0] + t[0], b[1] + t[1], b[2] + t[2]];
-        if !filter.keeps(p, b) {
-            continue;
-        }
-        let (x, y) = (b[0] as f32, b[1] as f32);
+        let b = se3::mat_vec(&r, [p[0] as f64, p[1] as f64, p[2] as f64]);
+        let (x, y) = ((b[0] + t[0]) as f32, (b[1] + t[1]) as f32);
         let range = x.hypot(y);
         if !range.is_finite() || range <= 0.0 {
             continue;
@@ -128,7 +67,27 @@ pub fn body_scan(
         angle_start_rad: 0.0,
         angle_increment_rad: inc,
         ranges_m: ranges,
+        blocked_bins: blocked_bins(&r, blocked_azimuth_deg),
     }
+}
+
+/// The body FRD bins whose centre bearing, turned into the sensor frame by
+/// the mount rotation `r_body_sensor`, lies in a blocked sector.
+fn blocked_bins(r_body_sensor: &[f64; 9], blocked_azimuth_deg: &[[f64; 2]]) -> Vec<u16> {
+    if blocked_azimuth_deg.is_empty() {
+        return Vec::new();
+    }
+    let r_sensor_body = se3::transpose(r_body_sensor);
+    let inc = std::f64::consts::TAU / SCAN_BINS as f64;
+    (0..SCAN_BINS)
+        .filter(|&i| {
+            let a = (i as f64 + 0.5) * inc;
+            // FRD bearing `a` (clockwise) as an FLU direction.
+            let s = se3::mat_vec(&r_sensor_body, [a.cos(), -a.sin(), 0.0]);
+            ados_scan2d::scan::is_blocked(s[1].atan2(s[0]).to_degrees(), blocked_azimuth_deg)
+        })
+        .map(|i| i as u16)
+        .collect()
 }
 
 /// The scan in its sensor FRD frame as [`POLAR_BINS`] polar bins (nearest
@@ -196,11 +155,7 @@ mod tests {
             t_offset_ns: vec![0, 0],
             intensity: vec![10, 20],
         };
-        let d = body_scan(
-            &scan,
-            &se3::to_mat4(&se3::IDENTITY, [0.0; 3]),
-            &ScanFilter::default(),
-        );
+        let d = body_scan(&scan, &se3::to_mat4(&se3::IDENTITY, [0.0; 3]), &[]);
         assert_eq!(d.ranges_m.len(), 360);
         assert!((d.ranges_m[0] - 2.0).abs() < 1e-6);
         assert!((d.ranges_m[90] - 3.0).abs() < 1e-6);
@@ -225,56 +180,64 @@ mod tests {
         }
     }
 
-    /// `R_ned_frd` of a nose-down pitch.
-    fn pitched(pitch_rad: f64) -> [f64; 9] {
-        let (s, c) = pitch_rad.sin_cos();
-        [c, 0.0, s, 0.0, 1.0, 0.0, -s, 0.0, c]
+    /// The agent pilot's reading of one shared-scan bin, mirrored from
+    /// ADOSDroneAgent `crates/ados-pilot/src/obstacles.rs`
+    /// (`Obstacles::ingest_scan`): a range of 0.05 m or less, or not
+    /// finite, is no return, and the pilot places a horizon point at
+    /// `SCAN_HORIZON_M` (12 m), which its brake treats as free space up to
+    /// there. Anything else bounds the free space at that range.
+    const PILOT_NO_RETURN_M: f32 = 0.05;
+    const PILOT_SCAN_HORIZON_M: f32 = 12.0;
+    fn pilot_free_to_m(r: f32) -> f32 {
+        if r <= PILOT_NO_RETURN_M || !r.is_finite() {
+            PILOT_SCAN_HORIZON_M
+        } else {
+            r
+        }
     }
 
     #[test]
-    fn the_airframe_and_blocked_sectors_never_reach_the_shared_scan() {
-        let mount = se3::to_mat4(&se3::IDENTITY, [0.0, 0.0, 0.12]);
-        // A prop 0.2 m ahead, a wall 3 m right, a leg 1 m behind.
-        let scan = ring_scan(vec![[0.2, 0.0, 0.0], [0.0, -3.0, 0.0], [-1.0, 0.0, 0.0]]);
-        let filter = ScanFilter {
-            blocked_azimuth_deg: vec![[170.0, 190.0]],
-            ..ScanFilter::default()
-        };
-        let d = body_scan(&scan, &mount, &filter);
-        assert_eq!(d.ranges_m[0], 0.0, "the prop return is the airframe");
-        assert!((d.ranges_m[90] - 3.0).abs() < 1e-6);
-        assert_eq!(d.ranges_m[180], 0.0, "the leg sits in a blocked sector");
-        let all = body_scan(&scan, &mount, &ScanFilter { min_range_m: 0.0, ..ScanFilter::default() });
-        assert!((all.ranges_m[0] - 0.2).abs() < 1e-6);
-        assert!((all.ranges_m[180] - 1.0).abs() < 1e-6);
+    fn the_pilot_reads_an_empty_bin_as_free_to_its_horizon() {
+        assert_eq!(pilot_free_to_m(0.0), 12.0);
+        assert_eq!(pilot_free_to_m(0.05), 12.0);
+        assert_eq!(pilot_free_to_m(f32::NAN), 12.0);
+        assert_eq!(pilot_free_to_m(0.2), 0.2);
     }
 
-    /// Pitched 10 degrees nose-down 1.5 m up, a planar scan meets the floor
-    /// about 9 m ahead (0.12 m mount): that return is floor, not an
-    /// obstacle, while a wall 4 m to the side stays.
+    /// Pitched 10° nose-down 1.5 m up, a planar scan meets the floor about
+    /// 9.2 m ahead (0.12 m mount); a prop sits 0.2 m to the front right and
+    /// a leg 1 m behind, inside the rig's blocked sector. None of them may
+    /// read to the pilot as free space past the return.
     #[test]
-    fn a_tilted_scans_floor_return_is_dropped() {
+    fn floor_airframe_and_blocked_returns_never_read_as_free_space() {
         let mount = se3::to_mat4(&se3::IDENTITY, [0.0, 0.0, 0.12]);
-        let pitch = 10f64.to_radians();
-        let floor_x = (1.5 + 0.12) / pitch.tan();
-        let scan = ring_scan(vec![[floor_x as f32, 0.0, 0.0], [0.0, -4.0, 0.0], [3.0, 0.0, 0.0]]);
-        let level = body_scan(&scan, &mount, &ScanFilter::default());
-        assert!((level.ranges_m[0] - 3.0).abs() < 1e-6);
-        let only_floor = ring_scan(vec![[floor_x as f32, 0.0, 0.0], [0.0, -4.0, 0.0]]);
-        let unfiltered = body_scan(&only_floor, &mount, &ScanFilter::default());
-        assert!((unfiltered.ranges_m[0] as f64 - floor_x).abs() < 1e-3, "no attitude: kept");
-        let filter = ScanFilter {
-            ground: Some((pitched(-pitch), 1.5)),
-            ..ScanFilter::default()
-        };
-        let d = body_scan(&only_floor, &mount, &filter);
-        assert_eq!(d.ranges_m[0], 0.0, "the floor ahead is dropped");
-        assert!((d.ranges_m[90] - 4.0).abs() < 1e-6, "the side wall stays");
-        // On the ground (height below the margin) nothing is dropped.
-        let landed = ScanFilter {
-            ground: Some((pitched(-pitch), 0.1)),
-            ..ScanFilter::default()
-        };
-        assert!(body_scan(&only_floor, &mount, &landed).ranges_m[0] > 0.0);
+        let floor_x = (1.5 + 0.12) / 10f64.to_radians().tan();
+        let prop = [0.2 * 0.5f32.cos(), -0.2 * 0.5f32.sin(), 0.0];
+        let scan = ring_scan(vec![[floor_x as f32, 0.0, 0.0], prop, [-1.0, 0.0, 0.0]]);
+        let blocked = [[170.0, 190.0]];
+        let d = body_scan(&scan, &mount, &blocked);
+        let prop_bin = (0.5f64.to_degrees()) as usize;
+        for (bin, want) in [(0, floor_x as f32), (prop_bin, 0.2), (180, 1.0)] {
+            let free = pilot_free_to_m(d.ranges_m[bin]);
+            assert!(
+                (free - want).abs() < 1e-3,
+                "bin {bin}: the pilot sees {free} m free, the return is at {want} m"
+            );
+        }
+        assert!(d.blocked_bins.contains(&180), "{:?}", d.blocked_bins);
+        assert!(!d.blocked_bins.contains(&0) && !d.blocked_bins.contains(&90));
+    }
+
+    #[test]
+    fn blocked_bins_follow_the_mount_yaw() {
+        // Sensor turned 90° left (FLU yaw +90°): its rear sector (170..190)
+        // faces the body's right, FRD bearing 90°.
+        let mount = se3::to_mat4(&yaw_flu(std::f64::consts::FRAC_PI_2), [0.0; 3]);
+        let d = body_scan(&ring_scan(vec![]), &mount, &[[170.0, 190.0]]);
+        assert!(d.blocked_bins.contains(&90), "{:?}", d.blocked_bins);
+        assert!(!d.blocked_bins.contains(&180));
+        assert!(body_scan(&ring_scan(vec![]), &mount, &[])
+            .blocked_bins
+            .is_empty());
     }
 }
