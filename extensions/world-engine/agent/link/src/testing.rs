@@ -36,6 +36,9 @@ pub struct FakeHost {
     pub aux_callback: Mutex<Option<AuxCallback>>,
     /// The frame-descriptor subscriptions, `(camera, callback)` in order.
     pub descriptor_callbacks: Mutex<Vec<(String, crate::host::DescriptorCallback)>>,
+    /// When set, `vision.subscribe_frames` is refused (a missing grant): no
+    /// callback is registered, as on the real host.
+    pub frames_refused: Mutex<bool>,
     /// The vehicle-state callback the link subscribed.
     pub state_callback: Mutex<Option<crate::host::StateCallback>>,
     /// `None` answers `node.info` with an error.
@@ -72,6 +75,7 @@ impl FakeHost {
             aux_sent: Mutex::default(),
             aux_callback: Mutex::default(),
             descriptor_callbacks: Mutex::default(),
+            frames_refused: Mutex::new(false),
             state_callback: Mutex::default(),
             node_info: Mutex::default(),
             mdns: Mutex::default(),
@@ -240,6 +244,9 @@ impl Host for FakeHost {
         camera_id: &str,
         callback: crate::host::DescriptorCallback,
     ) -> Result<(), ClientError> {
+        if *self.frames_refused.lock() {
+            return Err(ClientError::CapabilityDenied("vision.frame.read".into()));
+        }
         self.descriptor_callbacks
             .lock()
             .push((camera_id.to_string(), callback));

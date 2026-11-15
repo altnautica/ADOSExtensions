@@ -6,6 +6,22 @@ All notable changes to the World Engine extension.
 
 ### Added
 
+- **The LiDAR reports its own health.** A new shared topic,
+  `plugin.world-engine.lidar` (1 Hz, gated on `telemetry.read`), carries
+  the driver's port, link state, `GET_HEALTH` status and code from the
+  latest (re)connect, the measured revolution rate, and the scan, drop and
+  reconnect counters, so the agent no longer has to list a scanning LiDAR
+  as idle. A LiDAR the rig declares that is absent or silent when capture
+  starts is retried every 2 s inside the run (`lidar_source_recovered`
+  once it answers) instead of staying off until a config or rig change; an
+  unconfigured device is not retried and reports `connected: false`. 2.2.4.
+- **The shared scan lists the airframe's blocked bins.** The binned
+  body-frame scan (`plugin.world-engine.scan`) gains `blocked_bins`, the
+  bins the rig LiDAR's `blocked_azimuth_deg` sectors cover, turned through
+  the mount. Every range stays raw, airframe and floor returns included:
+  the agent pilot reads a bin with no return as free space to its
+  horizon, so a consumer that wants obstacles only (vision-nav's
+  `OBSTACLE_DISTANCE`) filters them itself. 2.2.4.
 - **Coloured LiDAR cloud.** On a node with a CUDA GPU, a reconstruction of
   a session with LiDAR and camera frames adds `cloud_rgb.laz`: the LiDAR
   points, with their attributes, coloured from the frames that see them, at
@@ -62,6 +78,8 @@ All notable changes to the World Engine extension.
 
 ### Removed
 
+- `atlas.hfov_deg`, one field of view for every camera copied by hand from
+  the roster: derived cameras take theirs from the roster. 2.2.4.
 - `atlas.live_reconstruct`. A compute node reconstructs a session in flight
   when its drone streams (`atlas.compute_placement = stream`, read from the
   drone's map status); `ADOS_ATLAS_LIVE` still forces it on a bench node.
@@ -677,35 +695,20 @@ All notable changes to the World Engine extension.
   top toward the nose, `up` straight up, `left`, `right` and `back` level
   along their side, `primary` and `aux` level forward. The pinhole of a
   camera with no intrinsics override uses the roster's field of view, or
-  70° when the roster gives none. `atlas.hfov_deg`, one field of view for
-  every camera copied by hand from the roster, is removed. 2.2.4.
-- **The shared scan carries no airframe and no floor.** The binned
-  body-frame scan (`plugin.world-engine.scan`, which vision-nav turns into
-  `OBSTACLE_DISTANCE` for the flight controller's proximity avoidance) kept
-  every return above 0 m: props and legs, the rig's blocked sectors, and
-  the floor a pitched drone's scan plane meets ahead. Returns nearer than
-  0.35 m (or the sensor's own minimum, if larger), past its maximum, or in
-  a `blocked_azimuth_deg` sector are now dropped, and with the flight
-  controller's attitude and downward range within 300 ms of the scan, a
-  return that levels to within 0.25 m of the ground is dropped as floor.
-  The scan stays in the body frame, unlevelled. 2.2.4.
-- **The LiDAR reports its own health.** A new shared topic,
-  `plugin.world-engine.lidar` (1 Hz, gated on `telemetry.read`), carries
-  the driver's port, link state, `GET_HEALTH` status and code from the
-  latest (re)connect, the measured revolution rate, and the scan, drop and
-  reconnect counters, so the agent no longer has to list a scanning LiDAR
-  as idle. A LiDAR the rig declares that is absent or silent when capture
-  starts is now retried every 2 s inside the run (`lidar_source_recovered`
-  once it answers) instead of staying off until a config or rig change; an
-  unconfigured device is not retried and reports `connected: false`. 2.2.4.
-- **Offloaded detections carry the camera's geometry.** A detection batch
-  returned from a compute node was republished on the drone's vision bus
-  without the camera's field of view and mount pitch, so Follow-Me projected
-  an offloaded box with its fallback geometry instead of the camera's. The
-  link now reads the offloaded camera's roster `fov_deg` and
-  `mount_pitch_deg` from its frame descriptors (descriptors only; the pixels
-  are not read) and stamps them on every returned batch, as the vision
-  engine does for a local detector. Built against agent 0.113.0. 2.2.4.
+  70° when the roster gives none. 2.2.4.
+- **Offloaded detections carry the main leg's camera geometry.** A
+  detection batch returned from a compute node was republished on the
+  drone's vision bus without the camera's field of view and mount pitch, so
+  Follow-Me projected an offloaded box with its fallback geometry. The link
+  now reads the roster `fov_deg` and `mount_pitch_deg` from the frame
+  descriptors (descriptors only; the pixels are not read) of the camera the
+  offloaded `main` leg streams: the vision engine's `main` tap, else the
+  `atlas.cameras` entry with role `primary`, never a camera of another
+  role. They are stamped on every returned batch while a session runs.
+  The agent has no route to end a frame subscription, so once offload has
+  started the host keeps forwarding those descriptors over IPC for the
+  plugin connection's life; between sessions the link drops them. Built
+  against agent 0.113.0. 2.2.4.
 
 ### Known limitations
 

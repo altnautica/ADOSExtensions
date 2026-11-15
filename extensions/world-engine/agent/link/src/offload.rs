@@ -25,6 +25,7 @@
 //! prefers a workstation that issued one. The RTSP URL handed to the node is the
 //! drone's LAN egress IP (never `localhost`: the node pulls the feed).
 
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -52,6 +53,9 @@ const RTSP_PORT: u16 = 8554;
 const RTSP_PATH: &str = "main";
 /// The camera the offloaded detections are attributed to (the drone's primary).
 const CAMERA_ID: &str = "front";
+/// The id the vision engine gives the primary camera it does not capture
+/// itself (its tap on the `main` leg the offload session streams).
+const MAIN_LEG_CAMERA: &str = "main";
 /// The fixed frame size the node decodes the feed at (the node scales the
 /// camera's own size to it).
 const FRAME_WIDTH: u32 = 1280;
@@ -168,9 +172,9 @@ impl Reconciler {
         let mut last_search: Option<Instant> = None;
         // Built on the first session and reused: one drain task for the process.
         let mut tee: Option<Arc<CloudDetectionTee>> = None;
-        // The offloaded camera's geometry from its frame descriptors, followed
-        // from the first session on (a frame subscription lasts the process).
-        let mut geometry: Option<watch::Receiver<CameraGeometry>> = None;
+        // The geometry of the camera the `main` leg streams, from its frame
+        // descriptors, applied only while a session runs.
+        let mut geometry = MainLegGeometry::new();
 
         loop {
             tokio::select! {
@@ -187,6 +191,7 @@ impl Reconciler {
                     tracing::info!(target = %sess.target, "offload session ended");
                 }
                 self.advertise(None).await;
+                geometry.stop();
             }
             let mode =
                 OffloadMode::parse(&config_json(self.host.as_ref(), "offload.enabled").await);
@@ -204,6 +209,7 @@ impl Reconciler {
                     // while the orchestrator is still submitting / opening the
                     // WebSocket and not yet parked on the cancel.
                     sess.cancel.notify_one();
+                    geometry.stop();
                     self.advertise(None).await;
                 }
                 continue;
@@ -228,18 +234,15 @@ impl Reconciler {
                 Arc::new(SdkDetectionPublisher::new(self.host.clone())),
             )
             .with_detection_tee(Some(tee as Arc<dyn DetectionTee>));
-            if geometry.is_none() {
-                match follow_camera_geometry(self.host.as_ref(), CAMERA_ID).await {
-                    Ok(rx) => geometry = Some(rx),
-                    Err(e) => tracing::warn!(
-                        error = %e,
-                        "offload: no frame descriptors for the camera geometry; batches carry none"
-                    ),
+            let cameras = main_leg_cameras(&config_json(self.host.as_ref(), "atlas.cameras").await);
+            let cfg = match geometry.start(self.host.as_ref(), cameras).await {
+                Some(rx) => cfg.with_camera_geometry(rx),
+                None => {
+                    tracing::warn!(
+                        "offload: no frame descriptors for the main leg's camera; batches carry no geometry"
+                    );
+                    cfg
                 }
-            }
-            let cfg = match &geometry {
-                Some(rx) => cfg.with_camera_geometry(rx.clone()),
-                None => cfg,
             };
             let endpoint = NodeEndpoint {
                 base_url: target.base_url,
@@ -269,6 +272,7 @@ impl Reconciler {
 
         if let Some(sess) = running.take() {
             sess.cancel.notify_one();
+            geometry.stop();
             self.advertise(None).await;
         }
     }
@@ -322,27 +326,131 @@ impl Reconciler {
     }
 }
 
-/// Follow `camera`'s geometry (its roster field of view and mount pitch) from
-/// the vision engine's frame descriptors. The receiver holds the newest frame's
-/// values, `None` fields until the first frame arrives.
-async fn follow_camera_geometry(
-    host: &dyn Host,
-    camera: &str,
-) -> Result<watch::Receiver<CameraGeometry>, ados_sdk::ClientError> {
-    let (tx, rx) = watch::channel(CameraGeometry::default());
-    host.subscribe_frame_descriptors(
-        camera,
-        Arc::new(move |d| {
-            let g = CameraGeometry::of_frame(&d);
-            tx.send_if_modified(|cur| {
-                let changed = *cur != g;
-                *cur = g;
-                changed
+/// The cameras whose frames are the `main` leg the offload session streams,
+/// best first: the vision engine's tap on `main` (a primary it does not
+/// capture), then the capture camera `atlas.cameras` declares primary. A
+/// camera of any other role is never a candidate, whatever its id.
+fn main_leg_cameras(atlas_cameras: &serde_json::Value) -> Vec<String> {
+    let mut out = vec![MAIN_LEG_CAMERA.to_string()];
+    let primary =
+        atlas_cameras.as_array().into_iter().flatten().find(|c| {
+            c["role"].as_str() == Some("primary") && c["enabled"].as_bool() != Some(false)
+        });
+    if let Some(id) = primary.and_then(|c| c["id"].as_str()).map(str::trim) {
+        if !id.is_empty() && id != MAIN_LEG_CAMERA {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
+/// What the descriptor callbacks share.
+struct LegState {
+    /// A session runs: descriptors apply. Off, the callbacks drop them.
+    active: bool,
+    /// The current candidates, best first ([`main_leg_cameras`]).
+    order: Vec<String>,
+    /// The newest geometry each camera's frames carried this session.
+    latest: HashMap<String, CameraGeometry>,
+    tx: watch::Sender<CameraGeometry>,
+}
+
+impl LegState {
+    /// Publish the best candidate's geometry, or none.
+    fn publish(&mut self) {
+        let g = self
+            .order
+            .iter()
+            .find_map(|c| {
+                self.latest
+                    .get(c)
+                    .filter(|g| **g != CameraGeometry::default())
+            })
+            .copied()
+            .unwrap_or_default();
+        self.tx.send_if_modified(|cur| {
+            let changed = *cur != g;
+            *cur = g;
+            changed
+        });
+    }
+}
+
+/// The geometry (roster field of view and mount pitch) of the camera the
+/// `main` leg streams, from the vision engine's frame descriptors.
+///
+/// Each candidate camera is subscribed once, after which the host forwards
+/// its descriptors for the connection's life: the agent has no
+/// `vision.unsubscribe_frames` route, so stopping a session cannot release
+/// the IPC stream. Between sessions the callbacks drop every descriptor and
+/// the receiver reads no geometry.
+struct MainLegGeometry {
+    state: Arc<parking_lot::Mutex<LegState>>,
+    subscribed: HashSet<String>,
+}
+
+impl MainLegGeometry {
+    fn new() -> Self {
+        let (tx, _) = watch::channel(CameraGeometry::default());
+        Self {
+            state: Arc::new(parking_lot::Mutex::new(LegState {
+                active: false,
+                order: Vec::new(),
+                latest: HashMap::new(),
+                tx,
+            })),
+            subscribed: HashSet::new(),
+        }
+    }
+
+    /// Start applying descriptors for a session over `cameras` (best
+    /// first), subscribing any not yet subscribed. `None` when no candidate
+    /// has a subscription.
+    async fn start(
+        &mut self,
+        host: &dyn Host,
+        cameras: Vec<String>,
+    ) -> Option<watch::Receiver<CameraGeometry>> {
+        for camera in &cameras {
+            if self.subscribed.contains(camera) {
+                continue;
+            }
+            let state = self.state.clone();
+            let id = camera.clone();
+            let callback = Arc::new(move |d: ados_protocol::framebus::FrameDescriptor| {
+                let mut s = state.lock();
+                // The gate: no session, no geometry (see the type's doc).
+                if !s.active {
+                    return;
+                }
+                s.latest.insert(id.clone(), CameraGeometry::of_frame(&d));
+                s.publish();
             });
-        }),
-    )
-    .await?;
-    Ok(rx)
+            match host.subscribe_frame_descriptors(camera, callback).await {
+                Ok(()) => {
+                    self.subscribed.insert(camera.clone());
+                }
+                Err(e) => {
+                    tracing::debug!(camera = %camera, error = %e, "offload: no frame descriptors")
+                }
+            }
+        }
+        let mut s = self.state.lock();
+        s.active = true;
+        s.order = cameras;
+        s.latest.clear();
+        s.publish();
+        let any = s.order.iter().any(|c| self.subscribed.contains(c));
+        any.then(|| s.tx.subscribe())
+    }
+
+    /// Stop applying descriptors: the session ended.
+    fn stop(&self) {
+        let mut s = self.state.lock();
+        s.active = false;
+        s.latest.clear();
+        s.publish();
+    }
 }
 
 #[cfg(test)]
@@ -395,21 +503,13 @@ mod tests {
         assert!(local_ip_towards("not a host", 80).is_err());
     }
 
-    #[tokio::test]
-    async fn the_offloaded_cameras_frame_descriptors_set_the_batch_geometry() {
+    fn frame(camera: &str, hfov: f32, pitch: f32) -> ados_protocol::framebus::FrameDescriptor {
         use ados_protocol::framebus::{
             FrameDescriptor, FrameFormat, FRAMEBUS_DESCRIPTOR_VERSION, TIMEBASE_HOST,
         };
-        let host = FakeHost::new();
-        let rx = follow_camera_geometry(host.as_ref(), CAMERA_ID)
-            .await
-            .unwrap();
-        let (camera, callback) = host.descriptor_callbacks.lock()[0].clone();
-        assert_eq!(camera, CAMERA_ID);
-        assert_eq!(*rx.borrow(), CameraGeometry::default());
-        callback(FrameDescriptor {
+        FrameDescriptor {
             v: FRAMEBUS_DESCRIPTOR_VERSION,
-            camera_id: CAMERA_ID.into(),
+            camera_id: camera.into(),
             frame_id: 1,
             ts_ns: 0,
             ts_sensor_ns: None,
@@ -419,19 +519,127 @@ mod tests {
             width: 1280,
             height: 720,
             format: FrameFormat::Rgb24,
-            shm_name: "ados-vision-front".into(),
+            shm_name: format!("ados-vision-{camera}"),
             slot: 0,
             seq: 1,
             byte_len: 0,
-            hfov_deg: Some(87.0),
-            mount_pitch_deg: Some(-15.0),
-        });
+            hfov_deg: Some(hfov),
+            mount_pitch_deg: Some(pitch),
+        }
+    }
+
+    fn geo(hfov: f32, pitch: f32) -> CameraGeometry {
+        CameraGeometry {
+            hfov_deg: Some(hfov),
+            mount_pitch_deg: Some(pitch),
+        }
+    }
+
+    /// Deliver `d` to every callback subscribed for its camera.
+    fn deliver(host: &FakeHost, d: ados_protocol::framebus::FrameDescriptor) {
+        let cbs = host.descriptor_callbacks.lock().clone();
+        for (camera, cb) in cbs {
+            if camera == d.camera_id {
+                cb(d.clone());
+            }
+        }
+    }
+
+    fn subscribed(host: &FakeHost) -> Vec<String> {
+        host.descriptor_callbacks
+            .lock()
+            .iter()
+            .map(|(c, _)| c.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_main_leg_is_the_tap_then_the_declared_primary_only() {
+        assert_eq!(main_leg_cameras(&json!(null)), vec!["main"]);
+        let cams = json!([
+            {"id": "front", "role": "aux"},
+            {"id": "nose", "role": "primary", "enabled": true}
+        ]);
+        assert_eq!(main_leg_cameras(&cams), vec!["main", "nose"]);
+        let off = json!([{"id": "nose", "role": "primary", "enabled": false}]);
+        assert_eq!(main_leg_cameras(&off), vec!["main"]);
+    }
+
+    #[tokio::test]
+    async fn the_main_tap_sets_the_batch_geometry() {
+        let host = FakeHost::new();
+        let mut g = MainLegGeometry::new();
+        let rx = g
+            .start(host.as_ref(), main_leg_cameras(&json!(null)))
+            .await
+            .unwrap();
+        assert_eq!(subscribed(&host), vec!["main"]);
+        assert_eq!(*rx.borrow(), CameraGeometry::default());
+        deliver(&host, frame("main", 87.0, -15.0));
+        assert_eq!(*rx.borrow(), geo(87.0, -15.0));
+    }
+
+    #[tokio::test]
+    async fn a_primary_captured_under_another_id_sets_it_and_the_tap_wins() {
+        let host = FakeHost::new();
+        let mut g = MainLegGeometry::new();
+        let cams = json!([{"id": "nose", "role": "primary"}]);
+        let rx = g
+            .start(host.as_ref(), main_leg_cameras(&cams))
+            .await
+            .unwrap();
+        assert_eq!(subscribed(&host), vec!["main", "nose"]);
+        deliver(&host, frame("nose", 70.0, -30.0));
+        assert_eq!(*rx.borrow(), geo(70.0, -30.0));
+        deliver(&host, frame("main", 87.0, -15.0));
         assert_eq!(
             *rx.borrow(),
-            CameraGeometry {
-                hfov_deg: Some(87.0),
-                mount_pitch_deg: Some(-15.0),
-            }
+            geo(87.0, -15.0),
+            "the main leg's own tap is preferred"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_non_primary_front_camera_never_sets_the_geometry() {
+        let host = FakeHost::new();
+        let mut g = MainLegGeometry::new();
+        let cams = json!([{"id": "front", "role": "down"}]);
+        let rx = g
+            .start(host.as_ref(), main_leg_cameras(&cams))
+            .await
+            .unwrap();
+        assert!(!subscribed(&host).contains(&"front".to_string()));
+        deliver(&host, frame("front", 120.0, -90.0));
+        assert_eq!(*rx.borrow(), CameraGeometry::default());
+    }
+
+    #[tokio::test]
+    async fn descriptors_stop_applying_when_the_session_stops_and_a_refusal_registers_nothing() {
+        let host = FakeHost::new();
+        *host.frames_refused.lock() = true;
+        let mut g = MainLegGeometry::new();
+        assert!(g.start(host.as_ref(), vec!["main".into()]).await.is_none());
+        assert!(
+            subscribed(&host).is_empty(),
+            "a refused subscription leaves no callback"
+        );
+        *host.frames_refused.lock() = false;
+        let rx = g.start(host.as_ref(), vec!["main".into()]).await.unwrap();
+        let rx2 = g.start(host.as_ref(), vec!["main".into()]).await.unwrap();
+        assert_eq!(
+            subscribed(&host),
+            vec!["main"],
+            "one subscription for the process"
+        );
+        deliver(&host, frame("main", 87.0, -15.0));
+        assert_eq!(*rx.borrow(), geo(87.0, -15.0));
+        g.stop();
+        assert_eq!(*rx2.borrow(), CameraGeometry::default());
+        deliver(&host, frame("main", 60.0, 0.0));
+        assert_eq!(
+            *rx2.borrow(),
+            CameraGeometry::default(),
+            "no session, no geometry"
         );
     }
 }

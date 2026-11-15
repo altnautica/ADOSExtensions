@@ -58,7 +58,10 @@ pub trait Host: Send + Sync + 'static {
     async fn publish_detection(&self, batch: &DetectionBatch) -> Result<Value, ClientError>;
     /// `vision.subscribe_frames` (cap `vision.frame.read`) for `camera_id`,
     /// delivering each frame's descriptor only: the pixels are never read
-    /// from the ring. A frame subscription lasts for the process.
+    /// from the ring. The callback is registered only once the host accepts
+    /// the subscription. The host has no unsubscribe route, so it keeps
+    /// forwarding the camera's descriptors over IPC for the connection's
+    /// life; a caller that stops needing them gates its callback.
     async fn subscribe_frame_descriptors(
         &self,
         camera_id: &str,
@@ -143,8 +146,14 @@ impl Host for PluginContext {
         camera_id: &str,
         callback: DescriptorCallback,
     ) -> Result<(), ClientError> {
-        let want = camera_id.to_string();
         let ipc = self.client();
+        // Subscribe first: a refused subscription (no grant, an older host)
+        // registers nothing, so a retry never stacks a dead callback.
+        let reply = ipc.vision_subscribe_frames(Some(camera_id)).await?;
+        if let Some(e) = reply_error(&reply) {
+            return Err(ClientError::Rpc(e.to_string()));
+        }
+        let want = camera_id.to_string();
         // The `vision.deliver` push carries the descriptor as a `descriptor`
         // binary; decoding it alone leaves the shared-memory ring untouched.
         ipc.register_vision_callback(
@@ -160,9 +169,7 @@ impl Host for PluginContext {
                 }
             }),
         );
-        ipc.vision_subscribe_frames(Some(camera_id))
-            .await
-            .map(|_| ())
+        Ok(())
     }
 
     async fn advertise_offload(&self, advert: &OffloadAdvertisement) -> Result<Value, ClientError> {
