@@ -192,6 +192,7 @@ class RecoveryMixin:
     _pose: Any
     _lease_id: Any
     _uncertain_since_s: float | None
+    _orbit_phase: float | None
 
     async def _on_lock_lost(self, cfg: FollowConfig, now: float) -> None:
         track_id = self._tracker.track_id
@@ -295,7 +296,9 @@ class RecoveryMixin:
             if lock is EffectiveLock.LOCKED:
                 # The engine locked the re-acquire designate: announce the
                 # re-lock on the track it locked, and follow it, keeping the
-                # subject filter and template.
+                # subject filter and template. The orbit restarts where the
+                # recovery left the drone, as engaging does: the phase kept
+                # from before the loss may lie across the circle.
                 track = self._tracker.track_id
                 await self._ctx.events.publish(
                     FOLLOW_REACQUIRED_TOPIC,
@@ -310,6 +313,7 @@ class RecoveryMixin:
                 self._ctx.log.info("follow_me_reacquired", track_id=track, phase=rec.phase)
                 self._recovery = None
                 self._filter_track_id = track
+                self._orbit_phase = None
                 self._measured_bbox = None
                 await self._tick_follow(cfg, now)
                 return

@@ -186,3 +186,28 @@ def test_the_orbit_circles_past_a_trunk_through_range_noise(seed: int) -> None:
     _assert_orbit(
         *_fly(direction="cw", trunk_bearing_deg=225.0, range_sigma_m=_RANGE_SIGMA_M, seed=seed)
     )
+
+
+@pytest.mark.parametrize("direction", ["cw", "ccw"])
+def test_a_fully_blocked_drone_holds_the_phase_at_the_max_lead(direction: str) -> None:
+    # The pilot cannot move the drone at all for two minutes: the phase stops
+    # within one step past the max lead and never runs away round the ring.
+    s = 1.0 if direction == "cw" else -1.0
+    step = math.radians(_RATE_DPS) * _DT
+    drone = (-_R, 0.0)
+    here = math.atan2(drone[1], drone[0])
+    phase = here
+    for _ in range(int(120.0 / _DT)):
+        phase = setpoint.advance_orbit_phase(
+            phase,
+            center_n=0.0,
+            center_e=0.0,
+            rate_dps=_RATE_DPS,
+            direction=direction,
+            drone_n=drone[0],
+            drone_e=drone[1],
+            dt_s=_DT,
+        )
+    lead = s * setpoint.wrap_pi(phase - here)
+    limit = math.radians(setpoint.ORBIT_MAX_LEAD_DEG)
+    assert limit <= lead <= limit + step + 1e-9

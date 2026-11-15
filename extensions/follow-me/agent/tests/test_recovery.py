@@ -5,6 +5,7 @@ predictive-search toggle, and the operator's resume and re-designate."""
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Any
 
 import pytest
@@ -18,7 +19,7 @@ from follow_fakes import (
     _state_events,
     _telemetry_config,
 )
-from follow_me import FollowMePlugin
+from follow_me import FollowMePlugin, setpoint
 from follow_me.state import (
     FOLLOW_LOST_TOPIC,
     FOLLOW_REACQUIRED_TOPIC,
@@ -196,6 +197,43 @@ async def test_only_the_same_person_is_relocked_and_it_is_announced(monkeypatch:
     (ev,) = _events(ctx, FOLLOW_REACQUIRED_TOPIC)
     assert ev["track_id"] == 9 and ev["phase"] == PHASE_PREDICTING and "mahalanobis" in ev
 
+
+@pytest.mark.asyncio
+async def test_a_relock_restarts_the_orbit_at_the_drone(monkeypatch: Any) -> None:
+    # The recovery flew the drone elsewhere on the ring, so the phase kept
+    # from before the loss is far ahead of it. The first goal after the
+    # re-lock starts the orbit where the drone is, as engaging does, instead
+    # of a ring point across the circle.
+    ctx = _Ctx(
+        config=_cfg(follow_mode="orbit"),
+        designate_result={"designated": True, "track_id": 9, "camera_id": "uvc-0"},
+    )
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+    clock.advance(0.3)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=None, lock_state=None, embedding=_EMB))
+    await plugin._tick()
+    assert len(ctx.vision.designate_calls) == 1
+    est = plugin._filter.predicted(clock.now)[0]
+    drone = setpoint.bearing(est[0], est[1], plugin._pose.north_m, plugin._pose.east_m)
+    assert drone is not None
+    plugin._orbit_phase = setpoint.wrap_pi(drone + math.radians(150.0))
+    clock.advance(0.05)
+    _fresh(plugin)
+    _feed(plugin, _person(track_id=9, lock_state=LOCK_LOCKED, embedding=_EMB))
+    sent = len(ctx.flight.setpoints)
+    await plugin._tick()
+    assert plugin._recovery is None
+    (goal,) = ctx.flight.setpoints[sent:]
+    assert goal["kind"] == "orbit"
+    cn, ce = goal["candidates"]["ring_center_ne"]
+    here = setpoint.bearing(cn, ce, plugin._pose.north_m, plugin._pose.east_m)
+    assert here is not None
+    # Within one rate step (10 °/s over the 0.5 s longest step).
+    lead = math.degrees(setpoint.wrap_pi(math.radians(goal["candidates"]["angle_deg"]) - here))
+    assert abs(lead) <= 5.0 + 1e-6
 
 @pytest.mark.asyncio
 async def test_strict_goes_straight_to_awaiting_the_operator(monkeypatch: Any) -> None:

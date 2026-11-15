@@ -132,6 +132,11 @@ _ORBIT_CASES = {
     "vehicle-at-the-centre": (0.0, 0.0, 0.0, 10.0),
     # Guard: a phase more than ORBIT_MAX_LEAD_DEG ahead waits.
     "beyond-the-max-lead": (50.0, 0.0, 8.0, 50.0),
+    # Across the ±180° seam: 10° behind the vehicle, 40° ahead of it, and
+    # 60° ahead (waits).
+    "behind-across-the-seam": (175.0, -175.0, 8.0, -175.0),
+    "lead-across-the-seam": (-150.0, 170.0, 8.0, -140.0),
+    "beyond-the-max-lead-across-the-seam": (-130.0, 170.0, 8.0, -130.0),
 }
 
 

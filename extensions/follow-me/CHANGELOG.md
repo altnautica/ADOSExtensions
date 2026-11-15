@@ -62,7 +62,9 @@ recovery phases and the waiting prompt.
   subject by at most 45°, instead of only while the drone is within 2 m of
   it, so a detour round a tree, a drone held inside or outside the circle,
   or an error in the subject's range no longer stops the orbit, and a drone
-  ahead of the orbit point is no longer pulled back.
+  ahead of the orbit point is no longer pulled back. After a re-acquire the
+  orbit restarts from where the drone is, instead of heading for an orbit
+  point the search may have left across the circle.
 
 ### Added
 
