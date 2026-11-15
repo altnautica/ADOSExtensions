@@ -279,8 +279,12 @@ pub struct PoseOut {
     /// The heading was not re-confirmed within the bounds
     /// ([`RESTART_AFTER_GATE_NS`] and the rest): the map was dropped at this
     /// scan and a new one starts at its pose, its heading the gyro's guess
-    /// across the gap. The caller re-anchors the new map's heading (the
-    /// flight controller's, while it does not fuse this pose);
+    /// across the gap. Until the new map has matched poses of its own it
+    /// moves at the velocity matched before the gap, turned with the gyro,
+    /// and the gyro keeps the bias it had before the gap: neither takes
+    /// anything from the scans matched while the heading was suspect. The
+    /// caller re-anchors the new map's heading (the flight controller's,
+    /// while it does not fuse this pose);
     /// [`LocalSlam::inserted_scans`] counts from it.
     pub map_restarted: bool,
 }
@@ -309,6 +313,13 @@ pub struct LocalSlam {
     last: Option<(u64, Pose2, f64)>,
     /// Matched poses of the last [`VELOCITY_WINDOW_NS`], oldest first.
     history: VecDeque<(u64, Pose2)>,
+    /// The LiDAR-frame velocity predicted at the last scan whose heading the
+    /// gyro measured and no gap made suspect.
+    confirmed_vel: [f64; 2],
+    /// The LiDAR-frame velocity a map started over in flight moves at until
+    /// it has matched two poses of its own ([`PoseOut::map_restarted`]): the
+    /// [`Self::confirmed_vel`] it started with.
+    restart_vel: Option<[f64; 2]>,
     /// Set while the latest match is degenerate.
     unobserved: Option<Unobserved>,
     /// Measured velocities ([`Self::feed_velocity`]), levelled LiDAR frame,
@@ -366,6 +377,8 @@ impl LocalSlam {
             nodes: Vec::new(),
             last: None,
             history: VecDeque::new(),
+            confirmed_vel: [0.0, 0.0],
+            restart_vel: None,
             unobserved: None,
             measured: VecDeque::new(),
             last_insert: None,
@@ -486,6 +499,7 @@ impl LocalSlam {
         self.last_insert = None;
         self.inserted = 0;
         self.suspect = None;
+        self.restart_vel = None;
         self.confirm_pyramid = None;
     }
 
@@ -785,7 +799,40 @@ impl LocalSlam {
             _ => t,
         });
         let span_ns = input.t_offset_ns.iter().copied().max().unwrap_or(0) as u64;
-        let (prior, velocity, yaw_rate, prior_vel) = self.predict(t, heading, span_ns);
+        let (mut prior, mut velocity, yaw_rate, mut prior_vel) = self.predict(t, heading, span_ns);
+        // Whether the gyro measured the turn since the reference scan: a gap
+        // in the IMU bridges it with a guess. Scans before the first sample
+        // are no gap: the heading starts there, and nothing was lost.
+        let measured = !gyro
+            || self
+                .last
+                .is_none_or(|(t1, _, _)| self.att.measured_since(t1));
+        if !measured {
+            if let Some((end_ns, len_ns)) = self.att.last_gap() {
+                self.suspect(t, prior, end_ns, len_ns);
+            }
+        }
+        let fc_now = self.fc_position_near(t);
+        let restarted = self
+            .suspect
+            .as_ref()
+            .is_some_and(|s| s.exhausted(t, Vector2::new(prior.x, prior.y), fc_now));
+        if restarted {
+            self.heading_unmeasured();
+            // The scan that starts the map over is the new map's first, and
+            // the new map has no matched poses to tell its motion. Until it
+            // has, it moves at the velocity matched while the heading was
+            // last confirmed, turned with the gyro, never at the one the
+            // matcher tracked through the stretch whose heading went
+            // unmeasured: that track, matched on a stale prior, hangs on the
+            // last bit of its input, and the new map would start from it.
+            // Nor at none: the drone flies on, and a map warmed up on a
+            // standing prior drags its first matches behind it.
+            self.restart_vel = Some(self.confirmed_vel);
+            (prior, velocity, _, prior_vel) = self.predict(t, heading, span_ns);
+        } else if measured && reached && self.suspect.is_none() {
+            self.confirmed_vel = velocity;
+        }
         let motion = Motion {
             roll,
             pitch,
@@ -809,31 +856,13 @@ impl LocalSlam {
             sigma_xy_m: SIGMA_MATCHED_M,
             heading_ok: false,
             heading_unconfirmed: false,
-            map_restarted: false,
+            map_restarted: restarted,
         };
         // Riding the prior: it carried the pose `speed × dt` since the last
         // scan without a match to check it.
         let dt_s = self.last.map_or(0.0, |(t1, _, _)| t.saturating_sub(t1) as f64 * 1e-9);
         let riding_sigma =
             (self.sigma_xy_m + SIGMA_GROWTH_PER_M * prior_vel.norm() * dt_s).min(SIGMA_MAX_M);
-        // Whether the gyro measured the turn since the reference scan: a gap
-        // in the IMU bridges it with a guess. Scans before the first sample
-        // are no gap: the heading starts there, and nothing was lost.
-        let measured = !gyro || self.last.is_none_or(|(t1, _, _)| self.att.measured_since(t1));
-        if !measured {
-            if let Some((end_ns, len_ns)) = self.att.last_gap() {
-                self.suspect(t, prior, end_ns, len_ns);
-            }
-        }
-        let fc_now = self.fc_position_near(t);
-        if self
-            .suspect
-            .as_ref()
-            .is_some_and(|s| s.exhausted(t, Vector2::new(prior.x, prior.y), fc_now))
-        {
-            self.heading_unmeasured();
-            out.map_restarted = true;
-        }
         let has_measured = self
             .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
             .is_some();
@@ -901,12 +930,18 @@ impl LocalSlam {
             let info = constraint_information(&scan, r.pose);
             let deg = degeneracy(&info);
             // The heading the scans turned since the last scan against the
-            // gyro's, for the gyro's z bias; never the FC's fused yaw.
+            // gyro's, for the gyro's z bias; never the FC's fused yaw, and
+            // never while the heading is suspect: the scan is then matched
+            // on a prior the gyro did not carry across the gap, against a
+            // map its heading is not re-confirmed in, so the turn it finds
+            // measures the match, not the gyro, and a map started over
+            // would inherit that bias.
             let min_rotation_info = (self.cfg.resolution_m / BIAS_MAX_ROTATION_SIGMA_RAD).powi(2);
             if let Some((t1, _, _)) = self.last {
                 if self.att.has_data()
                     && measured
                     && reached
+                    && self.suspect.is_none()
                     && yaw_rate.abs() <= BIAS_MAX_TURN_RATE
                     && rotation_information(&info) >= min_rotation_info
                 {
@@ -1015,7 +1050,8 @@ impl LocalSlam {
     /// `span_ns`, and the local-frame velocity of the prediction, from the
     /// IMU's heading and a velocity: the measured one
     /// ([`Self::feed_velocity`]) over the interval while it is fresh, else
-    /// the mean over the recent poses.
+    /// the mean over the recent poses, else, with fewer than two since the
+    /// map started over in flight, [`Self::restart_vel`].
     /// The velocity is kept in the LiDAR frame (the chord over the window is
     /// expressed at its middle heading) so it turns with the walker through a
     /// corner. Without a measured velocity, along directions the last match
@@ -1039,7 +1075,7 @@ impl LocalSlam {
                 let (cx, cy) = ((p1.x - p0.x) / d, (p1.y - p0.y) / d);
                 ([c * cx + s * cy, -s * cx + c * cy], turn / d)
             }
-            _ => ([0.0, 0.0], 0.0),
+            _ => (self.restart_vel.unwrap_or([0.0, 0.0]), 0.0),
         };
         let (dyaw, rate) = if self.att.has_data() {
             (heading - heading1, imu_rate)
