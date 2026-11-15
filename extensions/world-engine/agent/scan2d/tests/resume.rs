@@ -10,7 +10,7 @@ mod common;
 
 use ados_scan2d::pose::wrap;
 use ados_scan2d::{ImuSample, LocalSlam, Pose2, Scan2dConfig};
-use common::{rect, revolution, Rng, Seg, C1};
+use common::{rect, revolution, Path, Rng, Seg, C1};
 
 /// A 12 x 6 m room with two boxes: no turn maps its outline onto itself.
 fn room() -> Vec<Seg> {
@@ -229,3 +229,135 @@ fn an_ambiguous_room_starts_the_map_over() {
     assert!(at <= 7.6, "started over only at {at:.1} s");
     assert!(r.restart_drift.is_empty(), "the new map moved at {:?}", r.restart_drift);
 }
+
+/// How the drone moves from the scan that starts the map over on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum After {
+    FliesOn,
+    Stops,
+    Reverses,
+}
+
+/// What [`fly`] saw: when the map started over, and the worst position,
+/// m, and heading, degrees, of the scans after it against the truth
+/// placed at the restart (the caller re-anchors the new map once).
+#[derive(Debug)]
+struct Flown {
+    restart_s: Option<f64>,
+    worst_m: f64,
+    worst_deg: f64,
+}
+
+/// Fly `path` through `world`, the IMU's samples dropped over [stop,
+/// resume) and the flight controller's heading `bias_deg` off from
+/// `resume` on (as [`run`]); from `at_s` on the drone moves as `after`
+/// says, back along its track when it reverses.
+fn fly(
+    world: &[Seg],
+    path: &Path,
+    stop: f64,
+    resume: f64,
+    bias_deg: f64,
+    after: After,
+    at_s: f64,
+) -> Flown {
+    let pose_at = |t: f64| match after {
+        _ if t < at_s => path.at_time(t),
+        After::FliesOn => path.at_time(t),
+        After::Stops => path.at_time(at_s),
+        After::Reverses => path.at_time(2.0 * at_s - t),
+    };
+    let rate = |t: f64| wrap(pose_at(t + 0.0005).th - pose_at(t - 0.0005).th) / 0.001;
+    let mut rng = Rng::new(5);
+    let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
+    let mut out = Flown {
+        restart_s: None,
+        worst_m: 0.0,
+        worst_deg: 0.0,
+    };
+    let mut placed: Option<Pose2> = None;
+    let mut imu_t = 0.0f64;
+    let scans = (path.duration_s() / 0.1) as usize;
+    for n in 0..scans {
+        let t = n as f64 * 0.1;
+        while imu_t + 0.01 <= t + 0.1 + 1e-9 {
+            imu_t += 0.01;
+            if (stop..resume).contains(&imu_t) {
+                continue;
+            }
+            let t_ns = (imu_t * 1e9).round() as u64;
+            let bias = if imu_t >= resume {
+                bias_deg.to_radians()
+            } else {
+                0.0
+            };
+            slam.feed_fc_heading(t_ns, 1.0 + pose_at(imu_t).th + bias);
+            slam.feed_imu(&ImuSample {
+                t_ns,
+                gyro: [0.0, 0.0, rate(imu_t)],
+                accel: [0.0, 0.0, 9.81],
+            });
+        }
+        let p = slam.feed_scan(&revolution(world, &pose_at, t, C1, &mut rng));
+        let (est, truth) = (Pose2::new(p.x, p.y, p.yaw), pose_at(t));
+        if p.map_restarted {
+            out.restart_s.get_or_insert(t);
+            placed.get_or_insert(est * truth.inverse());
+        }
+        if let Some(frame) = placed {
+            let want = frame * truth;
+            out.worst_m = out.worst_m.max((want.x - est.x).hypot(want.y - est.y));
+            out.worst_deg = out.worst_deg.max(wrap(want.th - est.th).to_degrees().abs());
+        }
+    }
+    out
+}
+
+/// A map started over while the drone flies moves at the velocity matched
+/// before the gap until it has matched poses of its own. A drone that
+/// stops or turns back at that very scan is still tracked: the velocity is
+/// only the prior the scans are searched around. The new map's first
+/// scan is de-skewed at the old velocity, so it is smeared by up to the
+/// velocity change over one revolution, and the new map holds the drone
+/// off by up to that much.
+#[test]
+fn a_map_started_over_in_flight_tracks_a_drone_that_stops_or_turns_back() {
+    let mut w = rect(0.0, 0.0, 12.0, 11.0);
+    w.extend(rect(8.0, 1.0, 9.5, 2.5));
+    w.extend(rect(2.0, 6.0, 4.0, 7.5));
+    w.extend(rect(8.0, 7.0, 10.0, 9.0));
+    // Up to 1.2 m/s, then a quarter turn left at about 90°/s from 3.5 s,
+    // the gap inside it.
+    let path = Path::new(1.5, 2.0, 0.0)
+        .speed_to(1.2, 0.6)
+        .line(3.0)
+        .arc(0.75, std::f64::consts::FRAC_PI_2)
+        .line(6.0);
+    let (stop, resume, bias) = (3.8, 4.3, 14.0);
+    let first = fly(&w, &path, stop, resume, bias, After::FliesOn, f64::INFINITY);
+    let at = first.restart_s.expect("the map starts over");
+    for (after, dv) in [
+        (After::FliesOn, 0.0),
+        (After::Stops, 1.2),
+        (After::Reverses, 2.4),
+    ] {
+        let r = fly(&w, &path, stop, resume, bias, after, at);
+        eprintln!("{after:?} from {at:.1} s: {r:?}");
+        assert_eq!(
+            r.restart_s,
+            Some(at),
+            "{after:?}: the map started over elsewhere"
+        );
+        let bound = SLACK_M + dv * REVOLUTION_S;
+        assert!(
+            r.worst_m <= bound,
+            "{after:?}: {:.3} m off (bound {bound:.3} m)",
+            r.worst_m
+        );
+        assert!(r.worst_deg <= 1.5, "{after:?}: {:.2} deg off", r.worst_deg);
+    }
+}
+
+/// One LiDAR revolution, s, and the matcher's own position error, m.
+const REVOLUTION_S: f64 = 0.1;
+const SLACK_M: f64 = 0.05;
