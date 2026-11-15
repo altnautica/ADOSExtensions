@@ -155,6 +155,22 @@ All notable changes to the World Engine extension.
   with a rival check inside it, so an honest FC turn 7 to 9° off is no
   longer rejected at its edge. 2.2.3.
 
+- **A map the planar matcher starts over in flight no longer hangs on the
+  last bit of the outage.** Through an IMU hole the matcher matches scans
+  on a stale prior, and that track grows a last-bit difference to
+  centimetres: aarch64's `hypot`, which rounds a last bit differently from
+  x86's, put a replayed 1.5 s hole's restarted map 2.26° off on ARM and
+  1.48° on x86. The new map took two things from that track: its first scan
+  moved at the velocity tracked through the outage, and the gyro kept a bias
+  learned from scans matched while the heading was suspect. Until the new
+  map has matched poses of its own it now moves at the velocity matched
+  while the heading was last confirmed, turned with the gyro (before, its
+  second scan rode a standing prior and the warm-up dragged behind the
+  drone), and the bias is learned only from scans whose heading is not
+  suspect. The replay now comes back 1.42° off on both, and moving every
+  LiDAR point through the hole by one ulp moves the restarted map by less
+  than 0.01°. 2.2.3.
+
 - **TSDF meshing no longer aborts on newer GPUs.** Fusion shared a process
   with the splat renderer, and Open3D's cached CUDA allocator aborted the
   mesh stage ("Block ... should have been recorded") at the first fused
