@@ -709,7 +709,7 @@ All notable changes to the World Engine extension.
   The agent has no route to end a frame subscription, so once offload has
   started the host keeps forwarding those descriptors over IPC for the
   plugin connection's life; between sessions the link drops them. Built
-  against agent 0.113.0. 2.2.4.
+  against agent 0.113.1. 2.2.4.
 
 ### Known limitations
 
