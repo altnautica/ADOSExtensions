@@ -186,9 +186,9 @@ impl Engine {
         let (fx, width) = match rig_model {
             Some(c) => (c.fx, c.width),
             None => {
-                let c = self
-                    .cfg
-                    .intrinsics_for(&f.camera_id, f.width, f.height, f.geometry.hfov_deg);
+                let c =
+                    self.cfg
+                        .intrinsics_for(&f.camera_id, f.width, f.height, f.geometry.hfov_deg);
                 (c.fx, c.width)
             }
         };

@@ -340,21 +340,31 @@ mod tests {
         let (s15, c15) = 15f64.to_radians().sin_cos();
         assert_t(
             &t_of(&rig.sensors[0]),
-            &[0.0, -s15, c15, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -c15, -s15, 0.0, 0.0, 0.0, 0.0, 1.0],
+            &[
+                0.0, -s15, c15, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -c15, -s15, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
         );
         let main = rig.sensors[0].camera.as_ref().unwrap();
         assert!((main.fx - 640.0 / 43.5_f64.to_radians().tan()).abs() < 1e-9);
         // Straight down, the image top toward the nose.
-        let down = [0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let down = [
+            0.0, -1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
         assert_t(&t_of(&rig.sensors[1]), &down);
         assert!((rig.sensors[1].camera.as_ref().unwrap().fx - 320.0).abs() < 1e-9);
         // No roster geometry: the down camera still looks down (not up), the
         // primary looks level along the nose, on the default field of view.
-        let bare = derive_rig(&cfg, |id| Some(seen(if id == "main" { 1280 } else { 640 }, 480, None, None)), &[]);
+        let bare = derive_rig(
+            &cfg,
+            |id| Some(seen(if id == "main" { 1280 } else { 640 }, 480, None, None)),
+            &[],
+        );
         assert_t(&t_of(&bare.sensors[1]), &down);
         assert_t(
             &t_of(&bare.sensors[0]),
-            &[0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            &[
+                0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ],
         );
         let f = bare.sensors[0].camera.as_ref().unwrap().fx;
         assert!((f - 640.0 / (DEFAULT_HFOV_DEG / 2.0).to_radians().tan()).abs() < 1e-9);
@@ -413,7 +423,10 @@ mod tests {
         let json = |s: &[RigSensor]| serde_json::to_value(s).unwrap();
         assert_eq!(json(&rig.sensors[..2]), json(&stored.sensors));
         let main = &rig.sensors[2];
-        assert_eq!((main.kind, main.role), (RigSensorKind::Camera, RigSensorRole::Primary));
+        assert_eq!(
+            (main.kind, main.role),
+            (RigSensorKind::Camera, RigSensorRole::Primary)
+        );
         let cam = main.camera.as_ref().unwrap();
         assert_eq!((cam.width, cam.height), (1280, 720));
         assert!((cam.fx - 640.0 / 43.5_f64.to_radians().tan()).abs() < 1e-9);
