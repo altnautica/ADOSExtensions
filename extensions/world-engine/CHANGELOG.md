@@ -150,7 +150,14 @@ All notable changes to the World Engine extension.
   is taken instead, so a restart deep in a featureless corridor keeps the
   north. Without the FC's turn since either, the restarted map stays lost
   (`imu_feed: north_unknown`) rather than fused on the matcher's guess,
-  and its poses stay out of the GNSS fit.
+  and its poses stay out of the GNSS fit. With no pose trusted since the
+  map last started (on the ground before its first, or a LiDAR that never
+  matched) there is no north of its own to keep: the map starts over as at
+  the first `RAW_IMU` and latches the north afresh
+  (`nav_map_restarted_before_a_trusted_pose`) instead of staying lost: on
+  the take-off spot as at the first pose, and once the vehicle has left
+  that spot from the FC heading, since a declared take-off heading holds
+  only there.
   The FC-turn window that re-confirms a short gap widens from 8° to 10°,
   with a rival check inside it, so an honest FC turn 7 to 9° off is no
   longer rejected at its edge. 2.2.3.

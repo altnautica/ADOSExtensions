@@ -160,11 +160,19 @@ pub struct NavMap {
     /// vehicle is on the spot of the first one, then fixed; until the first
     /// heading nothing is placed in the map.
     yaw0: Option<f64>,
-    /// Where the first heading was taken (`map_frd`), while the vehicle is
-    /// still there; `None` before it and once the vehicle has left.
+    /// Where the first heading was taken (`map_frd`), the declared one or
+    /// the FC's, while the vehicle is still there; `None` before it and once
+    /// the vehicle has left.
     spot: Option<[f64; 3]>,
     /// Whether the vehicle has left the spot of the first heading.
     left_spot: bool,
+    /// Whether the vehicle has left the take-off spot (that of the first
+    /// heading the capture took): a declared take-off heading holds only
+    /// there. Kept when the map starts over ([`Self::start_over`]).
+    left_takeoff: bool,
+    /// The north was latched from the FC heading although a take-off heading
+    /// is declared: the map started over off the take-off spot.
+    north_from_fc: bool,
     /// The GNSS alignment onto the EKF's local frame.
     align: MapAlign,
     /// `map_ned`'s horizontal offset from the rotated SLAM world (north,
@@ -226,6 +234,14 @@ pub(crate) fn wrap_pi(a: f64) -> f64 {
     }
 }
 
+/// How far `t_frd` is from `spot` (both `map_frd`), horizontally and in
+/// climb, metres, and whether that is still on the spot ([`ON_SPOT_M`]).
+fn from_spot(spot: [f64; 3], t_frd: [f64; 3]) -> (f64, f64, bool) {
+    let horizontal = (t_frd[0] - spot[0]).hypot(t_frd[1] - spot[1]);
+    let climb = spot[2] - t_frd[2];
+    (horizontal, climb, horizontal <= ON_SPOT_M && climb <= ON_SPOT_M)
+}
+
 impl NavMap {
     pub fn new(settings: NavSettings) -> Self {
         Self {
@@ -245,6 +261,8 @@ impl NavMap {
             measured: None,
             seating: false,
             blind: false,
+            left_takeoff: false,
+            north_from_fc: false,
         }
     }
 
@@ -258,8 +276,17 @@ impl NavMap {
             return;
         }
         tracing::info!(t_ns, "nav_map_restarted");
+        self.restarted_at = Some(t_ns);
+        self.start_over();
+    }
+
+    /// The map, its north and its GNSS fit start over, as at the first pose;
+    /// the first-`RAW_IMU` restart already taken stays taken, and so does a
+    /// take-off spot the vehicle has left.
+    fn start_over(&mut self) {
         *self = Self {
-            restarted_at: Some(t_ns),
+            restarted_at: self.restarted_at,
+            left_takeoff: self.left_takeoff,
             ..Self::new(self.settings)
         };
     }
@@ -310,13 +337,33 @@ impl NavMap {
     ///   drone poorly, and only a pose that is not lost ends the placing.
     ///
     /// The GNSS fit starts over (it fitted the old map). Without the FC's
-    /// turn since the trusted pose (none, or older than the FC's attitude
-    /// history) the new map's north is unknown: it stays lost, never fused
-    /// on the matcher's guess through the outage. Without the FC's position
-    /// at both ends the pose keeps the old map's blind position. Both warn,
-    /// as does a turn bridged across a gap in the FC's attitudes.
+    /// turn since the trusted pose (no FC attitude, or none that old) the
+    /// new map's north is unknown: it stays lost, never fused on the
+    /// matcher's guess through the outage. Without the FC's position at
+    /// both ends the pose keeps the old map's blind position. Both warn, as
+    /// does a turn bridged across a gap in the FC's attitudes.
+    ///
+    /// With no pose trusted since the map last started (on the ground before
+    /// its first, or a LiDAR that never matched), the old map has no north
+    /// of its own to carry over: the map starts over as at the first
+    /// `RAW_IMU` ([`Self::restart_heading_at`]), and the next pose latches
+    /// the north afresh: on the take-off spot as at the first pose, off it
+    /// from the FC heading even with a declared take-off heading, which holds
+    /// only on that spot.
     pub fn restart_in_flight(&mut self, e: &PoseEstimate, fc_up: Option<f64>, fc: Option<&FcEkfPose>) {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
+        if self.good.is_none() && self.measured.is_none() {
+            // The restart pose may have left the spot since the last pose.
+            if self.spot.is_some_and(|spot| !from_spot(spot, t_frd).2) {
+                self.left_takeoff = true;
+            }
+            tracing::warn!(
+                left_takeoff = self.left_takeoff,
+                "nav_map_restarted_before_a_trusted_pose"
+            );
+            self.start_over();
+            return;
+        }
         let Some((heading, bridged)) = fc.and_then(|fc| self.outage_heading(e.t_ns, fc)) else {
             tracing::warn!("nav_map_restart_without_fc_heading");
             self.blind = true;
@@ -445,7 +492,7 @@ impl NavMap {
             Some(MapNorth::Gnss)
         } else if self.yaw0.is_none() {
             None
-        } else if self.settings.takeoff_heading_rad.is_some() {
+        } else if self.settings.takeoff_heading_rad.is_some() && !self.north_from_fc {
             Some(MapNorth::Declared)
         } else {
             Some(MapNorth::FcHeading)
@@ -528,30 +575,19 @@ impl NavMap {
     }
 
     /// Latch the map's north at the first pose from the declared take-off
-    /// heading when there is one. Otherwise take it from the FC heading while
-    /// the vehicle is on the spot of the first heading, and fix it once the
-    /// vehicle has moved [`ON_SPOT_M`] from there horizontally or in climb.
+    /// heading when there is one and the vehicle has not left the take-off
+    /// spot. Otherwise take it from the FC heading while the vehicle is on
+    /// the spot of the first heading. Either is fixed once the vehicle has
+    /// moved [`ON_SPOT_M`] from there horizontally or in climb.
     fn follow_heading(&mut self, r_frd: &[f64; 9], t_frd: [f64; 3], fc_heading: Option<f64>) {
         if self.left_spot {
             return;
         }
-        if let Some(declared) = self.settings.takeoff_heading_rad {
-            let yaw0 = wrap_pi(declared - frd_yaw(r_frd));
-            self.yaw0 = Some(yaw0);
-            self.left_spot = true;
-            tracing::info!(
-                heading_rad = declared,
-                fc_heading_rad = fc_heading,
-                yaw0_rad = yaw0,
-                "nav_map_north_declared"
-            );
-            return;
-        }
         if let Some(spot) = self.spot {
-            let horizontal = (t_frd[0] - spot[0]).hypot(t_frd[1] - spot[1]);
-            let climb = spot[2] - t_frd[2];
-            if horizontal > ON_SPOT_M || climb > ON_SPOT_M {
+            let (horizontal, climb, on_spot) = from_spot(spot, t_frd);
+            if !on_spot {
                 self.left_spot = true;
+                self.left_takeoff = true;
                 self.spot = None;
                 tracing::info!(
                     yaw0_rad = self.yaw0,
@@ -562,6 +598,20 @@ impl NavMap {
                 return;
             }
         }
+        if let Some(declared) = self.settings.takeoff_heading_rad.filter(|_| !self.left_takeoff) {
+            if self.yaw0.is_none() {
+                let yaw0 = wrap_pi(declared - frd_yaw(r_frd));
+                self.yaw0 = Some(yaw0);
+                self.spot = Some(t_frd);
+                tracing::info!(
+                    heading_rad = declared,
+                    fc_heading_rad = fc_heading,
+                    yaw0_rad = yaw0,
+                    "nav_map_north_declared"
+                );
+            }
+            return;
+        }
         let Some(heading) = fc_heading else { return };
         let yaw0 = heading - frd_yaw(r_frd);
         if self.yaw0.is_none() {
@@ -571,6 +621,7 @@ impl NavMap {
                 "nav_map_north_latched"
             );
             self.spot = Some(t_frd);
+            self.north_from_fc = self.settings.takeoff_heading_rad.is_some();
         }
         self.yaw0 = Some(yaw0);
     }

@@ -380,6 +380,158 @@ fn a_map_restarted_without_the_fc_position_keeps_the_pose() {
     }
 }
 
+/// The FC at rest, as [`FcEkfPose`] receives it at 50 Hz until 6 s: heading
+/// `heading` (radians), its EKF at the origin.
+fn fc_at_rest(heading: f64) -> FcEkfPose {
+    use crate::pose::fc_ekf::test_frames::{att, pos};
+    let fc = FcEkfPose::new();
+    let h = heading / 2.0;
+    let q = [h.cos() as f32, 0.0, 0.0, h.sin() as f32];
+    for ms in (0..=6_000u32).step_by(20) {
+        fc.on_frame(&att(ms, q), ms as u64 * 1_000_000);
+        fc.on_frame(&pos(ms, [0.0, 0.0, 0.0]), ms as u64 * 1_000_000);
+    }
+    fc
+}
+
+/// On the ground at rest, the capture's tick as the matcher drives it: the
+/// first `RAW_IMU` starts the map over at 0.4 s, it warms up lost (no
+/// trusted pose yet), a gap in the feed leaves its heading unmeasured, and
+/// at 4.9 s, the heading not re-confirmed, the matcher starts its map over,
+/// the vehicle a few millimetres from where it stood. The poses after it
+/// go through `seen` the same way. Returns the descriptor of the pose at
+/// 6 s, which the matcher reports good.
+fn restart_at_rest(nav: &mut NavMap, fc: &FcEkfPose, heading: f64) -> PoseDescriptor {
+    let mut seen = 0;
+    let mut tick = |nav: &mut NavMap, e: &PoseEstimate, restarts: u32| {
+        nav.restart_heading_at(400_000_000);
+        nav.on_matcher_poses(std::slice::from_ref(e), restarts, &mut seen, Some(0.0), Some(fc));
+        let t_ms = (e.t_ns / 1_000_000) as i64;
+        nav.on_pose(e, Some(0.0), Some(heading), t_ms, 0, false)
+    };
+    for k in 0..45 {
+        let mut e = at(estimate(-0.0005 * k as f64, 0.0001 * k as f64, 0.0), 410 + k * 100);
+        e.health = VioHealth::Lost;
+        tick(nav, &e, 0);
+    }
+    let mut restart = at(estimate(-0.02, 0.004, 0.0), 4_910);
+    restart.health = VioHealth::Lost;
+    tick(nav, &restart, 1);
+    for k in 1..10 {
+        let mut e = at(estimate(-0.02, 0.004, 0.0), 4_910 + k * 100);
+        e.health = VioHealth::Lost;
+        tick(nav, &e, 1);
+    }
+    tick(nav, &at(estimate(-0.02, 0.004, 0.0), 6_000), 1).expect("due")
+}
+
+/// On the ground, a map the matcher started over before any trusted pose
+/// has no north of its own to carry over: the north is the FC heading,
+/// latched afresh as at the first pose. The map is not blind, its poses
+/// are the matcher's, and the GNSS fit takes them.
+#[test]
+fn a_map_restarted_on_the_ground_before_a_trusted_pose_latches_its_north_afresh() {
+    let heading = 17.2f64.to_radians();
+    let fc = fc_at_rest(heading);
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let pd = restart_at_rest(&mut nav, &fc, heading);
+    assert!(!nav.north_unknown(), "blind on the ground");
+    assert_eq!(pd.health, VioHealth::Good);
+    assert_eq!(pd.north, Some(MapNorth::FcHeading));
+    assert!(wrap_pi(frd_yaw(&pd.pose.r) - heading).abs() < 1e-9);
+    for k in 0..50 {
+        nav.on_gnss_ref(&at(estimate(k as f64, 0.0, 0.0), 6_100 + k * 100), [k as f64, 0.0]);
+    }
+    assert!(nav.align.fit().is_some(), "the GNSS fit took none of its poses");
+}
+
+/// The same with a declared take-off heading: latched afresh, as at the
+/// first pose.
+#[test]
+fn a_declared_map_restarted_on_the_ground_before_a_trusted_pose_latches_it_afresh() {
+    let fc = fc_at_rest(0.3);
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    });
+    let pd = restart_at_rest(&mut nav, &fc, 0.3);
+    assert!(!nav.north_unknown(), "blind on the ground");
+    assert_eq!(pd.health, VioHealth::Good);
+    assert_eq!(pd.north, Some(MapNorth::Declared));
+    assert!(wrap_pi(frd_yaw(&pd.pose.r) - PI / 2.0).abs() < 1e-9);
+}
+
+/// Off the take-off spot too (here climbed off it, the north fixed at the
+/// FC's 0.3 rad), a restart before any pose was trusted has no north of
+/// the map's own to keep: the next pose latches the FC heading then.
+#[test]
+fn a_map_restarted_off_the_spot_before_a_trusted_pose_latches_the_fc_heading_then() {
+    let fc = fc_at_rest(0.3);
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut lost = at(estimate(0.0, 0.0, 0.0), 100);
+    lost.health = VioHealth::Lost;
+    nav.on_pose(&lost, Some(0.0), Some(0.3), 100, 0, false);
+    lost.t_ns = 200_000_000;
+    nav.on_pose(&lost, Some(ON_SPOT_M + 0.1), Some(0.3), 200, 0, false);
+    lost.t_ns = 1_000_000_000;
+    nav.on_matcher_pose(&lost, true, Some(ON_SPOT_M + 0.1), Some(&fc));
+    assert!(!nav.north_unknown());
+    let pd = nav
+        .on_pose(&at(estimate(0.0, 0.0, 0.0), 1_100), Some(3.0), Some(0.8), 1_100, 0, false)
+        .expect("published");
+    assert_eq!((pd.health, pd.north), (VioHealth::Good, Some(MapNorth::FcHeading)));
+    assert!(wrap_pi(frd_yaw(&pd.pose.r) - 0.8).abs() < 1e-9);
+}
+
+/// A declared take-off heading holds only on the take-off spot: a map
+/// restarted after the vehicle climbed off it, before any pose was trusted,
+/// latches the FC heading then (0.8 rad), never the declared 90° at the
+/// vehicle's heading now, which would be off by every turn since take-off.
+/// A later restart keeps that: the take-off spot stays left.
+#[test]
+fn a_declared_map_restarted_off_the_take_off_spot_latches_the_fc_heading_then() {
+    let fc = fc_at_rest(0.3);
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+    });
+    let mut lost = at(estimate(0.0, 0.0, 0.0), 100);
+    lost.health = VioHealth::Lost;
+    nav.on_pose(&lost, Some(0.0), Some(0.3), 100, 0, false);
+    assert_eq!(nav.north(), Some(MapNorth::Declared));
+    lost.t_ns = 200_000_000;
+    nav.on_pose(&lost, Some(ON_SPOT_M + 0.1), Some(0.3), 200, 0, false);
+    for t_ms in [1_000u64, 2_000] {
+        lost.t_ns = t_ms * 1_000_000;
+        nav.on_matcher_pose(&lost, true, Some(ON_SPOT_M + 0.1), Some(&fc));
+        assert!(!nav.north_unknown());
+        // Lost again: the next restart finds no trusted pose either.
+        let mut warm = at(estimate(0.0, 0.0, 0.0), t_ms as i64 + 100);
+        warm.health = VioHealth::Lost;
+        let pd = nav
+            .on_pose(&warm, Some(3.0), Some(0.8), t_ms as i64 + 100, 0, false)
+            .expect("published");
+        assert_eq!(pd.north, Some(MapNorth::FcHeading), "restart at {t_ms} ms");
+        assert!(wrap_pi(frd_yaw(&pd.pose.r) - 0.8).abs() < 1e-9, "restart at {t_ms} ms");
+    }
+}
+
+/// A map started over before it has any north (no FC heading yet) has none
+/// to lose: the first heading after it latches one, as at the first pose.
+#[test]
+fn a_map_restarted_before_its_first_north_latches_one() {
+    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut lost = at(estimate(0.0, 0.0, 0.0), 100);
+    lost.health = VioHealth::Lost;
+    assert!(nav.on_pose(&lost, Some(0.0), None, 100, 0, false).is_none());
+    nav.on_matcher_pose(&at(estimate(0.0, 0.0, 0.0), 900), true, Some(0.0), None);
+    assert!(!nav.north_unknown());
+    let pd = nav
+        .on_pose(&at(estimate(0.0, 0.0, 0.0), 1_000), Some(0.0), Some(0.3), 1_000, 0, false)
+        .expect("published once the FC heading is known");
+    assert_eq!((pd.health, pd.north), (VioHealth::Good, Some(MapNorth::FcHeading)));
+}
+
 /// The descriptor carries the time the pose describes, not the time it is
 /// published: a LiDAR pose published 150 ms after its scan's first return
 /// is stamped 150 ms back.

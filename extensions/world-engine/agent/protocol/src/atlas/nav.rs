@@ -256,14 +256,16 @@ pub enum ImuFeedReason {
     Starved,
     /// The feed is back after a gap (the stand-in, or samples dropped), and
     /// the matcher has not yet re-confirmed the heading the gap left
-    /// unmeasured against its map. Only on the pose topic (the feed itself
-    /// is fine); `map_status` reports the feed.
+    /// unmeasured against its map. A state of the map's heading, not of the
+    /// feed: on the pose topic and in `map_status` only while the feed
+    /// itself measures (a fault of the feed is reported instead).
     HeadingUnconfirmed,
     /// The matcher started its map over in flight, and the flight
     /// controller's turn since the last trusted pose is unknown (no
     /// attitude, or none that old): the new map's north is unknown, and the
-    /// pose is lost until the map restarts with one. Only on the pose topic
-    /// and in `map_status`; the feed itself may be fine.
+    /// pose is lost until the map restarts with one. Like
+    /// [`Self::HeadingUnconfirmed`], a state of the map's heading reported
+    /// only while the feed itself measures.
     NorthUnknown,
 }
 
