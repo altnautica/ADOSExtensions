@@ -139,6 +139,48 @@ describe("FollowMeTab", () => {
     expect(screen.getByTestId("fm-height-setpoint").textContent).toBe("4.0 m");
   });
 
+  it.each([
+    ["camera-range", "5.0 m · at least 5.0 m with camera-only range"],
+    ["range-unknown", "5.0 m · held at 5.0 m until the range is measured"],
+    ["subject-standing", "5.0 m · held at 5.0 m while the subject stands"],
+    [null, "5.0 m · held at 5.0 m"],
+  ] as const)("says why a shorter follow distance is flown farther (%s)", (reason, text) => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{
+          ...commandingFollow,
+          distanceSetpointM: 5,
+          standoffMinM: 5,
+          standoffRaised: true,
+          standoffReason: reason,
+        }}
+      />,
+    );
+    expect(screen.getByTestId("fm-distance-setpoint").textContent).toBe(text);
+  });
+
+  it("says the vehicle is closing in, to a tenth of a metre", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{
+          ...commandingFollow,
+          distanceSetpointM: 3.34,
+          standoffMinM: 3.34,
+          standoffRaised: true,
+          standoffReason: "closing-in",
+        }}
+      />,
+    );
+    expect(screen.getByTestId("fm-distance-setpoint").textContent).toBe("3.3 m · closing in from 3.3 m");
+    cleanup();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...commandingFollow, standoffMinM: 5 }} />);
+    expect(screen.getByTestId("fm-distance-setpoint").textContent).not.toContain("·");
+  });
+
   const waiting: FollowState = {
     ...EMPTY_FOLLOW_STATE,
     active: true,

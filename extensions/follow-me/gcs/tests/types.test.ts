@@ -79,6 +79,17 @@ describe("normalizeFollowState", () => {
     expect(normalizeFollowState({ height_setpoint_m: 4 }).heightRaised).toBe(false);
   });
 
+  it("reads the range's shortest standoff, whether it is held there and why", () => {
+    const s = normalizeFollowState({ standoff_min_m: 5, standoff_raised: true, standoff_reason: "subject-standing" });
+    expect([s.standoffMinM, s.standoffRaised, s.standoffReason]).toEqual([5, true, "subject-standing"]);
+    const odd = normalizeFollowState({ standoff_min_m: 5, standoff_raised: true, standoff_reason: "weather" });
+    expect(odd.standoffReason).toBeNull();
+    const held = normalizeFollowState({ standoff_raised: false, standoff_reason: "camera-range" });
+    expect(held.standoffReason).toBeNull();
+    const none = normalizeFollowState({});
+    expect([none.standoffMinM, none.standoffRaised, none.standoffReason]).toEqual([null, false, null]);
+  });
+
   it("normalizes the 0.5 recovery fields and phases", () => {
     const t = createPluginHarness({
       mount: () => undefined,

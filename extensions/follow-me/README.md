@@ -79,9 +79,10 @@ then on the agent runs a 20 Hz loop:
      `max_speed_mps`. Under range noise the subject's velocity, the range
      error and the command are smoothed and the range error is corrected
      only past a deadband, each scaled by the error the subject estimate
-     really carries (next to none on clean ranges), so noise does not swing the
-     speed. A standing subject is followed round a fixed centre with no
-     velocity, the point moving only past a 0.5 m deadband;
+     really carries (next to none on clean ranges, where the command is
+     still smoothed over 0.1 s), so noise does not swing the speed. A
+     standing subject is followed round a fixed centre with no velocity,
+     the point moving only past a 0.5 m deadband;
    - a yaw that turns toward the latest sighting's measured bearing (the
      estimate's bearing once no sighting is newer than 3 s) at no more than
      30°/s, with a deadband (6° round a standing subject, 2° otherwise), and
@@ -90,23 +91,41 @@ then on the agent runs a 20 Hz loop:
      them; a lower setting is flown at 3.4 m and read back as
      `height_raised`);
    - the subject's position, with the error its range carries
-     (`subject_sigma_m`), and the ring the pilot's planner searches for a
+     (`subject_sigma_m`, bounded so the distance the pilot's subject brake
+     keeps stays 2 m inside the standoff), and the ring the pilot's planner searches for a
      detour that keeps the subject in view (±90° of the follow angle, ±60°
      of the orbit phase), with `obstacle_margin_m`.
 
-   The velocity never closes on the subject inside the clear distance
-   (the safe distance, 2.5 m, plus two sigmas of the range error, and
-   always at least 2 m inside the standoff or orbit radius, so range noise
-   at a short standoff does not set it off): toward the subject it is held
-   to what still stops short of it, a path that passes it on one side is
-   kept, and within it the vehicle backs away; the cut in the closing
-   speed is not slewed, the rest of the change is.
-   The newest fixes' range is kept clear of when it is nearer
+   The velocity never closes on the subject inside the clear distance:
+   2.5 m plus two sigmas of the range error, held at least 2 m inside the
+   standoff or orbit radius so range noise at a short standoff does not
+   set it off. At a 4 m standoff that is 2 m, at 3 m only 1 m; there the
+   3.4 m height floor is what keeps the rotors a metre above the subject.
+   Toward the subject the velocity is held to what still stops short of
+   the clear distance, a path that passes it on one side is kept, and
+   within it the vehicle backs away; the cut in the closing speed is not
+   slewed, the rest of the change is, and once the cut ends the command
+   goes on from the vehicle's own velocity away from the subject. The
+   newest fixes' range is kept clear of when it is nearer
    than the estimate's, which trails a subject that turns back. A subject
    who turns straight back at the vehicle from the standoff can still pass
    under it: range noise takes half a second to a second of fixes to show
    the turn, and the vehicle about as long to stop at the pilot's profile.
    The follow height keeps the rotors at least 1 m above the subject then.
+
+   The shortest standoff (`follow_distance_m` or `orbit_radius_m`) flown
+   depends on the range the follow has, read from how far the fixes really
+   scatter about the estimate: 3 m on a measured range (a lidar or a depth
+   camera, σ 0.2 m or better), 5 m on a camera's alone, where the range
+   noise at 3-4 m sets the guard and the pilot's brake off every few
+   seconds. A shorter setting is flown farther and read back as
+   `standoff_min_m`, `standoff_raised` and `standoff_reason`:
+   `camera-range`, `range-unknown` (until the range is known the follow
+   keeps the distance it engaged at, between the two), `subject-standing`
+   (a smaller minimum is flown in to only while the subject moves, never
+   toward a person standing still) or `closing-in` (at 0.2 m/s); a larger
+   minimum applies at once. A stick nudge on the distance or radius starts
+   from the one flown and stops at the minimum.
 6. Optionally, it points a gimbal at the subject.
 
 A lock-state safety gate stops commanding when the tracker reports the
@@ -320,7 +339,7 @@ Per-drone configuration (see `config-schema.json`):
 | Key                        | Default       | Range       | Meaning                                         |
 | -------------------------- | ------------- | ----------- | ----------------------------------------------- |
 | `active`                   | `false`       | —           | Armed/disarmed (toggled by the Skill).          |
-| `follow_distance_m`        | `6`           | `3`–`30`    | Standoff distance behind the subject.           |
+| `follow_distance_m`        | `6`           | `3`–`30`    | Standoff distance behind the subject; under 5 m it is flown at 5 m without a measured range. |
 | `follow_height_m`          | `4`           | `3.4`–`20`  | Follow height above the ground; a lower stored value is flown at 3.4 m. |
 | `gimbal_point`             | `true`        | —           | Point a gimbal at the subject if present.       |
 | `designate_camera`         | `auto`        | —           | Camera the follow loop consumes; `auto` reads the designated subject's camera (any camera until one is designated). |
@@ -337,7 +356,7 @@ Per-drone configuration (see `config-schema.json`):
 | `max_speed_mps`            | `6`           | `0.5`–`10`  | The follow's speed limit.                       |
 | `follow_mode`              | `follow`      | follow, orbit | Follow at an angle, or orbit the subject.     |
 | `follow_angle_deg`         | `180`         | `0`–`355`   | Angle from the travel heading (follow mode).    |
-| `orbit_radius_m`           | `8`           | `3`–`30`    | Orbit radius.                                   |
+| `orbit_radius_m`           | `8`           | `3`–`30`    | Orbit radius; under 5 m it is flown at 5 m without a measured range. |
 | `orbit_rate_dps`           | `10`          | `2`–`30`    | Orbit angular rate.                             |
 | `orbit_direction`          | `cw`          | cw, ccw     | Orbit direction seen from above.                |
 | `obstacle_margin_m`        | `1.5`         | `0.8`–`5`   | Clearance the pilot's planner keeps.            |

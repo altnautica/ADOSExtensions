@@ -99,6 +99,7 @@ class ReadbackMixin:
     _outpaced_since_s: float | None
     _nav_feed: Any
     _subject_motion: Any
+    _range_tier: Any
 
     def _setpoint_rate_hz(self, now: float) -> float:
         """Setpoints sent per second over the last SETPOINT_RATE_WINDOW_S."""
@@ -343,6 +344,9 @@ class ReadbackMixin:
             state.operator_resume_seq = cfg.operator_resume_seq
             state.search_budget_s = cfg.search_budget_s
             state.height_raised = cfg.follow_height_raised
+            state.standoff_min_m = _r(cfg.standoff_min_m)
+            state.standoff_raised = cfg.standoff_raised
+            state.standoff_reason = cfg.standoff_reason
             if commanding:
                 # In orbit the flown geometry is the orbit radius (already
                 # published); the follow distance is not a setpoint there.

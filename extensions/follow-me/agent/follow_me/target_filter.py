@@ -191,12 +191,33 @@ class TargetFilter:
         what the fixes are fused with, near 0 on clean ranges (a lidar, a
         depth camera; a subject's own sharp manoeuvre still reads as a
         little scatter). Scaling the filter's own spread by it gives the error
-        the estimate really carries. A track's first SCATTER_MIN_FIXES fixes
+        the estimate really carries. It is :attr:`scatter_measured` taken in
+        by :attr:`scatter_weight`: a track's first SCATTER_MIN_FIXES fixes
         read 0 and the next SCATTER_MIN_FIXES take it in gradually."""
+        measured = self.scatter_measured
+        return 0.0 if measured is None else measured * self.scatter_weight
+
+    @property
+    def scatter_measured(self) -> float | None:
+        """The scatter ratio the fixes so far measure, or ``None`` for a
+        track's first SCATTER_MIN_FIXES fixes."""
         if self._scatter_n <= SCATTER_MIN_FIXES or self._scatter_s <= 0.0:
+            return None
+        return min(SCATTER_RATIO_MAX, math.sqrt(self._scatter_y2 / self._scatter_s))
+
+    @property
+    def scatter_weight(self) -> float:
+        """How much of the measured scatter is taken in: 0 for a track's
+        first SCATTER_MIN_FIXES fixes, rising to 1 over the next
+        SCATTER_MIN_FIXES."""
+        if self._scatter_s <= 0.0:
             return 0.0
-        ratio = min(SCATTER_RATIO_MAX, math.sqrt(self._scatter_y2 / self._scatter_s))
-        return ratio * min(1.0, self._scatter_n / SCATTER_MIN_FIXES - 1.0)
+        return max(0.0, min(1.0, self._scatter_n / SCATTER_MIN_FIXES - 1.0))
+
+    @property
+    def scatter_settled(self) -> bool:
+        """Whether :attr:`scatter_ratio` reads the measured scatter in full."""
+        return self.scatter_weight >= 1.0
 
     def last_estimate(self) -> tuple[float, float, float, float] | None:
         """The state ``(n, e, vn, ve)`` as last fused (or stopped), not

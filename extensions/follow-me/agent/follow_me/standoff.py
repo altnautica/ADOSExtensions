@@ -36,12 +36,15 @@ into that velocity:
   error, kept inside the standoff) or passes the subject beside it, and
   within it the vehicle backs away (:func:`keep_clear`). The cut along the
   line of sight is not slewed: the pilot shapes it at its profile's
-  limits.
+  limits. Once the cut ends, the command goes on from the vehicle's own
+  velocity away from the subject, not from the cut's full speed, so it
+  does not carry the vehicle metres past the standoff.
 * **Range noise.** The subject velocity fed forward, the range error and
   the command are smoothed, and the range error is corrected only past a
   deadband, each by the error the subject estimate really carries; on clean
   ranges next to none of it applies (a subject's own sharp manoeuvre reads
-  as a little scatter), and under monocular range noise the command
+  as a little scatter) but a short smoothing of the command
+  (``COMMAND_SMOOTH_MIN_S``), and under monocular range noise the command
   holds the subject's pace instead of swinging round it.
 * **Bearing.** The yaw turns toward the subject at a rate from the same
   square-root law (``YAW_GAIN_PER_S``, ``YAW_ACCEL_DPS2``, at most
@@ -127,6 +130,12 @@ APPROACH_LEAD_S = 0.7
 # * Their sum is smoothed again on COMMAND_SMOOTH_S_PER_M seconds per metre,
 #   so a fix that bends either ramp bends the command's acceleration
 #   gradually: the command's jerk stays a fraction of the profile's.
+# * That last smoothing is never shorter than COMMAND_SMOOTH_MIN_S, whatever
+#   the error: a measured range (σ 0.2 m) still moves the subject's
+#   velocity estimate a little at every fix, and a command following it
+#   raw jerks past 5 m/s³ (95th percentile) on a walker. The floor is taken
+#   in as the track's scatter is (:attr:`TargetFilter.scatter_weight`): a
+#   fresh track's estimate is followed as it is, as every term above.
 # No smoothing exceeds SMOOTH_MAX_S (a fresh track's spread is large).
 PACE_GATE_SIGMAS = 2.0
 PACE_SMOOTH_S_PER_MPS = 2.0
@@ -134,6 +143,7 @@ RANGE_DEADBAND_SIGMAS = 2.0
 RANGE_DEADBAND_MAX_M = 1.0
 CORRECTION_SMOOTH_S_PER_M = 2.0
 COMMAND_SMOOTH_S_PER_M = 0.4
+COMMAND_SMOOTH_MIN_S = 0.1
 SMOOTH_MAX_S = 2.0
 
 # Separation from the subject. The vehicle never flies into or over the
@@ -174,6 +184,20 @@ SEPARATION_HORIZON_S = 3.0
 SEPARATION_PUSH_PER_S = 1.0
 SEPARATION_SIDE_HOLD_MPS = 0.5
 SEPARATION_STALE_M = 2.5
+
+# The pilot's own subject brake keeps the subject's body this far clear,
+# centre to the vehicle's (a 0.4 m body radius, the default 0.4 m vehicle
+# radius and 0.5 m between them), plus two sigmas of the goal's
+# `subject_sigma_m`. It aims its soft cut PILOT_SUBJECT_SOFT_AIM_M outside
+# that distance and steps the velocity (its hard cut) only within
+# PILOT_SUBJECT_HARD_ZONE_M of it. The sigma is bounded so the distance
+# kept, with both, stays SAFE_STANDOFF_MARGIN_M inside the standoff, as the
+# follow's own clear distance does: range noise at a short standoff does
+# not set the pilot's brake off either.
+PILOT_SUBJECT_KEEP_M = 1.3
+PILOT_SUBJECT_SIGMAS = 2.0
+PILOT_SUBJECT_SOFT_AIM_M = 0.4
+PILOT_SUBJECT_HARD_ZONE_M = 1.0
 
 # Bearing control.
 YAW_GAIN_PER_S = 2.0
@@ -235,6 +259,22 @@ def clear_distance(standoff_m: float, range_sigma_m: float) -> float:
     safe = safe_distance(standoff_m)
     margin = min(SEPARATION_MARGIN_MAX_M, SEPARATION_SIGMAS * max(0.0, range_sigma_m))
     return min(safe + margin, max(safe, standoff_m - SAFE_STANDOFF_MARGIN_M))
+
+
+def pilot_subject_sigma(standoff_m: float, sigma_m: float) -> float:
+    """The subject range error a goal names for the pilot's subject brake:
+    ``sigma_m``, at most what keeps the pilot's kept distance, its soft aim
+    and its hard zone SAFE_STANDOFF_MARGIN_M inside the standoff (0 when
+    they are already past that)."""
+    room = max(
+        0.0,
+        standoff_m
+        - SAFE_STANDOFF_MARGIN_M
+        - PILOT_SUBJECT_HARD_ZONE_M
+        - PILOT_SUBJECT_SOFT_AIM_M
+        - PILOT_SUBJECT_KEEP_M,
+    )
+    return min(max(0.0, sigma_m), room / PILOT_SUBJECT_SIGMAS)
 
 
 def keep_clear(
@@ -511,10 +551,12 @@ class StandoffController:
         self._pace: tuple[float, float] = (0.0, 0.0)
         self._pace_t: float | None = None
         self._pace_still = False
-        # The side the vehicle passes the subject on, and whether the last
-        # command was limited to keep clear of it (see keep_clear).
+        # The side the vehicle passes the subject on, whether the last
+        # command was limited to keep clear of it (see keep_clear), and
+        # whether a cut stepped it and still holds.
         self._side = 0
         self.limited = False
+        self._cut = False
 
     def reset(self) -> None:
         self._t = None
@@ -574,12 +616,15 @@ class StandoffController:
         standoff_m: float,
         near_m: float | None = None,
         range_sigma_m: float = 0.0,
+        scatter_weight: float = 0.0,
     ) -> Command:
         """``latch_goal``: hold the goal through moves inside the deadband (a
         standing subject followed at a fixed angle; an orbit's goal moves on
         purpose). ``goal_v_ne`` carries the subject's velocity from
         :meth:`pace`; ``range_sigma_m`` is the error the subject estimate
-        really carries along the line of sight (0 on clean ranges).
+        really carries along the line of sight (0 on clean ranges), and
+        ``scatter_weight`` how much of the track's measured scatter that
+        error takes in (0 on a fresh track; it scales COMMAND_SMOOTH_MIN_S).
         ``subject_ne`` and ``subject_v_ne`` are the subject estimate's own
         position and velocity, unsmoothed, which the vehicle keeps clear of
         by the distance ``standoff_m`` (the follow standoff or orbit radius)
@@ -592,6 +637,7 @@ class StandoffController:
             self._yaw_rate = 0.0
             self._goal = None
             self._side = 0
+            self._cut = False
             dt = 0.0
         else:
             dt = max(0.0, now - self._t)
@@ -627,7 +673,8 @@ class StandoffController:
             k = _smoothing(dt, CORRECTION_SMOOTH_S_PER_M * sigma)
             self._corr = (self._corr[0] + (cn - self._corr[0]) * k, self._corr[1] + (ce - self._corr[1]) * k)
             want = _clamp_len(goal_v_ne[0] + self._corr[0], goal_v_ne[1] + self._corr[1], max_speed_mps)
-            k = _smoothing(dt, COMMAND_SMOOTH_S_PER_M * sigma)
+            floor = COMMAND_SMOOTH_MIN_S * max(0.0, min(1.0, scatter_weight))
+            k = _smoothing(dt, max(floor, COMMAND_SMOOTH_S_PER_M * sigma))
             self._want = (self._want[0] + (want[0] - self._want[0]) * k, self._want[1] + (want[1] - self._want[1]) * k)
         # Clear of the subject, from its estimate as it is: no smoothing
         # delays backing away.
@@ -643,13 +690,27 @@ class StandoffController:
             near_m=near_m,
         )
         want = _clamp_len(want[0], want[1], max_speed_mps)
-        dvn, dve = _clamp_len(want[0] - self._v[0], want[1] - self._v[1], COMMAND_ACCEL_MPS2 * dt)
-        slewed = (self._v[0] + dvn, self._v[1] + dve)
         rel = (subject_ne[0] - drone_ne[0], subject_ne[1] - drone_ne[1])
         r = math.hypot(rel[0], rel[1])
         un, ue = (rel[0] / r, rel[1] / r) if r > 1e-6 else (0.0, 0.0)
+        if self._cut and not limited:
+            # A cut released: the pilot flew it at its limits and the vehicle
+            # backed away only so far. The command does not go on from the
+            # cut's full speed away (slewing back from it carries the vehicle
+            # metres past the standoff): its part along the line of sight
+            # starts from the vehicle's own, or from the wanted one if that
+            # is further away.
+            a = self._v[0] * un + self._v[1] * ue
+            b = drone_v_ne[0] * un + drone_v_ne[1] * ue
+            w = want[0] * un + want[1] * ue
+            if a < b:
+                d = max(a, min(b, w)) - a
+                self._v = (self._v[0] + d * un, self._v[1] + d * ue)
+        dvn, dve = _clamp_len(want[0] - self._v[0], want[1] - self._v[1], COMMAND_ACCEL_MPS2 * dt)
+        slewed = (self._v[0] + dvn, self._v[1] + dve)
         along = (want[0] - slewed[0]) * un + (want[1] - slewed[1]) * ue
-        if limited and along < -1e-9:
+        stepped = limited and along < -1e-9
+        if stepped:
             # Safety outranks smoothness: a cut in the closing speed is not
             # slewed (the pilot shapes it at its profile's limits). Only the
             # part along the line of sight steps; the rest, a sidestep
@@ -657,6 +718,7 @@ class StandoffController:
             self._v = (slewed[0] + along * un, slewed[1] + along * ue)
         else:
             self._v = slewed
+        self._cut = stepped or (self._cut and limited)
         self.limited = limited
 
         err = wrap_pi(yaw_target - self._yaw)
@@ -678,12 +740,17 @@ __all__ = [
     "APPROACH_DECEL_MPS2",
     "APPROACH_GAIN_PER_S",
     "COMMAND_ACCEL_MPS2",
+    "COMMAND_SMOOTH_MIN_S",
     "COMMAND_SMOOTH_S_PER_M",
     "CORRECTION_SMOOTH_S_PER_M",
     "GOAL_DEADBAND_M",
     "HOLD_DEADBAND_M",
     "PACE_GATE_SIGMAS",
     "PACE_SMOOTH_S_PER_MPS",
+    "PILOT_SUBJECT_KEEP_M",
+    "PILOT_SUBJECT_HARD_ZONE_M",
+    "PILOT_SUBJECT_SIGMAS",
+    "PILOT_SUBJECT_SOFT_AIM_M",
     "RANGE_DEADBAND_MAX_M",
     "RANGE_DEADBAND_SIGMAS",
     "SAFE_DISTANCE_M",
@@ -704,6 +771,7 @@ __all__ = [
     "SubjectRef",
     "clear_distance",
     "keep_clear",
+    "pilot_subject_sigma",
     "safe_distance",
     "sqrt_law",
 ]

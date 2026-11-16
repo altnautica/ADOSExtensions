@@ -25,15 +25,36 @@ is not supported.
   struck them, at a 1.5 m height before).
 - The follow keeps clear of the subject: toward it the velocity is held to
   what still stops short of the clear distance (2.5 m plus two sigmas of
-  the range error, and always at least 2 m inside the standoff or orbit
-  radius, so range noise at a 3 m or 4 m standoff does not set it off), a
-  path that passes beside it is kept, and within it the vehicle backs
-  away. The cut in the closing speed is not slewed: under the Sport
-  profile a jogger who stops dead 6 m ahead is no longer overflown. The
-  newest fixes' range is kept clear of when it is nearer than the subject
-  estimate's, which trails a subject turning back. Goals carry
-  `subject_sigma_m`, the error of the subject's range, for the pilot's own
-  subject brake (agent 0.118.0).
+  the range error, held at least 2 m inside the standoff or orbit radius
+  so range noise does not set it off: 2 m at a 4 m standoff, 1 m at 3 m,
+  where the 3.4 m height floor keeps the rotors clear), a path that passes
+  beside it is kept, and within it the vehicle backs away. The cut in the
+  closing speed is not slewed: under the Sport profile a jogger who stops
+  dead 6 m ahead is no longer overflown. The newest fixes' range is kept
+  clear of when it is nearer than the subject estimate's, which trails a
+  subject turning back. Goals carry `subject_sigma_m`, the error of the
+  subject's range, for the pilot's own subject brake (agent 0.118.0),
+  bounded so the distance that brake keeps stays 2 m inside the standoff.
+- The shortest follow distance and orbit radius flown depend on how well
+  the subject's range is measured, read from how far the fixes really
+  scatter: 3 m on a measured range (a lidar or a depth camera, σ 0.2 m or
+  better), 5 m on a camera's alone, where range noise at 3-4 m set the
+  guard and the pilot's brake off every few seconds. A shorter setting is
+  flown farther, read back as `standoff_min_m`, `standoff_raised` and
+  `standoff_reason` (`camera-range`, `range-unknown`, `subject-standing`
+  or `closing-in`), and the panel says which. Until the range is known
+  the follow keeps the distance it engaged at; a larger minimum applies
+  at once, a smaller one is flown in to at 0.2 m/s and only while the
+  subject moves, never toward a person standing still. A stick nudge on
+  the distance or radius starts from the one flown and stops at the
+  minimum.
+- On a measured range the command is still smoothed a little (0.1 s): a
+  walker followed at 3-4 m is commanded within 3.5 m/s³ (95th percentile),
+  where the raw command jerked to 6.
+- Once the guard's cut in the closing speed ends, the command goes on
+  from the vehicle's own velocity away from the subject, not from the
+  cut's: a fresh track's first noisy fixes, which have the guard back
+  away, no longer carry the vehicle metres past the standoff.
 - Follow and orbit goals carry the follow's complete desired velocity
   (`vel_mode` `command`); the pilot shapes it within the vehicle's jerk and
   acceleration limits and adds no position loop of its own. The velocity

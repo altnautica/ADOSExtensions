@@ -71,7 +71,7 @@ from follow_me.state import (
     UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
 )
-from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject
+from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject, pilot_subject_sigma
 from follow_me.target_filter import Cov2, TargetFilter, subject_max_speed_mps
 
 # The fixed cadence the follow loop commands at, decoupled from the
@@ -125,11 +125,16 @@ _MIN_RANGE_SIGMA_FRAC = 0.06
 VEL_MODE_COMMAND = "command"
 
 
+def fix_range_sigma(fix: TargetFix) -> float:
+    """The range sigma a fix is fused with: its own, held to the measured
+    floor."""
+    return max(fix.range_sigma_m, _MIN_RANGE_SIGMA_M, _MIN_RANGE_SIGMA_FRAC * fix.range_m)
+
+
 def fix_covariance(fix: TargetFix) -> Cov2:
     """The north/east covariance a fix is fused with: its own, with the range
     sigma held to the measured floor."""
-    sigma = max(fix.range_sigma_m, _MIN_RANGE_SIGMA_M, _MIN_RANGE_SIGMA_FRAC * fix.range_m)
-    return range_bearing_covariance(fix.bearing_rad, sigma, fix.cross_sigma_m)
+    return range_bearing_covariance(fix.bearing_rad, fix_range_sigma(fix), fix.cross_sigma_m)
 
 
 def _estimate_error(
@@ -212,6 +217,7 @@ class FollowLoopMixin:
     _active_since_s: float | None
     _camera_lost: bool
     _subject_motion: Any
+    _range_tier: Any
     _outpaced_since_s: float | None
     _still: StillSubject
     _standoff: StandoffController
@@ -245,6 +251,7 @@ class FollowLoopMixin:
             # switched on again on the same track, so it restarts its geometry
             # where the drone is then, as engaging does.
             self._reset_geometry()
+            self._range_tier.reset()
             self._recovery = None
             self._uncertain_since_s = None
             self._active_since_s = None
@@ -444,6 +451,11 @@ class FollowLoopMixin:
         fused = self._filter.update(t_fix, north, east, cov)
         if fused:
             self._fused_s = now
+        scatter = self._filter.scatter_measured
+        if scatter is not None:
+            # The range scatter in metres: how far the fixes really scatter
+            # along the line of sight (see follow_me.range_tier).
+            self._range_tier.update(scatter * fix_range_sigma(fix), settled=self._filter.scatter_settled)
         # Every fix, fused or gated out: a subject breaking into a run puts
         # its first fixes outside the gate.
         est = self._filter.last_estimate()
@@ -552,8 +564,13 @@ class FollowLoopMixin:
             return
         if self._cfg is None:
             return
+        # A distance or radius is nudged from the one flown, never below the
+        # range's minimum.
         self._nudges.on_sticks(
-            self._nudges.apply_to(self._cfg), payload.get("axes"), fc_state.monotonic()
+            self._nudges.apply_to(self._cfg),
+            payload.get("axes"),
+            fc_state.monotonic(),
+            least_standoff_m=self._range_tier.min_standoff_m,
         )
 
     async def _on_revoked_stop(self, now: float) -> None:
@@ -689,6 +706,7 @@ class FollowLoopMixin:
         else:
             near = self._subject_motion.near_range(now)
             keep_ne, keep_v = (x[0], x[1]), (x[2], x[3])
+        standoff_m = cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m
         cmd = self._standoff.command(
             now=now,
             goal_ne=(g.north_m, g.east_m),
@@ -702,15 +720,17 @@ class FollowLoopMixin:
             max_speed_mps=cfg.max_speed_mps,
             subject_ne=keep_ne,
             subject_v_ne=keep_v,
-            standoff_m=cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m,
+            standoff_m=standoff_m,
             near_m=near,
             range_sigma_m=range_sigma,
+            scatter_weight=self._filter.scatter_weight,
         )
         # The pilot keeps the subject's body clear by the goal's subject
         # point and this error: the estimate's own, or what the newest fixes
-        # put it short by when they put the subject nearer.
+        # put it short by when they put the subject nearer, bounded so the
+        # distance the pilot keeps stays inside the standoff.
         short = 0.0 if near is None else math.hypot(tn - dn, te - de) - near
-        subject_sigma = max(range_sigma, short / SEPARATION_SIGMAS)
+        subject_sigma = pilot_subject_sigma(standoff_m, max(range_sigma, short / SEPARATION_SIGMAS))
         return {
             "kind": kind,
             "n": cmd.north_m,
@@ -752,6 +772,15 @@ class FollowLoopMixin:
             )
             return
         x, p = pred
+        if not self._range_tier.engaged:
+            # The first goal: the minimum standoff starts from where the
+            # vehicle is (nothing was raised before it).
+            orbit = cfg.follow_mode == FOLLOW_MODE_ORBIT
+            self._range_tier.engage(
+                math.hypot(x[0] - self._pose.north_m, x[1] - self._pose.east_m),
+                cfg.orbit_radius_m if orbit else cfg.follow_distance_m,
+            )
+            cfg = self._range_tier.apply_to(cfg)
         agl, _src = self._agl(now)
         await self._send_goal(self._goal(cfg, now, x, p, ff_scale), now)
         if self._pending_latency_ts_ms is not None:

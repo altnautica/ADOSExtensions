@@ -153,13 +153,15 @@ async def test_orbit_mode_sends_orbit_goals_on_the_ring(monkeypatch: Any) -> Non
     assert st["follow_mode"] == "orbit" and st["orbit_phase_deg"] is not None
 
 
-def _nudge(cfg: FollowConfig, axes: list[float], seconds: float) -> tuple[Nudges, FollowConfig]:
+def _nudge(
+    cfg: FollowConfig, axes: list[float], seconds: float, least: float = 0.0
+) -> tuple[Nudges, FollowConfig]:
     n = Nudges()
     t = 0.0
-    n.on_sticks(cfg, axes, t)
+    n.on_sticks(cfg, axes, t, least_standoff_m=least)
     while t < seconds - 1e-9:
         t += 0.05
-        n.on_sticks(n.apply_to(cfg), axes, t)
+        n.on_sticks(n.apply_to(cfg), axes, t, least_standoff_m=least)
     return n, n.apply_to(cfg)
 
 
@@ -195,6 +197,21 @@ def test_orbit_nudges_and_clamps() -> None:
     assert c.orbit_radius_m == 3.0
     _, c = _nudge(base, [0.0, 0.0, -1.0, 0.0], 30.0)
     assert c.follow_height_m == MIN_FOLLOW_HEIGHT_M
+
+
+@pytest.mark.parametrize("mode", ["follow", "orbit"])
+def test_distance_nudges_start_from_the_minimum_flown_and_stay_above_it(mode: str) -> None:
+    # Set to 3 m and flown at the camera range's 5 m: pushing closer leaves
+    # the setting alone, pulling back moves it out from 5 m at once (no 2 m
+    # dead band), and from 8 m a push stops at 5 m.
+    key = "orbit_radius_m" if mode == "orbit" else "follow_distance_m"
+    base = FollowConfig(follow_mode=mode, **{key: 3.0})
+    n, c = _nudge(base, [0.0, 1.0, 0.0, 0.0], 1.0, least=5.0)
+    assert getattr(c, key) == 3.0 and not n.nudged
+    _, c = _nudge(base, [0.0, -1.0, 0.0, 0.0], 0.5, least=5.0)
+    assert getattr(c, key) == pytest.approx(6.0)
+    _, c = _nudge(FollowConfig(follow_mode=mode, **{key: 8.0}), [0.0, 1.0, 0.0, 0.0], 3.0, least=5.0)
+    assert getattr(c, key) == pytest.approx(5.0)
 
 
 def test_orbit_rate_through_the_minimum_flips_direction() -> None:

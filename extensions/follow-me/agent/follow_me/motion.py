@@ -70,6 +70,17 @@ def _clamp(v: float, lo_hi: tuple[float, float]) -> float:
     return lo if v < lo else hi if v > hi else v
 
 
+def _nudge_standoff(set_m: float, delta: float, least_m: float, lo_hi: tuple[float, float]) -> float:
+    """A follow distance or orbit radius set to ``set_m`` nudged by
+    ``delta``, from the standoff flown (at least ``least_m``, the range's
+    minimum) and never below that minimum: a push closer at the minimum
+    leaves the setting alone, a pull back starts from where the vehicle is."""
+    lo, hi = lo_hi
+    base = max(set_m, least_m)
+    out = _clamp(base + delta, (max(lo, least_m), hi))
+    return set_m if out == base else out
+
+
 def lease_error_reason(reply: Any) -> str:
     """The pilot's refusal word from an acquire reply, ``"unavailable"`` when
     the reply carries none."""
@@ -122,8 +133,10 @@ class Nudges:
             elif have == want:
                 del self.values[key]
 
-    def on_sticks(self, cfg: FollowConfig, axes: Any, now: float) -> None:
-        """Integrate one stick frame against ``cfg`` (already nudged)."""
+    def on_sticks(self, cfg: FollowConfig, axes: Any, now: float, *, least_standoff_m: float = 0.0) -> None:
+        """Integrate one stick frame against ``cfg`` (already nudged);
+        ``least_standoff_m`` is the shortest standoff flown on the range the
+        follow has (see :mod:`follow_me.range_tier`)."""
         try:
             roll, pitch, thr = (float(axes[0]), float(axes[1]), float(axes[2]))
         except (TypeError, ValueError, IndexError):
@@ -147,8 +160,8 @@ class Nudges:
             )
         if cfg.follow_mode == FOLLOW_MODE_ORBIT:
             if abs(pitch) > _NUDGE_DEADBAND:
-                changes["orbit_radius_m"] = _clamp(
-                    cfg.orbit_radius_m - pitch * RADIUS_RATE_MPS * dt, ORBIT_RADIUS_RANGE
+                changes["orbit_radius_m"] = _nudge_standoff(
+                    cfg.orbit_radius_m, -pitch * RADIUS_RATE_MPS * dt, least_standoff_m, ORBIT_RADIUS_RANGE
                 )
             if abs(roll) > _NUDGE_DEADBAND:
                 # Roll + is right. Facing the subject, a clockwise orbit
@@ -161,8 +174,10 @@ class Nudges:
                 changes["orbit_direction"] = direction
         else:
             if abs(pitch) > _NUDGE_DEADBAND:
-                changes["follow_distance_m"] = _clamp(
-                    cfg.follow_distance_m - pitch * DISTANCE_RATE_MPS * dt,
+                changes["follow_distance_m"] = _nudge_standoff(
+                    cfg.follow_distance_m,
+                    -pitch * DISTANCE_RATE_MPS * dt,
+                    least_standoff_m,
                     FOLLOW_DISTANCE_RANGE,
                 )
             if abs(roll) > _NUDGE_DEADBAND:

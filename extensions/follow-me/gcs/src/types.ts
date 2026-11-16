@@ -168,6 +168,14 @@ export interface FollowState {
   heightSetpointM: number | null;
   /** The set follow height was below the lowest allowed and is held there. */
   heightRaised: boolean;
+  /**
+   * The shortest follow distance and orbit radius flown on the range the
+   * follow has, whether the set one was shorter and is held at it, and why
+   * (null when it is not held).
+   */
+  standoffMinM: number | null;
+  standoffRaised: boolean;
+  standoffReason: StandoffReason | null;
   reacquireMode: ReacquireMode;
   uncertainMode: UncertainMode;
   /** Whether a smart loss searches from a vantage point. */
@@ -241,6 +249,9 @@ export interface RawFollowState {
   distance_setpoint_m?: number | null;
   height_setpoint_m?: number | null;
   height_raised?: boolean;
+  standoff_min_m?: number | null;
+  standoff_raised?: boolean;
+  standoff_reason?: string | null;
   reacquire_mode?: ReacquireMode | string;
   uncertain_mode?: string;
   predictive_search?: boolean;
@@ -343,6 +354,9 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   distanceSetpointM: null,
   heightSetpointM: null,
   heightRaised: false,
+  standoffMinM: null,
+  standoffRaised: false,
+  standoffReason: null,
   reacquireMode: "smart",
   uncertainMode: "follow",
   predictiveSearch: true,
@@ -400,6 +414,9 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     distanceSetpointM: num(raw.distance_setpoint_m),
     heightSetpointM: num(raw.height_setpoint_m),
     heightRaised: raw.height_raised === true,
+    standoffMinM: num(raw.standoff_min_m),
+    standoffRaised: raw.standoff_raised === true,
+    standoffReason: raw.standoff_raised === true ? normalizeStandoffReason(raw.standoff_reason) : null,
     reacquireMode: normalizeReacquireMode(raw.reacquire_mode),
     uncertainMode: normalizeUncertainMode(raw.uncertain_mode),
     predictiveSearch: raw.predictive_search === true,
@@ -494,6 +511,16 @@ export function normalizeReacquireMode(v: unknown): ReacquireMode {
  * the conservative hold (the agent's rule). */
 export function normalizeUncertainMode(v: unknown): UncertainMode {
   return v === "follow" ? "follow" : "hold";
+}
+
+/** Why a shorter follow distance or orbit radius is flown farther. */
+export type StandoffReason = "camera-range" | "range-unknown" | "subject-standing" | "closing-in";
+
+const STANDOFF_REASONS: readonly StandoffReason[] = ["camera-range", "range-unknown", "subject-standing", "closing-in"];
+
+/** A reason the agent names, or null for one this panel does not know. */
+export function normalizeStandoffReason(v: unknown): StandoffReason | null {
+  return STANDOFF_REASONS.find((r) => r === v) ?? null;
 }
 
 function num(v: unknown): number | null {

@@ -76,6 +76,7 @@ from follow_me.ranging import Scan
 from follow_me.reacquire import Embedding, embedding_of
 from follow_me.readback import ReadbackMixin
 from follow_me.recovery import Recovery, RecoveryMixin
+from follow_me.range_tier import RangeTier
 from follow_me.speed_limit import NAV_STATE_TOPIC, NavFeed, SubjectMotion
 from follow_me.standoff import StandoffController, StillSubject
 from follow_me.state import (
@@ -200,6 +201,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         # motion (see follow_me.speed_limit).
         self._nav_feed = NavFeed()
         self._subject_motion = SubjectMotion()
+        # The shortest standoff flown on the range the follow has (see
+        # follow_me.range_tier).
+        self._range_tier = RangeTier()
         # The arm-edge write of predictive_search, kept so it is not
         # collected before it runs.
         self._arm_reset_task: asyncio.Task | None = None
@@ -427,6 +431,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._recovery = None
         self._filter.reset()
         self._filter_track_id = None
+        self._range_tier.reset()
         if self._ctx is not None:
             await self._release_lease()
             await self._lease.release(self._ctx)
@@ -464,7 +469,10 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._active_camera = self._resolve_designate_camera(
             self._cfg.designate_camera
         )
-        return self._cfg
+        # Flown no nearer than the range the follow has allows; the
+        # configured values (and the stick nudges on them) are kept.
+        self._range_tier.step(now, still=self._still.still)
+        return self._range_tier.apply_to(self._cfg)
 
     # -- detections --------------------------------------------------
 

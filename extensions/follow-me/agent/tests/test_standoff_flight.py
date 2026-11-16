@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 from follow_sim import DT, Flight, fly, percentile
 
+from follow_me.range_tier import MEASURED_MIN_STANDOFF_M, MEASURED_RANGE_SIGMA_M, MONOCULAR_MIN_STANDOFF_M
 from follow_me.standoff import COMMAND_ACCEL_MPS2
 
 
@@ -56,27 +57,48 @@ def _sign_flips(f: Flight, idx: range) -> int:
     return flips
 
 
+# The range a flight's fixes carry: a camera's (the recorded noise, flown at
+# a standoff of at least MONOCULAR_MIN_STANDOFF_M), or a measured one (a
+# lidar or a depth camera, σ 0.2 m, flown down to MEASURED_MIN_STANDOFF_M).
+_RANGE = {
+    "camera": {},
+    "measured": {"range_sigma_m": MEASURED_RANGE_SIGMA_M, "outlier_share": 0.0},
+}
+
+
+def _flown(standoff: float, rng: str) -> float:
+    """The standoff flown for one set to ``standoff`` on range ``rng``."""
+    return max(standoff, MEASURED_MIN_STANDOFF_M if rng == "measured" else MONOCULAR_MIN_STANDOFF_M)
+
+
 # The detector rate the agent runs at (10 Hz) and the one the recorded
 # flights ran at (3 Hz), with what each must hold a standing subject to: the
 # recorded 0.95 m/s (95th percentile) down to 0.1 at 10 Hz and 0.2 at 3 Hz.
-# The default 6 m standoff, and the shortest ones allowed (3 and 4 m), where
-# the distance kept clear of the subject comes nearest the standoff.
+# The default 6 m standoff and the shortest each range allows, where the
+# distances kept clear of the subject come nearest the standoff (3 m set on
+# a camera's range is flown at 5 m); the pilot's subject brake flown on the
+# goals, as the follow's own guard is.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("fix_hz", "speed_p95", "standoff"),
+    ("fix_hz", "speed_p95", "standoff", "rng"),
     [
-        (10.0, 0.1, 6.0),
-        (6.0, 0.1, 6.0),
-        (3.0, 0.2, 6.0),
-        (10.0, 0.1, 4.0),
-        (6.0, 0.1, 4.0),
-        (10.0, 0.1, 3.0),
-        (6.0, 0.1, 3.0),
+        (10.0, 0.1, 6.0, "camera"),
+        (6.0, 0.1, 6.0, "camera"),
+        (3.0, 0.2, 6.0, "camera"),
+        (10.0, 0.1, 5.0, "camera"),
+        (6.0, 0.1, 5.0, "camera"),
+        (10.0, 0.1, 3.0, "camera"),
+        (6.0, 0.1, 3.0, "camera"),
+        (10.0, 0.1, 3.0, "measured"),
+        (6.0, 0.1, 3.0, "measured"),
+        (10.0, 0.1, 4.0, "measured"),
+        (6.0, 0.1, 4.0, "measured"),
     ],
 )
 async def test_a_standing_subject_under_range_noise_holds_the_vehicle_still(
-    monkeypatch: Any, fix_hz: float, speed_p95: float, standoff: float
+    monkeypatch: Any, fix_hz: float, speed_p95: float, standoff: float, rng: str
 ) -> None:
+    flown = _flown(standoff, rng)
     for seed in range(1, 9):
         f = await fly(
             monkeypatch,
@@ -87,6 +109,8 @@ async def test_a_standing_subject_under_range_noise_holds_the_vehicle_still(
             miss=0.3,
             seed=seed,
             fix_hz=fix_hz,
+            subject_brake=True,
+            **_RANGE[rng],
         )
         idx = f.after(10.0)
         speeds = [f.speed(i) for i in idx]
@@ -95,18 +119,65 @@ async def test_a_standing_subject_under_range_noise_holds_the_vehicle_still(
         sd = math.sqrt(sum((r - mean) ** 2 for r in ranges) / len(ranges))
         yaw_p95 = percentile(_yaw_rates_dps(f, idx), 0.95)
         print(
-            f"{fix_hz} Hz seed {seed}: speed p50 {percentile(speeds, 0.5):.3f}"
+            f"{rng} {standoff:g} m {fix_hz} Hz seed {seed}: speed p50 {percentile(speeds, 0.5):.3f}"
             f" p95 {percentile(speeds, 0.95):.3f} range {mean:.2f}±{sd:.2f}"
-            f" yaw p95 {yaw_p95:.2f} flips {_sign_flips(f, idx)}"
+            f" yaw p95 {yaw_p95:.2f} flips {_sign_flips(f, idx)} braked {sum(f.braked[i] for i in idx)}"
         )
         assert percentile(speeds, 0.95) <= speed_p95
         assert sd <= 0.5
-        assert abs(mean - standoff) <= 1.0
+        assert abs(mean - flown) <= 1.0
         assert yaw_p95 <= 5.0
         # 50 s of standing: no velocity reversals at the detector's rate (the
         # recorded flight reversed 54 times a minute).
         assert _sign_flips(f, idx) <= 2
         assert all(p == "following" for p in (f.phases[i] for i in idx))
+        assert f.state[-1]["standoff_min_m"] == _flown(0.0, rng)
+        assert f.state[-1]["standoff_raised"] is (standoff < flown)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
+async def test_a_shorter_minimum_is_flown_in_to_only_once_the_subject_walks(monkeypatch: Any, fix_hz: float) -> None:
+    # Set to 3 m on measured range, engaged 6 m from a subject who stands
+    # 30 s and then walks away at 1.4 m/s. Standing, the vehicle comes in to
+    # no nearer than the camera's 5 m minimum (what it flies until the tier
+    # is known), and not further once the measured tier is: walking, the
+    # minimum comes in at INWARD_RATE_MPS and the follow settles at 3 m.
+    def subject(t: float) -> tuple[float, float]:
+        return (1.4 * max(0.0, t - 30.0), 0.0)
+
+    for seed in (1, 2, 3):
+        f = await fly(
+            monkeypatch,
+            subject=subject,
+            start=(-6.0, 0.0),
+            duration_s=70.0,
+            config={"follow_distance_m": 3.0},
+            miss=0.3,
+            seed=seed,
+            fix_hz=fix_hz,
+            subject_brake=True,
+            **_RANGE["measured"],
+        )
+        standing = [f.range(i) for i in f.after(5.0) if f.t[i] < 30.0]
+        late = [f.range(i) for i in f.after(55.0)]
+        print(
+            f"{fix_hz:g} Hz seed {seed}: standing range {min(standing):.2f}-{max(standing):.2f},"
+            f" walking range {min(late):.2f}-{max(late):.2f}, minimum read back {f.state[-1]['standoff_min_m']}"
+        )
+        assert min(standing) >= MONOCULAR_MIN_STANDOFF_M - 0.5
+        assert percentile([f.speed(i) for i in f.after(10.0) if f.t[i] < 30.0], 0.95) <= 0.1
+        assert all(abs(r - MEASURED_MIN_STANDOFF_M) <= 1.0 for r in late)
+        assert f.state[-1]["standoff_min_m"] == MEASURED_MIN_STANDOFF_M
+        # The read-back says why it is held, truly: the range not yet known,
+        # then the subject standing (never a camera's range), then closing
+        # in, then nothing held.
+        reasons = [(f.t[i], f.state[i].get("standoff_reason")) for i in range(len(f.t)) if f.state[i]]
+        assert {r for _t, r in reasons} <= {"range-unknown", "subject-standing", "closing-in", None}
+        assert any(r == "subject-standing" for t, r in reasons if t < 30.0)
+        assert any(r == "closing-in" for t, r in reasons if t > 30.0)
+        assert all(r != "subject-standing" for t, r in reasons if t > 35.0)
+        assert (f.state[-1]["standoff_raised"], f.state[-1]["standoff_reason"]) == (False, None)
 
 
 def _walker(t: float) -> tuple[float, float]:
@@ -226,14 +297,17 @@ def _weaving_walker(t: float) -> tuple[float, float]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("standoff", [6.0, 4.0, 3.0])
+@pytest.mark.parametrize(
+    ("standoff", "rng"),
+    [(6.0, "camera"), (5.0, "camera"), (3.0, "camera"), (3.0, "measured"), (4.0, "measured")],
+)
 @pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 @pytest.mark.parametrize(
     ("label", "subject"),
     [("straight", lambda t: (30.0 + 1.4 * t, 0.0)), ("weaving", _weaving_walker)],
 )
 async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
-    monkeypatch: Any, fix_hz: float, label: str, subject: Any, standoff: float
+    monkeypatch: Any, fix_hz: float, label: str, subject: Any, standoff: float, rng: str
 ) -> None:
     # Recorded range noise and 30 % missed frames, six flights of a minute
     # after the acquisition: at most one tilt past 5° a minute, the
@@ -252,13 +326,15 @@ async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
             miss=0.3,
             seed=seed,
             fix_hz=fix_hz,
+            subject_brake=True,
+            **_RANGE[rng],
         )
         idx = f.after(15.0)
         span = (f.t[idx[-1]] - f.t[idx[0]]) / 60.0
         tilts, jerk, flips = _tilt_events(f, idx), _command_jerk_p95(f, idx), _range_reversals(f, idx)
         print(
-            f"{label} {standoff:g} m {fix_hz:g} Hz seed {seed}: tilts {tilts},"
-            f" command jerk p95 {jerk:.2f}, reversals {flips}"
+            f"{label} {rng} {standoff:g} m {fix_hz:g} Hz seed {seed}: tilts {tilts},"
+            f" command jerk p95 {jerk:.2f}, reversals {flips}, braked {sum(f.braked[i] for i in idx)}"
         )
         events += tilts
         minutes += span
@@ -305,16 +381,26 @@ async def test_a_walker_that_stops_is_held_still_and_followed_again(
     assert all(p == "following" for p in f.phases)
 
 
-# The default 8 m radius and the shortest ones allowed, at 6 and 10 Hz.
+# The default 8 m radius and the shortest each range allows, at 6 and 10 Hz.
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("fix_hz", "radius"),
-    [(10.0, 8.0), (6.0, 8.0), (3.0, 8.0), (10.0, 4.0), (6.0, 4.0), (10.0, 3.0), (6.0, 3.0)],
+    ("fix_hz", "radius", "rng"),
+    [
+        (10.0, 8.0, "camera"),
+        (6.0, 8.0, "camera"),
+        (3.0, 8.0, "camera"),
+        (10.0, 5.0, "camera"),
+        (6.0, 5.0, "camera"),
+        (6.0, 3.0, "camera"),
+        (10.0, 3.0, "measured"),
+        (6.0, 3.0, "measured"),
+    ],
 )
 @pytest.mark.parametrize("direction", ["cw", "ccw"])
 async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
-    monkeypatch: Any, direction: str, fix_hz: float, radius: float
+    monkeypatch: Any, direction: str, fix_hz: float, radius: float, rng: str
 ) -> None:
+    flown = _flown(radius, rng)
     f = await fly(
         monkeypatch,
         subject=_still,
@@ -329,6 +415,8 @@ async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
         miss=0.3,
         seed=5,
         fix_hz=fix_hz,
+        subject_brake=True,
+        **_RANGE[rng],
     )
     idx = f.after(10.0)
     s = 1.0 if direction == "cw" else -1.0
@@ -343,9 +431,12 @@ async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
     rate = s * math.degrees(turned) / seconds
     ranges = [f.range(i) for i in idx]
     jerk = _command_jerk_p95(f, idx)
-    print(f"{direction} {radius:g} m: {rate:.2f} deg/s, radius p50 {percentile(ranges, 0.5):.2f}, command jerk p95 {jerk:.2f}")
+    print(
+        f"{direction} {rng} {radius:g} m: {rate:.2f} deg/s, radius p50 {percentile(ranges, 0.5):.2f},"
+        f" command jerk p95 {jerk:.2f}, braked {sum(f.braked[i] for i in idx)}"
+    )
     assert 9.0 <= rate <= 11.0
-    assert abs(percentile(ranges, 0.5) - radius) <= 0.75
+    assert abs(percentile(ranges, 0.5) - flown) <= 0.75
     # Smooth at every radius: the commanded jerk within the walking bar.
     assert jerk <= 5.0
 

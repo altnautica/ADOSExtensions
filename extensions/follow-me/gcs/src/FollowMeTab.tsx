@@ -47,11 +47,26 @@ import {
   modeSummary,
   type FollowConfig,
   type FollowState,
+  type StandoffReason,
 } from "./types";
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
 
 const DASH = "—";
+
+const STANDOFF_REASON_KEYS: Record<StandoffReason, string> = {
+  "camera-range": "metrics.standoffCameraRange",
+  "range-unknown": "metrics.standoffRangeUnknown",
+  "subject-standing": "metrics.standoffSubjectStanding",
+  "closing-in": "metrics.standoffClosingIn",
+};
+
+/** A distance or radius flown farther than set, with why. */
+function withStandoffReason(value: string, f: FollowState | null, t: Translate): string {
+  if (!f?.standoffRaised || f.standoffMinM == null) return value;
+  const key = f.standoffReason ? STANDOFF_REASON_KEYS[f.standoffReason] : "metrics.standoffRaised";
+  return `${value} · ${t(key, { min: f.standoffMinM.toFixed(1) })}`;
+}
 
 /** The host command that writes this plugin's own per-drone config. */
 const CONFIG_WRITE = "plugin.config.write";
@@ -512,13 +527,13 @@ function MetricsSection({
       {orbit ? (
         <MetricRow
           label={t("metrics.orbitRadius")}
-          value={meters(f?.orbitRadiusM ?? null)}
+          value={withStandoffReason(meters(f?.orbitRadiusM ?? null), f, t)}
           testId="fm-orbit-radius"
         />
       ) : (
         <MetricRow
           label={t("metrics.distanceSetpoint")}
-          value={meters(f?.distanceSetpointM ?? null)}
+          value={withStandoffReason(meters(f?.distanceSetpointM ?? null), f, t)}
           testId="fm-distance-setpoint"
         />
       )}

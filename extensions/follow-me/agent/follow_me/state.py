@@ -169,6 +169,12 @@ class FollowConfig:
     # The operator asked for a follow height below MIN_FOLLOW_HEIGHT_M, and
     # it is held at that instead.
     follow_height_raised: bool = False
+    # The shortest standoff (follow distance and orbit radius) flown on the
+    # range the follow has, whether the one flown was set shorter and is
+    # held at it, and why (see follow_me.range_tier).
+    standoff_min_m: float = 3.0
+    standoff_raised: bool = False
+    standoff_reason: str | None = None
 
     @classmethod
     def resolve(
@@ -309,6 +315,12 @@ class FollowState:
     # The configured follow height was below MIN_FOLLOW_HEIGHT_M and is held
     # at it (surfaces say so: kept above head height).
     height_raised: bool = False
+    # The shortest standoff flown on the range the follow has, whether the
+    # configured one was shorter and is held at it, and why: camera-range,
+    # range-unknown, subject-standing or closing-in (surfaces say which).
+    standoff_min_m: float | None = None
+    standoff_raised: bool = False
+    standoff_reason: str | None = None
     commanding: bool = False
     fc_armed: bool = False
     fc_guided: bool = False

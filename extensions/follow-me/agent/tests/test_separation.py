@@ -23,8 +23,11 @@ import pytest
 from follow_sim import (
     BODY_HEIGHT_M,
     BODY_RADIUS_M,
-    SPORT_ACCEL_MPS2,
-    SPORT_JERK_MPS3,
+    SPORT,
+    SUBJECT_HARD_ZONE_M,
+    SUBJECT_MARGIN_M,
+    SUBJECT_SIGMAS,
+    SUBJECT_SOFT_AIM_M,
     VEHICLE_RADIUS_M,
     fly,
 )
@@ -35,11 +38,16 @@ import follow_me.standoff as standoff
 from follow_me.speed_limit import NEAR_FIXES, NEAR_SPAN_S, SubjectMotion
 from follow_me.standoff import (
     COMMAND_ACCEL_MPS2,
+    PILOT_SUBJECT_HARD_ZONE_M,
+    PILOT_SUBJECT_KEEP_M,
+    PILOT_SUBJECT_SIGMAS,
+    PILOT_SUBJECT_SOFT_AIM_M,
     SAFE_DISTANCE_M,
     SAFE_STANDOFF_MARGIN_M,
     StandoffController,
     clear_distance,
     keep_clear,
+    pilot_subject_sigma,
     safe_distance,
 )
 from follow_me.state import (
@@ -271,6 +279,36 @@ def test_a_cut_steps_only_along_the_line_of_sight() -> None:
     assert abs(after.ve_mps - before.ve_mps) <= COMMAND_ACCEL_MPS2 * dt + 1e-9
 
 
+def test_a_released_cut_goes_on_from_the_vehicle_not_the_cut() -> None:
+    # Hovering, a subject 1 m ahead (inside the clear distance) has the
+    # command stepped back at once. The vehicle has not moved yet when the
+    # subject is gone again: the command goes on from the vehicle's own
+    # velocity, one slew step toward the goal, not from the cut's speed away.
+    c = StandoffController()
+    kw: dict[str, Any] = {
+        "goal_ne": (30.0, 0.0),
+        "goal_v_ne": (0.0, 0.0),
+        "drone_ne": (0.0, 0.0),
+        "drone_v_ne": (0.0, 0.0),
+        "drone_yaw": 0.0,
+        "yaw_target": 0.0,
+        "still": False,
+        "latch_goal": False,
+        "max_speed_mps": 2.0,
+        "subject_v_ne": (0.0, 0.0),
+        "standoff_m": 6.0,
+    }
+    dt = 0.05
+    c.command(now=0.0, subject_ne=(30.0, 0.0), **kw)
+    cut = c.command(now=dt, subject_ne=(1.0, 0.0), **kw)
+    assert c.limited and cut.vn_mps <= -1.0
+    held = c.command(now=2.0 * dt, subject_ne=(1.0, 0.0), **kw)
+    assert c.limited and held.vn_mps <= -1.0
+    after = c.command(now=3.0 * dt, subject_ne=(30.0, 0.0), **kw)
+    assert not c.limited
+    assert 0.0 <= after.vn_mps <= COMMAND_ACCEL_MPS2 * dt + 1e-9
+
+
 def _motion(fixes: list[tuple[float, float]]) -> SubjectMotion:
     m = SubjectMotion()
     for t, r in fixes:
@@ -298,15 +336,38 @@ def test_the_near_range_takes_only_fixes_of_the_last_span() -> None:
     assert _motion([*fixes, (1.5, 2.0), (1.6, 2.0), (1.7, 2.0)]).near_range(1.7) == 2.0
 
 
+def test_the_pilot_keeps_the_subject_inside_the_standoff() -> None:
+    # The pilot brake's zero-sigma keep (body, vehicle, margin), its soft
+    # aim and its hard zone, modelled in the sim as in the pilot.
+    assert PILOT_SUBJECT_KEEP_M == pytest.approx(BODY_RADIUS_M + VEHICLE_RADIUS_M + SUBJECT_MARGIN_M)
+    assert PILOT_SUBJECT_SIGMAS == SUBJECT_SIGMAS
+    assert PILOT_SUBJECT_SOFT_AIM_M == SUBJECT_SOFT_AIM_M
+    assert PILOT_SUBJECT_HARD_ZONE_M == SUBJECT_HARD_ZONE_M
+    reach = PILOT_SUBJECT_KEEP_M + PILOT_SUBJECT_SOFT_AIM_M + PILOT_SUBJECT_HARD_ZONE_M
+    for standoff_m in (3.0, 3.5, 4.0, 5.0, 6.0, 8.0):
+        for sigma in (0.0, 0.3, 0.75, 1.5, 3.0):
+            sent = pilot_subject_sigma(standoff_m, sigma)
+            assert 0.0 <= sent <= sigma
+            assert reach + PILOT_SUBJECT_SIGMAS * sent <= max(reach, standoff_m - SAFE_STANDOFF_MARGIN_M) + 1e-9
+    # A camera's error (σ 0.75 m) passes as it is at 8 m, bounded at the
+    # default 6 m and the camera's 5 m minimum, and none at 3 m.
+    assert pilot_subject_sigma(8.0, 0.75) == 0.75
+    assert pilot_subject_sigma(6.0, 0.75) == pytest.approx(0.65)
+    assert pilot_subject_sigma(5.0, 0.75) == pytest.approx(0.15)
+    assert pilot_subject_sigma(3.0, 0.75) == 0.0
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("short_m", [0.0, 3.0])
-async def test_goals_carry_the_subject_range_error(monkeypatch: Any, short_m: float) -> None:
+@pytest.mark.parametrize(("short_m", "standoff_m"), [(0.0, 6.0), (3.0, 6.0), (3.0, 4.0), (3.0, 3.0)])
+async def test_goals_carry_the_subject_range_error(monkeypatch: Any, short_m: float, standoff_m: float) -> None:
     # Every goal names the subject's range error for the pilot's subject
-    # brake: at least the estimate's own, and half what the newest fixes
-    # put the subject short of the estimate by (here, made 3 m short).
+    # brake: the estimate's own, or half what the newest fixes put the
+    # subject short of the estimate by (here, made 3 m short), whichever is
+    # larger, bounded so the pilot's keep stays inside the standoff flown
+    # (a camera's range flies a 3 or 4 m setting at its 5 m minimum).
     sigmas: list[float] = []
     nears: list[float | None] = []
-    seen: list[tuple[dict[str, Any], float, float | None, float]] = []
+    seen: list[tuple[dict[str, Any], float, float | None, float, float]] = []
     error, near_range, goal = loop._estimate_error, SubjectMotion.near_range, follow_me.FollowMePlugin._goal
 
     def spy_error(*a: Any, **k: Any) -> Any:
@@ -320,11 +381,11 @@ async def test_goals_carry_the_subject_range_error(monkeypatch: Any, short_m: fl
         nears.append(r)
         return r
 
-    def spy_goal(self: Any, *a: Any, **k: Any) -> dict[str, Any]:
+    def spy_goal(self: Any, cfg: Any, *a: Any, **k: Any) -> dict[str, Any]:
         nears.append(None)
-        g = goal(self, *a, **k)
+        g = goal(self, cfg, *a, **k)
         est = math.hypot(g["subject_ne"][0] - self._pose.north_m, g["subject_ne"][1] - self._pose.east_m)
-        seen.append((g, sigmas[-1], nears[-1], est))
+        seen.append((g, sigmas[-1], nears[-1], est, cfg.follow_distance_m))
         return g
 
     monkeypatch.setattr(loop, "_estimate_error", spy_error)
@@ -333,27 +394,79 @@ async def test_goals_carry_the_subject_range_error(monkeypatch: Any, short_m: fl
     await fly(
         monkeypatch,
         subject=lambda t: (8.0 + 1.4 * t, 0.0),
-        start=(2.0, 0.0),
+        start=(8.0 - standoff_m, 0.0),
+        config={"follow_distance_m": standoff_m},
         duration_s=20.0,
         miss=0.3,
         seed=3,
         fix_hz=10.0,
     )
     assert len(seen) > 100
-    for g, range_sigma, near, est in seen:
-        assert g["subject_sigma_m"] >= range_sigma - 1e-12
-        if near is not None:
-            assert g["subject_sigma_m"] >= (est - near) / 2.0 - 1e-9
-    with_near = [g["subject_sigma_m"] for g, _s, near, _e in seen if near is not None]
+    for g, range_sigma, near, est, flown in seen:
+        assert flown >= standoff_m
+        want = range_sigma if near is None else max(range_sigma, (est - near) / 2.0)
+        assert g["subject_sigma_m"] == pytest.approx(pilot_subject_sigma(flown, want), abs=1e-9)
+    with_near = [g["subject_sigma_m"] for g, _s, near, _e, _f in seen if near is not None]
     assert with_near
-    if short_m:
-        assert min(with_near) >= 1.0
+    if short_m and standoff_m >= 6.0:
+        # Made 3 m short, the error named reaches the bound.
+        assert min(with_near) == pytest.approx(pilot_subject_sigma(standoff_m, math.inf))
+
+
+# A walker followed at the shortest standoff each range allows, the
+# pilot's subject brake flown on the goals (see follow_sim): 3 and 4 m on
+# measured range, 5 m on a camera's. Under range noise the estimate dips
+# toward the vehicle; the range error a goal names must not widen the
+# pilot's keep into those dips. At 3 and 4 m it is held to none: the brake
+# cuts no more often than with no error named. At 5 m it is held to
+# 0.15 m: under 5 % of ticks (an unbounded error had the brake cut on 24 %
+# of ticks at 3 m and 6 % at 4 m on a camera's range).
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
+@pytest.mark.parametrize(("standoff_m", "range_sigma_m"), [(3.0, 0.2), (4.0, 0.2), (5.0, None)])
+async def test_the_named_range_error_does_not_set_the_pilot_brake_off_at_a_short_standoff(
+    monkeypatch: Any, standoff_m: float, range_sigma_m: float | None, fix_hz: float
+) -> None:
+    measured = {} if range_sigma_m is None else {"range_sigma_m": range_sigma_m, "outlier_share": 0.0}
+
+    async def braked_shares() -> list[float]:
+        out = []
+        for seed in range(1, 7):
+            f = await fly(
+                monkeypatch,
+                subject=lambda t: (30.0 + 1.4 * t, 0.0),
+                start=(30.0 - standoff_m, 0.0),
+                duration_s=75.0,
+                config={"follow_distance_m": standoff_m},
+                miss=0.3,
+                seed=seed,
+                fix_hz=fix_hz,
+                subject_brake=True,
+                **measured,
+            )
+            idx = f.after(15.0)
+            out.append(sum(f.braked[i] for i in idx) / len(idx))
+        return out
+
+    sent = await braked_shares()
+    monkeypatch.setattr(loop, "pilot_subject_sigma", lambda _standoff, _sigma: 0.0)
+    none = await braked_shares()
+    print(
+        f"{standoff_m:g} m {fix_hz:g} Hz braked share: as sent {[round(100 * s, 1) for s in sent]} %,"
+        f" no error named {[round(100 * s, 1) for s in none]} %"
+    )
+    if pilot_subject_sigma(standoff_m, math.inf) == 0.0:
+        assert sent == none
+    else:
+        assert sum(sent) / len(sent) <= 0.05
 
 
 # A jogger (2.5 m/s) followed at the default 6 m under the pilot's Sport
 # profile (2.5 m/s²), who stops dead. The speed law alone slews its
 # command at 1 m/s² and the vehicle comes over the subject; the guard cuts
-# the closing speed at once, which the pilot flies at Sport's limits.
+# the closing speed at once, which the pilot flies at Sport's limits. The
+# follow's own guard is flown alone, without the pilot's subject brake (a
+# pilot older than agent 0.118.0 has none).
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 async def test_a_jogger_stopping_dead_is_not_overflown_under_the_sport_profile(
@@ -376,8 +489,7 @@ async def test_a_jogger_stopping_dead_is_not_overflown_under_the_sport_profile(
                 miss=0.3,
                 seed=seed,
                 fix_hz=fix_hz,
-                accel_mps2=SPORT_ACCEL_MPS2,
-                jerk_mps3=SPORT_JERK_MPS3,
+                profile=SPORT,
             )
             out.append(min(f.range(i) for i in f.after(stop_s)))
         return out
@@ -419,14 +531,23 @@ def _clearance_3d(f: Any, i: int) -> float:
 
 # Turns back from straight ahead to 60° off, at a walk, a jog and a run;
 # at once and over a second. The follow height asked is 1.5 m, below the
-# lowest: it is flown at the lowest.
+# lowest: it is flown at the lowest. At the default 6 m on a camera's
+# range, and at 3 m on a measured one with the pilot's subject brake (the
+# shortest standoff flown, closed in to from 6 m while the subject walks).
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 @pytest.mark.parametrize("speed", [1.4, 3.0, 5.0])
 @pytest.mark.parametrize("angle", [180.0, 165.0, 150.0, -150.0, 120.0])
+@pytest.mark.parametrize("tier", ["camera-6", "measured-3"])
 async def test_a_subject_turning_back_never_comes_within_a_metre_of_the_rotors(
-    monkeypatch: Any, angle: float, speed: float, fix_hz: float
+    monkeypatch: Any, angle: float, speed: float, fix_hz: float, tier: str
 ) -> None:
+    extra: dict[str, Any] = (
+        {}
+        if tier == "camera-6"
+        else {"range_sigma_m": 0.2, "outlier_share": 0.0, "subject_brake": True}
+    )
+    standoff_m = 6.0 if tier == "camera-6" else 3.0
     least, least_h = math.inf, math.inf
     for turn_s in (0.0, 1.0):
         for seed in (1, 2):
@@ -435,15 +556,19 @@ async def test_a_subject_turning_back_never_comes_within_a_metre_of_the_rotors(
                 subject=_reversal(angle, speed, turn_s),
                 start=(24.0, 0.0),
                 duration_s=_TURN_S + 12.0,
-                config={"follow_height_m": 1.5},
+                config={"follow_height_m": 1.5, "follow_distance_m": standoff_m},
                 miss=0.3,
                 seed=seed,
                 fix_hz=fix_hz,
+                **extra,
             )
             idx = f.after(_TURN_S)
             least = min(least, min(_clearance_3d(f, i) for i in idx))
             least_h = min(least_h, min(f.range(i) for i in idx))
-    print(f"{angle:.0f}° {speed} m/s {fix_hz:.0f} Hz: least 3-D clearance {least:.2f} m, horizontal {least_h:.2f} m")
+    print(
+        f"{tier} {angle:.0f}° {speed} m/s {fix_hz:.0f} Hz: least 3-D clearance {least:.2f} m,"
+        f" horizontal {least_h:.2f} m"
+    )
     # The body passes under the rotors at the lowest follow height or
     # further off, to within the rangefinder's 1 cm the height is held on.
     assert least >= OVERHEAD_CLEARANCE_M - _RANGEFINDER_RESOLUTION_M
