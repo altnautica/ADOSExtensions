@@ -254,7 +254,8 @@ async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
 async def test_a_walker_that_stops_is_held_still_and_followed_again(
     monkeypatch: Any, seed: int, fix_hz: float
 ) -> None:
-    # Walks 20 s, stands 15 s, walks on; the agent's 10 Hz detector.
+    # Walks 20 s, stands 15 s, walks on; the agent's 10 Hz detector and the
+    # slowest supported, 6 Hz.
     def subject(t: float) -> tuple[float, float]:
         return (8.0 + 1.4 * min(t, 20.0) + 1.4 * max(0.0, t - 35.0), 0.0)
 

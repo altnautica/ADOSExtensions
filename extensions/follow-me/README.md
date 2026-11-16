@@ -79,7 +79,7 @@ then on the agent runs a 20 Hz loop:
      `max_speed_mps`. Under range noise the subject's velocity, the range
      error and the command are smoothed and the range error is corrected
      only past a deadband, each scaled by the error the subject estimate
-     really carries (none on clean ranges), so noise does not swing the
+     really carries (next to none on clean ranges), so noise does not swing the
      speed. A standing subject is followed round a fixed centre with no
      velocity, the point moving only past a 0.5 m deadband;
    - a yaw that turns toward the latest sighting's measured bearing (the

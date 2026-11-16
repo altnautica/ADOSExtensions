@@ -32,7 +32,8 @@ into that velocity:
 * **Range noise.** The subject velocity fed forward, the range error and
   the command are smoothed, and the range error is corrected only past a
   deadband, each by the error the subject estimate really carries; on clean
-  ranges none of it applies, and under monocular range noise the command
+  ranges next to none of it applies (a subject's own sharp manoeuvre reads
+  as a little scatter), and under monocular range noise the command
   holds the subject's pace instead of swinging round it.
 * **Bearing.** The yaw turns toward the subject at a rate from the same
   square-root law (``YAW_GAIN_PER_S``, ``YAW_ACCEL_DPS2``, at most
@@ -101,7 +102,7 @@ APPROACH_LEAD_S = 0.7
 # Range noise. Every term below scales with the error the subject estimate
 # really carries (the filter's spread times how far the fixes actually
 # scatter, see :func:`follow_me.loop._estimate_error`), so on clean ranges
-# (a lidar, a depth camera) the law is exactly the one above, and under
+# (a lidar, a depth camera) the law is next to the one above, and under
 # monocular range noise it no longer turns that noise into speed swings:
 # each swing at the profile's acceleration tilts the vehicle 5.8°.
 #

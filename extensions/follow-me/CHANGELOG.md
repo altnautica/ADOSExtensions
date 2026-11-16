@@ -26,10 +26,10 @@ is not supported.
   fed forward smoothed, the range error is corrected only past a deadband
   and smoothed, and so is the command, each by the error the subject
   estimate really carries: its spread scaled by how far the fixes actually
-  scatter. On clean ranges none of it applies. Following a walking person
-  under monocular range noise in the closed-loop sim, the vehicle tilts
-  past 5° about once in six minutes (was 18-28 times a minute) and
-  the commanded jerk stays near 2 m/s³ (95th percentile; was 29-39), at
+  scatter. On clean ranges next to none of it applies. Following a walking
+  person under monocular range noise in the closed-loop sim, the vehicle
+  tilts past 5° about once in six minutes (was 19-30 times a minute) and
+  the commanded jerk stays near 2 m/s³ (95th percentile; was 25-39), at
   10 Hz and 6 Hz detection.
 - A standing subject is held still: once the median of its fixes stops
   moving the follow is built round a fixed centre with no velocity, the

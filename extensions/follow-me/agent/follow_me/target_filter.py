@@ -50,10 +50,11 @@ _UNCAPPED_REACH_MPS = 5.0
 # The range scatter (see :attr:`TargetFilter.scatter_ratio`) averages about
 # this many fixes (5 s at 10 Hz): long enough that the innovations of a
 # second's manoeuvre barely move it, short enough to follow the cues as the
-# range or the light changes. It reads no more than SCATTER_RATIO_MAX, and is
-# taken in gradually over the first SCATTER_MIN_FIXES fixes (2 s at 10 Hz):
-# a fresh track's first innovations say more about its start than about the
-# cues, and a smoothing switched on at once would itself step the command.
+# range or the light changes. It reads no more than SCATTER_RATIO_MAX. A
+# track's first SCATTER_MIN_FIXES fixes read 0 and the next SCATTER_MIN_FIXES
+# take it in gradually (about 4 s at 10 Hz): a fresh track's first
+# innovations say more about its start than about the cues, and a smoothing
+# switched on at once would itself step the command.
 SCATTER_FIXES = 50
 SCATTER_MIN_FIXES = 20
 SCATTER_RATIO_MAX = 2.0
@@ -188,7 +189,8 @@ class TargetFilter:
         of the mean squared innovation over its predicted variance, over the
         last SCATTER_FIXES or so fixes fused. 1 when the range cues' noise is
         what the fixes are fused with, near 0 on clean ranges (a lidar, a
-        depth camera). Scaling the filter's own spread by it gives the error
+        depth camera; a subject's own sharp manoeuvre still reads as a
+        little scatter). Scaling the filter's own spread by it gives the error
         the estimate really carries. A track's first SCATTER_MIN_FIXES fixes
         read 0 and the next SCATTER_MIN_FIXES take it in gradually."""
         if self._scatter_n <= SCATTER_MIN_FIXES or self._scatter_s <= 0.0:
