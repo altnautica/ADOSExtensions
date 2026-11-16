@@ -71,7 +71,7 @@ from follow_me.state import (
     UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
 )
-from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject, safe_distance
+from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject
 from follow_me.target_filter import Cov2, TargetFilter, subject_max_speed_mps
 
 # The fixed cadence the follow loop commands at, decoupled from the
@@ -702,7 +702,7 @@ class FollowLoopMixin:
             max_speed_mps=cfg.max_speed_mps,
             subject_ne=keep_ne,
             subject_v_ne=keep_v,
-            safe_m=safe_distance(cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m),
+            standoff_m=cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m,
             near_m=near,
             range_sigma_m=range_sigma,
         )

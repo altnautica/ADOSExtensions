@@ -94,11 +94,14 @@ then on the agent runs a 20 Hz loop:
      detour that keeps the subject in view (±90° of the follow angle, ±60°
      of the orbit phase), with `obstacle_margin_m`.
 
-   The velocity never closes on the subject inside the safe distance
-   (2.5 m, or a metre inside a shorter standoff, plus two sigmas of the
-   range error): toward the subject it is held to what still stops short of
-   it, a path that passes it on one side is kept, and within it the vehicle
-   backs away. The newest fixes' range is kept clear of when it is nearer
+   The velocity never closes on the subject inside the clear distance
+   (the safe distance, 2.5 m, plus two sigmas of the range error, and
+   always at least 2 m inside the standoff or orbit radius, so range noise
+   at a short standoff does not set it off): toward the subject it is held
+   to what still stops short of it, a path that passes it on one side is
+   kept, and within it the vehicle backs away; the cut in the closing
+   speed is not slewed, the rest of the change is.
+   The newest fixes' range is kept clear of when it is nearer
    than the estimate's, which trails a subject that turns back. A subject
    who turns straight back at the vehicle from the standoff can still pass
    under it: range noise takes half a second to a second of fixes to show
@@ -318,7 +321,7 @@ Per-drone configuration (see `config-schema.json`):
 | -------------------------- | ------------- | ----------- | ----------------------------------------------- |
 | `active`                   | `false`       | —           | Armed/disarmed (toggled by the Skill).          |
 | `follow_distance_m`        | `6`           | `3`–`30`    | Standoff distance behind the subject.           |
-| `follow_height_m`          | `4`           | `0`–`20`    | Follow height above the ground.                 |
+| `follow_height_m`          | `4`           | `3.4`–`20`  | Follow height above the ground; a lower stored value is flown at 3.4 m. |
 | `gimbal_point`             | `true`        | —           | Point a gimbal at the subject if present.       |
 | `designate_camera`         | `auto`        | —           | Camera the follow loop consumes; `auto` reads the designated subject's camera (any camera until one is designated). |
 | `camera_hfov_deg`          | unset         | `30`–`160`  | Camera horizontal field of view, where the camera roster does not give it; unset is 87°. |

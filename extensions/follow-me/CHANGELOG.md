@@ -21,16 +21,19 @@ is not supported.
   above head height. A subject who turns straight back into the vehicle
   passes under it with the rotors at least 1 m clear: in the closed-loop
   sim, at a walk, a jog and a run, turning back from 60° off to straight
-  on, at 10 Hz and 6 Hz detection (it came within 0.4 m of the rotors, or
+  on, at 10 Hz and 6 Hz detection (it came within 0.7 m of the rotors, or
   struck them, at a 1.5 m height before).
 - The follow keeps clear of the subject: toward it the velocity is held to
-  what still stops short of the safe distance (2.5 m at the default
-  standoff, a metre inside a shorter one, plus two sigmas of the range
-  error), a path that passes beside it is kept, and within it the vehicle
-  backs away. The newest fixes' range is kept clear of when it is nearer
-  than the subject estimate's, which trails a subject turning back. Goals
-  carry `subject_sigma_m`, the error of the subject's range, for the
-  pilot's own subject brake (agent 0.118.0).
+  what still stops short of the clear distance (2.5 m plus two sigmas of
+  the range error, and always at least 2 m inside the standoff or orbit
+  radius, so range noise at a 3 m or 4 m standoff does not set it off), a
+  path that passes beside it is kept, and within it the vehicle backs
+  away. The cut in the closing speed is not slewed: under the Sport
+  profile a jogger who stops dead 6 m ahead is no longer overflown. The
+  newest fixes' range is kept clear of when it is nearer than the subject
+  estimate's, which trails a subject turning back. Goals carry
+  `subject_sigma_m`, the error of the subject's range, for the pilot's own
+  subject brake (agent 0.118.0).
 - Follow and orbit goals carry the follow's complete desired velocity
   (`vel_mode` `command`); the pilot shapes it within the vehicle's jerk and
   acceleration limits and adds no position loop of its own. The velocity

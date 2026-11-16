@@ -59,17 +59,31 @@ def _sign_flips(f: Flight, idx: range) -> int:
 # The detector rate the agent runs at (10 Hz) and the one the recorded
 # flights ran at (3 Hz), with what each must hold a standing subject to: the
 # recorded 0.95 m/s (95th percentile) down to 0.1 at 10 Hz and 0.2 at 3 Hz.
+# The default 6 m standoff, and the shortest ones allowed (3 and 4 m), where
+# the distance kept clear of the subject comes nearest the standoff.
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("fix_hz", "speed_p95"), [(10.0, 0.1), (6.0, 0.1), (3.0, 0.2)])
+@pytest.mark.parametrize(
+    ("fix_hz", "speed_p95", "standoff"),
+    [
+        (10.0, 0.1, 6.0),
+        (6.0, 0.1, 6.0),
+        (3.0, 0.2, 6.0),
+        (10.0, 0.1, 4.0),
+        (6.0, 0.1, 4.0),
+        (10.0, 0.1, 3.0),
+        (6.0, 0.1, 3.0),
+    ],
+)
 async def test_a_standing_subject_under_range_noise_holds_the_vehicle_still(
-    monkeypatch: Any, fix_hz: float, speed_p95: float
+    monkeypatch: Any, fix_hz: float, speed_p95: float, standoff: float
 ) -> None:
     for seed in range(1, 9):
         f = await fly(
             monkeypatch,
             subject=_still,
-            start=(-6.0, 0.0),
+            start=(-standoff, 0.0),
             duration_s=60.0,
+            config={"follow_distance_m": standoff},
             miss=0.3,
             seed=seed,
             fix_hz=fix_hz,
@@ -87,7 +101,7 @@ async def test_a_standing_subject_under_range_noise_holds_the_vehicle_still(
         )
         assert percentile(speeds, 0.95) <= speed_p95
         assert sd <= 0.5
-        assert abs(mean - 6.0) <= 1.0
+        assert abs(mean - standoff) <= 1.0
         assert yaw_p95 <= 5.0
         # 50 s of standing: no velocity reversals at the detector's rate (the
         # recorded flight reversed 54 times a minute).
@@ -212,13 +226,14 @@ def _weaving_walker(t: float) -> tuple[float, float]:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("standoff", [6.0, 4.0, 3.0])
 @pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 @pytest.mark.parametrize(
     ("label", "subject"),
     [("straight", lambda t: (30.0 + 1.4 * t, 0.0)), ("weaving", _weaving_walker)],
 )
 async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
-    monkeypatch: Any, fix_hz: float, label: str, subject: Any
+    monkeypatch: Any, fix_hz: float, label: str, subject: Any, standoff: float
 ) -> None:
     # Recorded range noise and 30 % missed frames, six flights of a minute
     # after the acquisition: at most one tilt past 5° a minute, the
@@ -231,8 +246,9 @@ async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
         f = await fly(
             monkeypatch,
             subject=subject,
-            start=(24.0, 0.0),
+            start=(30.0 - standoff, 0.0),
             duration_s=75.0,
+            config={"follow_distance_m": standoff},
             miss=0.3,
             seed=seed,
             fix_hz=fix_hz,
@@ -240,7 +256,10 @@ async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
         idx = f.after(15.0)
         span = (f.t[idx[-1]] - f.t[idx[0]]) / 60.0
         tilts, jerk, flips = _tilt_events(f, idx), _command_jerk_p95(f, idx), _range_reversals(f, idx)
-        print(f"{label} {fix_hz:g} Hz seed {seed}: tilts {tilts}, command jerk p95 {jerk:.2f}, reversals {flips}")
+        print(
+            f"{label} {standoff:g} m {fix_hz:g} Hz seed {seed}: tilts {tilts},"
+            f" command jerk p95 {jerk:.2f}, reversals {flips}"
+        )
         events += tilts
         minutes += span
         assert jerk <= 5.0
@@ -286,20 +305,24 @@ async def test_a_walker_that_stops_is_held_still_and_followed_again(
     assert all(p == "following" for p in f.phases)
 
 
+# The default 8 m radius and the shortest ones allowed, at 6 and 10 Hz.
 @pytest.mark.asyncio
-@pytest.mark.parametrize("fix_hz", [10.0, 6.0, 3.0])
+@pytest.mark.parametrize(
+    ("fix_hz", "radius"),
+    [(10.0, 8.0), (6.0, 8.0), (3.0, 8.0), (10.0, 4.0), (6.0, 4.0), (10.0, 3.0), (6.0, 3.0)],
+)
 @pytest.mark.parametrize("direction", ["cw", "ccw"])
 async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
-    monkeypatch: Any, direction: str, fix_hz: float
+    monkeypatch: Any, direction: str, fix_hz: float, radius: float
 ) -> None:
     f = await fly(
         monkeypatch,
         subject=_still,
-        start=(-8.0, 0.0),
+        start=(-radius, 0.0),
         duration_s=70.0,
         config={
             "follow_mode": "orbit",
-            "orbit_radius_m": 8.0,
+            "orbit_radius_m": radius,
             "orbit_rate_dps": 10.0,
             "orbit_direction": direction,
         },
@@ -319,9 +342,12 @@ async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
     seconds = f.t[idx[-1]] - f.t[idx[0]]
     rate = s * math.degrees(turned) / seconds
     ranges = [f.range(i) for i in idx]
-    print(f"{direction}: {rate:.2f} deg/s, radius p50 {percentile(ranges, 0.5):.2f}")
+    jerk = _command_jerk_p95(f, idx)
+    print(f"{direction} {radius:g} m: {rate:.2f} deg/s, radius p50 {percentile(ranges, 0.5):.2f}, command jerk p95 {jerk:.2f}")
     assert 9.0 <= rate <= 11.0
-    assert abs(percentile(ranges, 0.5) - 8.0) <= 0.75
+    assert abs(percentile(ranges, 0.5) - radius) <= 0.75
+    # Smooth at every radius: the commanded jerk within the walking bar.
+    assert jerk <= 5.0
 
 
 @pytest.mark.asyncio

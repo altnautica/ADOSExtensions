@@ -31,11 +31,12 @@ into that velocity:
   ``COMMAND_ACCEL_MPS2`` per second, so it never steps, except to keep
   clear of the subject.
 * **Separation.** Whatever the geometry asks, the velocity toward the
-  subject is held so the vehicle stops short of the safe distance
-  (:func:`safe_distance`, plus two sigmas of the range error) or passes the
-  subject beside it, and within it the vehicle backs away
-  (:func:`keep_clear`). That change is not slewed: the pilot shapes it at
-  its profile's limits.
+  subject is held so the vehicle stops short of the clear distance
+  (:func:`clear_distance`: the safe distance plus two sigmas of the range
+  error, kept inside the standoff) or passes the subject beside it, and
+  within it the vehicle backs away (:func:`keep_clear`). The cut along the
+  line of sight is not slewed: the pilot shapes it at its profile's
+  limits.
 * **Range noise.** The subject velocity fed forward, the range error and
   the command are smoothed, and the range error is corrected only past a
   deadband, each by the error the subject estimate really carries; on clean
@@ -144,7 +145,14 @@ SMOOTH_MAX_S = 2.0
 #   fix), held at least SAFE_STANDOFF_MARGIN_M inside a shorter standoff.
 # * Uncertain range is taken short: the distance kept clear adds
 #   SEPARATION_SIGMAS of the error the estimate carries along the line of
-#   sight, at most SEPARATION_MARGIN_MAX_M.
+#   sight, at most SEPARATION_MARGIN_MAX_M, and that margin too stays
+#   SAFE_STANDOFF_MARGIN_M inside the standoff (never past the safe
+#   distance). Under monocular range noise (σ 0.75 m and its outliers) the
+#   subject estimate puts a subject at the standoff up to 1.5 m nearer for
+#   a moment; 2 m inside, the guard does not answer that noise at any
+#   standoff allowed. Over a short standoff the
+#   height floor (MIN_FOLLOW_HEIGHT_M) keeps the rotors a metre clear of
+#   the subject whatever the horizontal distance.
 # * The closing speed toward the subject (relative to the subject's own
 #   motion) is limited so the vehicle can still stop, decelerating at
 #   SEPARATION_DECEL_MPS2 after the shaper's lag, short of the clear
@@ -157,7 +165,7 @@ SMOOTH_MAX_S = 2.0
 #   stopping, and the side is held (SEPARATION_SIDE_HOLD_MPS) while the
 #   conflict lasts.
 SAFE_DISTANCE_M = 2.5
-SAFE_STANDOFF_MARGIN_M = 1.0
+SAFE_STANDOFF_MARGIN_M = 2.0
 SEPARATION_SIGMAS = 2.0
 SEPARATION_MARGIN_MAX_M = 1.5
 SEPARATION_DECEL_MPS2 = 0.8
@@ -219,6 +227,16 @@ def safe_distance(standoff_m: float) -> float:
     return max(0.0, min(SAFE_DISTANCE_M, standoff_m - SAFE_STANDOFF_MARGIN_M))
 
 
+def clear_distance(standoff_m: float, range_sigma_m: float) -> float:
+    """The horizontal distance kept clear of the subject: the safe distance
+    plus SEPARATION_SIGMAS of the range error, the margin held
+    SAFE_STANDOFF_MARGIN_M inside the standoff (the safe distance itself
+    is)."""
+    safe = safe_distance(standoff_m)
+    margin = min(SEPARATION_MARGIN_MAX_M, SEPARATION_SIGMAS * max(0.0, range_sigma_m))
+    return min(safe + margin, max(safe, standoff_m - SAFE_STANDOFF_MARGIN_M))
+
+
 def keep_clear(
     *,
     rel_ne: tuple[float, float],
@@ -227,7 +245,7 @@ def keep_clear(
     want_ne: tuple[float, float],
     command_v_ne: tuple[float, float],
     range_sigma_m: float,
-    safe_m: float,
+    standoff_m: float,
     side: int,
     near_m: float | None = None,
 ) -> tuple[tuple[float, float], int, bool]:
@@ -238,10 +256,11 @@ def keep_clear(
     velocity and ``pace_v_ne`` the one fed forward (:meth:`StandoffController.pace`),
     ``command_v_ne`` the velocity commanded now (what the vehicle is turning
     toward), ``range_sigma_m`` the error the estimate carries along the line
-    of sight, ``side`` the side returned last tick and ``near_m`` the range
-    of the newest fixes (see
+    of sight, ``standoff_m`` the follow standoff (or orbit radius) the clear
+    distance comes from (:func:`clear_distance`), ``side`` the side
+    returned last tick and ``near_m`` the range of the newest fixes (see
     :meth:`follow_me.speed_limit.SubjectMotion.near_range`), kept clear in
-    place of the estimate's when there is one."""
+    place of the estimate's when it is nearer."""
     r = math.hypot(rel_ne[0], rel_ne[1])
     sn, se = subject_v_ne
     if r > 1e-6:
@@ -261,10 +280,10 @@ def keep_clear(
     if near_m is not None:
         if near_m < r - max(margin, SEPARATION_STALE_M):
             credit = min(credit, 0.0)
-        r = near_m
+        r = min(r, near_m)
     sn, se = sn + (credit - away) * un, se + (credit - away) * ue
     qn, qe = want_ne[0] - sn, want_ne[1] - se
-    clear = safe_m + margin
+    clear = clear_distance(standoff_m, range_sigma_m)
     q_u = qn * un + qe * ue
     if r <= clear:
         # Inside: every velocity that does not back away is refused.
@@ -552,7 +571,7 @@ class StandoffController:
         max_speed_mps: float,
         subject_ne: tuple[float, float],
         subject_v_ne: tuple[float, float],
-        safe_m: float,
+        standoff_m: float,
         near_m: float | None = None,
         range_sigma_m: float = 0.0,
     ) -> Command:
@@ -562,8 +581,9 @@ class StandoffController:
         :meth:`pace`; ``range_sigma_m`` is the error the subject estimate
         really carries along the line of sight (0 on clean ranges).
         ``subject_ne`` and ``subject_v_ne`` are the subject estimate's own
-        position and velocity, unsmoothed, which the vehicle keeps
-        ``safe_m`` clear of, with ``near_m`` the newest fixes' range (see
+        position and velocity, unsmoothed, which the vehicle keeps clear of
+        by the distance ``standoff_m`` (the follow standoff or orbit radius)
+        sets, with ``near_m`` the newest fixes' range (see
         :func:`keep_clear`)."""
         resume = self._t is None or now - self._t > _RESUME_AFTER_S
         if resume:
@@ -618,7 +638,7 @@ class StandoffController:
             want_ne=self._want,
             command_v_ne=self._v,
             range_sigma_m=sigma,
-            safe_m=safe_m,
+            standoff_m=standoff_m,
             side=self._side,
             near_m=near_m,
         )
@@ -628,11 +648,13 @@ class StandoffController:
         rel = (subject_ne[0] - drone_ne[0], subject_ne[1] - drone_ne[1])
         r = math.hypot(rel[0], rel[1])
         un, ue = (rel[0] / r, rel[1] / r) if r > 1e-6 else (0.0, 0.0)
-        if limited and slewed[0] * un + slewed[1] * ue > want[0] * un + want[1] * ue + 1e-9:
+        along = (want[0] - slewed[0]) * un + (want[1] - slewed[1]) * ue
+        if limited and along < -1e-9:
             # Safety outranks smoothness: a cut in the closing speed is not
-            # slewed (the pilot shapes it at its profile's limits); any
-            # other change still is.
-            self._v = want
+            # slewed (the pilot shapes it at its profile's limits). Only the
+            # part along the line of sight steps; the rest, a sidestep
+            # included, is still slewed.
+            self._v = (slewed[0] + along * un, slewed[1] + along * ue)
         else:
             self._v = slewed
         self.limited = limited
@@ -680,6 +702,7 @@ __all__ = [
     "StandoffController",
     "StillSubject",
     "SubjectRef",
+    "clear_distance",
     "keep_clear",
     "safe_distance",
     "sqrt_law",
