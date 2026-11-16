@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use ados_capture_contract::v1::ImuBatch;
-use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus};
+use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus, PoseSource};
 
 use super::Engine;
 use crate::lidar_scan::LidarScan;
@@ -46,12 +46,25 @@ impl NavFeedStats {
 }
 
 impl Engine {
+    /// The FC IMU feeds this run's pose: `atlas.lidar.imu = "fc"` and the
+    /// provider running is the planar LiDAR one, the only LiDAR pose that
+    /// levels with an IMU. A run whose pose fell back to the FC's EKF
+    /// (`pose_provider = "fc_ekf"`, a rig without the LiDAR, a LiDAR pose
+    /// that failed to start, no rig document) or runs KISS-ICP on a 3D LiDAR
+    /// has no FC IMU feed, whatever the setting names.
+    fn fc_feeds_lidar_pose(&self) -> bool {
+        self.cfg.lidar.imu == fc_imu::FC_IMU_ID
+            && self.pose.source() == PoseSource::Lidar
+            && self.nav_deps.lidar_planar
+    }
+
     /// Hand the FC feed this run's sink ([`fc_imu::sink`]): every EKF
-    /// height, and with the FC as the matcher's IMU every `RAW_IMU` sample
-    /// and flow velocity, reach the pose provider as their frames arrive.
+    /// height, and with the FC feeding the LiDAR pose
+    /// ([`Self::fc_feeds_lidar_pose`]) every `RAW_IMU` sample and flow
+    /// velocity, reach the pose provider as their frames arrive.
     pub(super) fn attach_fc_nav(&self) {
         if let Some(fc) = &self.nav_deps.fc_feed {
-            let fc_is_imu = self.cfg.lidar.imu == fc_imu::FC_IMU_ID;
+            let fc_is_imu = self.fc_feeds_lidar_pose();
             let sink = fc_imu::sink(self.pose.clone(), fc_is_imu, self.fc_nav.clone());
             fc.set_nav_sink(Some(sink));
         }
@@ -133,7 +146,7 @@ impl Engine {
         // Before `RAW_IMU`, the FC's attitude up to now first, so the matcher
         // has the rotation across this scan before it sees the scan.
         self.feed_fc_attitude();
-        if self.cfg.lidar.imu == fc_imu::FC_IMU_ID {
+        if self.fc_feeds_lidar_pose() {
             let end = scan.t_ns + u64::from(scan.t_offset_ns.iter().copied().max().unwrap_or(0));
             let f = &mut self.nav_feed;
             f.scans += 1;
@@ -205,13 +218,13 @@ impl Engine {
         }
     }
 
-    /// With `atlas.lidar.imu = "fc"` and until the FC streams `RAW_IMU`
+    /// With the FC feeding the LiDAR pose and until the FC streams `RAW_IMU`
     /// (which [`fc_imu::sink`] hands on as it arrives), the newest FC
     /// attitude turned into an IMU sample ([`fc_imu::sample`]): a
     /// GNSS-denied FC reports no EKF position (so no pose estimate) until
     /// the external navigation it waits for arrives.
     fn feed_fc_attitude(&mut self) {
-        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID || self.fc_nav.raw_imu() {
+        if !self.fc_feeds_lidar_pose() || self.fc_nav.raw_imu() {
             return;
         }
         let Some(fc) = self.nav_deps.fc_feed.as_ref() else {
@@ -243,11 +256,11 @@ impl Engine {
         self.place_scans().await;
     }
 
-    /// With the FC as the matcher's IMU, the pose follows the FC IMU feed
+    /// With the FC feeding the LiDAR pose, the pose follows the FC IMU feed
     /// ([`fc_imu::FeedState::degraded`], [`fc_imu::hold_poses_to_feed`]).
     /// Each change is logged (`nav_imu_feed_degraded` / `nav_imu_feed_ok`).
     pub(super) fn degrade_on_imu_feed(&mut self, poses: &mut [PoseEstimate], now_ns: u64) {
-        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+        if !self.fc_feeds_lidar_pose() {
             return;
         }
         let degraded = self.fc_nav.degraded(now_ns);
@@ -274,11 +287,11 @@ impl Engine {
         fc_imu::hold_poses_to_feed(poses, degraded, raw_since);
     }
 
-    /// At most every [`NAV_FEED_LOG_EVERY`], with the FC as the IMU: the IMU
-    /// rate fed to the pose provider, the median and widest scan-to-IMU
-    /// gaps, and the waits between `RAW_IMU` frames over 100 ms.
+    /// At most every [`NAV_FEED_LOG_EVERY`], with the FC feeding the LiDAR
+    /// pose: the IMU rate fed to the pose provider, the median and widest
+    /// scan-to-IMU gaps, and the waits between `RAW_IMU` frames over 100 ms.
     fn log_nav_feed(&mut self) {
-        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+        if !self.fc_feeds_lidar_pose() {
             return;
         }
         let elapsed_s = self.nav_feed.since.elapsed().as_secs_f64();
@@ -334,11 +347,12 @@ impl Engine {
         self.publisher.publish_map_status(&out.status).await;
     }
 
-    /// [`world_engine_protocol::atlas::MapStatus::imu_feed`]: with the FC as
-    /// the planar pose's IMU, whether its feed measures the heading, why
-    /// not, and the `RAW_IMU` rate; `None` otherwise.
+    /// [`world_engine_protocol::atlas::MapStatus::imu_feed`]: with the FC
+    /// feeding the LiDAR pose, whether its feed measures the heading, why
+    /// not, and the `RAW_IMU` rate; `None` otherwise, including a run whose
+    /// pose fell back to the FC's EKF.
     fn imu_feed_status(&self) -> Option<ImuFeedStatus> {
-        if self.cfg.lidar.imu != fc_imu::FC_IMU_ID {
+        if !self.fc_feeds_lidar_pose() {
             return None;
         }
         let now = crate::clock::mono_ns();

@@ -369,6 +369,8 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
 mod tests;
 #[cfg(test)]
 mod tests_timebase;
+#[cfg(test)]
+mod tests_imu_feed;
 
 /// A session being finished on a blocking thread; its id stays reported in
 /// the state view until the finish completes.
