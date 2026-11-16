@@ -76,8 +76,8 @@ REACQUIRE_STRICT = "strict"
 REACQUIRE_SMART = "smart"
 _REACQUIRE_MODES = (REACQUIRE_STRICT, REACQUIRE_SMART)
 
-# What an uncertain lock does. ``follow``: keep following the prediction at
-# reduced feed-forward. ``hold``: hold where it is. Either way an unsure
+# What an uncertain lock does. ``follow``: keep following the prediction (at
+# full speed while a fix is fresh). ``hold``: hold where it is. Either way an unsure
 # spell longer than UNCERTAIN_FOLLOW_MAX_S is handled as a loss.
 UNCERTAIN_FOLLOW = "follow"
 UNCERTAIN_HOLD = "hold"

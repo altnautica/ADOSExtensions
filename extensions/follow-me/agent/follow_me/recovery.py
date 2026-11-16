@@ -193,12 +193,16 @@ class RecoveryMixin:
     _lease_id: Any
     _uncertain_since_s: float | None
     _orbit_phase: float | None
+    _still: Any
 
     async def _on_lock_lost(self, cfg: FollowConfig, now: float) -> None:
         track_id = self._tracker.track_id
         self._tracker.drop()
         self._measured_bbox = None
         self._uncertain_since_s = None
+        # The subject may have left where it stood: the recovery predicts from
+        # the estimate, and standing is judged afresh once it is seen again.
+        self._still.reset()
         if cfg.reacquire_mode == REACQUIRE_SMART and self._filter.initialized:
             self._start_recovery(cfg, now, track_id, lost_s=now)
             self._ctx.log.info("follow_me_recovering", track_id=track_id)

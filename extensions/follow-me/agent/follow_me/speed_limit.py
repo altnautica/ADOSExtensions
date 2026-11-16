@@ -13,7 +13,7 @@ Known limitation: a source set whose ``EK3_SRCn_POSXY`` is not GPS reads as
 uncapped here, while the pilot, which reads that parameter, caps it.
 
 The subject's speed is judged on measured fixes, not the subject filter:
-the filter caps a person at 3 m/s, so it can never show a sprinter outrunning
+the filter caps a person at 5 m/s, so it can never show a sprinter outrunning
 a 6 m/s follow. Over the last 2 s of fixes, either the subject's
 displacement rate is above the limit, or the range keeps opening while the
 vehicle already flies at the limit.

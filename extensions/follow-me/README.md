@@ -52,12 +52,16 @@ then on the agent runs a 20 Hz loop:
 4. A constant-velocity Kalman filter tracks the subject's north/east position
    and velocity in the flight controller's local frame (`LOCAL_POSITION_NED`).
    The velocity estimate is capped by the subject's detector class: a
-   `person` at 3 m/s, a steady run; faster readings are range noise, and a
-   4 m/s runner is still followed, trailed by under a metre. Other classes
-   are not capped there.
+   `person` at 5 m/s, a run on a trail; faster readings are range noise.
+   Fixes beyond 3 sigma of the prediction are gated out, unless three in a
+   row agree with each other (a real move). Other classes are not capped
+   there.
 5. It holds the agent pilot's motion lease and sends it a goal every tick
-   (20 Hz). The pilot flies the goal through its obstacle planner, speed
-   limits and geofence. Each goal carries:
+   (20 Hz). The goal carries the follow's complete desired velocity
+   (`vel_mode` `command`); the pilot shapes it within the vehicle's
+   acceleration and jerk limits and flies it through its obstacle planner,
+   speed limits and geofence, adding no position loop of its own. Each goal
+   carries:
    - **follow** mode: the point `follow_distance_m` from the subject at
      `follow_angle_deg` from its travel heading (180 behind, 90 on its right,
      270 on its left, 0 leading). The reference heading starts where the
@@ -68,12 +72,16 @@ then on the agent runs a 20 Hz loop:
      subject, advancing at `orbit_rate_dps` in `orbit_direction` while it
      leads the drone's bearing from the subject by at most 45°, so a detour
      round an obstacle or a radial offset slows the orbit but never stops it;
-   - the subject's velocity (plus the orbit's tangential velocity) as
-     feed-forward, clamped to `max_speed_mps`;
-   - yaw along the latest sighting's measured bearing (the estimate's
-     bearing once no sighting is newer than 3 s), so a wrong range or
-     velocity cannot turn the subject out of the frame, and a
-     terrain-following height of `follow_height_m` above the ground;
+   - the velocity from a speed law: the subject's velocity (plus the orbit's
+     tangential velocity) and a closing speed toward the point, full when
+     far, ramping down at no more than 0.6 m/s² into the standoff and
+     nothing at it, changing by at most 1.0 m/s² per second and never above
+     `max_speed_mps`. A standing subject is followed round a fixed centre
+     with no velocity, the point moving only past a 0.5 m deadband;
+   - a yaw that turns toward the latest sighting's measured bearing (the
+     estimate's bearing once no sighting is newer than 3 s) at no more than
+     30°/s, with a deadband (6° round a standing subject, 2° otherwise), and
+     a terrain-following height of `follow_height_m` above the ground;
    - the subject's position and the ring the pilot's planner searches for a
      detour that keeps the subject in view (±90° of the follow angle, ±60°
      of the orbit phase), with `obstacle_margin_m`.
@@ -121,9 +129,10 @@ waits when the frames return; meanwhile it keeps the phase
 ### Re-acquire after occlusion
 
 An uncertain lock first. In Smart, with `uncertain_mode` `follow` (the
-default), the follow keeps flying the prediction at half feed-forward; with
-`hold`, and always in Strict, it holds. Either way an unsure spell longer than
-3 s is handled as a loss.
+default), the follow keeps flying the prediction, at full speed while a fix
+was fused in the last 2 s and at half the subject's velocity after that;
+with `hold`, and always in Strict, it holds. Either way an unsure spell
+longer than 3 s is handled as a loss.
 
 `reacquire_mode` decides what a lost lock does:
 
@@ -151,7 +160,7 @@ default), the follow keeps flying the prediction at half feed-forward; with
      and repeats until the budget is spent.
 
   The prediction's spread is bounded by how far the subject can have gone
-  (its class speed cap, 3 m/s for a person, times the time since it was last
+  (its class speed cap, 5 m/s for a person, times the time since it was last
   seen, plus that sighting's own spread), so the position check and the
   search area stay meaningful in a long gap. The constant-velocity
   extrapolation stops 70 s after the last sighting, past the longest budget;
@@ -196,7 +205,7 @@ and a latched hover point with the frame, so they stay put in the world.
 
 `outpaced` turns true once the subject has been measured faster than the
 limit in force for 2 s: its displacement over the last 2 s of fixes (not the
-subject filter's estimate, which caps a person at 3 m/s) above the limit, or
+subject filter's estimate, which caps a person at 5 m/s) above the limit, or
 the range opening while the vehicle already flies at the limit. The limit,
 published as `speed_limit_mps`, is `max_speed_mps`, or the pilot's 2 m/s
 GNSS-denied cap when lower: the pilot's cap is not forwarded to plugins, so
@@ -303,7 +312,7 @@ Per-drone configuration (see `config-schema.json`):
 | `search_speed_mps`         | `2`           | `0.5`–`4`   | Speed limit while repositioning.                |
 | `operator_resume_seq`      | `0`           | `≥ 0`       | Written as current + 1 to resume a search.      |
 | `reacquire_min_similarity` | `0.75`        | `0.5`–`0.99`| Appearance similarity needed to re-acquire.     |
-| `max_speed_mps`            | `6`           | `0.5`–`15`  | Cap on the velocity feed-forward.               |
+| `max_speed_mps`            | `6`           | `0.5`–`10`  | The follow's speed limit.                       |
 | `follow_mode`              | `follow`      | follow, orbit | Follow at an angle, or orbit the subject.     |
 | `follow_angle_deg`         | `180`         | `0`–`355`   | Angle from the travel heading (follow mode).    |
 | `orbit_radius_m`           | `8`           | `3`–`30`    | Orbit radius.                                   |
@@ -314,13 +323,14 @@ Per-drone configuration (see `config-schema.json`):
 
 ## Requirements
 
-- ADOS agent 0.109.0 or later: the pilot flies the vehicle; the plugin only
+- ADOS agent 0.118.0 or later: the pilot flies the vehicle; the plugin only
   sends goals under the pilot's motion lease (capability `flight.motion`).
   A multirotor, or a VTOL in hover.
-- A camera bound to the vision pipeline producing the detection stream. While
-  the behaviour is active the plugin holds a detection lease on that camera
-  (renewed every 2 s, 6 s hold, released when it goes inactive), so the engine
-  runs detection there only while follow-me needs it.
+- A camera bound to the vision pipeline producing the detection stream, with
+  a person detector at 6 Hz or more. While the behaviour is active the plugin
+  holds a detection lease on that camera (renewed every 2 s, 6 s hold,
+  released when it goes inactive), so the engine runs detection there only
+  while follow-me needs it.
 - Recommended: a downward rangefinder on the flight controller for
   terrain-following height.
 - Optional: the world-engine extension's planar scan, for the lidar range cue.

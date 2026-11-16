@@ -102,10 +102,11 @@ _GIMBAL_PERIOD_S = 0.2
 _MAX_LATENCY_MS = 10_000.0
 # Window the published goal send rate is measured over.
 SETPOINT_RATE_WINDOW_S = 2.0
-# The engine publishes a batch for every inferred frame (3 Hz by default),
-# an empty one too. With none from the follow camera for this long the camera
-# is lost; the first seconds after activation are exempt while the engine
-# starts detecting on the camera the follow just leased.
+# The engine publishes a batch for every inferred frame (6 Hz or more on the
+# boards this plugin supports), an empty one too. With none from the follow
+# camera for this long the camera is lost; the first seconds after
+# activation are exempt while the engine starts detecting on the camera the
+# follow just leased.
 _CAMERA_LOST_S = 2.0
 _CAMERA_START_GRACE_S = 5.0
 # A frame stamp more than this before its batch arrived is a clock mismatch:

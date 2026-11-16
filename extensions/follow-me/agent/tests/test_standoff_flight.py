@@ -4,7 +4,7 @@ up with fast and approached without overshooting the standoff, an orbit
 turns at its commanded rate, and a missed detection neither stops nor slows
 the vehicle.
 
-The targets are the forest-follow audit's: with a standing subject the
+The targets come from a recorded forest flight: with a standing subject the
 recorded flight wandered at 0.27 m/s (median) and 0.95 m/s (95th
 percentile), its range spread 1.5 m and its yaw turned at up to 10°/s
 (95th percentile); its orbit turned at 0.04°/s of a commanded 10°/s.
@@ -125,7 +125,7 @@ async def test_a_far_subject_is_caught_up_fast_and_approached_without_overshoot(
     )
     # Fast when far: well over the subject's pace while beyond 2x the
     # standoff (the recorded flights crawled at 1.7-1.9 m/s at 8-20 m). From
-    # rest 24 m short, accelerating at 0.8 and braking at 0.6 m/s² peaks at
+    # rest 24 m short, accelerating at 1.0 and braking at 0.6 m/s² peaks at
     # about 4 m/s; a walker running ahead lets it reach more.
     assert max(speeds[i] for i in all_idx if ranges[i] > 12.0) >= 3.5
     # No overshoot into the standoff.
@@ -413,3 +413,34 @@ def test_three_range_outliers_in_a_row_do_not_end_standing() -> None:
         t += 0.1
         s.add_fix(t, 2.5 + 0.5 * k, 0.0, cov, 0.0, fused=False)
     assert not s.still
+
+
+@pytest.mark.asyncio
+async def test_a_lost_standing_subject_is_predicted_from_the_estimate_not_its_old_centre(
+    monkeypatch: Any,
+) -> None:
+    # A standing subject lost from view (the detector unsure for longer than
+    # an unsure spell may last): the recovery predicts from the subject
+    # estimate, not round the centre it stood at, which it may have left.
+    import follow_me
+
+    after_loss: list[bool] = []
+    lost = follow_me.FollowMePlugin._on_lock_lost
+
+    async def spy(self: Any, cfg: Any, now: float) -> None:
+        await lost(self, cfg, now)
+        after_loss.append(self._still.still)
+
+    monkeypatch.setattr(follow_me.FollowMePlugin, "_on_lock_lost", spy)
+    f = await fly(
+        monkeypatch,
+        subject=_still,
+        start=(-6.0, 0.0),
+        duration_s=25.0,
+        fix_hz=10.0,
+        miss_frames=tuple(range(151, 251)),
+        range_sigma_m=0.0,
+        outlier_share=0.0,
+    )
+    assert f.still[f.after(14.0)[0]]
+    assert after_loss and not any(after_loss)

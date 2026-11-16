@@ -103,9 +103,10 @@ is not supported.
 
 ### Added
 
-- A 320×320 CPU variant of the person model, for the detector's crop pass
-  round the designated subject. The 640×640 variant stays the whole-frame
-  model.
+- A 320×320 CPU variant of the person model, declared for the detector's
+  crop model (the crop pass round the designated subject; the agent sets it
+  through the detector's crop model setting). The 640×640 variant stays the
+  whole-frame model.
 - Settings `uncertain_mode`, `predictive_search` (turned back on at every
   arm), `search_budget_s`, `search_radius_m` and `search_speed_mps`, and the
   `operator_resume_seq` key a surface writes to resume a search.

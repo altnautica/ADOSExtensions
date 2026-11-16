@@ -62,7 +62,7 @@
     "uncertain_mode": {
       "type": "string",
       "title": "Uncertain lock",
-      "description": "What an uncertain lock does. follow: keep following the prediction at reduced speed. hold: hold where it is. Either way an unsure spell longer than 3 s is handled as a loss.",
+      "description": "What an uncertain lock does. follow: keep following the prediction. hold: hold where it is. Either way an unsure spell longer than 3 s is handled as a loss.",
       "enum": ["follow", "hold"],
       "default": "follow"
     },
@@ -114,10 +114,10 @@
     "max_speed_mps": {
       "type": "number",
       "title": "Maximum speed (m/s)",
-      "description": "Cap on the velocity feed-forward sent to the pilot with each goal.",
+      "description": "The follow's speed limit. The operator may raise it to 10 m/s.",
       "default": 6,
       "minimum": 0.5,
-      "maximum": 15
+      "maximum": 10
     },
     "follow_mode": {
       "type": "string",

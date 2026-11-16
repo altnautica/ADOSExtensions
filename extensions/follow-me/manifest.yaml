@@ -10,8 +10,9 @@ description_long: |
   companion locks onto that track, estimates the subject's position from the
   box (ground intersection of the feet, box height, and an optional planar
   lidar return, fused by their uncertainty), tracks its velocity with a
-  Kalman filter, and sends follow goals (position, velocity feed-forward,
-  yaw and the subject) to the agent's pilot at 20 Hz under a motion lease.
+  Kalman filter, and sends follow goals (position, the complete desired
+  velocity, yaw and the subject) to the agent's pilot at 20 Hz under a
+  motion lease; the pilot shapes the velocity within the vehicle's limits.
   The pilot flies them through its obstacle planner, speed limits and
   geofence. A downward rangefinder on the flight controller keeps the follow
   height above the terrain.
@@ -27,7 +28,7 @@ description_long: |
 
   A lock-state safety gate stops commanding when the tracker reports the
   subject uncertain or lost. On an unsure lock Smart keeps following the
-  prediction at reduced speed for up to 3 s (or holds, as set); Strict holds.
+  prediction for up to 3 s (or holds, as set); Strict holds.
   On a loss the re-acquire mode decides. Strict stops at a latched hover
   point and waits for the operator. Smart predicts where the subject went,
   asks the pilot for a vantage point that sees past the obstacles within a
@@ -367,8 +368,8 @@ gcs:
           label: "settings.reacquireMode"
           group: "settings.title"
           order: 60
-      # What an uncertain lock does: keep following the prediction at reduced
-      # speed, or hold. Either way an unsure spell longer than 3 s is a loss.
+      # What an uncertain lock does: keep following the prediction, or hold.
+      # Either way an unsure spell longer than 3 s is a loss.
       - key: uncertain_mode
         binding: plugin.config
         schema:
@@ -517,8 +518,9 @@ gcs:
           - board_match: cpu
             runtime: onnx
             input: "640x640"
-          # The crop-pass model: the detector's crop around the designated
-          # subject. Listed after 640 so 640 stays the whole-frame pick.
+          # Declared for the detector's crop model (its crop around the
+          # designated subject), which the agent sets through the detector's
+          # crop model setting. Listed after 640, the whole-frame pick.
           - board_match: cpu
             runtime: onnx
             input: "320x320"

@@ -2,7 +2,7 @@
 
 State ``[n, e, vn, ve]`` in the flight controller's local NED frame (metres,
 metres per second). The process model is a constant velocity driven by white
-acceleration noise of 1.5 m/s^2 (a walking or running person changing pace
+acceleration noise of 1.0 m/s^2 (a walking or running person changing pace
 and direction); the measurement is the subject's north/east position from one
 box (vehicle LOCAL_POSITION_NED plus the projected offset) with the 2x2
 range/bearing covariance from :mod:`follow_me.projection`.
