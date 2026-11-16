@@ -517,5 +517,10 @@ gcs:
           - board_match: cpu
             runtime: onnx
             input: "640x640"
+          # The crop-pass model: the detector's crop around the designated
+          # subject. Listed after 640 so 640 stays the whole-frame pick.
+          - board_match: cpu
+            runtime: onnx
+            input: "320x320"
   locales:
     - en
