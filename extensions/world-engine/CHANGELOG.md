@@ -6,6 +6,16 @@ All notable changes to the World Engine extension.
 
 ### Added
 
+- **The LiDAR status counts returns, not just scans.** `plugin.world-engine.lidar`
+  (now `v` 2) adds `returns_last_scan`, the returns in the newest scan
+  (`0` when it saw nothing; null when not connected), and `empty_scans`,
+  the scans with no return at all since the run started. A scan arriving
+  only said the link was up, so an RPLIDAR whose scans all came back empty
+  (a blocked window, a failed receiver, a mount facing open sky, or nothing
+  within range) read the same as one measuring walls. The Livox counts
+  them too, but it delivers a scan only around a valid point, so a Livox
+  that sees nothing stops sending scans and reads `connected: false`. A
+  version 1 report decodes with both absent. 2.2.6.
 - **The LiDAR reports its own health.** A new shared topic,
   `plugin.world-engine.lidar` (1 Hz, gated on `telemetry.read`), carries
   the driver's port, link state, `GET_HEALTH` status and code from the
@@ -155,6 +165,17 @@ All notable changes to the World Engine extension.
   maximum range (`masks.py --lidar-max-range`).
 
 ### Fixed
+
+- **`map_status.imu_feed` is null unless the FC IMU feeds the running
+  LiDAR pose.** It, the FC attitude stand-in, the `RAW_IMU` and flow
+  forwarding, the pose hold on a degraded feed and the `nav_imu_feed` log
+  were gated on `atlas.lidar.imu = "fc"` alone, so a run whose pose fell
+  back to the FC's EKF (`pose_provider = "fc_ekf"`, a rig without the
+  LiDAR, a LiDAR pose that failed to start, no rig document) still
+  reported an FC IMU feeding the LiDAR pose, and the agent showed it as a
+  readiness item. KISS-ICP on a 3D LiDAR, which uses no FC IMU, also had
+  every pose held to the feed's state. They now also require the running
+  provider to be the planar LiDAR one. 2.2.6.
 
 - **A map the planar matcher starts over in flight keeps the map's own
   north.** Its heading was the FC's absolute heading, degrees off the
