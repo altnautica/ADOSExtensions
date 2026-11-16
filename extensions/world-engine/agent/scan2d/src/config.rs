@@ -95,7 +95,9 @@ pub struct Scan2dConfig {
     pub submap_height_band_m: f64,
     /// While the scan plane climbs or descends faster than this, m/s, scans
     /// are not matched or inserted: the pose rides its motion prior (the
-    /// IMU's heading, the measured or recent velocity). Every revolution of
+    /// IMU's heading and the measured velocity; with none, a take-off holds
+    /// its position and any other climb coasts on the recent velocity).
+    /// Every revolution of
     /// a take-off cuts the walls at another height, and sparse scans matched
     /// into submaps a few scans deep add up their noise faster than the
     /// prior drifts over the climb.

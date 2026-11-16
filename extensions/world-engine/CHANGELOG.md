@@ -166,6 +166,24 @@ All notable changes to the World Engine extension.
 
 ### Fixed
 
+- **A take-off with no measured ground velocity holds its position.** While
+  the planar LiDAR's scan plane climbs or descends, mostly straight up or
+  down, its scans ride the motion prior unmatched. With no flow velocity
+  (a dark mine, where the downward flow sensor reads nothing) the prior
+  coasted on the velocity the last matches showed, which on the floor is
+  only their noise against an outline that changes as the scan plane
+  lifts. Through a 1.8 s take-off that carried the pose up to 0.4 m off
+  in a recorded mine-tunnel take-off, and the new height's submap,
+  started at that pose, kept the offset for the rest of the flight, as
+  did any map placed on the pose. A climb that begins within 0.3 m of
+  the height origin (a take-off, from rest) now holds its position, as
+  the flight controller does, and its `sigma_xy_m` grows by 0.03 m/s for
+  the time held instead of by half the invented coasted distance. A
+  climb begun in flight still rides the velocity its matches showed,
+  where it may be real sideways motion. Two recorded take-offs are
+  replayed in `scan2d/tests/takeoff.rs`, and the same climb begun 1.5 m
+  up. 2.2.7.
+
 - **`map_status.imu_feed` is null unless the FC IMU feeds the running
   LiDAR pose.** It, the FC attitude stand-in, the `RAW_IMU` and flow
   forwarding, the pose hold on a degraded feed and the `nav_imu_feed` log

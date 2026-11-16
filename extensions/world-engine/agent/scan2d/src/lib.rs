@@ -26,7 +26,9 @@
 //!   height, so with the height fed ([`LocalSlam::feed_height`]) a scan
 //!   taken while the height
 //!   changes faster than [`Scan2dConfig::max_climb_rate_mps`], and faster
-//!   than the rig moves sideways, rides the motion prior, unmatched and
+//!   than the rig moves sideways, rides the motion prior (the measured
+//!   ground velocity; without one a take-off holds its position and a
+//!   climb begun in flight coasts on the recent velocity), unmatched and
 //!   unmapped, for the first [`Scan2dConfig::max_unmatched_climb_m`] of the
 //!   climb (a take-off), and without a measured ground velocity for at most
 //!   [`Scan2dConfig::max_unmatched_climb_s`]; past either (a shaft, a

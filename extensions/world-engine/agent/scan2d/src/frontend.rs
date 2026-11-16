@@ -59,6 +59,18 @@ pub(crate) const SIGMA_MATCHED_M: f64 = 0.05;
 const SIGMA_GROWTH_PER_M: f64 = 0.5;
 /// The uncertainty stops growing here, metres.
 const SIGMA_MAX_M: f64 = 5.0;
+/// One-sigma horizontal speed, m/s, of a take-off climb that rides the prior
+/// with no measured velocity ([`LocalSlam::skip_climbing`]): the flight
+/// controller holds its position through a vertical take-off, off by its
+/// own velocity error, which nothing here measures. The pose holds its
+/// position and the uncertainty grows by this speed times the time ridden.
+const CLIMB_SPEED_SIGMA_MPS: f64 = 0.03;
+/// A climb is a take-off when it begins within this of the height origin,
+/// metres (the flight controller's EKF height, whose origin is near the
+/// take-off floor). Only a take-off starts from rest, so only its scans
+/// hold their position; a climb that begins in flight may carry real
+/// sideways motion and keeps riding the velocity its matches showed.
+const TAKEOFF_FROM_M: f64 = 0.3;
 /// The IMU covers a scan once its newest sample is no more than this before
 /// the scan's time (one sample of a 50 Hz IMU).
 const IMU_COVER_SLACK_NS: u64 = 20_000_000;
@@ -202,6 +214,8 @@ struct Unobserved {
 struct Climb {
     /// The height it began at, metres.
     from_m: f64,
+    /// It began on the floor ([`TAKEOFF_FROM_M`]): a take-off from rest.
+    takeoff: bool,
     /// Its scans are matched again in the submap of the height it began at:
     /// it has gone past [`Scan2dConfig::max_unmatched_climb_m`] (a transit,
     /// whose shaft walls draw the same outline at every height).
@@ -252,8 +266,9 @@ pub struct PoseOut {
     pub degeneracy: f64,
     /// Horizontal one-sigma uncertainty, metres. While scans ride the motion
     /// prior unmatched it grows by half the distance the prior carries the
-    /// pose (speed times interval), and while a climb without a measured
-    /// velocity is matched band by band by half the height climbed; up to
+    /// pose (speed times interval), while a climb with no measured velocity
+    /// holds its position by 0.03 m/s times the time held, and while such a
+    /// climb is matched band by band by half the height climbed; up to
     /// 5.0. A matched scan is otherwise as good as the submap it matched in:
     /// 0.05 in a submap started at a matched pose, the start pose's own
     /// sigma in one the prior placed (the submap of a new height after a
@@ -707,7 +722,10 @@ impl LocalSlam {
     /// is climbing, mostly straight up or down (faster than the horizontal
     /// `speed_mps` it moves at): a take-off or a step in height, up to
     /// [`Scan2dConfig::max_unmatched_climb_m`] from where the climb began.
-    /// Past that the climb is a transit (a shaft) whose walls the motion
+    /// With a measured velocity the pose follows it; without one a take-off
+    /// holds its position ([`CLIMB_SPEED_SIGMA_MPS`]) and any other climb
+    /// coasts on the velocity the matches last showed.
+    /// Past that height the climb is a transit (a shaft) whose walls the motion
     /// prior cannot hold the pose against, and its scans are matched until
     /// the climb has paused for [`CLIMB_END_NS`]. Without a measured
     /// velocity (`has_measured`) the prior cannot see a sideways drift, so
@@ -727,6 +745,7 @@ impl LocalSlam {
         };
         let c = self.climb.get_or_insert(Climb {
             from_m: h.up_m,
+            takeoff: h.up_m.abs() <= TAKEOFF_FROM_M,
             transit: false,
             unmeasured: false,
             start_ns: t,
@@ -866,14 +885,29 @@ impl LocalSlam {
         let has_measured = self
             .measured_velocity(self.last.map_or(t, |(t1, _, _)| t1), t + span_ns)
             .is_some();
-        if scan.points.len() < MIN_POINTS || self.skip_climbing(t, prior_vel.norm(), has_measured)
-        {
+        let few = scan.points.len() < MIN_POINTS;
+        let riding = self.skip_climbing(t, prior_vel.norm(), has_measured);
+        if few || riding {
+            // A take-off with no measured velocity holds its position: the
+            // velocity the matches last showed on the floor is their noise
+            // against a scene whose outline changes with height, never the
+            // drone's motion, and coasting on it carries the pose off for
+            // the whole climb.
+            let takeoff = riding && self.climb.is_some_and(|c| c.takeoff);
+            let (pose, sigma) = match self.last {
+                Some((_, p1, _)) if takeoff && !has_measured => (
+                    Pose2::new(p1.x, p1.y, prior.th),
+                    (self.sigma_xy_m + CLIMB_SPEED_SIGMA_MPS * dt_s).min(SIGMA_MAX_M),
+                ),
+                _ => (prior, riding_sigma),
+            };
+            (out.x, out.y) = (pose.x, pose.y);
             let consistent = self.check_heading(t, prior.th, heading, yaw_rate, measured);
             out.heading_ok = reached && consistent && self.suspect.is_none();
             out.heading_unconfirmed = self.suspect.is_some();
-            self.advance(t, prior, heading);
-            self.sigma_xy_m = riding_sigma;
-            out.sigma_xy_m = riding_sigma;
+            self.advance(t, pose, heading);
+            self.sigma_xy_m = sigma;
+            out.sigma_xy_m = sigma;
             return out;
         }
         // Matched through a climb it could not ride (no measured velocity),
