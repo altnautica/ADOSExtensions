@@ -179,8 +179,8 @@ describe("manifest 0.5 release", () => {
     expect(/^version: "([^"]+)"/m.exec(text)?.[1]).toBe("0.5.0");
   });
 
-  it("needs the agent whose surfaces show the recovery phases and the waiting prompt", () => {
-    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.115.0");
+  it("needs the agent that shows the recovery phases and flies the goal's velocity", () => {
+    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.118.0");
   });
 
   it("may send commands, for the hold prompt's actions", () => {

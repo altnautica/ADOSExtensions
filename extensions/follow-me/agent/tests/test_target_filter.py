@@ -66,8 +66,8 @@ def test_position_sigma_is_the_major_axis() -> None:
 
 
 def test_the_speed_cap_comes_from_the_class() -> None:
-    assert subject_max_speed_mps("person") == 3.0
-    assert subject_max_speed_mps(" Person ") == 3.0
+    assert subject_max_speed_mps("person") == 5.0
+    assert subject_max_speed_mps(" Person ") == 5.0
     assert subject_max_speed_mps("car") is None
     assert subject_max_speed_mps("") is None
     assert subject_max_speed_mps(None) is None
@@ -78,23 +78,67 @@ def test_the_speed_cap_comes_from_the_class() -> None:
 _RANGE_R = ((1.0, 0.0), (0.0, 0.25))
 
 
-def _noisy_walker(f: TargetFilter) -> float:
+def _noisy_walker(f: TargetFilter, *, gated: bool = True) -> float:
     """Feed 1.2 m/s east with ±4 m north range noise; the largest speed."""
     top = 0.0
     for i in range(30):
         t = i / 3.0
-        f.update(t, 8.0 + (4.0 if i % 2 else -4.0), 1.2 * t, _RANGE_R)
+        f.update(t, 8.0 + (4.0 if i % 2 else -4.0), 1.2 * t, _RANGE_R, gated=gated)
         x, _p = f.predicted(t)  # type: ignore[misc]
         top = max(top, math.hypot(x[2], x[3]))
     return top
 
 
 def test_range_noise_cannot_make_a_person_faster_than_the_cap() -> None:
+    cap = subject_max_speed_mps("person")
+    assert cap is not None
     free = TargetFilter()
-    assert _noisy_walker(free) > 3.0
+    assert _noisy_walker(free, gated=False) > cap
     capped = TargetFilter()
-    capped.max_speed_mps = subject_max_speed_mps("person")
-    assert _noisy_walker(capped) <= 3.0 + 1e-9
+    capped.max_speed_mps = cap
+    assert _noisy_walker(capped, gated=False) <= cap + 1e-9
+
+
+def test_the_innovation_gate_keeps_range_outliers_out_of_the_velocity() -> None:
+    # The same ±4 m fixes claimed to 1 m are outliers: gated, the estimate
+    # stays near the walker's 1.2 m/s with no speed cap at all.
+    assert _noisy_walker(TargetFilter()) < 1.6
+
+
+def _steady_walker(f: TargetFilter, n_fixes: int) -> float:
+    """A walker at 1.4 m/s east sighted at 3 Hz with a 0.5 m sigma; the
+    time of the last fix."""
+    r = ((0.25, 0.0), (0.0, 0.25))
+    t = 0.0
+    for i in range(n_fixes):
+        t = i / 3.0
+        f.update(t, 0.0, 1.4 * t, r)
+    return t
+
+
+def test_a_single_range_outlier_moves_the_estimate_less_than_0_2_m() -> None:
+    f = TargetFilter()
+    t = _steady_walker(f, 15) + 1.0 / 3.0
+    before, _p = f.predicted(t)  # type: ignore[misc]
+    # One fix 3 m off along the line of sight (a lidar return off a trunk).
+    assert f.update(t, 3.0, 1.4 * t, ((0.25, 0.0), (0.0, 0.25))) is False
+    after, _p = f.predicted(t)  # type: ignore[misc]
+    assert math.hypot(after[0] - before[0], after[1] - before[1]) < 0.2
+
+
+def test_a_subject_that_really_moved_is_taken_back_within_three_fixes() -> None:
+    # The subject is suddenly 4 m north of the track and stays there: the
+    # gate gives way on the third fix in a row.
+    f = TargetFilter()
+    t0 = _steady_walker(f, 15)
+    r = ((0.25, 0.0), (0.0, 0.25))
+    fused = []
+    for k in range(1, 4):
+        t = t0 + k / 3.0
+        fused.append(f.update(t, 4.0, 1.4 * t, r))
+    assert fused == [False, False, True]
+    x, _p = f.predicted(t0 + 1.0)  # type: ignore[misc]
+    assert abs(x[0] - 4.0) < 1.0
 
 
 def test_a_capped_estimate_still_keeps_up_with_a_runner() -> None:

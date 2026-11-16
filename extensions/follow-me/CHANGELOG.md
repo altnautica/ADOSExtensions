@@ -6,11 +6,38 @@ uses independent semantic versioning per extension.
 
 ## [0.5.0] - Unreleased
 
-Needs ADOS agent 0.115.0 or later: the pilot's vantage goal and its goal
-status, and the cockpit, kiosk, dashboard and terminal UI that show the
-recovery phases and the waiting prompt.
+Needs ADOS agent 0.118.0 or later: the pilot's vantage goal and its goal
+status, the goal `vel_mode` the pilot shapes and flies, and the cockpit,
+kiosk, dashboard and terminal UI that show the recovery phases and the
+waiting prompt.
 
 ### Changed
+
+- Follow and orbit goals carry the follow's complete desired velocity
+  (`vel_mode` `command`); the pilot shapes it within the vehicle's jerk and
+  acceleration limits and adds no position loop of its own. The velocity
+  comes from a speed law: the subject's own motion plus a closing speed
+  that is full when far, ramps down at no more than 0.6 m/s² into the
+  standoff and is nothing at it, never changing by more than 0.8 m/s² per
+  second. Follow speed no longer depends on the flight controller's
+  waypoint speed and acceleration.
+- A standing subject is held still: once the median of its fixes stops
+  moving the follow is built round a fixed centre with no velocity, the
+  goal moves only past a 0.5 m deadband and the vehicle holds within 0.2 m
+  of it. It follows again once the subject walks off.
+- The yaw turns toward the subject at no more than 30°/s, from a rate law
+  with a deadband (6° round a standing subject, 2° otherwise), instead of
+  stepping to each new sighting.
+- Range outliers are gated out of the subject estimate (χ² 3 sigma; fixes
+  past 2 sigma are weighed down), and three gated fixes in a row that agree
+  with each other are taken as a real move. Each fix is placed at its
+  frame's exposure time and the vehicle's position then, and fused with a
+  range sigma of at least 0.75 m (6 % of the range). The person speed cap
+  is 5 m/s.
+- A missed detection no longer stops or slows the follow: up to 2 s
+  without a fused fix are ridden through on the prediction at full speed.
+- A hold names the point it began at and a zero velocity, so the pilot
+  stops on its profile instead of chasing the current pose.
 
 - A lost subject is recovered instead of coasted on. In Smart mode the
   follow predicts where the subject went (`predicting`), asks the pilot for a

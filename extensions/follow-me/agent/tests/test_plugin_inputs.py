@@ -211,14 +211,19 @@ async def test_coasting_holds_the_last_setpoint_without_recomputing(
 
     # Tick again with NO new detection (the tracker holds the same frozen bbox
     # within the coast window) and a CHANGED vehicle attitude. The loop must
-    # hold: re-send the same setpoint, never re-project the stale bbox.
+    # coast: the same subject estimate and goal point, never a re-projection
+    # of the stale bbox (the commanded velocity and yaw carry on smoothly).
     plugin._on_attitude(_attitude(0.0, 0.0, 1.0))
     captured = _spy_projection(monkeypatch)
     await plugin._tick()
 
     assert captured == {}, "coasting must not re-project the stale bbox"
     assert len(ctx.flight.setpoints) == 2
-    assert ctx.flight.setpoints[-1] == first_setpoint, "the held setpoint is re-sent"
+    held = ctx.flight.setpoints[-1]
+    for key in ("kind", "subject_ne", "candidates"):
+        assert held[key] == first_setpoint[key], key
+    assert held["n"] == pytest.approx(first_setpoint["n"])
+    assert held["e"] == pytest.approx(first_setpoint["e"])
     states = _state_events(ctx)
     assert states[-1]["commanding"] is True
 

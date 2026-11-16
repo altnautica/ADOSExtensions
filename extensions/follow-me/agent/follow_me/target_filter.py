@@ -17,8 +17,10 @@ import math
 
 Mat = list[list[float]]
 
-# Process noise, the 1-sigma white acceleration, m/s^2.
-ACCEL_SIGMA_MPS2 = 1.5
+# Process noise, the 1-sigma white acceleration, m/s^2: a walker or runner
+# changing pace and direction. 1.0 rather than more, so range noise between
+# sightings is not read as acceleration.
+ACCEL_SIGMA_MPS2 = 1.0
 # Velocity sigma a fresh track starts with: a person can be moving at up to
 # a run when first seen.
 _INIT_VEL_SIGMA_MPS = 3.0
@@ -28,16 +30,33 @@ _INIT_VEL_SIGMA_MPS = 3.0
 # estimate with a spread bounded by how far the subject can have gone (see
 # :meth:`TargetFilter.search_predicted`).
 MAX_PREDICT_S = 70.0
+# The innovation gate: χ² with two degrees of freedom at 99.73 % (3 sigma).
+# A recorded forest follow put 5 % of its range fixes 3.5-7.6 m off the
+# subject, outliers no constant-velocity person makes.
+GATE_CHI2 = 11.83
+# Inside the gate, a fix beyond 2 sigma (χ² 4.0) is fused with its noise
+# scaled by how far out it lies.
+HUBER_CHI2 = 4.0
+# The outlier in a row that is fused anyway when it and the ones before it
+# agree (a subject that really did turn or sprint is never gated out): at
+# 3 Hz the third fix, 0.7 s on. Scattered outliers (range errors either side
+# of the subject) never agree and stay out.
+GATE_FORCE_AFTER = 3
+# Rejected fixes agree when each lies within this many of its own sigmas of
+# the one before, plus the distance the subject can cover in between.
+_AGREE_SIGMAS = 3.0
+# The reach used for a subject class with no speed cap, m/s.
+_UNCAPPED_REACH_MPS = 5.0
 
 # The fastest a followed subject of each detector class is taken to move,
-# m/s. A person's cap is a steady run: a velocity estimate above it comes from
-# range noise between sightings, not from the subject, and extrapolating it
-# carries the estimate away from the subject within a second. A faster
-# subject is still followed: each sighting still moves the estimate, which
-# then trails a 4 m/s runner by under a metre. A class with no entry is not
-# capped here (the goal's feed-forward is still clamped to the configured
-# max_speed_mps).
-SUBJECT_MAX_SPEED_MPS: dict[str, float] = {"person": 3.0}
+# m/s. A person's cap is a run on a trail: a velocity estimate above it comes
+# from range noise between sightings, not from the subject, and
+# extrapolating it carries the estimate away from the subject within a
+# second (the innovation gate keeps the range outliers that caused most of it
+# out). A faster subject is still followed: each sighting still moves the
+# estimate. A class with no entry is not capped here (the goal's
+# feed-forward is still clamped to the configured max_speed_mps).
+SUBJECT_MAX_SPEED_MPS: dict[str, float] = {"person": 5.0}
 
 
 def subject_max_speed_mps(class_label: str | None) -> float | None:
@@ -128,6 +147,8 @@ class TargetFilter:
         self._t_meas: float = 0.0
         # The 1-sigma position spread just after the last measurement.
         self._sigma_meas: float = 0.0
+        # The measurements gated out in a row (t, n, e, sigma), newest last.
+        self._rejected: list[tuple[float, float, float, float]] = []
         self.max_speed_mps: float | None = None
 
     @property
@@ -164,6 +185,7 @@ class TargetFilter:
         self._t = 0.0
         self._t_meas = 0.0
         self._sigma_meas = 0.0
+        self._rejected.clear()
 
     def stop(self, t: float) -> None:
         """Stop the estimate where it is predicted at ``t``, with no velocity.
@@ -185,6 +207,19 @@ class TargetFilter:
             [0.0, 0.0, 0.0, v],
         ]
         self._t = max(self._t, t)
+
+    def _rejected_agree(self) -> bool:
+        """Whether the last GATE_FORCE_AFTER gated-out fixes agree with each
+        other: a subject that moved, not scattered range errors."""
+        rej = self._rejected
+        if len(rej) < GATE_FORCE_AFTER:
+            return False
+        reach = self.max_speed_mps or _UNCAPPED_REACH_MPS
+        for (t0, n0, e0, s0), (t1, n1, e1, s1) in zip(rej, rej[1:]):
+            bound = _AGREE_SIGMAS * math.hypot(s0, s1) + reach * max(0.0, t1 - t0)
+            if math.hypot(n1 - n0, e1 - e0) > bound:
+                return False
+        return True
 
     def _cap_speed(self) -> None:
         cap = self.max_speed_mps
@@ -292,8 +327,21 @@ class TargetFilter:
         )
         return math.sqrt(max(0.0, d2))
 
-    def update(self, t: float, north: float, east: float, r: Cov2) -> None:
-        """Fuse one north/east position measurement taken at ``t``."""
+    def update(
+        self, t: float, north: float, east: float, r: Cov2, *, gated: bool = True
+    ) -> bool:
+        """Fuse one north/east position measurement taken at ``t``; whether
+        it was fused.
+
+        A measurement whose innovation lies outside the χ² gate
+        (:data:`GATE_CHI2`, 3 sigma in two dimensions) is an outlier of the
+        range cues (a lidar return off a trunk, a box cut by foliage) and is
+        dropped, so a single bad fix cannot move the estimate metres. Gating
+        must never lock a real manoeuvre out: once :data:`GATE_FORCE_AFTER`
+        outliers in a row agree with each other, the newest is fused with
+        the position spread widened by the innovation, which pulls the
+        estimate onto the measurements again. ``gated=False`` fuses a
+        measurement already checked elsewhere (a re-acquire) as it is."""
         if self._x is None:
             self._x = [north, east, 0.0, 0.0]
             v = _INIT_VEL_SIGMA_MPS * _INIT_VEL_SIGMA_MPS
@@ -306,15 +354,38 @@ class TargetFilter:
             self._t = t
             self._t_meas = t
             self._sigma_meas = position_sigma(self._p)
-            return
+            self._rejected.clear()
+            return True
         x, p = self._propagate(t)
-        hp = _mul(_H, p)
-        s = _add(_mul(hp, _HT), [list(r[0]), list(r[1])])
-        s_inv = _inv2(s)
-        if s_inv is None:
-            return
-        k = _mul(_mul(p, _HT), s_inv)
         y = [north - x[0], east - x[1]]
+        s_inv = _innovation_inverse(p, r)
+        if s_inv is None:
+            return False
+        d2 = y[0] * (s_inv[0][0] * y[0] + s_inv[0][1] * y[1]) + y[1] * (
+            s_inv[1][0] * y[0] + s_inv[1][1] * y[1]
+        )
+        if gated and d2 > GATE_CHI2:
+            self._rejected.append((t, north, east, position_sigma([list(r[0]), list(r[1])])))
+            del self._rejected[:-GATE_FORCE_AFTER]
+            if not self._rejected_agree():
+                return False
+            p = [list(row) for row in p]
+            p[0][0] += y[0] * y[0]
+            p[0][1] += y[0] * y[1]
+            p[1][0] += y[1] * y[0]
+            p[1][1] += y[1] * y[1]
+            s_inv = _innovation_inverse(p, r)
+            if s_inv is None:
+                return False
+        elif gated and d2 > HUBER_CHI2:
+            # Inside the gate but far out: weighed down (a Huber update), so
+            # a fix the gate lets through cannot swing the velocity.
+            w = d2 / HUBER_CHI2
+            s_inv = _innovation_inverse(p, ((r[0][0] * w, r[0][1] * w), (r[1][0] * w, r[1][1] * w)))
+            if s_inv is None:
+                return False
+        self._rejected.clear()
+        k = _mul(_mul(p, _HT), s_inv)
         self._x = [x[i] + k[i][0] * y[0] + k[i][1] * y[1] for i in range(4)]
         # Joseph-free form; P stays symmetric enough at this size, and is
         # re-symmetrised to keep rounding from accumulating.
@@ -326,6 +397,17 @@ class TargetFilter:
         self._t = max(self._t, t)
         self._t_meas = max(self._t_meas, t)
         self._sigma_meas = position_sigma(self._p)
+        return True
+
+
+def _innovation_inverse(p: Mat, r: Cov2) -> Mat | None:
+    """The inverse of the innovation covariance ``H P Hᵀ + R``."""
+    return _inv2(
+        [
+            [p[0][0] + r[0][0], p[0][1] + r[0][1]],
+            [p[1][0] + r[1][0], p[1][1] + r[1][1]],
+        ]
+    )
 
 
 def position_sigma(p: Mat) -> float:
@@ -339,6 +421,8 @@ def position_sigma(p: Mat) -> float:
 
 __all__ = [
     "ACCEL_SIGMA_MPS2",
+    "GATE_CHI2",
+    "GATE_FORCE_AFTER",
     "MAX_PREDICT_S",
     "SUBJECT_MAX_SPEED_MPS",
     "TargetFilter",

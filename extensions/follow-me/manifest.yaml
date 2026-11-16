@@ -75,8 +75,9 @@ risk: high
 compatibility:
   # The pilot's vantage goal and its goal status (flight.goal.status) arrive
   # in 0.112.1; the cockpit, kiosk, dashboard and terminal UI show the
-  # recovery phases and the waiting prompt from 0.115.0.
-  ados_version: ">=0.115.0"
+  # recovery phases and the waiting prompt from 0.115.0; the pilot shapes and
+  # flies a goal's complete velocity (vel_mode command) from 0.118.0.
+  ados_version: ">=0.118.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 

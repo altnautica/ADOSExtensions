@@ -77,6 +77,7 @@ from follow_me.reacquire import Embedding, embedding_of
 from follow_me.readback import ReadbackMixin
 from follow_me.recovery import Recovery, RecoveryMixin
 from follow_me.speed_limit import NAV_STATE_TOPIC, NavFeed, SubjectMotion
+from follow_me.standoff import StandoffController, StillSubject
 from follow_me.state import (
     HOLD_INACTIVE,
     PHASE_IDLE,
@@ -187,6 +188,14 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._recovery: Recovery | None = None
         self._uncertain_since_s: float | None = None
         self._outpaced_since_s: float | None = None
+        # When the last fix was fused, on the loop's clock.
+        self._fused_s: float = -math.inf
+        # The standing-subject reference and the speed and bearing law the
+        # goals fly (see follow_me.standoff), and where the current hold
+        # began.
+        self._still = StillSubject()
+        self._standoff = StandoffController()
+        self._hold_point: tuple[float, float, float, float] | None = None
         # What says which speed limit is in force, and the subject's measured
         # motion (see follow_me.speed_limit).
         self._nav_feed = NavFeed()

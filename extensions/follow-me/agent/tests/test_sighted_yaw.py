@@ -2,8 +2,9 @@
 estimate.
 
 The follow goal's position comes from the subject estimate, which carries
-the range's noise; its yaw comes from the latest sighting's measured line of
-sight, so a wrong range or velocity cannot turn the subject out of the frame.
+the range's noise; its yaw turns toward the latest sighting's measured line
+of sight, so a wrong range or velocity cannot turn the subject out of the
+frame.
 While the lock is unsure the vehicle holds, still facing that sighting, and
 the estimate stops where it is instead of extrapolating its last velocity.
 """
@@ -68,17 +69,28 @@ async def test_the_goal_yaw_follows_the_sighting_not_the_estimate(monkeypatch: A
     # An estimate from earlier sightings that sits well right of the subject.
     plugin._filter_track_id = 7
     plugin._filter.update(clock.now, 4.0, 6.9, ((0.01, 0.0), (0.0, 0.01)))
+    plugin._fused_s = clock.now
     clock.advance(0.05)
     _pose(plugin)
     await _sight(plugin, clock, _LEFT)
-
-    goal = ctx.flight.setpoints[-1]
     fix = plugin._last_fix
-    assert goal["kind"] == "follow" and fix is not None
-    assert goal["yaw"] == pytest.approx(fix.bearing_rad)
+    assert fix is not None
+    yaws = []
+    for _ in range(16):
+        clock.advance(0.05)
+        _pose(plugin)
+        await _sight(plugin, clock, _LEFT)
+        goal = ctx.flight.setpoints[-1]
+        assert goal["kind"] == "follow"
+        yaws.append(goal["yaw"])
+
     # The subject is left of the nose; the estimate is still pulled right.
     assert fix.bearing_rad < 0.0
     assert _estimate_bearing(plugin, clock.now) - fix.bearing_rad > 0.2
+    # The camera turns left, toward the sighting, at the bearing control's
+    # rate, never right toward the estimate.
+    assert all(b < a for a, b in zip(yaws[1:], yaws[2:]))
+    assert fix.bearing_rad <= yaws[-1] < -0.1
 
 
 @pytest.mark.asyncio

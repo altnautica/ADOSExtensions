@@ -35,6 +35,7 @@ from follow_me import fc_state, mavlink_frames, setpoint
 from follow_me.camera import DEFAULT_GEOMETRY, CameraGeometry, exposure_fc_s
 from follow_me.motion import LEASE_RETRY_S, SKILL_ID, Nudges, lease_error_reason
 from follow_me.projection import TargetFix
+from follow_me.ranging import range_bearing_covariance
 from follow_me.reacquire import (
     OVERLAP_IOU,
     PERSON,
@@ -70,7 +71,8 @@ from follow_me.state import (
     UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
 )
-from follow_me.target_filter import TargetFilter, subject_max_speed_mps
+from follow_me.standoff import StandoffController, StillSubject
+from follow_me.target_filter import Cov2, TargetFilter, subject_max_speed_mps
 
 # The fixed cadence the follow loop commands at, decoupled from the
 # inference rate so the setpoint stream is smooth regardless of detector
@@ -78,9 +80,12 @@ from follow_me.target_filter import TargetFilter, subject_max_speed_mps
 _LOOP_HZ = 20.0
 _LOOP_PERIOD = 1.0 / _LOOP_HZ
 
-# With no new range fix for this long the prediction is no longer trusted
-# enough to command on a live lock.
-_MEASUREMENT_STALE_S = 1.0
+# With no fused range fix for this long the prediction is no longer trusted
+# enough to command on a live lock, and an unsure lock's feed-forward is
+# reduced. Shorter gaps (a missed frame, a full occlusion of up to 2 s, fixes
+# the outlier gate dropped) are ridden through on the prediction at full
+# speed: a stop there is what tilts the camera.
+_MEASUREMENT_STALE_S = 2.0
 # The camera is turned toward the latest sighting's measured bearing while
 # that sighting is at most this old (through a short unsure spell too);
 # after that the estimate's bearing takes over.
@@ -103,6 +108,27 @@ SETPOINT_RATE_WINDOW_S = 2.0
 # starts detecting on the camera the follow just leased.
 _CAMERA_LOST_S = 2.0
 _CAMERA_START_GRACE_S = 5.0
+# A frame stamp more than this before its batch arrived is a clock mismatch:
+# the fix is placed at the batch's arrival instead.
+_MAX_EXPOSURE_AGE_S = 1.0
+# The range sigma a fix is fused with at the least. A recorded forest follow
+# measured 0.7-1.5 m (median) between consecutive fixes of a subject 7-30 m
+# away where the cues claimed about 0.4 m; fused at the cues' own figure that
+# noise went straight into the estimate and the goal.
+_MIN_RANGE_SIGMA_M = 0.75
+_MIN_RANGE_SIGMA_FRAC = 0.06
+# Goals in which ``vn``/``ve`` are the follow's complete desired velocity:
+# the pilot shapes and caps it and adds no position loop toward ``n``/``e``
+# (pilot.v1 ``vel_mode``). A zero velocity stops on the pilot's profile and
+# holds where the vehicle stops.
+VEL_MODE_COMMAND = "command"
+
+
+def fix_covariance(fix: TargetFix) -> Cov2:
+    """The north/east covariance a fix is fused with: its own, with the range
+    sigma held to the measured floor."""
+    sigma = max(fix.range_sigma_m, _MIN_RANGE_SIGMA_M, _MIN_RANGE_SIGMA_FRAC * fix.range_m)
+    return range_bearing_covariance(fix.bearing_rad, sigma, fix.cross_sigma_m)
 
 
 @dataclass(frozen=True)
@@ -168,6 +194,12 @@ class FollowLoopMixin:
     _camera_lost: bool
     _subject_motion: Any
     _outpaced_since_s: float | None
+    _still: StillSubject
+    _standoff: StandoffController
+    # Where the current hold began (n, e, d, yaw), or None while not holding.
+    _hold_point: tuple[float, float, float, float] | None
+    # When the last fix was fused (its arrival on the loop's clock).
+    _fused_s: float
 
     async def _follow_loop(self) -> None:
         while True:
@@ -291,10 +323,7 @@ class FollowLoopMixin:
         # the same object; it is never re-projected through fresh attitude.
         if target.bbox is not self._measured_bbox:
             self._measure_sighting(cfg, now, target.bbox)
-        if (
-            not self._filter.initialized
-            or (now - self._filter.last_update_s) > _MEASUREMENT_STALE_S
-        ):
+        if not self._filter.initialized or (now - self._fused_s) > _MEASUREMENT_STALE_S:
             await self._hold(
                 cfg,
                 now,
@@ -318,14 +347,23 @@ class FollowLoopMixin:
         self._pending_latency_ts_ms = None
         self._ref_heading = None
         self._orbit_phase = None
+        self._still.reset()
+        self._standoff.reset()
         self._subject_motion.clear()
         self._outpaced_since_s = None
+        self._fused_s = -math.inf
 
     async def _tick_uncertain(self, cfg: FollowConfig, now: float) -> None:
-        """An unsure lock: keep following the prediction at reduced
-        feed-forward (``uncertain_mode`` follow) or hold (``hold``). An unsure
-        spell longer than UNCERTAIN_FOLLOW_MAX_S is handled as a loss, so a
-        hold never outlasts it."""
+        """An unsure lock: keep following the prediction (``uncertain_mode``
+        follow) or hold (``hold``). An unsure spell longer than
+        UNCERTAIN_FOLLOW_MAX_S is handled as a loss, so a hold never outlasts
+        it.
+
+        The tracker calls every missed frame unsure. While the last fix is
+        recent the prediction is as good as on a sure lock, so the follow
+        flies on unchanged: a missed frame neither stops nor slows the
+        vehicle. Past _MEASUREMENT_STALE_S without a fix the subject's
+        feed-forward is reduced, as for a prediction after a loss."""
         if self._uncertain_since_s is None:
             self._uncertain_since_s = now
         if now - self._uncertain_since_s > UNCERTAIN_FOLLOW_MAX_S:
@@ -339,11 +377,12 @@ class FollowLoopMixin:
                     cfg, now, phase=PHASE_HOLDING, hold_reason=gate, lock_state=LOCK_UNCERTAIN
                 )
                 return
+            fresh = (now - self._fused_s) <= _MEASUREMENT_STALE_S
             await self._command(
                 cfg,
                 now,
                 phase=PHASE_FOLLOWING,
-                ff_scale=SEARCH_FF_SCALE,
+                ff_scale=1.0 if fresh else SEARCH_FF_SCALE,
                 lock_state=LOCK_UNCERTAIN,
             )
             return
@@ -372,10 +411,22 @@ class FollowLoopMixin:
             return
         if s is not None:
             self._filter.max_speed_mps = subject_max_speed_mps(s.class_label)
-        north = self._pose.north_m + fix.offset_north_m
-        east = self._pose.east_m + fix.offset_east_m
+        # The fix is placed from where the vehicle was when the frame was
+        # exposed, and at that time; the filter carries it on to now, which
+        # also takes the detector's latency out of the estimate.
         t_fix = s.received_s if s else now
-        self._filter.update(t_fix, north, east, fix.covariance())
+        t_exposed = self._host_exposure_s(s, exposed_s) if s else None
+        if t_exposed is not None:
+            t_fix = t_exposed
+        back = max(0.0, now - t_fix)
+        north = self._pose.north_m - self._pose.vn_mps * back + fix.offset_north_m
+        east = self._pose.east_m - self._pose.ve_mps * back + fix.offset_east_m
+        cov = fix_covariance(fix)
+        if self._filter.update(t_fix, north, east, cov):
+            self._fused_s = now
+            est = self._filter.last_estimate()
+            speed = math.hypot(est[2], est[3]) if est is not None else 0.0
+            self._still.add_fix(now, north, east, cov, speed)
         # The measured motion, unclamped by the filter's speed cap, for the
         # faster-than-the-limit check.
         self._subject_motion.record(t_fix, north, east, fix.range_m)
@@ -391,6 +442,18 @@ class FollowLoopMixin:
                 others_near=self._others_near(bbox),
             ):
                 self._template = blend_template(self._template, s.embedding)
+
+    def _host_exposure_s(self, s: Sighting, exposed_fc_s: float | None) -> float | None:
+        """A sighting's exposure on the host clock, or None when no stamp
+        places it within _MAX_EXPOSURE_AGE_S before its receipt."""
+        offset = self._fc_clock.offset_s
+        if exposed_fc_s is not None and offset is not None:
+            t = exposed_fc_s + offset
+        elif s.ts_ms > 0:
+            t = s.ts_ms / 1000.0
+        else:
+            return None
+        return t if 0.0 <= s.received_s - t <= _MAX_EXPOSURE_AGE_S else None
 
     def _exposure_s(self, ts_ms: int, ts_sensor_ms: int | None) -> float | None:
         """A frame's exposure on the flight-controller clock, or None (the
@@ -489,11 +552,14 @@ class FollowLoopMixin:
     # -- commanding and holding ----------------------------------------
 
     def _reset_geometry(self) -> None:
-        """Forget the follow reference and orbit phase: the next goal seeds
-        them from where the drone is."""
+        """Forget the follow reference, the orbit phase and the standing
+        subject: the next goal seeds them from where the drone is."""
         self._ref_heading = None
         self._orbit_phase = None
         self._geom_tick_s = None
+        self._still.reset()
+        self._standoff.reset()
+        self._hold_point = None
 
     def _geometry_dt(self, cfg: FollowConfig, now: float) -> float:
         """Seconds since the previous goal, resetting the follow reference
@@ -508,7 +574,10 @@ class FollowLoopMixin:
     def _goal(self, cfg: FollowConfig, now: float, x: list[float], ff_scale: float) -> dict[str, Any]:
         agl, _src = self._agl(now)
         dt = self._geometry_dt(cfg, now)
-        tn, te, tvn, tve = x[0], x[1], x[2], x[3]
+        # A standing subject is followed round a fixed centre, with no
+        # velocity: range noise no longer moves the goal.
+        ref = self._still.reference((x[0], x[1], x[2], x[3]))
+        tn, te, tvn, tve = ref.north_m, ref.east_m, ref.vn_mps, ref.ve_mps
         dn, de = self._pose.north_m, self._pose.east_m
         here = setpoint.bearing(tn, te, dn, de)
         if cfg.follow_mode == FOLLOW_MODE_ORBIT:
@@ -573,18 +642,32 @@ class FollowLoopMixin:
                 "angle_deg": math.degrees(self._ref_heading + math.radians(cfg.follow_angle_deg)) % 360.0,
                 "angle_span_deg": _FOLLOW_SPAN_DEG,
             }
-        # The camera looks along the latest sighting's line of sight; the
-        # position goal stays on the estimate.
+        # The camera turns toward the latest sighting's line of sight (the
+        # estimate's bearing without one) through the bearing control; the
+        # goal flies the speed law toward the geometry's point.
         sighted = self._sighted_bearing(now)
+        cmd = self._standoff.command(
+            now=now,
+            goal_ne=(g.north_m, g.east_m),
+            goal_v_ne=(g.vn_mps, g.ve_mps),
+            drone_ne=(dn, de),
+            drone_v_ne=(self._pose.vn_mps, self._pose.ve_mps),
+            drone_yaw=self._pose.yaw,
+            yaw_target=g.yaw_rad if sighted is None else sighted,
+            still=ref.still,
+            latch_goal=ref.still and kind == "follow",
+            max_speed_mps=cfg.max_speed_mps,
+        )
         return {
             "kind": kind,
-            "n": g.north_m,
-            "e": g.east_m,
+            "n": cmd.north_m,
+            "e": cmd.east_m,
             "d": setpoint.height_down(self._pose.down_m, agl, cfg.follow_height_m),
-            "vn": g.vn_mps,
-            "ve": g.ve_mps,
+            "vn": cmd.vn_mps,
+            "ve": cmd.ve_mps,
             "vd": 0.0,
-            "yaw": g.yaw_rad if sighted is None else sighted,
+            "vel_mode": VEL_MODE_COMMAND,
+            "yaw": cmd.yaw_rad,
             "yaw_rate": None,
             "subject_ne": [tn, te],
             "max_speed_mps": cfg.max_speed_mps,
@@ -651,12 +734,23 @@ class FollowLoopMixin:
         hold_d: float | None = None,
     ) -> None:
         if self._lease_id is not None and active and self._pose.ready(now):
-            # Keep the lease alive and the vehicle where it is: the pilot
-            # holds a position goal at the current position (or the latched
-            # hover point the caller gives, which the drifting pose estimate
-            # cannot move), at the current heading or the one the caller gives.
-            n, e = (self._pose.north_m, self._pose.east_m) if hold_ne is None else hold_ne
-            d = self._pose.down_m if hold_d is None else hold_d
+            # Keep the lease alive and the vehicle still: the pilot brings
+            # the commanded velocity to zero on its own profile and holds
+            # where it stops. The goal names the point the hold began at (or
+            # the latched hover point the caller gives, which the drifting
+            # pose estimate cannot move) and the heading then (or the one the
+            # caller gives); it is not the current pose, so a hold never
+            # chases the vehicle round.
+            if self._hold_point is None:
+                self._hold_point = (
+                    self._pose.north_m,
+                    self._pose.east_m,
+                    self._pose.down_m,
+                    self._pose.yaw,
+                )
+            hn, he, hd, hyaw = self._hold_point
+            n, e = (hn, he) if hold_ne is None else hold_ne
+            d = hd if hold_d is None else hold_d
             await self._send_goal(
                 {
                     "kind": "position",
@@ -666,7 +760,8 @@ class FollowLoopMixin:
                     "vn": 0.0,
                     "ve": 0.0,
                     "vd": 0.0,
-                    "yaw": self._pose.yaw if yaw_rad is None else yaw_rad,
+                    "vel_mode": VEL_MODE_COMMAND,
+                    "yaw": hyaw if yaw_rad is None else yaw_rad,
                     "yaw_rate": None,
                     "subject_ne": None,
                     "max_speed_mps": cfg.max_speed_mps,
@@ -688,10 +783,13 @@ class FollowLoopMixin:
 
     async def _send_goal(self, goal: dict[str, Any], now: float) -> None:
         """Send one goal under the lease and count it toward the published
-        send rate (the read-back is where a bench reads the rate)."""
+        send rate (the read-back is where a bench reads the rate). Any goal
+        but a hold ends the hold, so the next one latches where it begins."""
         lease_id = self._lease_id
         if lease_id is None:
             return
+        if goal.get("kind") != "position":
+            self._hold_point = None
         await self._ctx.flight.goal_send(lease_id, goal)
         self._setpoint_times.append(now)
 

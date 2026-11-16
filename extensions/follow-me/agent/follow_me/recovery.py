@@ -418,6 +418,11 @@ class RecoveryMixin:
         """The local frame jumped (an EKF position reset): move every point
         held in it by the same step, so each stays put in the world."""
         self._filter.shift(dn, de)
+        self._still.shift(dn, de)
+        self._standoff.shift(dn, de)
+        if self._hold_point is not None:
+            hn, he, hd, hyaw = self._hold_point
+            self._hold_point = (hn + dn, he + de, hd + dd, hyaw)
         rec = self._recovery
         if rec is None:
             return
@@ -609,7 +614,10 @@ class RecoveryMixin:
             return
         track = result.get("track_id")
         self._mark_designated(rec, int(track) if isinstance(track, int) else None, cand, now)
-        self._filter.update(now, cand.north_m, cand.east_m, cand.covariance)
+        # The candidate already passed the re-lock position check: it starts
+        # the estimate over where it is, with no outlier gate.
+        self._filter.update(now, cand.north_m, cand.east_m, cand.covariance, gated=False)
+        self._fused_s = now
         self._ctx.log.info(
             "follow_me_reacquire_designated",
             track_id=rec.designated_track,
