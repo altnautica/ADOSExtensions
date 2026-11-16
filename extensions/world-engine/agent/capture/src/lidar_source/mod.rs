@@ -24,6 +24,7 @@ pub mod rplidar;
 mod tests;
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -109,6 +110,41 @@ pub struct LidarDriverStats {
     pub dropped_scans: u64,
     /// Link re-establishments after a loss.
     pub reconnects: u64,
+    /// Returns in the newest scan the driver produced; `None` before one.
+    pub returns_last_scan: Option<u32>,
+    /// Scans produced with no return at all.
+    pub empty_scans: u64,
+}
+
+/// What a driver's forwarding bridge counts of each scan's content: its
+/// returns, which say whether the sensor sees anything, where the scan
+/// counters only say that it is scanning.
+#[derive(Debug, Default)]
+pub(crate) struct ReturnCounter {
+    /// Returns of the newest scan plus one; 0 before the first scan.
+    last_plus_one: AtomicU64,
+    empty: AtomicU64,
+}
+
+impl ReturnCounter {
+    /// One scan with `returns` points left the device.
+    pub(crate) fn on_scan(&self, returns: usize) {
+        let n = u32::try_from(returns).unwrap_or(u32::MAX);
+        self.last_plus_one
+            .store(u64::from(n) + 1, Ordering::Relaxed);
+        if n == 0 {
+            self.empty.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn returns_last_scan(&self) -> Option<u32> {
+        let v = self.last_plus_one.load(Ordering::Relaxed);
+        (v > 0).then(|| (v - 1) as u32)
+    }
+
+    pub(crate) fn empty_scans(&self) -> u64 {
+        self.empty.load(Ordering::Relaxed)
+    }
 }
 
 /// A running LiDAR driver; dropping it stops the device.
@@ -311,6 +347,8 @@ pub fn lidar_status(stats: Option<&LidarDriverStats>, rate_hz: Option<f32>) -> L
         scans: s.scans,
         dropped_scans: s.dropped_scans,
         reconnects: s.reconnects,
+        returns_last_scan: s.returns_last_scan.filter(|_| s.connected),
+        empty_scans: s.empty_scans,
         ..LidarStatus::default()
     }
 }

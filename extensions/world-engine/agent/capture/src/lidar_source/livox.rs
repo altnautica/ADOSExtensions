@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use super::{LidarDriver, LidarDriverStats, LidarSourceError};
+use super::{LidarDriver, LidarDriverStats, LidarSourceError, ReturnCounter};
 use crate::lidar_scan::LidarScan;
 
 pub use ados_livox::SdkNetConfig;
@@ -60,6 +60,8 @@ struct Counters {
     dropped: AtomicU64,
     /// Host monotonic ns of the device's last scan; 0 before the first.
     last_scan_ns: AtomicU64,
+    /// The returns of the rig's device's scans.
+    returns: ReturnCounter,
 }
 
 /// A running Livox source; dropping it stops the SDK.
@@ -96,6 +98,8 @@ impl LidarDriver for LivoxSource {
             scans: c.delivered.load(Ordering::Relaxed),
             dropped_scans: c.dropped.load(Ordering::Relaxed),
             reconnects: 0,
+            returns_last_scan: c.returns.returns_last_scan(),
+            empty_scans: c.returns.empty_scans(),
         }
     }
 }
@@ -143,6 +147,7 @@ fn start_impl(
         c.frames.fetch_add(1, Ordering::Relaxed);
         c.last_scan_ns
             .store(crate::clock::mono_ns(), Ordering::Relaxed);
+        c.returns.on_scan(scan.points.len());
         let counter = match scans.try_send(scan_from_livox(&sensor_id, scan)) {
             Ok(()) => &c.delivered,
             Err(_) => &c.dropped,

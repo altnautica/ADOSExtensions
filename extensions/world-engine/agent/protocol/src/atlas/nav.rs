@@ -340,7 +340,7 @@ pub struct MapStatus {
 }
 
 /// Schema version of [`LidarStatus`].
-pub const LIDAR_STATUS_VERSION: u16 = 1;
+pub const LIDAR_STATUS_VERSION: u16 = 2;
 
 /// A LiDAR's own health report (the RPLIDAR `GET_HEALTH` status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,7 +354,14 @@ pub enum LidarHealth {
 /// The configured LiDAR's link on `plugin.world-engine.lidar`, 1 Hz while
 /// the rig declares the sensor. A driver that is not running (the device
 /// absent at start, or not configured) reports `connected: false`, null
-/// device, health and rate, and zero counters.
+/// device, health, rate and returns, and zero counters.
+///
+/// Version 2 adds `returns_last_scan` and `empty_scans`: a scan arriving
+/// says the link is up, never that the sensor sees anything, so a LiDAR
+/// whose scans all come back without a return (a blocked window, a failed
+/// receiver, a mount facing open sky, or nothing within range) is told apart
+/// from one that measures surfaces. A version 1 report decodes with both
+/// absent (null and 0).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LidarStatus {
     /// [`LIDAR_STATUS_VERSION`].
@@ -377,6 +384,13 @@ pub struct LidarStatus {
     pub dropped_scans: u64,
     /// Link re-establishments after a loss, since the run started.
     pub reconnects: u64,
+    /// Returns (points) in the newest scan; null when not connected or
+    /// before the first scan.
+    #[serde(default)]
+    pub returns_last_scan: Option<u32>,
+    /// Scans with no return at all, since the run started.
+    #[serde(default)]
+    pub empty_scans: u64,
 }
 
 impl Default for LidarStatus {
@@ -391,6 +405,8 @@ impl Default for LidarStatus {
             scans: 0,
             dropped_scans: 0,
             reconnects: 0,
+            returns_last_scan: None,
+            empty_scans: 0,
         }
     }
 }

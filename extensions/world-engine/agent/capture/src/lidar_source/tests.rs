@@ -82,8 +82,8 @@ fn an_empty_device_setting_means_no_driver() {
 }
 
 /// A device on TCP that answers the handshake and streams 500-node
-/// revolutions at 2 m.
-fn fake_rplidar() -> String {
+/// revolutions at `dist_m` (0: every node without a return).
+fn fake_rplidar(dist_m: f32) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = format!("tcp:{}", listener.local_addr().unwrap());
     thread::spawn(move || {
@@ -142,7 +142,7 @@ fn fake_rplidar() -> String {
                 for _ in 0..50 {
                     let slot = k % 500;
                     let angle = slot as f32 * 0.72;
-                    burst.extend_from_slice(&encode_standard_node(slot == 0, 40, angle, 2.0));
+                    burst.extend_from_slice(&encode_standard_node(slot == 0, 40, angle, dist_m));
                     k += 1;
                 }
                 if s.write_all(&burst).is_err() {
@@ -158,7 +158,7 @@ fn fake_rplidar() -> String {
 #[test]
 fn an_rplidar_model_streams_planar_scans_through_the_seam() {
     let mut s = LidarSettings::default();
-    let addr = fake_rplidar();
+    let addr = fake_rplidar(2.0);
     s.rplidar.device = addr.clone();
     let dir = tempfile::tempdir().unwrap();
     let (tx, mut rx) = mpsc::channel(SCAN_CHANNEL_DEPTH);
@@ -192,6 +192,40 @@ fn an_rplidar_model_streams_planar_scans_through_the_seam() {
     assert!(st.revolutions >= st.scans, "{st:?}");
     assert_eq!(st.device.as_deref(), Some(addr.as_str()));
     assert_eq!(st.health, Some((LidarHealth::Good, 0)));
+    assert_eq!((st.returns_last_scan, st.empty_scans), (Some(500), 0));
+    drop(driver);
+}
+
+/// Scans that keep arriving with nothing in them are a live link that sees
+/// nothing: the status says so instead of reading as a working sensor.
+#[test]
+fn an_rplidar_seeing_nothing_reports_its_empty_scans() {
+    let mut s = LidarSettings::default();
+    s.rplidar.device = fake_rplidar(0.0);
+    let dir = tempfile::tempdir().unwrap();
+    let (tx, mut rx) = mpsc::channel(SCAN_CHANNEL_DEPTH);
+    let driver = start(&c1(), &s, "lidar0", dir.path(), tx).expect("start");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut got = 0;
+    while got < 2 {
+        match rx.try_recv() {
+            Ok(scan) => {
+                assert_eq!(scan.len(), 0, "no node returned");
+                got += 1;
+            }
+            Err(_) if std::time::Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(5))
+            }
+            Err(e) => panic!("no scan within 5 s: {e}"),
+        }
+    }
+    let st = driver.stats();
+    assert!(st.connected && st.scans >= 2, "{st:?}");
+    assert_eq!(st.returns_last_scan, Some(0), "{st:?}");
+    assert!(st.empty_scans >= 2, "{st:?}");
+    let status = lidar_status(Some(&st), Some(10.0));
+    assert_eq!(status.returns_last_scan, Some(0));
+    assert_eq!(status.empty_scans, st.empty_scans);
     drop(driver);
 }
 
@@ -228,6 +262,8 @@ fn the_status_reports_a_running_driver_and_nulls_without_one() {
         scans: 39,
         dropped_scans: 1,
         reconnects: 2,
+        returns_last_scan: Some(312),
+        empty_scans: 4,
     };
     let st = lidar_status(Some(&up), Some(10.0));
     assert_eq!(
@@ -241,19 +277,23 @@ fn the_status_reports_a_running_driver_and_nulls_without_one() {
             scans: 39,
             dropped_scans: 1,
             reconnects: 2,
+            returns_last_scan: Some(312),
+            empty_scans: 4,
             ..LidarStatus::default()
         }
     );
-    // A link that dropped keeps its port and last health but has no rate.
+    // A link that dropped keeps its port, last health and counters but has
+    // no rate and no current returns.
     let down = LidarDriverStats {
         connected: false,
         ..up
     };
     let st = lidar_status(Some(&down), Some(10.0));
     assert!(!st.connected);
-    assert_eq!(st.rate_hz, None);
+    assert_eq!((st.rate_hz, st.returns_last_scan), (None, None));
     assert_eq!(st.device.as_deref(), Some("/dev/serial/by-id/usb-lidar"));
     assert_eq!(st.health, Some(LidarHealth::Warning));
+    assert_eq!(st.empty_scans, 4);
 }
 
 #[test]

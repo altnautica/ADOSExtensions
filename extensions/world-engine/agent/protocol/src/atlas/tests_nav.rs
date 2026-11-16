@@ -213,10 +213,12 @@ fn the_lidar_status_carries_exactly_the_documented_keys() {
         "connected",
         "device",
         "dropped_scans",
+        "empty_scans",
         "health",
         "health_code",
         "rate_hz",
         "reconnects",
+        "returns_last_scan",
         "scans",
         "v",
     ];
@@ -225,12 +227,18 @@ fn the_lidar_status_carries_exactly_the_documented_keys() {
     let idle = LidarStatus::default();
     let v = serde_json::to_value(&idle).unwrap();
     assert_eq!(keys(&v), want);
-    assert_eq!(v["v"], 1);
+    assert_eq!(v["v"], 2);
     assert_eq!(v["connected"], false);
-    for key in ["device", "health", "health_code", "rate_hz"] {
+    for key in [
+        "device",
+        "health",
+        "health_code",
+        "rate_hz",
+        "returns_last_scan",
+    ] {
         assert!(v[key].is_null(), "{key}");
     }
-    for key in ["scans", "dropped_scans", "reconnects"] {
+    for key in ["scans", "dropped_scans", "reconnects", "empty_scans"] {
         assert_eq!(v[key], 0, "{key}");
     }
 
@@ -243,6 +251,8 @@ fn the_lidar_status_carries_exactly_the_documented_keys() {
         scans: 120,
         dropped_scans: 2,
         reconnects: 1,
+        returns_last_scan: Some(0),
+        empty_scans: 118,
         ..LidarStatus::default()
     };
     let v = serde_json::to_value(&live).unwrap();
@@ -250,6 +260,8 @@ fn the_lidar_status_carries_exactly_the_documented_keys() {
     assert_eq!(v["health"], "warning");
     assert_eq!(v["health_code"], 0x0102);
     assert_eq!(v["rate_hz"], 10.0);
+    assert_eq!(v["returns_last_scan"], 0, "no return is 0, never null");
+    assert_eq!(v["empty_scans"], 118);
     for (h, word) in [
         (LidarHealth::Good, "good"),
         (LidarHealth::Warning, "warning"),
@@ -266,6 +278,19 @@ fn the_lidar_status_carries_exactly_the_documented_keys() {
     let wire: serde_json::Value = rmp_serde::from_slice(&back.payload).unwrap();
     assert_eq!(keys(&wire), want);
     assert_eq!(wire["health"], "warning");
+}
+
+#[test]
+fn a_version_1_lidar_status_decodes_without_its_returns() {
+    let v1 = serde_json::json!({
+        "v": 1, "device": null, "connected": true, "health": "good", "health_code": 0,
+        "rate_hz": 10.0, "scans": 4, "dropped_scans": 0, "reconnects": 0,
+    });
+    let back: LidarStatus = serde_json::from_value(v1.clone()).unwrap();
+    assert_eq!((back.returns_last_scan, back.empty_scans), (None, 0));
+    let mp = rmp_serde::to_vec_named(&v1).unwrap();
+    let back = LidarStatus::from_msgpack(&mp).unwrap();
+    assert_eq!((back.v, back.scans, back.returns_last_scan), (1, 4, None));
 }
 
 #[test]

@@ -14,7 +14,7 @@ use ados_rplidar::{Health, HealthStatus, RawScan, Rplidar, RplidarConfig};
 use tokio::sync::mpsc;
 use world_engine_protocol::atlas::LidarHealth;
 
-use super::{LidarDriver, LidarDriverStats, LidarSourceError};
+use super::{LidarDriver, LidarDriverStats, LidarSourceError, ReturnCounter};
 use crate::lidar_scan::LidarScan;
 
 /// A revolution as the capture path carries it; the vectors move, no copy.
@@ -32,6 +32,7 @@ pub fn scan_from_rplidar(sensor_id: &str, s: RawScan) -> LidarScan {
 struct Counters {
     delivered: AtomicU64,
     dropped: AtomicU64,
+    returns: ReturnCounter,
 }
 
 /// A running RPLIDAR source.
@@ -59,6 +60,7 @@ impl RplidarSource {
                 // Ends when the device stops (its sender drops) or the
                 // consumer goes away (dropping `raw` then stops the reader).
                 while let Ok(scan) = raw.recv() {
+                    c.returns.on_scan(scan.points.len());
                     match scans.try_send(scan_from_rplidar(&sensor_id, scan)) {
                         Ok(()) => c.delivered.fetch_add(1, Ordering::Relaxed),
                         Err(mpsc::error::TrySendError::Full(_)) => {
@@ -105,6 +107,8 @@ impl LidarDriver for RplidarSource {
             scans: self.counters.delivered.load(Ordering::Relaxed),
             dropped_scans: self.counters.dropped.load(Ordering::Relaxed) + dev.dropped_scans,
             reconnects: dev.reconnects,
+            returns_last_scan: self.counters.returns.returns_last_scan(),
+            empty_scans: self.counters.returns.empty_scans(),
         }
     }
 }
