@@ -4,10 +4,11 @@ the pilot, its fixes drawn from a scripted subject with recorded noise.
 * **Pilot.** A goal with ``vel_mode`` ``command`` is flown at its velocity; any
   other goal at its velocity plus the position error (the flight
   controller's position gain of 1), capped at the goal's speed limit. The
-  velocity is shaped as the pilot's Normal profile shapes it: acceleration at
-  most 1.0 m/s², jerk at most 2.0 m/s³, by a square-root law so the shaped
-  velocity never overshoots its target. The yaw turns toward the goal's at no
-  more than 30°/s.
+  velocity is smoothed on 0.15 s against tracker noise and then shaped as the
+  pilot's Normal profile shapes it: acceleration at most 1.0 m/s², jerk at
+  most 2.0 m/s³, by a square-root law so the shaped velocity never
+  overshoots its target. The yaw turns toward the goal's at no more than
+  30°/s.
 * **Subject.** A scripted path. Each fix is the true offset plus a range
   error along the line of sight (sigma 0.75 m, the median 0.72 m step
   jitter a recorded forest follow measured with a standing subject) and,
@@ -51,6 +52,8 @@ SHAPER_ACCEL_MPS2 = 1.0
 SHAPER_JERK_MPS3 = 2.0
 SHAPER_YAW_DPS = 30.0
 _FC_POS_GAIN = 1.0
+# The time constant the pilot smooths an asked velocity on before shaping it.
+ASK_SMOOTH_S = 0.15
 RANGE_SIGMA_M = 0.75
 OUTLIER_SHARE = 0.05
 _CLAIMED_SIGMA_M = 0.4
@@ -111,6 +114,7 @@ class _Pilot:
         self.vel: Point = (0.0, 0.0)
         self.acc: Point = (0.0, 0.0)
         self.yaw = yaw
+        self.ask: Point = (0.0, 0.0)
 
     def fly(self, goal: dict[str, Any] | None) -> None:
         if goal is None:
@@ -125,6 +129,9 @@ class _Pilot:
                 to = (float(goal["n"]) - self.pos[0], float(goal["e"]) - self.pos[1])
                 want = (v_goal[0] + _FC_POS_GAIN * to[0], v_goal[1] + _FC_POS_GAIN * to[1])
             want = _clamp(want, limit)
+        k = 1.0 - math.exp(-DT / ASK_SMOOTH_S)
+        self.ask = (self.ask[0] + (want[0] - self.ask[0]) * k, self.ask[1] + (want[1] - self.ask[1]) * k)
+        want = self.ask
         h = DT / _SUBSTEPS
         for _ in range(_SUBSTEPS):
             # The acceleration that brings the velocity onto its target with
