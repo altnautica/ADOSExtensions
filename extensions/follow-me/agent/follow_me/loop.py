@@ -422,11 +422,14 @@ class FollowLoopMixin:
         north = self._pose.north_m - self._pose.vn_mps * back + fix.offset_north_m
         east = self._pose.east_m - self._pose.ve_mps * back + fix.offset_east_m
         cov = fix_covariance(fix)
-        if self._filter.update(t_fix, north, east, cov):
+        fused = self._filter.update(t_fix, north, east, cov)
+        if fused:
             self._fused_s = now
-            est = self._filter.last_estimate()
-            speed = math.hypot(est[2], est[3]) if est is not None else 0.0
-            self._still.add_fix(now, north, east, cov, speed)
+        # Every fix, fused or gated out: a subject breaking into a run puts
+        # its first fixes outside the gate.
+        est = self._filter.last_estimate()
+        speed = math.hypot(est[2], est[3]) if est is not None else 0.0
+        self._still.add_fix(now, north, east, cov, speed, fused=fused)
         # The measured motion, unclamped by the filter's speed cap, for the
         # faster-than-the-limit check.
         self._subject_motion.record(t_fix, north, east, fix.range_m)

@@ -9,7 +9,8 @@ uses independent semantic versioning per extension.
 Needs ADOS agent 0.118.0 or later: the pilot's vantage goal and its goal
 status, the goal `vel_mode` the pilot shapes and flies, and the cockpit,
 kiosk, dashboard and terminal UI that show the recovery phases and the
-waiting prompt.
+waiting prompt. Needs a person detector at 6 Hz or more; slower detection
+is not supported.
 
 ### Changed
 
@@ -18,13 +19,17 @@ waiting prompt.
   acceleration limits and adds no position loop of its own. The velocity
   comes from a speed law: the subject's own motion plus a closing speed
   that is full when far, ramps down at no more than 0.6 m/s² into the
-  standoff and is nothing at it, never changing by more than 0.8 m/s² per
-  second. Follow speed no longer depends on the flight controller's
-  waypoint speed and acceleration.
+  standoff and is nothing at it, never changing by more than 1.0 m/s² (the
+  pilot's Normal profile) per second. Follow speed no longer depends on the
+  flight controller's waypoint speed and acceleration.
 - A standing subject is held still: once the median of its fixes stops
   moving the follow is built round a fixed centre with no velocity, the
   goal moves only past a 0.5 m deadband and the vehicle holds within 0.2 m
-  of it. It follows again once the subject walks off.
+  of it. It follows again once the subject walks off, or at once when four
+  fixes in a row land well off the centre on one side (a subject breaking
+  into a run), counting fixes the outlier gate refused.
+- The follow speed limit (`max_speed_mps`) can be raised to 10 m/s (was
+  15); the default stays 6 m/s.
 - The yaw turns toward the subject at no more than 30°/s, from a rate law
   with a deadband (6° round a standing subject, 2° otherwise), instead of
   stepping to each new sighting.

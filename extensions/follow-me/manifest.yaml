@@ -449,13 +449,14 @@ gcs:
           group: "settings.title"
           order: 64
           visible_if: { key: reacquire_mode, equals: "smart" }
-      # Cap on the velocity feed-forward handed to the flight controller.
+      # The follow's speed limit: 6 m/s by default, the operator may raise it
+      # to 10. A runner faster than the limit is caught up at the difference.
       - key: max_speed_mps
         binding: plugin.config
         schema:
           type: number
           minimum: 0.5
-          maximum: 15
+          maximum: 10
           step: 0.5
           default: 6
         ui:

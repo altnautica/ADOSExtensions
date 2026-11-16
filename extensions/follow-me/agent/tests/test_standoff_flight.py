@@ -18,6 +18,8 @@ from typing import Any
 import pytest
 from follow_sim import DT, Flight, fly, percentile
 
+from follow_me.standoff import COMMAND_ACCEL_MPS2
+
 
 def _still(_t: float) -> tuple[float, float]:
     return (0.0, 0.0)
@@ -140,14 +142,15 @@ async def test_a_far_subject_is_caught_up_fast_and_approached_without_overshoot(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("fix_hz", "rms_mean"), [(10.0, 0.5), (3.0, 1.0)])
+@pytest.mark.parametrize(("fix_hz", "rms_mean"), [(10.0, 0.5), (6.0, 1.0)])
 async def test_a_walking_subject_under_range_noise_is_held_at_the_standoff(
     monkeypatch: Any, fix_hz: float, rms_mean: float
 ) -> None:
     # Recorded range noise and 30 % missed frames, ten flights: the standoff
     # error is within 1 m RMS on average (0.5 m at the agent's 10 Hz) and
     # inside ±2 m at least 80 % of every flight (the recorded walks were
-    # never inside ±2 m).
+    # never inside ±2 m). 6 Hz is the slowest detector the plugin is
+    # supported on (a CPU-only board); slower ones are not.
     rms, bands = [], []
     for seed in range(1, 11):
         f = await fly(
@@ -257,8 +260,9 @@ async def test_missed_detections_neither_stop_nor_slow_the_follow(monkeypatch: A
     assert all(f.phases[i] == "following" for i in idx)
     assert all(f.goals[i].get("kind") == "follow" for i in idx)
     cmd = [math.hypot(f.goals[i]["vn"], f.goals[i]["ve"]) for i in idx]
-    # The command never steps: at most the 0.8 m/s² slew per tick.
-    assert max(abs(b - a) for a, b in zip(cmd, cmd[1:])) <= 0.8 * DT + 1e-6
+    # The command never steps: at most the pilot profile's acceleration per
+    # tick.
+    assert max(abs(b - a) for a, b in zip(cmd, cmd[1:])) <= COMMAND_ACCEL_MPS2 * DT + 1e-6
     # Never more than 30 % off the subject's pace.
     assert all(abs(c - 1.4) <= 0.3 * 1.4 for c in cmd)
 
@@ -285,3 +289,127 @@ async def test_a_single_uncertain_batch_does_not_zero_the_commanded_velocity(
         g = f.goals[k]
         assert g["kind"] == "follow" and f.phases[k] == "following"
         assert math.hypot(g["vn"], g["ve"]) >= 0.9 * before > 1.0
+
+
+@pytest.mark.asyncio
+async def test_a_subject_breaking_into_a_run_from_standing_is_caught_up(monkeypatch: Any) -> None:
+    # Standing 15 s, then a 5 m/s run (a person's trail pace) at once; the
+    # operator's 8 m/s limit, recorded range noise, 30 % missed frames. The
+    # run is seen from the first fixes that all land well off the standing
+    # centre (most outside the subject filter's gate), not once a median of
+    # two seconds of fixes has moved; and the command speeds up at the pilot
+    # profile's full acceleration. The catch-up is then set by that
+    # acceleration and by the limit's margin over the subject.
+    start = 15.0
+    left, back = [], []
+    for seed in (1, 2, 3):
+        f = await fly(
+            monkeypatch,
+            subject=lambda t: (6.0 + 5.0 * max(0.0, t - start), 0.0),
+            start=(0.0, 0.0),
+            duration_s=40.0,
+            config={"max_speed_mps": 8.0},
+            miss=0.3,
+            seed=seed,
+            fix_hz=10.0,
+        )
+        idx = f.after(start)
+        assert f.still[idx[0]]
+        t_left = next(f.t[i] for i in idx if not f.still[i]) - start
+        k = next(i for i in idx if f.t[i] > start + 2.0 and abs(f.range(i) - 6.0) <= 2.0)
+        t_back = f.t[k] - start
+        cmd = [math.hypot(f.goals[i]["vn"], f.goals[i]["ve"]) for i in idx]
+        accel = max(b - a for a, b in zip(cmd, cmd[1:])) / DT
+        print(f"seed {seed}: left standing {t_left:.2f} s, back in ±2 m {t_back:.1f} s, command accel {accel:.2f}")
+        left.append(t_left)
+        back.append(t_back)
+        assert accel >= 0.95
+        # Caught up without overshooting the standoff.
+        assert min(f.range(i) for i in range(k, len(f.t))) >= 5.0
+    assert sum(left) / len(left) <= 1.2
+    assert sum(back) / len(back) <= 15.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5, 6])
+async def test_a_walker_that_stops_dead_is_not_overflown(monkeypatch: Any, seed: int) -> None:
+    # A walker at 1.4 m/s who stops dead. On clean fixes the vehicle stops
+    # 1.6 m inside the 6 m standoff: the pilot profile's 1.0 m/s² and the
+    # subject filter's own lag. Under the recorded range noise along the
+    # line of sight (σ 0.75 m, 5 % outliers) a dead stop takes about a
+    # second of fixes to tell from noise, in which the vehicle closes
+    # another 1.4 m: it comes to 2.5-4.5 m, then returns to the standoff.
+    def subject(t: float) -> tuple[float, float]:
+        return (8.0 + 1.4 * min(t, 20.0), 0.0)
+
+    clean = await fly(
+        monkeypatch,
+        subject=subject,
+        start=(2.0, 0.0),
+        duration_s=30.0,
+        seed=seed,
+        fix_hz=10.0,
+        range_sigma_m=0.0,
+        outlier_share=0.0,
+    )
+    noisy = await fly(
+        monkeypatch, subject=subject, start=(2.0, 0.0), duration_s=30.0, miss=0.3, seed=seed, fix_hz=10.0
+    )
+    least_clean = min(clean.range(i) for i in clean.after(20.0))
+    least = min(noisy.range(i) for i in noisy.after(20.0))
+    print(f"seed {seed}: least range {least_clean:.2f} m clean, {least:.2f} m noisy")
+    assert least_clean >= 4.0
+    assert least >= 2.5
+    assert abs(noisy.range(len(noisy.t) - 1) - 6.0) <= 1.0
+
+
+@pytest.mark.asyncio
+async def test_a_standing_subject_that_walks_off_is_followed_within_the_band(monkeypatch: Any) -> None:
+    # Standing 25 s, then a 1.4 m/s walk straight away from the vehicle, the
+    # direction monocular range sees worst. The walk is told from range
+    # noise after about 1.5 s of fixes, and the vehicle needs about another
+    # second to reach the subject's pace at the profile's 1.0 m/s²: the
+    # range peaks near 9 m, and the follow stays inside ±2 m for at least
+    # 80 % of the 25 s after.
+    peaks, bands = [], []
+    for seed in range(1, 7):
+        f = await fly(
+            monkeypatch,
+            subject=lambda t: (1.4 * max(0.0, t - 25.0), 0.0),
+            start=(-6.0, 0.0),
+            duration_s=50.0,
+            miss=0.3,
+            seed=seed,
+            fix_hz=10.0,
+        )
+        ranges = [f.range(i) for i in f.after(25.0)]
+        peaks.append(max(ranges))
+        bands.append(sum(abs(r - 6.0) <= 2.0 for r in ranges) / len(ranges))
+    print(f"peaks {[round(p, 2) for p in peaks]}, inside ±2 m {[round(b, 2) for b in bands]}")
+    assert max(peaks) <= 10.0
+    assert min(bands) >= 0.8
+
+
+def test_three_range_outliers_in_a_row_do_not_end_standing() -> None:
+    # A recorded noise flight put three 4-6 m range outliers in a row on one
+    # side of a standing subject; the subject filter took the third as a
+    # move. Standing ends on the fourth such fix, not the third.
+    from follow_me.standoff import STILL_STEP_FIXES, StillSubject
+
+    cov = ((0.75**2, 0.0), (0.0, 0.2**2))
+    s = StillSubject()
+    t = 0.0
+    while not s.still:
+        t += 0.1
+        s.add_fix(t, 0.0, 0.0, cov, 0.0)
+    for k in range(STILL_STEP_FIXES - 1):
+        t += 0.1
+        s.add_fix(t, 4.5 + 0.3 * k, 0.0, cov, 0.0, fused=k == STILL_STEP_FIXES - 2)
+    assert s.still
+    t += 0.1
+    s.add_fix(t, 0.1, 0.0, cov, 0.0)
+    assert s.still
+    for k in range(STILL_STEP_FIXES):
+        t += 0.1
+        s.add_fix(t, 2.5 + 0.5 * k, 0.0, cov, 0.0, fused=False)
+    assert not s.still

@@ -37,6 +37,10 @@ FOLLOW_HEIGHT_RANGE = (0.0, 20.0)
 ORBIT_RADIUS_RANGE = (3.0, 30.0)
 ORBIT_RATE_RANGE = (2.0, 30.0)
 OBSTACLE_MARGIN_RANGE = (0.8, 5.0)
+# The highest follow speed limit an operator may set, m/s. The default stays
+# 6: until tracking caps speed to what its sensors can see ahead, a faster
+# chase into trees is the wrong trade.
+MAX_SPEED_CAP_MPS = 10.0
 
 # Lock-state words on the wire (lowercase, matching the vision contract).
 LOCK_LOCKED = "locked"
@@ -225,7 +229,7 @@ class FollowConfig:
                 pick("max_speed_mps", cls.max_speed_mps),
                 cls.max_speed_mps,
                 0.5,
-                15.0,
+                MAX_SPEED_CAP_MPS,
             ),
             follow_mode=follow_mode if follow_mode in _FOLLOW_MODES else FOLLOW_MODE_FOLLOW,
             follow_angle_deg=_as_float(

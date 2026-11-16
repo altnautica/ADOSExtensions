@@ -13,9 +13,11 @@ into that velocity:
   centre with no velocity, refined by every fix with its pull clipped to
   ``STILL_PULL_M``, so range noise on a standing person no longer moves the
   goal. It walks again once the median of the last span's fixes leaves
-  ``STILL_EXIT_RADIUS_M`` of the centre. Medians of fixes, not estimates: a
-  single range outlier moves an estimate (and its velocity) by a metre, and
-  a median of the fixes not at all.
+  ``STILL_EXIT_RADIUS_M`` of the centre, or once ``STILL_STEP_FIXES`` fixes
+  in a row (gated out by the subject filter or not) each land well off it on
+  the same side: a subject breaking into a run. Medians of fixes, not
+  estimates: a single range outlier moves an estimate (and its velocity) by
+  a metre, and a median of the fixes not at all.
 * **Deadband.** While the subject stands, the follow goal moves only when the
   geometry puts it more than ``GOAL_DEADBAND_M`` from the latched goal, and
   the vehicle holds once it is within ``HOLD_DEADBAND_M`` of it.
@@ -60,6 +62,13 @@ _MEDIAN_VAR_FACTOR = 1.57
 # ...over the fixes of this last span, on this many fixes in a row.
 STILL_EXIT_SPAN_S = 1.5
 STILL_EXIT_FIXES = 2
+# Breaking into a run: STILL_STEP_FIXES fixes in a row, each beyond
+# STILL_STEP_SIGMA of its own sigma and STILL_STEP_MIN_M off the centre, on
+# the same side (within 45°).
+STILL_STEP_SIGMA = 2.5
+STILL_STEP_MIN_M = 1.0
+STILL_STEP_FIXES = 4
+_SAME_SIDE_COS = math.cos(math.radians(45.0))
 STILL_PULL_M = 1.0
 # The centre averages at most this many fixes (20 s at 3 Hz), so it still
 # settles onto a subject that shuffles.
@@ -70,14 +79,16 @@ GOAL_DEADBAND_M = 0.5
 HOLD_DEADBAND_M = 0.2
 
 # The speed law. The pilot shapes every goal velocity within its profile's
-# limits (Normal: 1.0 m/s², 2.0 m/s³, a 0.5 s jerk ramp). The command slews
-# at no more than 0.8 of that acceleration and the approach decelerates at
-# 0.6 of it, looking ahead by the shaper's lag, so the shaper never
-# saturates and the vehicle follows the ramp into the standoff without
-# overshooting it.
+# limits (Normal: 1.0 m/s², 2.0 m/s³, a 0.5 s jerk ramp) and is the
+# authority on them: the plugin is not told the profile, and a Cine profile
+# simply shapes the command more slowly. The command slews at the Normal
+# profile's acceleration, so a catch-up or a stop is never slower than the
+# vehicle allows; the approach decelerates at 0.6 of it, looking ahead by
+# the shaper's lag, so the vehicle follows the ramp into the standoff
+# without overshooting it.
 APPROACH_GAIN_PER_S = 0.6
 APPROACH_DECEL_MPS2 = 0.6
-COMMAND_ACCEL_MPS2 = 0.8
+COMMAND_ACCEL_MPS2 = 1.0
 # The lag from a command to the vehicle's motion: the shaper's 0.5 s jerk
 # ramp and the command's own slew.
 APPROACH_LEAD_S = 0.7
@@ -148,6 +159,10 @@ class StillSubject:
         self._count = 0
         # Fixes in a row that put the subject off its centre.
         self._off = 0
+        # Fixes in a row each well off the centre on the same side, and that
+        # side.
+        self._step = 0
+        self._step_dir: tuple[float, float] = (0.0, 0.0)
 
     @property
     def still(self) -> bool:
@@ -158,6 +173,7 @@ class StillSubject:
         self._still = False
         self._count = 0
         self._off = 0
+        self._step = 0
 
     def shift(self, dn: float, de: float) -> None:
         """Move with a jump of the local frame."""
@@ -190,10 +206,45 @@ class StillSubject:
         d2 = (c * dn * dn - 2.0 * b * dn * de + a * de * de) / det
         return d2 > STILL_EXIT_SIGMA * STILL_EXIT_SIGMA
 
-    def add_fix(self, t: float, n: float, e: float, cov: Cov2, speed_mps: float) -> None:
-        """A fix the subject filter fused, placed at ``t``, with the
-        covariance it was fused with and the filter's speed estimate after
-        it."""
+    def _stepped_off(self, n: float, e: float, cov: Cov2) -> bool:
+        """Whether this fix and the ones just before it all lie well off the
+        centre on the same side: a subject that broke into a run is past
+        any fix's noise within a few fixes, long before a median of the span
+        moves. One range outlier, or two, never makes a run of them."""
+        dn, de = n - self._center[0], e - self._center[1]
+        d = math.hypot(dn, de)
+        if d <= STILL_STEP_MIN_M:
+            self._step = 0
+            return False
+        un, ue = dn / d, de / d
+        sigma = math.sqrt(max(0.0, un * (cov[0][0] * un + cov[0][1] * ue) + ue * (cov[1][0] * un + cov[1][1] * ue)))
+        if d <= STILL_STEP_SIGMA * sigma:
+            self._step = 0
+            return False
+        same = self._step > 0 and un * self._step_dir[0] + ue * self._step_dir[1] >= _SAME_SIDE_COS
+        self._step = self._step + 1 if same else 1
+        self._step_dir = (un, ue)
+        return self._step >= STILL_STEP_FIXES
+
+    def _walk_on(self, t: float, n: float, e: float, cov: Cov2) -> None:
+        """Walking again: standing is judged afresh from here."""
+        self._still = False
+        self._off = 0
+        self._step = 0
+        self._fixes.clear()
+        self._fixes.append((t, n, e, cov))
+
+    def add_fix(
+        self, t: float, n: float, e: float, cov: Cov2, speed_mps: float, *, fused: bool = True
+    ) -> None:
+        """A fix placed at ``t`` with its covariance, and the subject
+        filter's speed estimate after it. ``fused``: whether the filter took
+        it; one its gate refused counts only toward breaking into a run."""
+        stepped = self._still and self._stepped_off(n, e, cov)
+        if not fused:
+            if stepped:
+                self._walk_on(t, n, e, cov)
+            return
         fixes = self._fixes
         fixes.append((t, n, e, cov))
         while fixes and t - fixes[0][0] > 2.0 * STILL_SPAN_S:
@@ -207,12 +258,8 @@ class StillSubject:
             off_now = self._median_ne(near)
             walked = off_now is not None and self._walked_off(near, off_now)
             self._off = self._off + 1 if walked else 0
-            if self._off >= STILL_EXIT_FIXES:
-                # Walking again: standing is judged afresh from here.
-                self._still = False
-                self._off = 0
-                fixes.clear()
-                fixes.append((t, n, e, cov))
+            if self._off >= STILL_EXIT_FIXES or stepped:
+                self._walk_on(t, n, e, cov)
                 return
             self._count = min(self._count + 1, _STILL_MEAN_FIXES)
             dn, de = n - self._center[0], e - self._center[1]
