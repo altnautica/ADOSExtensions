@@ -132,6 +132,24 @@ def fix_covariance(fix: TargetFix) -> Cov2:
     return range_bearing_covariance(fix.bearing_rad, sigma, fix.cross_sigma_m)
 
 
+def _estimate_error(
+    x: list[float], p: list[list[float]], drone_n: float, drone_e: float, scatter_ratio: float
+) -> tuple[float, float]:
+    """The 1-sigma error the subject estimate really carries: along the line
+    of sight from the drone, and in its velocity. The filter's own spread,
+    scaled by how far the fixes actually scatter against what it fuses them
+    with (:attr:`TargetFilter.scatter_ratio`)."""
+    dn, de = x[0] - drone_n, x[1] - drone_e
+    d = math.hypot(dn, de)
+    un, ue = (dn / d, de / d) if d > 1e-6 else (1.0, 0.0)
+    pos = un * (p[0][0] * un + p[0][1] * ue) + ue * (p[1][0] * un + p[1][1] * ue)
+    vel = 0.5 * (p[2][2] + p[3][3])
+    return (
+        math.sqrt(max(0.0, pos)) * scatter_ratio,
+        math.sqrt(max(0.0, vel)) * scatter_ratio,
+    )
+
+
 @dataclass(frozen=True)
 class Sighting:
     """The engine-designated detection from the newest batch, with what the
@@ -575,14 +593,22 @@ class FollowLoopMixin:
         self._geom_tick_s = now
         return max(0.0, min(dt, 0.5))
 
-    def _goal(self, cfg: FollowConfig, now: float, x: list[float], ff_scale: float) -> dict[str, Any]:
+    def _goal(
+        self, cfg: FollowConfig, now: float, x: list[float], p: list[list[float]], ff_scale: float
+    ) -> dict[str, Any]:
         agl, _src = self._agl(now)
         dt = self._geometry_dt(cfg, now)
         # A standing subject is followed round a fixed centre, with no
         # velocity: range noise no longer moves the goal.
         ref = self._still.reference((x[0], x[1], x[2], x[3]))
-        tn, te, tvn, tve = ref.north_m, ref.east_m, ref.vn_mps, ref.ve_mps
+        tn, te = ref.north_m, ref.east_m
         dn, de = self._pose.north_m, self._pose.east_m
+        range_sigma, pace_sigma = _estimate_error(x, p, dn, de, self._filter.scatter_ratio)
+        # The subject's velocity fed forward, smoothed by how uncertain it
+        # is; the reference heading still turns on the filter's own.
+        tvn, tve = self._standoff.pace(
+            now=now, vn=ref.vn_mps, ve=ref.ve_mps, sigma_mps=pace_sigma, still=ref.still
+        )
         here = setpoint.bearing(tn, te, dn, de)
         if cfg.follow_mode == FOLLOW_MODE_ORBIT:
             if self._orbit_phase is None:
@@ -624,7 +650,9 @@ class FollowLoopMixin:
                 base = here if here is not None else self._pose.yaw + math.pi
                 self._ref_heading = setpoint.wrap_pi(base - math.radians(cfg.follow_angle_deg))
             else:
-                self._ref_heading = setpoint.slew_ref_heading(self._ref_heading, tvn, tve, dt)
+                self._ref_heading = setpoint.slew_ref_heading(
+                    self._ref_heading, ref.vn_mps, ref.ve_mps, dt
+                )
             g = setpoint.follow_goal(
                 target_n=tn,
                 target_e=te,
@@ -661,6 +689,7 @@ class FollowLoopMixin:
             still=ref.still,
             latch_goal=ref.still and kind == "follow",
             max_speed_mps=cfg.max_speed_mps,
+            range_sigma_m=range_sigma,
         )
         return {
             "kind": kind,
@@ -701,9 +730,9 @@ class FollowLoopMixin:
                 cfg, now, phase=PHASE_HOLDING, hold_reason=refusal, lock_state=lock_state
             )
             return
-        x = pred[0]
+        x, p = pred
         agl, _src = self._agl(now)
-        await self._send_goal(self._goal(cfg, now, x, ff_scale), now)
+        await self._send_goal(self._goal(cfg, now, x, p, ff_scale), now)
         if self._pending_latency_ts_ms is not None:
             # Both clocks are the host's monotonic clock (the engine stamps
             # frames with CLOCK_MONOTONIC).

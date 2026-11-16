@@ -76,8 +76,12 @@ then on the agent runs a 20 Hz loop:
      tangential velocity) and a closing speed toward the point, full when
      far, ramping down at no more than 0.6 m/s² into the standoff and
      nothing at it, changing by at most 1.0 m/s² per second and never above
-     `max_speed_mps`. A standing subject is followed round a fixed centre
-     with no velocity, the point moving only past a 0.5 m deadband;
+     `max_speed_mps`. Under range noise the subject's velocity, the range
+     error and the command are smoothed and the range error is corrected
+     only past a deadband, each scaled by the error the subject estimate
+     really carries (none on clean ranges), so noise does not swing the
+     speed. A standing subject is followed round a fixed centre with no
+     velocity, the point moving only past a 0.5 m deadband;
    - a yaw that turns toward the latest sighting's measured bearing (the
      estimate's bearing once no sighting is newer than 3 s) at no more than
      30°/s, with a deadband (6° round a standing subject, 2° otherwise), and

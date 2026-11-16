@@ -29,6 +29,11 @@ into that velocity:
   decelerates at no more than ``APPROACH_DECEL_MPS2`` into the standoff, and
   nothing at it. The commanded velocity changes by at most
   ``COMMAND_ACCEL_MPS2`` per second, so it never steps.
+* **Range noise.** The subject velocity fed forward, the range error and
+  the command are smoothed, and the range error is corrected only past a
+  deadband, each by the error the subject estimate really carries; on clean
+  ranges none of it applies, and under monocular range noise the command
+  holds the subject's pace instead of swinging round it.
 * **Bearing.** The yaw turns toward the subject at a rate from the same
   square-root law (``YAW_GAIN_PER_S``, ``YAW_ACCEL_DPS2``, at most
   ``YAW_RATE_MAX_DPS``), with a deadband of ``YAW_DEADBAND_STILL_DEG``
@@ -93,6 +98,35 @@ COMMAND_ACCEL_MPS2 = 1.0
 # ramp and the command's own slew.
 APPROACH_LEAD_S = 0.7
 
+# Range noise. Every term below scales with the error the subject estimate
+# really carries (the filter's spread times how far the fixes actually
+# scatter, see :func:`follow_me.loop._estimate_error`), so on clean ranges
+# (a lidar, a depth camera) the law is exactly the one above, and under
+# monocular range noise it no longer turns that noise into speed swings:
+# each swing at the profile's acceleration tilts the vehicle 5.8°.
+#
+# * The subject's velocity is fed forward smoothed on PACE_SMOOTH_S_PER_MPS
+#   seconds per m/s of its error; any change beyond PACE_GATE_SIGMAS of that
+#   error passes at once (a stop, a sprint).
+# * The range error is corrected only beyond RANGE_DEADBAND_SIGMAS of the
+#   estimate's error along the line of sight (at most RANGE_DEADBAND_MAX_M),
+#   by the speed law above shifted out by that band, so the catch-up and the
+#   ramp into the standoff keep their shape.
+# * That correction is smoothed on CORRECTION_SMOOTH_S_PER_M seconds per
+#   metre of the error: the estimate's range moves in a step at every fix,
+#   and the correction follows it as a ramp, not a step.
+# * Their sum is smoothed again on COMMAND_SMOOTH_S_PER_M seconds per metre,
+#   so a fix that bends either ramp bends the command's acceleration
+#   gradually: the command's jerk stays a fraction of the profile's.
+# No smoothing exceeds SMOOTH_MAX_S (a fresh track's spread is large).
+PACE_GATE_SIGMAS = 2.0
+PACE_SMOOTH_S_PER_MPS = 2.0
+RANGE_DEADBAND_SIGMAS = 2.0
+RANGE_DEADBAND_MAX_M = 1.0
+CORRECTION_SMOOTH_S_PER_M = 2.0
+COMMAND_SMOOTH_S_PER_M = 0.4
+SMOOTH_MAX_S = 2.0
+
 # Bearing control.
 YAW_GAIN_PER_S = 2.0
 YAW_ACCEL_DPS2 = 60.0
@@ -130,6 +164,13 @@ def _clamp_len(vn: float, ve: float, limit: float) -> tuple[float, float]:
         return vn, ve
     k = max(0.0, limit) / n
     return vn * k, ve * k
+
+
+def _smoothing(dt: float, tau: float) -> float:
+    """The share of the way a first-order smoothing on ``tau`` seconds
+    (capped at SMOOTH_MAX_S) moves in ``dt``; all of it for no smoothing."""
+    tau = min(tau, SMOOTH_MAX_S)
+    return 1.0 if tau <= 1e-6 else 1.0 - math.exp(-dt / tau)
 
 
 @dataclass(frozen=True)
@@ -307,10 +348,51 @@ class StandoffController:
         self._yaw = 0.0
         self._yaw_rate = 0.0
         self._goal: tuple[float, float] | None = None
+        # The range correction and the velocity the command steers toward,
+        # as last smoothed (see CORRECTION_SMOOTH_S_PER_M and
+        # COMMAND_SMOOTH_S_PER_M).
+        self._corr: tuple[float, float] = (0.0, 0.0)
+        self._want: tuple[float, float] = (0.0, 0.0)
+        # The subject velocity fed forward, when it was, and whether the
+        # subject stood then.
+        self._pace: tuple[float, float] = (0.0, 0.0)
+        self._pace_t: float | None = None
+        self._pace_still = False
 
     def reset(self) -> None:
         self._t = None
         self._goal = None
+        self._pace_t = None
+
+    def pace(
+        self, *, now: float, vn: float, ve: float, sigma_mps: float, still: bool
+    ) -> tuple[float, float]:
+        """The subject velocity to feed forward, from the subject filter's
+        ``(vn, ve)`` and ``sigma_mps``, the error it really carries. Within
+        PACE_GATE_SIGMAS of that error a change is taken in on
+        PACE_SMOOTH_S_PER_MPS seconds per m/s of it; any part beyond, at
+        once. A standing subject's velocity (none), and the first after it
+        stands or walks on, are taken as they are: the standing decision is
+        the evidence a range change alone does not give."""
+        changed = still != self._pace_still
+        self._pace_still = still
+        if still or changed or self._pace_t is None or now - self._pace_t > _RESUME_AFTER_S:
+            self._pace_t = now
+            self._pace = (vn, ve)
+            return self._pace
+        dt = max(0.0, now - self._pace_t)
+        self._pace_t = now
+        sigma = max(0.0, sigma_mps)
+        pn, pe = self._pace
+        dn, de = vn - pn, ve - pe
+        d = math.hypot(dn, de)
+        gate = PACE_GATE_SIGMAS * sigma
+        if d > gate:
+            k = 1.0 - gate / d
+            pn, pe = pn + dn * k, pe + de * k
+        k = _smoothing(dt, PACE_SMOOTH_S_PER_MPS * sigma)
+        self._pace = (pn + (vn - pn) * k, pe + (ve - pe) * k)
+        return self._pace
 
     def shift(self, dn: float, de: float) -> None:
         """Move with a jump of the local frame."""
@@ -330,11 +412,15 @@ class StandoffController:
         still: bool,
         latch_goal: bool,
         max_speed_mps: float,
+        range_sigma_m: float = 0.0,
     ) -> Command:
         """``latch_goal``: hold the goal through moves inside the deadband (a
         standing subject followed at a fixed angle; an orbit's goal moves on
-        purpose)."""
-        if self._t is None or now - self._t > _RESUME_AFTER_S:
+        purpose). ``goal_v_ne`` carries the subject's velocity from
+        :meth:`pace`; ``range_sigma_m`` is the error the subject estimate
+        really carries along the line of sight (0 on clean ranges)."""
+        resume = self._t is None or now - self._t > _RESUME_AFTER_S
+        if resume:
             self._v = drone_v_ne
             self._yaw = drone_yaw
             self._yaw_rate = 0.0
@@ -358,10 +444,25 @@ class StandoffController:
         # current command into motion: closing faster than the goal moves,
         # it covers that much more before a slower command bites.
         rel = (self._v[0] - goal_v_ne[0]) * un + (self._v[1] - goal_v_ne[1]) * ue
-        ahead = dist - max(0.0, rel) * APPROACH_LEAD_S - (HOLD_DEADBAND_M if still else 0.0)
+        sigma = max(0.0, range_sigma_m)
+        band = HOLD_DEADBAND_M if still else min(RANGE_DEADBAND_MAX_M, RANGE_DEADBAND_SIGMAS * sigma)
+        ahead = dist - max(0.0, rel) * APPROACH_LEAD_S - band
         closing = sqrt_law(ahead, APPROACH_GAIN_PER_S, APPROACH_DECEL_MPS2)
         closing = min(closing, max(0.0, max_speed_mps))
-        want = _clamp_len(goal_v_ne[0] + un * closing, goal_v_ne[1] + ue * closing, max_speed_mps)
+        cn, ce = un * closing, ue * closing
+        want = _clamp_len(goal_v_ne[0] + cn, goal_v_ne[1] + ce, max_speed_mps)
+        if resume or still:
+            # A standing subject's centre is the mean of many fixes, not the
+            # estimate: no fix steps it.
+            self._corr = (cn, ce)
+            self._want = want
+        else:
+            k = _smoothing(dt, CORRECTION_SMOOTH_S_PER_M * sigma)
+            self._corr = (self._corr[0] + (cn - self._corr[0]) * k, self._corr[1] + (ce - self._corr[1]) * k)
+            want = _clamp_len(goal_v_ne[0] + self._corr[0], goal_v_ne[1] + self._corr[1], max_speed_mps)
+            k = _smoothing(dt, COMMAND_SMOOTH_S_PER_M * sigma)
+            self._want = (self._want[0] + (want[0] - self._want[0]) * k, self._want[1] + (want[1] - self._want[1]) * k)
+        want = self._want
         dvn, dve = _clamp_len(want[0] - self._v[0], want[1] - self._v[1], COMMAND_ACCEL_MPS2 * dt)
         self._v = (self._v[0] + dvn, self._v[1] + dve)
 
@@ -384,8 +485,15 @@ __all__ = [
     "APPROACH_DECEL_MPS2",
     "APPROACH_GAIN_PER_S",
     "COMMAND_ACCEL_MPS2",
+    "COMMAND_SMOOTH_S_PER_M",
+    "CORRECTION_SMOOTH_S_PER_M",
     "GOAL_DEADBAND_M",
     "HOLD_DEADBAND_M",
+    "PACE_GATE_SIGMAS",
+    "PACE_SMOOTH_S_PER_MPS",
+    "RANGE_DEADBAND_MAX_M",
+    "RANGE_DEADBAND_SIGMAS",
+    "SMOOTH_MAX_S",
     "STILL_ENTER_DRIFT_M",
     "STILL_ENTER_SPEED_MPS",
     "STILL_EXIT_MIN_M",

@@ -22,6 +22,15 @@ is not supported.
   standoff and is nothing at it, never changing by more than 1.0 m/s² (the
   pilot's Normal profile) per second. Follow speed no longer depends on the
   flight controller's waypoint speed and acceleration.
+- Range noise no longer swings the follow speed. The subject's velocity is
+  fed forward smoothed, the range error is corrected only past a deadband
+  and smoothed, and so is the command, each by the error the subject
+  estimate really carries: its spread scaled by how far the fixes actually
+  scatter. On clean ranges none of it applies. Following a walking person
+  under monocular range noise in the closed-loop sim, the vehicle tilts
+  past 5° about once in six minutes (was 18-28 times a minute) and
+  the commanded jerk stays near 2 m/s³ (95th percentile; was 29-39), at
+  10 Hz and 6 Hz detection.
 - A standing subject is held still: once the median of its fixes stops
   moving the follow is built round a fixed centre with no velocity, the
   goal moves only past a 0.5 m deadband and the vehicle holds within 0.2 m
@@ -141,6 +150,12 @@ is not supported.
   read the EKF source parameters. A source set whose `EK3_SRCn_POSXY` names
   a non-GPS source therefore reads as uncapped in `speed_limit_mps`, while
   the pilot, which reads that parameter, flies it capped at 2 m/s.
+- With a 6 Hz detector, a standing subject who walks or runs off is told
+  from range noise about as late as the still-subject check allows: in the
+  sim a run is seen 1.2 s after it starts (1.2 s or less at 10 Hz) and a
+  walk straight away from the vehicle opens the range to 10.2 m (10 m or
+  less at 10 Hz). A range cue better than monocular (a lidar fused with the
+  subject's range) closes this.
 
 ## [0.4.9] - 2026-11-14
 

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import math
+import random
 
-from follow_me.target_filter import TargetFilter, position_sigma, subject_max_speed_mps
+from follow_me.target_filter import (
+    SCATTER_MIN_FIXES,
+    TargetFilter,
+    position_sigma,
+    subject_max_speed_mps,
+)
 
 _R = ((0.09, 0.0), (0.0, 0.09))
 
@@ -175,3 +181,20 @@ def test_stop_leaves_the_estimate_where_it_was() -> None:
         f.update(t, at_stop[0] + 2.0 * (t - 4.2), 0.0, _R)
     x, _p = f.predicted(6.1)  # type: ignore[misc]
     assert abs(x[2] - 2.0) < 0.3
+
+
+def test_the_scatter_ratio_reads_how_far_the_fixes_really_scatter() -> None:
+    # A walker 1.4 m/s along the line of sight (north), fixes fused with the
+    # 0.75 m range sigma: when they really scatter by it the ratio reads
+    # about 1, on clean ranges about 0, and a fresh track's first fixes
+    # read nothing.
+    r = ((0.75**2, 0.0), (0.0, 0.2**2))
+    for noise, low, high in ((0.75, 0.7, 1.3), (0.0, 0.0, 0.1)):
+        rnd = random.Random(3)
+        f = TargetFilter()
+        for i in range(200):
+            t = i * 0.1
+            f.update(t, 1.4 * t + rnd.gauss(0.0, noise), rnd.gauss(0.0, 0.05 * noise), r)
+            if i < SCATTER_MIN_FIXES:
+                assert f.scatter_ratio == 0.0
+        assert low <= f.scatter_ratio <= high, (noise, f.scatter_ratio)

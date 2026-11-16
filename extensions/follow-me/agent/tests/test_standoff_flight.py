@@ -1,8 +1,8 @@
 """The follow flown closed-loop (see :mod:`follow_sim`): a standing subject
 under recorded range noise holds the vehicle still, a far subject is caught
-up with fast and approached without overshooting the standoff, an orbit
-turns at its commanded rate, and a missed detection neither stops nor slows
-the vehicle.
+up with fast and approached without overshooting the standoff, a walking
+subject is followed without tilting the vehicle, an orbit turns at its
+commanded rate, and a missed detection neither stops nor slows the vehicle.
 
 The targets come from a recorded forest flight: with a standing subject the
 recorded flight wandered at 0.27 m/s (median) and 0.95 m/s (95th
@@ -60,7 +60,7 @@ def _sign_flips(f: Flight, idx: range) -> int:
 # flights ran at (3 Hz), with what each must hold a standing subject to: the
 # recorded 0.95 m/s (95th percentile) down to 0.1 at 10 Hz and 0.2 at 3 Hz.
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("fix_hz", "speed_p95"), [(10.0, 0.1), (3.0, 0.2)])
+@pytest.mark.parametrize(("fix_hz", "speed_p95"), [(10.0, 0.1), (6.0, 0.1), (3.0, 0.2)])
 async def test_a_standing_subject_under_range_noise_holds_the_vehicle_still(
     monkeypatch: Any, fix_hz: float, speed_p95: float
 ) -> None:
@@ -170,10 +170,89 @@ async def test_a_walking_subject_under_range_noise_is_held_at_the_standoff(
     assert min(bands) >= 0.8
 
 
+# A pilot profile acceleration past this tilts the vehicle more than 5°.
+_TILT_ACCEL_MPS2 = 9.81 * math.tan(math.radians(5.0))
+
+
+def _tilt_events(f: Flight, idx: range) -> int:
+    """Times the vehicle's acceleration rises past a 5° tilt."""
+    events, over = 0, False
+    for i in idx[1:]:
+        a = math.hypot(f.vel[i][0] - f.vel[i - 1][0], f.vel[i][1] - f.vel[i - 1][1]) / DT
+        if a > _TILT_ACCEL_MPS2 and not over:
+            events += 1
+        over = a > _TILT_ACCEL_MPS2
+    return events
+
+
+def _command_jerk_p95(f: Flight, idx: range) -> float:
+    """The 95th percentile of the commanded velocity's jerk."""
+    v = [(f.goals[i]["vn"], f.goals[i]["ve"]) for i in idx]
+    a = [((q[0] - p[0]) / DT, (q[1] - p[1]) / DT) for p, q in zip(v, v[1:])]
+    return percentile([math.hypot(q[0] - p[0], q[1] - p[1]) / DT for p, q in zip(a, a[1:])], 0.95)
+
+
+def _range_reversals(f: Flight, idx: range) -> int:
+    """Reversals of the vehicle's velocity along the line of sight (|v| >
+    0.1 m/s): toward the subject, then away."""
+    flips, sign = 0, 0.0
+    for i in idx:
+        dn, de = f.subject[i][0] - f.pos[i][0], f.subject[i][1] - f.pos[i][1]
+        x = (f.vel[i][0] * dn + f.vel[i][1] * de) / max(1e-6, math.hypot(dn, de))
+        if abs(x) > 0.1:
+            if sign and math.copysign(1.0, x) != sign:
+                flips += 1
+            sign = math.copysign(1.0, x)
+    return flips
+
+
+def _weaving_walker(t: float) -> tuple[float, float]:
+    # Weaving between trunks: 1.2 m/s on, 2 m either side every 25 s.
+    return (30.0 + 1.2 * t, 2.0 * math.sin(t / 4.0))
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
+@pytest.mark.parametrize(
+    ("label", "subject"),
+    [("straight", lambda t: (30.0 + 1.4 * t, 0.0)), ("weaving", _weaving_walker)],
+)
+async def test_a_walking_subject_is_followed_without_tilting_the_vehicle(
+    monkeypatch: Any, fix_hz: float, label: str, subject: Any
+) -> None:
+    # Recorded range noise and 30 % missed frames, six flights of a minute
+    # after the acquisition: at most one tilt past 5° a minute, the
+    # commanded jerk within 5 m/s³ (95th percentile) and at most two
+    # reversals along the line of sight a minute. Range noise put through
+    # the speed law swung the command 0.7-2.6 m/s every few seconds, each
+    # swing at the profile's 1.0 m/s² (18-28 tilts a minute).
+    events, minutes = 0, 0.0
+    for seed in range(1, 7):
+        f = await fly(
+            monkeypatch,
+            subject=subject,
+            start=(24.0, 0.0),
+            duration_s=75.0,
+            miss=0.3,
+            seed=seed,
+            fix_hz=fix_hz,
+        )
+        idx = f.after(15.0)
+        span = (f.t[idx[-1]] - f.t[idx[0]]) / 60.0
+        tilts, jerk, flips = _tilt_events(f, idx), _command_jerk_p95(f, idx), _range_reversals(f, idx)
+        print(f"{label} {fix_hz:g} Hz seed {seed}: tilts {tilts}, command jerk p95 {jerk:.2f}, reversals {flips}")
+        events += tilts
+        minutes += span
+        assert jerk <= 5.0
+        assert flips <= 2.0 * span
+    assert events / minutes <= 1.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 @pytest.mark.parametrize("seed", [1, 2, 3])
 async def test_a_walker_that_stops_is_held_still_and_followed_again(
-    monkeypatch: Any, seed: int
+    monkeypatch: Any, seed: int, fix_hz: float
 ) -> None:
     # Walks 20 s, stands 15 s, walks on; the agent's 10 Hz detector.
     def subject(t: float) -> tuple[float, float]:
@@ -186,7 +265,7 @@ async def test_a_walker_that_stops_is_held_still_and_followed_again(
         duration_s=60.0,
         miss=0.3,
         seed=seed,
-        fix_hz=10.0,
+        fix_hz=fix_hz,
     )
     # Once the vehicle has come to rest after the stop (it overshoots and
     # comes back to the standoff first), until the walk on: it stays at rest.
@@ -207,9 +286,10 @@ async def test_a_walker_that_stops_is_held_still_and_followed_again(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0, 3.0])
 @pytest.mark.parametrize("direction", ["cw", "ccw"])
 async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
-    monkeypatch: Any, direction: str
+    monkeypatch: Any, direction: str, fix_hz: float
 ) -> None:
     f = await fly(
         monkeypatch,
@@ -224,6 +304,7 @@ async def test_an_orbit_turns_at_its_commanded_rate_under_range_noise(
         },
         miss=0.3,
         seed=5,
+        fix_hz=fix_hz,
     )
     idx = f.after(10.0)
     s = 1.0 if direction == "cw" else -1.0
@@ -292,7 +373,10 @@ async def test_a_single_uncertain_batch_does_not_zero_the_commanded_velocity(
 
 
 @pytest.mark.asyncio
-async def test_a_subject_breaking_into_a_run_from_standing_is_caught_up(monkeypatch: Any) -> None:
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
+async def test_a_subject_breaking_into_a_run_from_standing_is_caught_up(
+    monkeypatch: Any, fix_hz: float
+) -> None:
     # Standing 15 s, then a 5 m/s run (a person's trail pace) at once; the
     # operator's 8 m/s limit, recorded range noise, 30 % missed frames. The
     # run is seen from the first fixes that all land well off the standing
@@ -311,7 +395,7 @@ async def test_a_subject_breaking_into_a_run_from_standing_is_caught_up(monkeypa
             config={"max_speed_mps": 8.0},
             miss=0.3,
             seed=seed,
-            fix_hz=10.0,
+            fix_hz=fix_hz,
         )
         idx = f.after(start)
         assert f.still[idx[0]]
@@ -326,13 +410,20 @@ async def test_a_subject_breaking_into_a_run_from_standing_is_caught_up(monkeypa
         assert accel >= 0.95
         # Caught up without overshooting the standoff.
         assert min(f.range(i) for i in range(k, len(f.t))) >= 5.0
-    assert sum(left) / len(left) <= 1.2
+    # How soon the run is told from standing is the still detector's, at the
+    # agent's 10 Hz; at 6 Hz its four fixes in a row take 1.2 s on average
+    # whatever the speed law. The catch-up after it holds at both rates.
+    if fix_hz >= 10.0:
+        assert sum(left) / len(left) <= 1.2
     assert sum(back) / len(back) <= 15.5
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5, 6])
-async def test_a_walker_that_stops_dead_is_not_overflown(monkeypatch: Any, seed: int) -> None:
+async def test_a_walker_that_stops_dead_is_not_overflown(
+    monkeypatch: Any, seed: int, fix_hz: float
+) -> None:
     # A walker at 1.4 m/s who stops dead. On clean fixes the vehicle stops
     # 1.6 m inside the 6 m standoff: the pilot profile's 1.0 m/s² and the
     # subject filter's own lag. Under the recorded range noise along the
@@ -348,12 +439,12 @@ async def test_a_walker_that_stops_dead_is_not_overflown(monkeypatch: Any, seed:
         start=(2.0, 0.0),
         duration_s=30.0,
         seed=seed,
-        fix_hz=10.0,
+        fix_hz=fix_hz,
         range_sigma_m=0.0,
         outlier_share=0.0,
     )
     noisy = await fly(
-        monkeypatch, subject=subject, start=(2.0, 0.0), duration_s=30.0, miss=0.3, seed=seed, fix_hz=10.0
+        monkeypatch, subject=subject, start=(2.0, 0.0), duration_s=30.0, miss=0.3, seed=seed, fix_hz=fix_hz
     )
     least_clean = min(clean.range(i) for i in clean.after(20.0))
     least = min(noisy.range(i) for i in noisy.after(20.0))
@@ -364,7 +455,10 @@ async def test_a_walker_that_stops_dead_is_not_overflown(monkeypatch: Any, seed:
 
 
 @pytest.mark.asyncio
-async def test_a_standing_subject_that_walks_off_is_followed_within_the_band(monkeypatch: Any) -> None:
+@pytest.mark.parametrize("fix_hz", [10.0, 6.0])
+async def test_a_standing_subject_that_walks_off_is_followed_within_the_band(
+    monkeypatch: Any, fix_hz: float
+) -> None:
     # Standing 25 s, then a 1.4 m/s walk straight away from the vehicle, the
     # direction monocular range sees worst. The walk is told from range
     # noise after about 1.5 s of fixes, and the vehicle needs about another
@@ -380,13 +474,17 @@ async def test_a_standing_subject_that_walks_off_is_followed_within_the_band(mon
             duration_s=50.0,
             miss=0.3,
             seed=seed,
-            fix_hz=10.0,
+            fix_hz=fix_hz,
         )
         ranges = [f.range(i) for i in f.after(25.0)]
         peaks.append(max(ranges))
         bands.append(sum(abs(r - 6.0) <= 2.0 for r in ranges) / len(ranges))
     print(f"peaks {[round(p, 2) for p in peaks]}, inside ±2 m {[round(b, 2) for b in bands]}")
-    assert max(peaks) <= 10.0
+    # The peak is set by how soon the walk is told from range noise, the
+    # still detector's at the agent's 10 Hz (about 10.2 m at 6 Hz whatever
+    # the speed law); the band holds at both rates.
+    if fix_hz >= 10.0:
+        assert max(peaks) <= 10.0
     assert min(bands) >= 0.8
 
 
@@ -413,6 +511,25 @@ def test_three_range_outliers_in_a_row_do_not_end_standing() -> None:
         t += 0.1
         s.add_fix(t, 2.5 + 0.5 * k, 0.0, cov, 0.0, fused=False)
     assert not s.still
+
+
+def test_the_fed_forward_pace_smooths_noise_and_passes_a_stop() -> None:
+    # Under a 0.4 m/s velocity error a 0.3 m/s wobble is taken in over
+    # about a second; a walker's estimate dropping by 1.4 m/s passes beyond
+    # the gate at once; on clean ranges (no error) the estimate is fed
+    # forward as it is; a standing subject's (none) at once too.
+    from follow_me.standoff import PACE_GATE_SIGMAS, StandoffController
+
+    c = StandoffController()
+    c.pace(now=0.0, vn=1.4, ve=0.0, sigma_mps=0.4, still=False)
+    vn, _ = c.pace(now=0.05, vn=1.7, ve=0.0, sigma_mps=0.4, still=False)
+    assert 1.4 < vn < 1.45
+    vn, _ = c.pace(now=0.1, vn=0.0, ve=0.0, sigma_mps=0.4, still=False)
+    assert vn <= PACE_GATE_SIGMAS * 0.4 + 1e-9
+    vn, _ = c.pace(now=0.15, vn=1.0, ve=0.0, sigma_mps=0.0, still=False)
+    assert vn == 1.0
+    vn, _ = c.pace(now=0.2, vn=0.0, ve=0.0, sigma_mps=0.4, still=True)
+    assert vn == 0.0
 
 
 @pytest.mark.asyncio

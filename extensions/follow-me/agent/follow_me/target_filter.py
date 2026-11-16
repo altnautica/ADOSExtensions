@@ -47,6 +47,16 @@ GATE_FORCE_AFTER = 3
 _AGREE_SIGMAS = 3.0
 # The reach used for a subject class with no speed cap, m/s.
 _UNCAPPED_REACH_MPS = 5.0
+# The range scatter (see :attr:`TargetFilter.scatter_ratio`) averages about
+# this many fixes (5 s at 10 Hz): long enough that the innovations of a
+# second's manoeuvre barely move it, short enough to follow the cues as the
+# range or the light changes. It reads no more than SCATTER_RATIO_MAX, and is
+# taken in gradually over the first SCATTER_MIN_FIXES fixes (2 s at 10 Hz):
+# a fresh track's first innovations say more about its start than about the
+# cues, and a smoothing switched on at once would itself step the command.
+SCATTER_FIXES = 50
+SCATTER_MIN_FIXES = 20
+SCATTER_RATIO_MAX = 2.0
 
 # The fastest a followed subject of each detector class is taken to move,
 # m/s. A person's cap is a run on a trail: a velocity estimate above it comes
@@ -149,6 +159,12 @@ class TargetFilter:
         self._sigma_meas: float = 0.0
         # The measurements gated out in a row (t, n, e, sigma), newest last.
         self._rejected: list[tuple[float, float, float, float]] = []
+        # The running means of the squared innovation along the line of
+        # sight and of its predicted variance, over the fixes fused, and how
+        # many fixes they average (see :attr:`scatter_ratio`).
+        self._scatter_y2 = 0.0
+        self._scatter_s = 0.0
+        self._scatter_n = 0
         self.max_speed_mps: float | None = None
 
     @property
@@ -164,6 +180,21 @@ class TargetFilter:
     def last_sigma_m(self) -> float:
         """The 1-sigma position spread just after the last measurement."""
         return self._sigma_meas
+
+    @property
+    def scatter_ratio(self) -> float:
+        """How far the fixes actually scatter about the estimate along the
+        line of sight, as a share of what the filter takes them to: the root
+        of the mean squared innovation over its predicted variance, over the
+        last SCATTER_FIXES or so fixes fused. 1 when the range cues' noise is
+        what the fixes are fused with, near 0 on clean ranges (a lidar, a
+        depth camera). Scaling the filter's own spread by it gives the error
+        the estimate really carries. A track's first SCATTER_MIN_FIXES fixes
+        read 0 and the next SCATTER_MIN_FIXES take it in gradually."""
+        if self._scatter_n <= SCATTER_MIN_FIXES or self._scatter_s <= 0.0:
+            return 0.0
+        ratio = min(SCATTER_RATIO_MAX, math.sqrt(self._scatter_y2 / self._scatter_s))
+        return ratio * min(1.0, self._scatter_n / SCATTER_MIN_FIXES - 1.0)
 
     def last_estimate(self) -> tuple[float, float, float, float] | None:
         """The state ``(n, e, vn, ve)`` as last fused (or stopped), not
@@ -186,6 +217,9 @@ class TargetFilter:
         self._t_meas = 0.0
         self._sigma_meas = 0.0
         self._rejected.clear()
+        self._scatter_y2 = 0.0
+        self._scatter_s = 0.0
+        self._scatter_n = 0
 
     def stop(self, t: float) -> None:
         """Stop the estimate where it is predicted at ``t``, with no velocity.
@@ -384,6 +418,10 @@ class TargetFilter:
             s_inv = _innovation_inverse(p, ((r[0][0] * w, r[0][1] * w), (r[1][0] * w, r[1][1] * w)))
             if s_inv is None:
                 return False
+        if gated and d2 <= GATE_CHI2:
+            # A fix forced through the gate (a manoeuvre) or fused unchecked
+            # (a re-acquire) is not range noise.
+            self._note_scatter(p, r, y)
         self._rejected.clear()
         k = _mul(_mul(p, _HT), s_inv)
         self._x = [x[i] + k[i][0] * y[0] + k[i][1] * y[1] for i in range(4)]
@@ -398,6 +436,25 @@ class TargetFilter:
         self._t_meas = max(self._t_meas, t)
         self._sigma_meas = position_sigma(self._p)
         return True
+
+    def _note_scatter(self, p: Mat, r: Cov2, y: list[float]) -> None:
+        """Add one innovation ``y`` along the line of sight (the major axis
+        of the fix's covariance ``r``) and its predicted variance to the
+        running means behind :attr:`scatter_ratio`."""
+        a, b, c = r[0][0], r[0][1], r[1][1]
+        major = (a + c) / 2.0 + math.sqrt(max(0.0, (a - c) ** 2 / 4.0 + b * b))
+        un, ue = (b, major - a) if abs(b) > 1e-12 else ((1.0, 0.0) if a >= c else (0.0, 1.0))
+        n = math.hypot(un, ue)
+        un, ue = un / n, ue / n
+        y_los = y[0] * un + y[1] * ue
+        s_los = (
+            un * ((p[0][0] + a) * un + (p[0][1] + b) * ue)
+            + ue * ((p[1][0] + b) * un + (p[1][1] + c) * ue)
+        )
+        self._scatter_n = min(self._scatter_n + 1, SCATTER_FIXES)
+        k = 1.0 / self._scatter_n
+        self._scatter_y2 += (y_los * y_los - self._scatter_y2) * k
+        self._scatter_s += (s_los - self._scatter_s) * k
 
 
 def _innovation_inverse(p: Mat, r: Cov2) -> Mat | None:
@@ -424,6 +481,9 @@ __all__ = [
     "GATE_CHI2",
     "GATE_FORCE_AFTER",
     "MAX_PREDICT_S",
+    "SCATTER_FIXES",
+    "SCATTER_MIN_FIXES",
+    "SCATTER_RATIO_MAX",
     "SUBJECT_MAX_SPEED_MPS",
     "TargetFilter",
     "position_sigma",
