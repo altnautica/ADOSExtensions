@@ -342,6 +342,7 @@ class ReadbackMixin:
             state.predictive_search = cfg.predictive_search
             state.operator_resume_seq = cfg.operator_resume_seq
             state.search_budget_s = cfg.search_budget_s
+            state.height_raised = cfg.follow_height_raised
             if commanding:
                 # In orbit the flown geometry is the orbit radius (already
                 # published); the follow distance is not a setpoint there.

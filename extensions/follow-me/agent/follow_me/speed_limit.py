@@ -45,6 +45,11 @@ _MAX_FIX_AGE_S = 1.0
 # this share of the limit or more.
 OPENING_MPS = 0.3
 AT_LIMIT_SHARE = 0.8
+# The near range (see SubjectMotion.near_range): the median over this many
+# of the newest fixes, all within this span (three fixes take 0.7 s at
+# 6 Hz with a third of the frames missed).
+NEAR_FIXES = 5
+NEAR_SPAN_S = 1.5
 
 
 class NavFeed:
@@ -109,6 +114,19 @@ class SubjectMotion:
         if span < _MIN_SPAN_S or now - t1 > _MAX_FIX_AGE_S:
             return None
         return math.hypot(n1 - n0, e1 - e0) / span, (r1 - r0) / span
+
+    def near_range(self, now: float) -> float | None:
+        """The median measured range of the last NEAR_FIXES fixes of the
+        last NEAR_SPAN_S, or ``None`` without them: a range a subject turning
+        back or stopping shortens within a few fixes, where the subject
+        estimate trails by a second, and one range outlier does not move.
+        Each is the range when its frame was taken: while the vehicle keeps
+        pace with the subject that is the range now."""
+        recent = [f for f in self._fixes if now - f[0] <= NEAR_SPAN_S][-NEAR_FIXES:]
+        if len(recent) < NEAR_FIXES:
+            return None
+        d = sorted(r for _t, _n, _e, r in recent)
+        return d[len(d) // 2]
 
 
 def faster_than(rates: tuple[float, float] | None, limit: float, vehicle_speed: float) -> bool:

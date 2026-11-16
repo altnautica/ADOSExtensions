@@ -31,9 +31,18 @@ ORBIT_CW = "cw"
 ORBIT_CCW = "ccw"
 _ORBIT_DIRECTIONS = (ORBIT_CW, ORBIT_CCW)
 
+# The lowest follow height: the vehicle passes over a followed subject that
+# turns back into it, so it never flies lower than a tall subject (a person,
+# a rider) plus the reach of its own rotors plus a clearance between the
+# two. Whatever the detector calls the subject.
+SUBJECT_HEIGHT_M = 2.0
+ROTOR_ENVELOPE_M = 0.4
+OVERHEAD_CLEARANCE_M = 1.0
+MIN_FOLLOW_HEIGHT_M = SUBJECT_HEIGHT_M + ROTOR_ENVELOPE_M + OVERHEAD_CLEARANCE_M
+
 # Config ranges, shared by the resolver, the stick nudges and the schema.
 FOLLOW_DISTANCE_RANGE = (3.0, 30.0)
-FOLLOW_HEIGHT_RANGE = (0.0, 20.0)
+FOLLOW_HEIGHT_RANGE = (MIN_FOLLOW_HEIGHT_M, 20.0)
 ORBIT_RADIUS_RANGE = (3.0, 30.0)
 ORBIT_RATE_RANGE = (2.0, 30.0)
 OBSTACLE_MARGIN_RANGE = (0.8, 5.0)
@@ -157,6 +166,9 @@ class FollowConfig:
     orbit_direction: str = ORBIT_CW
     # The skill's obstacle margin, passed to the pilot's planner in each goal.
     obstacle_margin_m: float = 1.5
+    # The operator asked for a follow height below MIN_FOLLOW_HEIGHT_M, and
+    # it is held at that instead.
+    follow_height_raised: bool = False
 
     @classmethod
     def resolve(
@@ -189,6 +201,8 @@ class FollowConfig:
                 cls.follow_height_m,
                 *FOLLOW_HEIGHT_RANGE,
             ),
+            follow_height_raised=_as_float(pick("follow_height_m", cls.follow_height_m), cls.follow_height_m)
+            < MIN_FOLLOW_HEIGHT_M,
             gimbal_point=bool(pick("gimbal_point", cls.gimbal_point)),
             designate_camera=str(
                 pick("designate_camera", cls.designate_camera)
@@ -292,6 +306,9 @@ class FollowState:
     range_m: float | None = None
     distance_setpoint_m: float | None = None
     height_setpoint_m: float | None = None
+    # The configured follow height was below MIN_FOLLOW_HEIGHT_M and is held
+    # at it (surfaces say so: kept above head height).
+    height_raised: bool = False
     commanding: bool = False
     fc_armed: bool = False
     fc_guided: bool = False
@@ -370,6 +387,10 @@ __all__ = [
     "ORBIT_CCW",
     "FOLLOW_DISTANCE_RANGE",
     "FOLLOW_HEIGHT_RANGE",
+    "MIN_FOLLOW_HEIGHT_M",
+    "OVERHEAD_CLEARANCE_M",
+    "ROTOR_ENVELOPE_M",
+    "SUBJECT_HEIGHT_M",
     "ORBIT_RADIUS_RANGE",
     "ORBIT_RATE_RANGE",
     "OBSTACLE_MARGIN_RANGE",

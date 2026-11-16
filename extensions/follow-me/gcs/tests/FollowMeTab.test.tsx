@@ -123,6 +123,22 @@ describe("FollowMeTab", () => {
     expect(screen.queryByTestId("fm-outpaced")).toBeNull();
   });
 
+  it("says the height is kept above head height when a lower one was set", () => {
+    const h = harnessCtx();
+    render(
+      <FollowMeTab
+        ctx={h.ctx}
+        followOverride={{ ...commandingFollow, heightSetpointM: 3.4, heightRaised: true }}
+      />,
+    );
+    expect(screen.getByTestId("fm-height-setpoint").textContent).toBe(
+      "3.4 m · kept above head height for safety",
+    );
+    cleanup();
+    render(<FollowMeTab ctx={h.ctx} followOverride={commandingFollow} />);
+    expect(screen.getByTestId("fm-height-setpoint").textContent).toBe("4.0 m");
+  });
+
   const waiting: FollowState = {
     ...EMPTY_FOLLOW_STATE,
     active: true,

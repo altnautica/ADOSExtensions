@@ -30,6 +30,7 @@ from follow_me.state import (
     FOLLOW_STOPPED_TOPIC,
     HOLD_LEASE_BUSY,
     LOCK_LOCKED,
+    MIN_FOLLOW_HEIGHT_M,
     FollowConfig,
 )
 
@@ -193,7 +194,7 @@ def test_orbit_nudges_and_clamps() -> None:
     _, c = _nudge(base, [0.0, 1.0, 0.0, 0.0], 10.0)
     assert c.orbit_radius_m == 3.0
     _, c = _nudge(base, [0.0, 0.0, -1.0, 0.0], 30.0)
-    assert c.follow_height_m == 0.0
+    assert c.follow_height_m == MIN_FOLLOW_HEIGHT_M
 
 
 def test_orbit_rate_through_the_minimum_flips_direction() -> None:

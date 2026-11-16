@@ -14,6 +14,23 @@ is not supported.
 
 ### Changed
 
+- The follow never flies lower than 3.4 m above the ground: a 2 m subject,
+  the rotors' 0.4 m reach and 1 m between them, whatever the detector calls
+  the subject. A lower `follow_height_m` (it could be 0) is flown at 3.4 m,
+  read back as `height_raised`, and the panel says the height is kept
+  above head height. A subject who turns straight back into the vehicle
+  passes under it with the rotors at least 1 m clear: in the closed-loop
+  sim, at a walk, a jog and a run, turning back from 60° off to straight
+  on, at 10 Hz and 6 Hz detection (it came within 0.4 m of the rotors, or
+  struck them, at a 1.5 m height before).
+- The follow keeps clear of the subject: toward it the velocity is held to
+  what still stops short of the safe distance (2.5 m at the default
+  standoff, a metre inside a shorter one, plus two sigmas of the range
+  error), a path that passes beside it is kept, and within it the vehicle
+  backs away. The newest fixes' range is kept clear of when it is nearer
+  than the subject estimate's, which trails a subject turning back. Goals
+  carry `subject_sigma_m`, the error of the subject's range, for the
+  pilot's own subject brake (agent 0.118.0).
 - Follow and orbit goals carry the follow's complete desired velocity
   (`vel_mode` `command`); the pilot shapes it within the vehicle's jerk and
   acceleration limits and adds no position loop of its own. The velocity
@@ -156,6 +173,11 @@ is not supported.
   walk straight away from the vehicle opens the range to 10.2 m (10 m or
   less at 10 Hz). A range cue better than monocular (a lidar fused with the
   subject's range) closes this.
+- A subject who turns straight back at the vehicle from the standoff can
+  still pass under it at a walk or a run: monocular range takes half a
+  second to a second of fixes to show the turn, and the vehicle about as
+  long again to stop. The follow height keeps the rotors clear then (see
+  above); a range cue better than monocular shortens it.
 
 ## [0.4.9] - 2026-11-14
 

@@ -74,6 +74,11 @@ describe("normalizeFollowState", () => {
     expect(s.confidence).toBe(0.97);
   });
 
+  it("reads a raised follow height, and none when the payload says nothing", () => {
+    expect(normalizeFollowState({ height_setpoint_m: 3.4, height_raised: true }).heightRaised).toBe(true);
+    expect(normalizeFollowState({ height_setpoint_m: 4 }).heightRaised).toBe(false);
+  });
+
   it("normalizes the 0.5 recovery fields and phases", () => {
     const t = createPluginHarness({
       mount: () => undefined,

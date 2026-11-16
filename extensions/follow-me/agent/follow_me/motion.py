@@ -103,7 +103,11 @@ class Nudges:
     def apply_to(self, cfg: FollowConfig) -> FollowConfig:
         if not self.values:
             return cfg
-        return replace(cfg, **self.values)  # type: ignore[arg-type]
+        values = dict(self.values)
+        if "follow_height_m" in values:
+            # A nudged height is already held inside the config range.
+            values["follow_height_raised"] = False
+        return replace(cfg, **values)  # type: ignore[arg-type]
 
     def settle(self, cfg_read: FollowConfig) -> None:
         """Drop overrides the config has caught up with, once written."""

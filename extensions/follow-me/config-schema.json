@@ -21,9 +21,9 @@
     "follow_height_m": {
       "type": "number",
       "title": "Follow height (m)",
-      "description": "Height above the ground the drone holds while following: the downward rangefinder when it is valid, else the barometric height above the take-off point.",
+      "description": "Height above the ground the drone holds while following: the downward rangefinder when it is valid, else the barometric height above the take-off point. At least 3.4 m (a 2 m subject, the rotors' 0.4 m reach and 1 m between them): a lower setting is held at 3.4 m.",
       "default": 4,
-      "minimum": 0,
+      "minimum": 3.4,
       "maximum": 20
     },
     "gimbal_point": {

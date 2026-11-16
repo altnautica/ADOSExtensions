@@ -85,10 +85,25 @@ then on the agent runs a 20 Hz loop:
    - a yaw that turns toward the latest sighting's measured bearing (the
      estimate's bearing once no sighting is newer than 3 s) at no more than
      30°/s, with a deadband (6° round a standing subject, 2° otherwise), and
-     a terrain-following height of `follow_height_m` above the ground;
-   - the subject's position and the ring the pilot's planner searches for a
+     a terrain-following height of `follow_height_m` above the ground, never
+     below 3.4 m (a 2 m subject, the rotors' 0.4 m reach and 1 m between
+     them; a lower setting is flown at 3.4 m and read back as
+     `height_raised`);
+   - the subject's position, with the error its range carries
+     (`subject_sigma_m`), and the ring the pilot's planner searches for a
      detour that keeps the subject in view (±90° of the follow angle, ±60°
      of the orbit phase), with `obstacle_margin_m`.
+
+   The velocity never closes on the subject inside the safe distance
+   (2.5 m, or a metre inside a shorter standoff, plus two sigmas of the
+   range error): toward the subject it is held to what still stops short of
+   it, a path that passes it on one side is kept, and within it the vehicle
+   backs away. The newest fixes' range is kept clear of when it is nearer
+   than the estimate's, which trails a subject that turns back. A subject
+   who turns straight back at the vehicle from the standoff can still pass
+   under it: range noise takes half a second to a second of fixes to show
+   the turn, and the vehicle about as long to stop at the pilot's profile.
+   The follow height keeps the rotors at least 1 m above the subject then.
 6. Optionally, it points a gimbal at the subject.
 
 A lock-state safety gate stops commanding when the tracker reports the
@@ -278,7 +293,7 @@ The other `follow.state` fields:
 - **Range:** `range_m`, `range_sigma_m`, `range_cues`.
 - **Subject:** `target_speed_mps`, `bearing_deg`, `depression_deg`,
   `target_ned`, `target_vel_ned`, `predicted_bbox`.
-- **Height:** `agl_m`, `agl_source`.
+- **Height:** `agl_m`, `agl_source`, `height_raised`.
 - **Re-acquire:** `reacquire_mode`, `uncertain_mode`, `predictive_search`,
   `reacquire_remaining_s`, `search_budget_s`, `search_step`, `search_area`,
   `predicted_path_ne`, `vantage_ne`, `vantage_state`, `occluder`, `hold_ne`,

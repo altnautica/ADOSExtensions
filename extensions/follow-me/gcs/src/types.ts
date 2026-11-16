@@ -166,6 +166,8 @@ export interface FollowState {
   aglSource: AglSource | null;
   distanceSetpointM: number | null;
   heightSetpointM: number | null;
+  /** The set follow height was below the lowest allowed and is held there. */
+  heightRaised: boolean;
   reacquireMode: ReacquireMode;
   uncertainMode: UncertainMode;
   /** Whether a smart loss searches from a vantage point. */
@@ -238,6 +240,7 @@ export interface RawFollowState {
   agl_source?: AglSource | string | null;
   distance_setpoint_m?: number | null;
   height_setpoint_m?: number | null;
+  height_raised?: boolean;
   reacquire_mode?: ReacquireMode | string;
   uncertain_mode?: string;
   predictive_search?: boolean;
@@ -339,6 +342,7 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   aglSource: null,
   distanceSetpointM: null,
   heightSetpointM: null,
+  heightRaised: false,
   reacquireMode: "smart",
   uncertainMode: "follow",
   predictiveSearch: true,
@@ -395,6 +399,7 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
         : null,
     distanceSetpointM: num(raw.distance_setpoint_m),
     heightSetpointM: num(raw.height_setpoint_m),
+    heightRaised: raw.height_raised === true,
     reacquireMode: normalizeReacquireMode(raw.reacquire_mode),
     uncertainMode: normalizeUncertainMode(raw.uncertain_mode),
     predictiveSearch: raw.predictive_search === true,

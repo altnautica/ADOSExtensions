@@ -524,7 +524,11 @@ function MetricsSection({
       )}
       <MetricRow
         label={t("metrics.heightSetpoint")}
-        value={meters(f?.heightSetpointM ?? null)}
+        value={
+          f?.heightRaised
+            ? `${meters(f.heightSetpointM)} · ${t("metrics.heightRaised")}`
+            : meters(f?.heightSetpointM ?? null)
+        }
         testId="fm-height-setpoint"
       />
     </section>

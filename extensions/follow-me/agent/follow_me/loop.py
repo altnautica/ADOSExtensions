@@ -71,7 +71,7 @@ from follow_me.state import (
     UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
 )
-from follow_me.standoff import StandoffController, StillSubject
+from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject, safe_distance
 from follow_me.target_filter import Cov2, TargetFilter, subject_max_speed_mps
 
 # The fixed cadence the follow loop commands at, decoupled from the
@@ -678,6 +678,17 @@ class FollowLoopMixin:
         # estimate's bearing without one) through the bearing control; the
         # goal flies the speed law toward the geometry's point.
         sighted = self._sighted_bearing(now)
+        # Kept clear of: a standing subject's centre (the mean of many fixes:
+        # a run of range outliers that drags the estimate and the newest
+        # fixes' range in for a moment does not move it, and a step toward
+        # the vehicle ends standing within STILL_STEP_FIXES fixes); a moving
+        # one's estimate and the newest fixes' range.
+        if ref.still:
+            near = None
+            keep_ne, keep_v = (tn, te), (0.0, 0.0)
+        else:
+            near = self._subject_motion.near_range(now)
+            keep_ne, keep_v = (x[0], x[1]), (x[2], x[3])
         cmd = self._standoff.command(
             now=now,
             goal_ne=(g.north_m, g.east_m),
@@ -689,8 +700,17 @@ class FollowLoopMixin:
             still=ref.still,
             latch_goal=ref.still and kind == "follow",
             max_speed_mps=cfg.max_speed_mps,
+            subject_ne=keep_ne,
+            subject_v_ne=keep_v,
+            safe_m=safe_distance(cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m),
+            near_m=near,
             range_sigma_m=range_sigma,
         )
+        # The pilot keeps the subject's body clear by the goal's subject
+        # point and this error: the estimate's own, or what the newest fixes
+        # put it short by when they put the subject nearer.
+        short = 0.0 if near is None else math.hypot(tn - dn, te - de) - near
+        subject_sigma = max(range_sigma, short / SEPARATION_SIGMAS)
         return {
             "kind": kind,
             "n": cmd.north_m,
@@ -703,6 +723,7 @@ class FollowLoopMixin:
             "yaw": cmd.yaw_rad,
             "yaw_rate": None,
             "subject_ne": [tn, te],
+            "subject_sigma_m": subject_sigma,
             "max_speed_mps": cfg.max_speed_mps,
             "candidates": ring,
             "margin_m": cfg.obstacle_margin_m,
