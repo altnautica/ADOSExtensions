@@ -146,6 +146,8 @@ impl OffloadReturnBridge {
             frame_width: batch.width,
             frame_height: batch.height,
             detections,
+            // The node detects on the whole frame: no crop-only pass.
+            crop_window: None,
         };
         (db, status)
     }

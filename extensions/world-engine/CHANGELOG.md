@@ -166,6 +166,12 @@ All notable changes to the World Engine extension.
 
 ### Fixed
 
+- **Builds against agent 0.118.0.** That SDK's `DetectionBatch` carries
+  `crop_window`, so the offload bridge's batches set it to none: the node
+  detects on the whole frame, and the wire output is unchanged (the field is
+  omitted when absent). The repository's SDK pin (`ADOS_AGENT_REV`) moves to
+  agent 0.118.0, so CI builds and tests every extension against it.
+
 - **A take-off with no measured ground velocity holds its position.** While
   the planar LiDAR's scan plane climbs or descends, mostly straight up or
   down, its scans ride the motion prior unmatched. With no flow velocity

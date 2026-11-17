@@ -368,6 +368,7 @@ mod tests {
             mount_pitch_deg: Some(-15.0),
             frame_width: 1280,
             frame_height: 720,
+            crop_window: None,
             detections: vec![Detection {
                 bbox: Some(BoundingBox {
                     x: 320.0,
