@@ -4,7 +4,23 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
-## [0.5.0] - Unreleased
+## [0.5.1] - 2026-11-17
+
+### Fixed
+
+- A standing subject is no longer left on range outliers. With a 6 Hz
+  detector missing about a third of its detections, a 1.5 s exit span can
+  hold only six fixes; three range outliers among them pulled the span's
+  median 1.6 m off the centre on two fixes in a row, standing ended, and
+  the vehicle stepped 0.8 m and back. Standing now ends on that median only
+  while the newest fix also lies out along its offset, at least half as far
+  (`STILL_EXIT_CONFIRM`): a walk carries the newest fix ahead of the
+  median, outliers leave it near the centre. Walking off is told as soon as
+  before.
+- The flight-sim tests start their clock at a fixed time instead of the
+  host's uptime, so a result no longer depends on the machine.
+
+## [0.5.0] - 2026-11-17
 
 Needs ADOS agent 0.118.0 or later: the pilot's vantage goal and its goal
 status, the goal `vel_mode` the pilot shapes and flies, and the cockpit,

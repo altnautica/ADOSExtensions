@@ -13,7 +13,8 @@ into that velocity:
   centre with no velocity, refined by every fix with its pull clipped to
   ``STILL_PULL_M``, so range noise on a standing person no longer moves the
   goal. It walks again once the median of the last span's fixes leaves
-  ``STILL_EXIT_RADIUS_M`` of the centre, or once ``STILL_STEP_FIXES`` fixes
+  ``STILL_EXIT_RADIUS_M`` of the centre while the newest fix lies out that
+  way too (``STILL_EXIT_CONFIRM``), or once ``STILL_STEP_FIXES`` fixes
   in a row (gated out by the subject filter or not) each land well off it on
   the same side: a subject breaking into a run. Medians of fixes, not
   estimates: a single range outlier moves an estimate (and its velocity) by
@@ -71,6 +72,11 @@ STILL_ENTER_SPEED_MPS = 0.6
 # STILL_EXIT_MIN_M from the centre, or STILL_EXIT_RADIUS_M whatever the
 # sigmas. Monocular range is poor and bearing good, so a step across the
 # line of sight is seen within a fix or two and one along it takes longer.
+# The newest fix must also lie out along that median's offset, at least
+# STILL_EXIT_CONFIRM of it: a walk carries the newest fix ahead of the
+# median, while range outliers among a sparse span's fixes drag the median
+# off with the newest fix back near the centre.
+STILL_EXIT_CONFIRM = 0.5
 STILL_EXIT_SIGMA = 4.0
 STILL_EXIT_MIN_M = 0.5
 STILL_EXIT_RADIUS_M = 1.5
@@ -426,10 +432,14 @@ class StillSubject:
     def _walked_off(self, pts: list[tuple[float, float, float, Cov2]], recent: tuple[float, float]) -> bool:
         dn, de = recent[0] - self._center[0], recent[1] - self._center[1]
         dist = math.hypot(dn, de)
-        if dist > STILL_EXIT_RADIUS_M:
-            return True
         if dist <= STILL_EXIT_MIN_M:
             return False
+        newest = max(pts, key=lambda p: p[0])
+        along = ((newest[1] - self._center[0]) * dn + (newest[2] - self._center[1]) * de) / dist
+        if along < STILL_EXIT_CONFIRM * dist:
+            return False
+        if dist > STILL_EXIT_RADIUS_M:
+            return True
         k = _MEDIAN_VAR_FACTOR / (len(pts) * len(pts))
         a = k * sum(p[3][0][0] for p in pts)
         b = k * sum(p[3][0][1] for p in pts)
@@ -759,6 +769,7 @@ __all__ = [
     "SMOOTH_MAX_S",
     "STILL_ENTER_DRIFT_M",
     "STILL_ENTER_SPEED_MPS",
+    "STILL_EXIT_CONFIRM",
     "STILL_EXIT_MIN_M",
     "STILL_EXIT_RADIUS_M",
     "STILL_EXIT_SIGMA",

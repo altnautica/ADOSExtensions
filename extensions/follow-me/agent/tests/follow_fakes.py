@@ -265,10 +265,15 @@ def _make_plugin(ctx: _Ctx) -> follow_me.FollowMePlugin:
 
 class _Clock:
     """A controllable stand-in for the plugin's monotonic clock, so a test can
-    let a telemetry stream go stale without sleeping through a real window."""
+    let a telemetry stream go stale without sleeping through a real window.
+
+    It starts at a fixed time, not the host's uptime: the flight sims are
+    chaotic, and a start taken from ``time.monotonic()`` let float rounding
+    at a span's edge differ from machine to machine, so a test passed on
+    one host and failed on another."""
 
     def __init__(self) -> None:
-        self.now = time.monotonic()
+        self.now = 1000.0
 
     def __call__(self) -> float:
         return self.now

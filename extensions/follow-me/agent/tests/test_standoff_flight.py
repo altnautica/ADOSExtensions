@@ -631,6 +631,45 @@ def test_three_range_outliers_in_a_row_do_not_end_standing() -> None:
     assert not s.still
 
 
+def test_two_range_outliers_in_the_exit_span_do_not_end_standing() -> None:
+    # Recorded from a 6 Hz camera flight missing 30 % of its detections: the
+    # 1.5 s exit span of a standing subject held six fixes, the 3.2 and 3.9 m
+    # range outliers and an earlier 2.9 m one among them. Their median sat
+    # 1.6 m off the centre on two fixes in a row and standing ended, so the
+    # vehicle stepped 0.8 m and back. Standing holds through them and for
+    # the 3 s after.
+    from follow_me.standoff import StillSubject
+
+    cov = ((0.75**2, 0.0), (0.0, 0.2**2))
+    noise = (0.3, -0.2, 0.1, -0.4, 0.4, -0.1, 0.2, -0.3, 0.0)
+    s = StillSubject()
+    i = 0
+    while not s.still:
+        i += 1
+        s.add_fix(i / 6.0, noise[i % len(noise)], 0.0, cov, 0.0)
+    t0 = i / 6.0 + 0.25
+    # (seconds after t0, north, east) of each fix, as recorded.
+    span = (
+        (0.0, 0.05, 0.01),
+        (0.3, 2.9, -0.74),
+        (0.5, 0.27, -0.02),
+        (0.65, 3.21, -0.71),
+        (0.8, 3.83, -0.82),
+        (1.3, -1.05, 0.19),
+        (1.65, -0.54, 0.13),
+    )
+    for dt, dn, de in span:
+        s.add_fix(t0 + dt, dn, de, cov, 0.0)
+        assert s.still, f"standing ended {dt:.2f} s into the span"
+    # Then 3 s at 6 Hz, about one fix in three missed (None).
+    quiet = (0.2, None, -0.1, 0.4, None, -0.4, 0.0, 0.3, None, -0.2, 0.1, None)
+    for k, dn in enumerate(quiet + quiet[:6], start=1):
+        if dn is None:
+            continue
+        s.add_fix(t0 + 1.65 + k / 6.0, dn, 0.0, cov, 0.0)
+        assert s.still, f"standing ended {k / 6.0:.2f} s after the span"
+
+
 def test_the_fed_forward_pace_smooths_noise_and_passes_a_stop() -> None:
     # Under a 0.4 m/s velocity error a 0.3 m/s wobble is taken in over
     # about a second; a walker's estimate dropping by 1.4 m/s passes beyond

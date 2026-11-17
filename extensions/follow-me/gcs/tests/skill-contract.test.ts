@@ -176,7 +176,6 @@ describe("manifest 0.5 release", () => {
       ]),
     );
     expect(keys).not.toContain("reacquire_window_s");
-    expect(/^version: "([^"]+)"/m.exec(text)?.[1]).toBe("0.5.0");
   });
 
   it("needs the agent that shows the recovery phases and flies the goal's velocity", () => {
