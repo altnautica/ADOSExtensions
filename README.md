@@ -33,13 +33,13 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/screens/drone-plugins-catalog-dark.webp">
-    <img src=".github/assets/screens/drone-plugins-catalog-light.webp" alt="The plugin catalog on a drone's Plugins tab" width="100%">
+    <img src=".github/assets/screens/drone-plugins-catalog-light.webp" alt="The extension catalog on a drone's Agent ▸ Extensions page" width="100%">
   </picture>
 </p>
 
-ADOS is an open-source platform for software-defined drones, and extensions are how it grows. This repo holds the first-party extensions: subject following, GPS-denied vision navigation, gimbal and camera-pod drivers, and World Engine (in beta) for 3D world models and perception offload. They are built with the same SDKs and plugin system that are open to everyone, so anything here is something you can build too.
+ADOS is an open-source platform for software-defined drones, and extensions are how it grows. This repo holds the first-party extensions: subject following, GPS-denied vision navigation, gimbal and camera-pod drivers, and 3D capture and reconstruction (in beta) — **Capture** on the aircraft and **Reconstruct** on a ground GPU node. They are built with the same SDKs and plugin system that are open to everyone, so anything here is something you can build too.
 
-An extension adds a capability to ADOS without forking it: a new panel in Mission Control, a driver for a sensor or gimbal on the drone, or a behavior that spans both. Each one ships as a single signed `.adosplug` archive that an operator installs from the Plugins tab or the agent CLI, with the permissions it needs shown up front. One manifest describes both halves: the agent half runs as a supervised subprocess on the ADOS Drone Agent (Python or Rust), and the GCS half renders as React panels in a sandboxed iframe in ADOS Mission Control.
+An extension adds a capability to ADOS without forking it: a new panel in Mission Control, a driver for a sensor or gimbal on the drone, or a behavior that spans both. Each one ships as a single signed `.adosplug` archive that an operator installs from a node's **Agent ▸ Extensions** page or the agent CLI, with the permissions it needs shown up front. One manifest describes both halves: the agent half runs as a supervised subprocess on the ADOS Drone Agent (Python or Rust), and the GCS half renders as React panels in a sandboxed iframe in ADOS Mission Control.
 
 ## Two ways in
 
@@ -87,7 +87,9 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 | [siyi-pod](extensions/siyi-pod/README.md) | ADOS SIYI Optical Pod | Agent + GCS | Native SIYI optical-pod driver with per-model capability negotiation: gimbal, zoom, thermal, and a laser rangefinder with subject geolocation |
 | [thermal-camera-flir-lepton-usb](extensions/thermal-camera-flir-lepton-usb/README.md) | ADOS Thermal Camera FLIR Lepton USB UVC | Agent + GCS | FLIR Lepton 3.5 radiometric driver, palettes and spot metering with a GCS overlay. The capture path needs a UVC backend that this repository does not include, so it reports an explicit unavailable state instead of producing readings |
 | [vision-nav](extensions/vision-nav/README.md) | ADOS Vision Navigation | Agent (Rust) + GCS | GPS-denied navigation from downward optical flow, with a camera-IMU calibration check and an advisory pre-arm status |
-| [world-engine](extensions/world-engine/README.md) | ADOS World Engine | Agent (Rust) + GCS | Beta. 3D world model from drone flights, reconstructed on a LAN compute node from keyframes posed by the flight controller, visual-inertial odometry or LiDAR SLAM, plus perception offload for drones without an NPU |
+| [world-engine](extensions/world-engine/README.md) | ADOS Capture and Reconstruct | Agent (Rust) + GCS | Beta. **Capture** on the aircraft: pose-tagged keyframes, the live map, sessions and the relay. **Reconstruct** on a LAN GPU node: splat, mesh, point cloud, ortho and DSM from keyframes posed by the flight controller, visual-inertial odometry or LiDAR SLAM. Plus perception offload for drones without an NPU. One signed archive provides both halves |
+
+The 3D-capture archive names its two halves because they run on different machines and ask for different permissions: Capture reads the cameras and the flight controller's pose, Reconstruct owns the GPU and the job queue. An operator on a ground station installs neither. The archive ships both until they are packaged separately.
 
 These extensions are under active development and grow with every release; build on them, or start your own, with the SDKs below.
 
@@ -259,11 +261,11 @@ rustup target add aarch64-unknown-linux-musl
 
 ## Signing
 
-Tagged releases run `scripts/sign.sh` in CI against the publisher key. The signed archive is published as a GitHub Release asset and, for first-party extensions, surfaces inside the Mission Control Plugins tab through the hosted registry.
+Tagged releases run `scripts/sign.sh` in CI against the publisher key. The signed archive is published as a GitHub Release asset and, for first-party extensions, surfaces in the node's **Agent ▸ Extensions** page through the hosted registry.
 
-## Installing on a drone
+## Installing on a node
 
-From Mission Control: open a drone, switch to the **Plugins** tab, browse the registry, pick the extension, and approve the two-stage install dialog. The agent downloads the signed archive, verifies the Ed25519 signature, and stages the plugin under its supervisor.
+From Mission Control: open a node, go to its **Agent** tab and choose **Extensions**, browse the catalog, pick the extension, and approve the two-stage install dialog. The agent downloads the signed archive, verifies the Ed25519 signature, and stages the plugin under its supervisor.
 
 From the agent CLI:
 
