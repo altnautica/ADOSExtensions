@@ -37,7 +37,7 @@ fn frd_azimuth(x: f32, y_flu: f32) -> f32 {
 /// horizontal range per bin. Every return is kept, airframe, blocked
 /// sectors and floor included: the agent pilot reads a bin with no return
 /// as free space out to its horizon, so such a return must stay a bound.
-/// A consumer that wants obstacles only (vision-nav's `OBSTACLE_DISTANCE`)
+/// A consumer that wants obstacles only (the navigation extension's `OBSTACLE_DISTANCE`)
 /// filters them itself. `t_body_sensor` is the LiDAR mount (FLU);
 /// `blocked_azimuth_deg` the rig's sensor-frame blocked sectors, published
 /// as [`ScanDescriptor::blocked_bins`].

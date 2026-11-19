@@ -65,8 +65,8 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
   </tr>
   <tr>
     <td width="50%">
-      <img src=".github/assets/screens/vision-nav-tab.webp" alt="The Vision Navigation tab">
-      <p align="center"><a href="https://docs.altnautica.com/drone-agent/vision-nav-install">Vision Navigation</a></p>
+      <img src=".github/assets/screens/navigation-page.webp" alt="The Navigation page">
+      <p align="center"><a href="https://docs.altnautica.com/drone-agent/navigation-install">Navigation</a></p>
     </td>
     <td width="50%">
       <picture>
@@ -86,7 +86,7 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 | [mavlink-gimbal-v2](extensions/mavlink-gimbal-v2/README.md) | ADOS MAVLink Gimbal v2 Controller | Agent + GCS | MAVLink Gimbal v2 manager control, region-of-interest lock, and an aim-at-target visual servo with a lock-state safety gate |
 | [siyi-pod](extensions/siyi-pod/README.md) | ADOS SIYI Optical Pod | Agent + GCS | Native SIYI optical-pod driver with per-model capability negotiation: gimbal, zoom, thermal, and a laser rangefinder with subject geolocation |
 | [thermal-camera-flir-lepton-usb](extensions/thermal-camera-flir-lepton-usb/README.md) | ADOS Thermal Camera FLIR Lepton USB UVC | Agent + GCS | FLIR Lepton 3.5 radiometric driver, palettes and spot metering with a GCS overlay. The capture path needs a UVC backend that this repository does not include, so it reports an explicit unavailable state instead of producing readings |
-| [vision-nav](extensions/vision-nav/README.md) | ADOS Vision Navigation | Agent (Rust) + GCS | GPS-denied navigation from downward optical flow, with a camera-IMU calibration check and an advisory pre-arm status |
+| [navigation](extensions/navigation/README.md) | ADOS Navigation | Agent (Rust) + GCS | GPS-denied navigation from downward optical flow, with a camera-IMU calibration check and an advisory pre-arm status |
 | [world-engine](extensions/world-engine/README.md) | ADOS Capture and Reconstruct | Agent (Rust) + GCS | Beta. **Capture** on the aircraft: pose-tagged keyframes, the live map, sessions and the relay. **Reconstruct** on a LAN GPU node: splat, mesh, point cloud, ortho and DSM from keyframes posed by the flight controller, visual-inertial odometry or LiDAR SLAM. Plus perception offload for drones without an NPU. One signed archive provides both halves |
 
 The 3D-capture archive names its two halves because they run on different machines and ask for different permissions: Capture reads the cameras and the flight controller's pose, Reconstruct owns the GPU and the job queue. An operator on a ground station installs neither. The archive ships both until they are packaged separately.
@@ -183,7 +183,7 @@ extensions/                        first-party extensions, versioned independent
   mavlink-gimbal-v2/
   siyi-pod/
   thermal-camera-flir-lepton-usb/
-  vision-nav/
+  navigation/
   world-engine/
 packages/
   create-ados-plugin/              scaffolder + templates
@@ -209,7 +209,7 @@ scripts/
   rust-check.yml                   check the Rust agent halves
   reference.yml                    keep docs/reference/extensions.json in sync
   release.yml                      build, sign, and release on tag push
-  vision-nav-release.yml           Vision Navigation release pipeline
+  navigation-release.yml           Navigation release pipeline
   world-engine-release.yml         World Engine release pipeline
   world-engine-deep.yml            on-demand deep World Engine test run
 ```
@@ -241,7 +241,7 @@ It fails on a declared permission with no call site, a declared UI slot with no 
 
 The Rust agent SDK is [`ados-sdk`](https://crates.io/crates/ados-sdk), published on crates.io with API docs on [docs.rs](https://docs.rs/ados-sdk). An out-of-tree plugin adds it with `cargo add ados-sdk`; its version tracks the agent release it targets. See the [Rust SDK guide](https://docs.altnautica.com/developers/sdk-rust).
 
-First-party extensions in this repo (`vision-nav`, `world-engine`) build against a sibling agent checkout instead, so the two repositories have to sit next to each other:
+First-party extensions in this repo (`navigation`, `world-engine`) build against a sibling agent checkout instead, so the two repositories have to sit next to each other:
 
 ```
 <root>/ADOSDroneAgent
@@ -254,7 +254,7 @@ Cross-compiling for a drone needs the musl target and an aarch64 musl linker. Ap
 
 ```sh
 rustup target add aarch64-unknown-linux-musl
-./scripts/pack-rust.sh vision-nav
+./scripts/pack-rust.sh navigation
 ```
 
 `pack-rust.sh` asserts both halves are in the archive before it zips: the compiled binary at the manifest's `agent.entrypoint` and, when one is declared, the built GCS bundle.

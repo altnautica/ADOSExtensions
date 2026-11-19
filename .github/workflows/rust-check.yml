@@ -8,7 +8,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "extensions/vision-nav/agent/**"
+      - "extensions/navigation/agent/**"
       - "extensions/world-engine/agent/**"
       - "crates/**"
       - "Cargo.toml"
@@ -17,7 +17,7 @@ on:
       - ".github/workflows/rust-check.yml"
   pull_request:
     paths:
-      - "extensions/vision-nav/agent/**"
+      - "extensions/navigation/agent/**"
       - "extensions/world-engine/agent/**"
       - "crates/**"
       - "Cargo.toml"
@@ -25,7 +25,7 @@ on:
       - "Cargo.lock"
 
 jobs:
-  vision-nav-crate:
+  navigation-crate:
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -45,13 +45,13 @@ jobs:
           components: clippy
 
       - name: Clippy (deny warnings)
-        run: cargo clippy -p vision-nav -- -D warnings
+        run: cargo clippy -p navigation -- -D warnings
 
       - name: Test
-        run: cargo test -p vision-nav
+        run: cargo test -p navigation
 
       - name: Check the release target compiles
-        run: cargo check -p vision-nav --target aarch64-unknown-linux-musl
+        run: cargo check -p navigation --target aarch64-unknown-linux-musl
 
   # The shared mapping crates and the World Engine crates. The node links
   # rerun and bundled SQLite, and the transport links rustls/ring, so the musl

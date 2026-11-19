@@ -1,0 +1,227 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "Navigation",
+  "description": "Per-drone configuration for the ADOS Navigation plugin.",
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "Operating mode. optical_flow uses a downward camera plus a rangefinder; optical_flow_degraded takes its scale from the barometer (or GPS height in outdoor mode) instead; external_nav sends the pose from a shared pose topic (for example a lidar SLAM) as ODOMETRY and switches the EKF source set; off keeps the plugin loaded but silent.",
+      "default": "off",
+      "enum": ["off", "optical_flow", "optical_flow_degraded", "external_nav"]
+    },
+    "active": {
+      "type": "boolean",
+      "title": "Engaged",
+      "default": true,
+      "description": "Written by the Engage Skill. Off idles navigation: nothing is sent to the flight controller."
+    },
+    "flow_quality_min": {
+      "type": "integer",
+      "title": "Flow quality gate",
+      "description": "Minimum optical-flow quality (0-255) for the estimator to report converged and for the pre-arm flow check to pass.",
+      "minimum": 0,
+      "maximum": 255,
+      "default": 50
+    },
+    "outdoor": {
+      "type": "boolean",
+      "title": "Outdoor mode",
+      "default": false,
+      "description": "Outdoor mode: allow the GPS altitude rung, measured from the first 3D fix."
+    },
+    "camera": {
+      "$ref": "#/definitions/camera",
+      "title": "Camera"
+    },
+    "external_nav": {
+      "type": "object",
+      "title": "External navigation",
+      "description": "Used in external_nav mode. The pose topic must be published by an installed plugin; the agent refuses the mode without it.",
+      "properties": {
+        "pose_topic": {
+          "type": "string",
+          "title": "Pose topic",
+          "description": "Shared topic carrying the pose descriptor (map frame converted to FRD).",
+          "default": "plugin.navigation.pose"
+        },
+        "origin_lla": {
+          "type": "array",
+          "title": "EKF origin",
+          "description": "[latitude deg, longitude deg, altitude m AMSL] of the take-off site. Sent as SET_GPS_GLOBAL_ORIGIN when the flight controller has none, is disarmed, and GPS is not primary, 5 s after the flight controller boots. Prefer the flight controller setting it at boot (AHRS_OPTIONS bit 4 with AHRS_ORIGIN_LAT/LON/ALT set to the same place). Required in external_nav mode unless GPS is primary.",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "rate_hz": {
+          "type": "number",
+          "title": "ODOMETRY rate (Hz)",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 50
+        },
+        "extnav_set": {
+          "type": "integer",
+          "title": "External-nav source set",
+          "description": "EKF source set (EK3_SRCn) whose position source is ExternalNav.",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 3
+        },
+        "fallback_set": {
+          "type": "integer",
+          "title": "Fallback source set",
+          "description": "EKF source set used when the external pose is lost (the flight controller's optical-flow set), or the GPS set when GPS is primary.",
+          "default": 2,
+          "minimum": 1,
+          "maximum": 3
+        },
+        "gps_primary": {
+          "type": "boolean",
+          "title": "GPS primary",
+          "description": "Fly on GPS and switch to the external pose only while the GPS has no 3D fix or reports a horizontal accuracy worse than 5 m.",
+          "default": false
+        }
+      }
+    },
+    "obstacle": {
+      "type": "object",
+      "title": "Obstacle feed",
+      "description": "Turns a shared planar scan into OBSTACLE_DISTANCE for the flight controller's proximity avoidance (PRX1_TYPE 2).",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "title": "Enabled",
+          "default": false
+        },
+        "scan_topic": {
+          "type": "string",
+          "title": "Scan topic",
+          "default": "plugin.navigation.scan"
+        },
+        "sectors": {
+          "type": "integer",
+          "title": "Sectors",
+          "description": "Number of equal sectors over 360 degrees (72 = 5 degrees each).",
+          "default": 72,
+          "minimum": 1,
+          "maximum": 72
+        },
+        "rate_hz": {
+          "type": "number",
+          "title": "Rate (Hz)",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 20
+        }
+      }
+    },
+    "rangefinder": {
+      "type": "object",
+      "title": "Rangefinder",
+      "description": "Distance source used to scale optical flow into metric velocity.",
+      "properties": {
+        "topology": {
+          "type": "string",
+          "title": "Topology",
+          "description": "Where the rangefinder is wired. companion = plugin reads it; fc = flight controller already publishes DISTANCE_SENSOR; none = no rangefinder.",
+          "default": "fc",
+          "enum": ["companion", "fc", "none"]
+        },
+        "driver": {
+          "type": "string",
+          "title": "Driver",
+          "description": "fc_relay reads the flight controller's DISTANCE_SENSOR stream; tfluna_uart reads a Benewake TF-Luna on a companion serial port.",
+          "default": "fc_relay",
+          "enum": ["tfluna_uart", "fc_relay"]
+        },
+        "device": {
+          "type": "string",
+          "title": "Device node",
+          "description": "Serial device path (for example /dev/ttyUSB0) for the TF-Luna. Optional when topology is fc or none.",
+          "pattern": "^/dev/(ttyS|ttyUSB|ttyAMA|ttyACM|serial)[0-9]+$"
+        },
+        "baud": {
+          "type": "integer",
+          "title": "Baud rate",
+          "description": "Only used for the TF-Luna UART driver.",
+          "default": 115200,
+          "minimum": 1200,
+          "maximum": 1000000
+        }
+      },
+      "required": ["topology"]
+    },
+    "firmware": {
+      "type": "object",
+      "title": "Flight firmware",
+      "properties": {
+        "type": {
+          "type": "string",
+          "title": "Firmware",
+          "description": "Flight controller firmware. ArduPilot and iNav (7.0+) receive OPTICAL_FLOW; PX4 receives OPTICAL_FLOW_RAD. Betaflight is not supported because the firmware has no position estimator.",
+          "default": "ardupilot",
+          "enum": ["ardupilot", "px4", "inav"]
+        }
+      },
+      "required": ["type"]
+    }
+  },
+  "required": ["mode", "camera", "firmware"],
+  "definitions": {
+    "camera": {
+      "type": "object",
+      "properties": {
+        "camera_id": {
+          "type": "string",
+          "title": "Flow camera id",
+          "description": "Agent camera id the flow is computed from, for example the downward camera. Empty takes frames from every camera.",
+          "default": ""
+        },
+        "device_path": {
+          "type": "string",
+          "title": "Device path",
+          "description": "Reported to the GCS as the camera when no flow camera id is set. Frames come from the agent's vision bus; choose the captured camera in the agent's camera settings.",
+          "default": "/dev/video0",
+          "pattern": "^/dev/video[0-9]+$"
+        },
+        "bus_type": {
+          "type": "string",
+          "title": "Bus type",
+          "default": "uvc",
+          "enum": ["uvc", "csi"]
+        },
+        "orientation": {
+          "type": "string",
+          "title": "Mount orientation",
+          "description": "Both optical-flow modes need downward (or auto); forward or side leaves navigation disengaged.",
+          "default": "auto",
+          "enum": ["forward", "downward", "side", "auto"]
+        },
+        "width": {
+          "type": "integer",
+          "title": "Capture width",
+          "default": 640,
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "height": {
+          "type": "integer",
+          "title": "Capture height",
+          "default": 480,
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "fps": {
+          "type": "integer",
+          "title": "Frames per second",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 240
+        }
+      },
+      "required": ["bus_type"]
+    }
+  }
+}

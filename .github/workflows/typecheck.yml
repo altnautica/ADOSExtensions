@@ -7,7 +7,7 @@ name: typecheck
 # `extensions/*/gcs` packages shipped with `tsconfig.json` files nothing ever
 # read. `packages/extension-ui` had a `typecheck` script no workflow called.
 # There was also no pull-request Node gate here at all: `release.yml` and
-# `vision-nav-release.yml` are tag-triggered, so nothing ran on a PR.
+# `navigation-release.yml` are tag-triggered, so nothing ran on a PR.
 #
 # `pnpm typecheck` at the root builds `@altnautica/plugin-sdk` first and then
 # runs `pnpm -r typecheck`. The build is not optional: every gcs half resolves

@@ -48,7 +48,7 @@ pub const NEAR_SAMPLES: f64 = 50.0;
 pub const STEP_JUMP_M: f64 = 3.0;
 /// How long GNSS must have held a 3D fix before the EKF's position is taken as
 /// GNSS-referenced, ms on the FC clock. Longer than a companion's switch back
-/// from external navigation after GNSS returns (vision-nav: 10 s), so the
+/// from external navigation after GNSS returns (the navigation extension: 10 s), so the
 /// EKF's own reset back onto GNSS is behind it.
 pub const GNSS_SETTLE_MS: u32 = 15_000;
 

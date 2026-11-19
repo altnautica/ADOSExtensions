@@ -5,8 +5,8 @@ pilot's cap without GNSS (2 m/s). The pilot's own cap is not forwarded to
 plugins, so it is rebuilt here with the pilot's rule for an EKF whose source
 parameters it does not know: uncapped while the active EKF source set is 1-3
 and a 3-D fix from GPS_RAW_INT is fresh. The active set is the last one the
-vision-nav extension's ``nav.state`` named (``active_set``), and the boot set
-1 before any. Its external-navigation mode alone says nothing: vision-nav
+navigation extension's ``nav.state`` named (``active_set``), and the boot set
+1 before any. Its external-navigation mode alone says nothing: navigation
 runs it beside GPS on set 1.
 
 Known limitation: a source set whose ``EK3_SRCn_POSXY`` is not GPS reads as
@@ -25,7 +25,7 @@ import math
 from collections import deque
 from typing import Any
 
-# The vision-nav extension's navigation state event.
+# The navigation extension's navigation state event.
 NAV_STATE_TOPIC = "nav.state"
 # The pilot's horizontal speed cap while the position source is not GNSS.
 GNSS_DENIED_MAX_SPEED_MPS = 2.0
@@ -54,7 +54,7 @@ NEAR_SPAN_S = 1.5
 
 class NavFeed:
     """The latest GPS fix type, when it arrived, and the active EKF source
-    set last named by vision-nav."""
+    set last named by the navigation extension."""
 
     __slots__ = ("gps_fix", "gps_at", "source_set")
 

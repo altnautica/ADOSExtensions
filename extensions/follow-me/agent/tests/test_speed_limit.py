@@ -41,7 +41,7 @@ def test_without_a_3d_fix_the_limit_is_the_gnss_denied_cap() -> None:
 
 
 def test_external_nav_on_the_gps_source_set_is_uncapped_as_the_pilot_flies_it() -> None:
-    # vision-nav in its external-navigation mode with the EKF on source set 1
+    # the navigation extension in its external-navigation mode with the EKF on source set 1
     # and a 3-D fix: the pilot flies uncapped, so the limit is the follow's.
     feed = NavFeed()
     feed.on_gps_fix(6, 10.0)

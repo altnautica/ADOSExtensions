@@ -1,0 +1,177 @@
+# navigation-release
+#
+# Fires on a `navigation-v*` tag push: runs the extensions.yml gate for
+# navigation (manifest schema + lint, GCS tests, cargo test), builds the GCS bundle,
+# cross-compiles the Rust agent binary against the pinned agent SDK revision,
+# then packs, signs, and attaches the .adosplug archive to the GitHub Release.
+#
+# The extension ships no third-party binaries, so there is no vendor-build
+# matrix and nothing to stage into the archive beyond the agent binary and the
+# GCS bundle.
+
+name: navigation-release
+
+on:
+  push:
+    tags:
+      - "navigation-v*"
+
+jobs:
+  checks:
+    uses: ./.github/workflows/extensions.yml
+    with:
+      ext: navigation
+
+  build-and-release:
+    needs: checks
+    # Native arm64 so the agent binary cross-compiles to the static
+    # aarch64-unknown-linux-musl target with musl-tools (one binary runs on
+    # every supported board regardless of glibc).
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: write
+    env:
+      # The agent SDK crates (ados-sdk / ados-protocol) are consumed via the
+      # workspace path dep `{ path = "../ADOSDroneAgent/crates/..." }`, so the
+      # sibling repo is cloned before the crate builds. The revision comes from
+      # the committed ADOS_AGENT_REV file, so re-running this tag builds against
+      # the same SDK commit.
+      ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse tag
+        id: route
+        run: |
+          echo "ext=navigation" >> "$GITHUB_OUTPUT"
+
+      - name: Check the tag matches the manifest version
+        run: |
+          set -euo pipefail
+          # Tag form: <ext>-v<semver>. The archive names the manifest version,
+          # so a tag that disagrees would publish a mis-versioned release.
+          tag_version="${GITHUB_REF_NAME##*-v}"
+          manifest_version="$(grep -E '^version:' "extensions/navigation/manifest.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
+          if [ "${tag_version}" != "${manifest_version}" ]; then
+            echo "ERROR: tag ${GITHUB_REF_NAME} does not match manifest version ${manifest_version}" >&2
+            exit 1
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          pip install cryptography
+
+      - name: Build workspace SDK
+        run: pnpm --filter @altnautica/plugin-sdk build
+
+      - name: Build GCS bundle
+        run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" build
+
+      - name: Check out the agent SDK at the pinned revision
+        run: |
+          set -e
+          rev="$(cat ADOS_AGENT_REV)"
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
+          git -C "${dest}" checkout "${rev}"
+          echo "agent SDK pinned at ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+
+      - name: Install Rust toolchain (musl target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Install musl cross tools
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Pack archive
+        # pack-rust.sh cross-compiles the agent binary (bin/navigation) via
+        # scripts/build-rust.sh, stages it + the GCS bundle, and refuses to pack
+        # a half-archive missing the agent.entrypoint.
+        run: ./scripts/pack-rust.sh "${{ steps.route.outputs.ext }}" aarch64-unknown-linux-musl
+
+      - name: Sign archive
+        env:
+          # Same first-party key as release.yml so a single public half
+          # (/etc/ados/plugin-keys/altnautica-2026-A.pem) verifies every plugin.
+          ADOS_SIGNING_KEY: ${{ secrets.ALTNAUTICA_PLUGIN_KEY_A }}
+          ADOS_SIGNING_KEY_INLINE: "1"
+          ADOS_SIGNING_KEY_ID: altnautica-2026-A
+        run: |
+          archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.adosplug$' | grep -v '\.signed\.' | head -n1)"
+          ./scripts/sign.sh "${archive}"
+          echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
+
+      - name: Verify the signature against the committed public key
+        run: |
+          set -euo pipefail
+          # Recompute the canonical payload hash from the signed archive (sha256
+          # over the sorted "<path>\n<sha256-hex>\n" of every entry except
+          # SIGNATURE, the agent's archive rule) and verify SIGNATURE line 2
+          # against keys/<signer>.pub.pem. A wrong key id, a mismatched private
+          # key or a tampered entry fails here instead of at install.
+          python3 - "${SIGNED}" <<'PY'
+          import base64
+          import hashlib
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          from cryptography.exceptions import InvalidSignature
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+          from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+          with zipfile.ZipFile(sys.argv[1]) as z:
+              lines = z.read("SIGNATURE").decode("ascii").splitlines()
+              entries = sorted(
+                  (i.filename, z.read(i))
+                  for i in z.infolist()
+                  if not i.is_dir() and i.filename != "SIGNATURE"
+              )
+          signer, sig_b64 = lines[0].strip(), lines[1].strip()
+          pem = Path("keys") / f"{signer}.pub.pem"
+          if not pem.is_file():
+              sys.exit(f"ERROR: signer '{signer}' has no committed public key at {pem}")
+          key = load_pem_public_key(pem.read_bytes())
+          if not isinstance(key, Ed25519PublicKey):
+              sys.exit(f"ERROR: {pem} is not an Ed25519 public key")
+          agg = hashlib.sha256()
+          for name, data in entries:
+              agg.update(f"{name}\n{hashlib.sha256(data).hexdigest()}\n".encode())
+          try:
+              key.verify(base64.b64decode(sig_b64), agg.digest())
+          except InvalidSignature:
+              sys.exit(f"ERROR: the signature does not verify against {pem}")
+          print(f"OK: signature by {signer} verifies against {pem}")
+          PY
+
+      - name: Emit SHA-256 checksum
+        run: |
+          digest=$(shasum -a 256 "${SIGNED}" | awk '{print $1}')
+          printf '%s  %s\n' "${digest}" "$(basename "${SIGNED}")" > "${SIGNED}.sha256"
+          cat "${SIGNED}.sha256"
+
+      - name: Upload to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
+            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug.sha256
+            extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md

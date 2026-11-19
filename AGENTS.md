@@ -34,7 +34,7 @@ pnpm build:thermal-camera          pnpm test:thermal-camera
 pnpm build:mavlink-gimbal-v2       pnpm test:mavlink-gimbal-v2
 pnpm build:follow-me               pnpm test:follow-me
 pnpm build:siyi-pod                pnpm test:siyi-pod
-pnpm build:vision-nav              pnpm test:vision-nav
+pnpm build:navigation              pnpm test:navigation
 
 # Manifest against the code it describes (permissions, slots, versions).
 node scripts/lint-manifest.mjs extensions/<name>/manifest.yaml
@@ -56,7 +56,7 @@ uv run pytest extensions/thermal-camera-flir-lepton-usb/agent/tests
 The Rust agent half builds against a sibling `ADOSDroneAgent` checkout:
 
 ```bash
-DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo test -p vision-nav
+DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo test -p navigation
 ```
 
 Packing asserts both halves are present, so pack before you claim an extension
@@ -78,7 +78,7 @@ ships:
 - SIYI optical pod extension:
   `extensions/siyi-pod/`
 - Vision-nav extension:
-  `extensions/vision-nav/`
+  `extensions/navigation/`
 - GCS halves: `extensions/*/gcs/`
 - Agent halves: `extensions/*/agent/`
 - Locales: `extensions/*/locales/`

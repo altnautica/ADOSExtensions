@@ -265,7 +265,7 @@ impl FeedState {
 /// `reason` ([`FeedState::degraded`]).
 /// - On the attitude stand-in or a stalled `RAW_IMU`, no yaw rate reaches
 ///   the matcher, whose rotation prior then pins the heading so it cannot
-///   follow a yaw at all: every pose is lost. vision-nav sends no
+///   follow a yaw at all: every pose is lost. the navigation extension sends no
 ///   `ODOMETRY` for it, and the flight controller falls back to its other
 ///   sources.
 /// - On a live but starved `RAW_IMU`, the heading is measured, coarsely: a

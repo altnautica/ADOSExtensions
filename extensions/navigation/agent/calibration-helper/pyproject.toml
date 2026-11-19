@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "altnautica-navigation-calib"
+version = "1.0.0"
+description = "Loaders and validators for the Kalibr camchain.yaml the ADOS Navigation agent reads at start-up."
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.10"
+authors = [{ name = "Altnautica" }]
+keywords = ["ados", "calibration", "kalibr", "intrinsics", "timeshift"]
+dependencies = [
+  "pydantic>=2",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["altnautica_navigation_calib"]

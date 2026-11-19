@@ -2,7 +2,7 @@
 #
 # The per-extension gate. Runs on every pull request and push to main over the
 # full extension matrix, and is called by the release workflows
-# (release.yml, vision-nav-release.yml, world-engine-release.yml) with the one
+# (release.yml, navigation-release.yml, world-engine-release.yml) with the one
 # extension being tagged, so a release runs exactly the checks a pull request
 # does before anything is packed or signed.
 #
@@ -15,7 +15,7 @@
 #   - the GCS half's tests (`pnpm --filter ./extensions/<x>/gcs test`, the
 #     same command as `pnpm test:<x>`);
 #   - the Python agent half's tests, one pytest invocation per extension;
-#   - `cargo test -p vision-nav` for vision-nav.
+#   - `cargo test -p navigation` for navigation.
 #
 # The agent revision is the repository variable ADOS_AGENT_REV when set, else
 # the committed ADOS_AGENT_REV file the release builds already pin to.
@@ -134,7 +134,7 @@ jobs:
           pnpm --filter "./extensions/${EXT}/gcs" test
 
       # Every extension: the agent-half tests import the real host SDK from this
-      # sibling checkout, and vision-nav's Rust half uses it as a path dependency.
+      # sibling checkout, and navigation's Rust half uses it as a path dependency.
       - name: Check out the agent SDK (sibling path)
         run: |
           set -euo pipefail
@@ -153,9 +153,9 @@ jobs:
           uv run pytest "extensions/${EXT}/agent/tests"
 
       - name: Install Rust toolchain
-        if: matrix.ext == 'vision-nav'
+        if: matrix.ext == 'navigation'
         uses: dtolnay/rust-toolchain@stable
 
       - name: Rust tests
-        if: matrix.ext == 'vision-nav'
-        run: cargo test -p vision-nav
+        if: matrix.ext == 'navigation'
+        run: cargo test -p navigation

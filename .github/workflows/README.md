@@ -9,9 +9,9 @@ release manager can pick the pipeline that matches the situation.
 | Workflow                       | Trigger tag pattern                | What it does |
 |--------------------------------|------------------------------------|-------------|
 | `release.yml`                  | `mavlink-gimbal-v2-v*`, `follow-me-v*`, `siyi-pod-v*` | Per-extension release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. The tag list is the publish allowlist. |
-| `vision-nav-release.yml`       | `vision-nav-v*`                    | Pipeline for vision-nav: cross-compiles the Rust agent half against the SDK revision pinned in `ADOS_AGENT_REV`, then packs with `scripts/pack-rust.sh` and signs. |
+| `navigation-release.yml`       | `navigation-v*`                    | Pipeline for navigation: cross-compiles the Rust agent half against the SDK revision pinned in `ADOS_AGENT_REV`, then packs with `scripts/pack-rust.sh` and signs. |
 | `world-engine-release.yml`     | `world-engine-v*`                  | Pipeline for the World Engine: builds its binaries per arch (aarch64-linux, x86_64-linux, aarch64-macos), attaches them and the Rerun viewer wasm to the release as install-time payloads, then packs the small archive with `scripts/pack-rust.sh --payload-manifest` and signs. |
-| `extensions.yml`               | pull request, push to main, called by each release workflow | Per-extension checks: validates the manifest against the agent's plugin manifest schema, runs `scripts/lint-manifest.mjs`, the GCS tests, the agent pytest suite when one exists, and `cargo test` for vision-nav. |
+| `extensions.yml`               | pull request, push to main, called by each release workflow | Per-extension checks: validates the manifest against the agent's plugin manifest schema, runs `scripts/lint-manifest.mjs`, the GCS tests, the agent pytest suite when one exists, and `cargo test` for navigation. |
 | `rust-check.yml`               | pull request, push to main         | Builds, clippies and tests the Rust agent half against the pinned SDK revision. |
 | `typecheck.yml`                | pull request, push to main         | TypeScript typecheck across every GCS package. |
 
@@ -19,7 +19,7 @@ release manager can pick the pipeline that matches the situation.
 
 An extension is publishable only once a tag pattern for it exists in
 `release.yml`, or in the trigger of its own release workflow for the
-extensions that have one (`vision-nav-v*`, `world-engine-v*`; never both,
+extensions that have one (`navigation-v*`, `world-engine-v*`; never both,
 or one tag publishes twice). Adding that pattern is the act that makes its archive
 publishable, so do not add one for an extension whose advertised
 capability cannot execute:
@@ -52,7 +52,7 @@ it, not secrets to configure.
 
 | Secret name                  | Format                                   | Used by |
 |------------------------------|------------------------------------------|--------|
-| `ALTNAUTICA_PLUGIN_KEY_A`    | Base64-encoded Ed25519 private PEM (PKCS#8) | `release.yml`, `vision-nav-release.yml`, `world-engine-release.yml` |
+| `ALTNAUTICA_PLUGIN_KEY_A`    | Base64-encoded Ed25519 private PEM (PKCS#8) | `release.yml`, `navigation-release.yml`, `world-engine-release.yml` |
 
 Set secrets via GitHub repo settings: **Settings > Secrets and
 variables > Actions**.
@@ -87,10 +87,10 @@ pip install "git+https://github.com/altnautica/ADOSDroneAgent.git"
 ados plugin keygen test-signer --output-dir /tmp/test-keys
 
 # Sign an extension as the workflow would.
-ados plugin sign extensions/vision-nav \
+ados plugin sign extensions/navigation \
     --key /tmp/test-keys/test-signer.priv.pem \
     --signer-id test-signer \
-    --output /tmp/vision-nav.signed.adosplug
+    --output /tmp/navigation.signed.adosplug
 
 # Walk the result through the agent's normal install path on a paired rig.
 ```

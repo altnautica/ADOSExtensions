@@ -214,7 +214,7 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
                 gyro: [i16_at(&b, 14) * 1e-3, i16_at(&b, 16) * 1e-3, i16_at(&b, 18) * 1e-3],
             })
         }
-        // The FC's own flow only: a companion's (the vision-nav plugin sends
+        // The FC's own flow only: a companion's (the navigation extension sends
         // one to the FC) fills the fields with other units.
         MSG_OPTICAL_FLOW if component(frame) == Some(COMP_AUTOPILOT) => {
             let b: [u8; 26] = padded(payload);

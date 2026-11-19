@@ -69,6 +69,43 @@
       "published": true
     },
     {
+      "id": "com.altnautica.navigation",
+      "name": "ADOS Navigation",
+      "version": "1.0.0",
+      "description": "GNSS-denied navigation. Optical flow from a downward camera, or an external pose sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+.",
+      "category": null,
+      "supported_boards": [
+        "cm4",
+        "cm5",
+        "rock-5c-lite",
+        "rk3588s2",
+        "rk3576",
+        "rpi5"
+      ],
+      "permissions": [
+        "estimator.pose.inject",
+        "event.publish",
+        "event.subscribe",
+        "hardware.uart",
+        "mavlink.component.vio",
+        "mavlink.read",
+        "mavlink.write",
+        "telemetry.extend",
+        "telemetry.read",
+        "telemetry.subscribe.navigation",
+        "ui.slot.cockpit-panel",
+        "ui.slot.flight-skill",
+        "ui.slot.node-agent-page",
+        "vision.frame.read"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/navigation-overview",
+      "published": true
+    },
+    {
       "id": "com.altnautica.siyi-pod",
       "name": "ADOS SIYI Optical Pod",
       "version": "0.6.4",
@@ -140,42 +177,6 @@
       ],
       "documentation_url": "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-thermal-camera-flir-lepton-usb-uvc",
       "published": false
-    },
-    {
-      "id": "com.altnautica.vision-nav",
-      "name": "ADOS Vision Navigation",
-      "version": "0.8.6",
-      "description": "GPS-denied navigation. Optical flow from a downward camera, or an external pose (for example a lidar SLAM) sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+.",
-      "category": null,
-      "supported_boards": [
-        "cm4",
-        "cm5",
-        "rock-5c-lite",
-        "rk3588s2",
-        "rk3576",
-        "rpi5"
-      ],
-      "permissions": [
-        "estimator.pose.inject",
-        "event.publish",
-        "event.subscribe",
-        "hardware.uart",
-        "mavlink.component.vio",
-        "mavlink.read",
-        "mavlink.write",
-        "telemetry.extend",
-        "telemetry.read",
-        "telemetry.subscribe.navigation",
-        "ui.slot.flight-skill",
-        "ui.slot.node-detail-tab",
-        "vision.frame.read"
-      ],
-      "halves": [
-        "agent",
-        "gcs"
-      ],
-      "documentation_url": "https://docs.altnautica.com/drone-agent/vision-nav-overview",
-      "published": true
     },
     {
       "id": "com.altnautica.world-engine",

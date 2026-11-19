@@ -252,7 +252,7 @@ published as `speed_limit_mps`, is `max_speed_mps`, or the pilot's 2 m/s
 GNSS-denied cap when lower: the pilot's cap is not forwarded to plugins, so
 it is rebuilt with the pilot's rule for unknown EKF source parameters:
 uncapped while the active EKF source set is 1-3 and `GPS_RAW_INT` has a
-fresh 3-D fix. The active set is the last one the vision-nav extension's
+fresh 3-D fix. The active set is the last one the navigation extension's
 `nav.state` named (`active_set`), and the boot set 1 before any; its
 external-navigation mode alone does not cap. A source set whose
 `EK3_SRCn_POSXY` is not GPS reads as uncapped here while the pilot caps it.
