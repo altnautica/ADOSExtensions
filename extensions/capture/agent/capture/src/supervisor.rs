@@ -36,7 +36,7 @@ use crate::runtime::{CaptureRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS
 use crate::scan_raw::ScanRaw;
 use crate::service::{run_capture_loop, LoopDeps, Paths};
 use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
+use ados_mapping_pose::frame_source::{FrameFeed, FrameRouter};
 use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
 
@@ -179,7 +179,7 @@ impl CaptureRun {
             .enabled_cameras()
             .map(|c| c.id.clone())
             .collect();
-        let frames = AtlasFrameSource::Engine(feeds.router.attach(enabled));
+        let frames = FrameFeed::Engine(feeds.router.attach(enabled));
         let deps = LoopDeps {
             cfg: config.clone(),
             profile,
@@ -438,7 +438,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
 mod tests {
     use super::*;
     use crate::config::{CameraConfig, CaptureConfig};
-    use ados_mapping_protocol::atlas::CameraRole;
+    use ados_mapping_protocol::capture::CameraRole;
 
     fn enabled_config() -> CaptureRuntimeConfig {
         CaptureRuntimeConfig {

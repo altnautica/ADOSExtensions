@@ -12,7 +12,7 @@ use ados_capture_contract::foxglove::RawImage;
 use ados_capture_contract::v1::{ClockSample, ImuBatch, ImuSample, TriggerRecord};
 use ados_capture_contract::{SessionReader, Timebase};
 use ados_config::capture_storage::{CaptureState, CaptureStorageSidecar, CaptureUsage};
-use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, EngineFrameSource};
+use ados_mapping_pose::frame_source::{CapturedFrame, EngineFrameSource, FrameFeed};
 use ados_mapping_pose::replay::ReplayPose;
 use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
@@ -205,7 +205,7 @@ async fn a_two_camera_sim_session_records_and_validates() {
     let deps = LoopDeps {
         cfg,
         profile: "visor".into(),
-        frames: AtlasFrameSource::Engine(EngineFrameSource::from_receiver(frx)),
+        frames: FrameFeed::Engine(EngineFrameSource::from_receiver(frx)),
         router: None,
         pose: Arc::new(ReplayPose::new(poses)),
         fc: None,

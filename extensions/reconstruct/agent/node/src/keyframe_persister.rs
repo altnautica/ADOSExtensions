@@ -1,4 +1,4 @@
-//! Turn received Atlas keyframes into a reconstructor-ingestible dataset.
+//! Turn received captured keyframes into a reconstructor-ingestible dataset.
 //!
 //! Each keyframe carries the compressed image bytes plus a world-from-camera
 //! pose and the camera model (the drone computed the pose on-board from its
@@ -26,7 +26,7 @@ use ados_capture_contract::{
     CameraModel, CameraModelModel, ContractId, GeoAnchor, TransformsFrame, TransformsJson,
     TransformsJsonCameraModel,
 };
-use ados_mapping_protocol::atlas::{ImageEncoding, KeyframeEnvelope};
+use ados_mapping_protocol::capture::{ImageEncoding, KeyframeEnvelope};
 
 /// Subdirectory under a dataset directory that holds the keyframe images.
 const IMAGES_DIR: &str = "images";

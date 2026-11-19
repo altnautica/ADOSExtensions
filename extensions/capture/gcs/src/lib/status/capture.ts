@@ -1,7 +1,7 @@
 /**
- * @module status/atlas
- * @description Maps the `atlas` slice of the extension's agent state (the
- * capture service's own report, published by the drone half) onto the atlas
+ * @module status/capture
+ * @description Maps the `capture` slice of the extension's agent state (the
+ * capture service's own report, published by the drone half) onto the capture
  * store's live slice. Pure.
  */
 
@@ -24,7 +24,7 @@ function asBool(v: unknown): boolean | null {
 }
 
 /**
- * Map the capture service's state slice onto the atlas store's live slice.
+ * Map the capture service's state slice onto the capture store's live slice.
  * Returns `null` when the slice carries nothing (a present-but-empty /
  * non-capturing slice) so the previous live values are preserved. The drone
  * emits its own

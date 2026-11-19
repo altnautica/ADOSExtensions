@@ -44,7 +44,7 @@ use crate::runtime::{CaptureRuntimeConfig, PoseSourceChoice, SharedSteps};
 use crate::scan_raw::ScanRaw;
 use crate::session::CaptureSession;
 use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
+use ados_mapping_pose::frame_source::{CapturedFrame, FrameFeed, FrameRouter};
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::pose::PoseProvider;
 use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
@@ -84,7 +84,7 @@ pub struct LoopDeps {
     pub cfg: CaptureRuntimeConfig,
     /// The node profile (`drone` or `visor`).
     pub profile: String,
-    pub frames: AtlasFrameSource,
+    pub frames: FrameFeed,
     /// The engine router, for its per-camera drop counts.
     pub router: Option<Arc<FrameRouter>>,
     pub pose: Arc<dyn PoseProvider>,

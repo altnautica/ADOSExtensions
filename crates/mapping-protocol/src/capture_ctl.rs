@@ -1,4 +1,4 @@
-//! The capture control socket (`atlas-control.sock`), version 2.
+//! The capture control socket (`capture-control.sock`), version 2.
 //!
 //! The capture service binds it; the link (the extension's HTTP API, the MCP
 //! tool handler) is the client. One connection per exchange: one
@@ -7,7 +7,7 @@
 //!
 //! | `cmd`      | args            | `result` on success              |
 //! |------------|-----------------|----------------------------------|
-//! | `status`   | -               | [`crate::atlas::CaptureStatus`]  |
+//! | `status`   | -               | [`crate::capture::CaptureStatus`]  |
 //! | `state`    | -               | [`CaptureStateView`]             |
 //! | `coverage` | -               | [`CoverageView`]                 |
 //! | `start`    | [`StartArgs`]   | `{"session_id": ".."}`           |
@@ -230,7 +230,7 @@ pub struct StorageView {
     pub est_remaining_s: Option<u64>,
 }
 
-/// `GET /atlas/capture/state`.
+/// `GET /capture/state`.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CaptureStateView {
     /// `idle|recording|paused|closing`.
@@ -250,7 +250,7 @@ pub struct CaptureStateView {
     pub storage: StorageView,
 }
 
-/// `GET /atlas/capture/coverage`: top-down coverage cells `[ix, iy, hits]`
+/// `GET /capture/coverage`: top-down coverage cells `[ix, iy, hits]`
 /// on a `cell_m` grid and the walked trajectory, local ENU metres.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CoverageView {

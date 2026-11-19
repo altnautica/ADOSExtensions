@@ -20,9 +20,9 @@ export function captureLanes(profile: InlineNodeSummary["profile"]): readonly No
   switch (profile) {
     case "drone":
     case "visor":
-      return ["atlas.ingest", "sessions.upload", "jobs.submit"];
+      return ["capture.ingest", "sessions.upload", "jobs.submit"];
     case "ground-station":
-      return ["atlas.ingest"];
+      return ["capture.ingest"];
     default:
       return null;
   }
@@ -31,7 +31,7 @@ export function captureLanes(profile: InlineNodeSummary["profile"]): readonly No
 /** Reconstruct on a drone: perception offload, the live scan stream and
  * reconstruction submits. */
 export function reconstructLanes(profile: InlineNodeSummary["profile"]): readonly NodeLane[] | null {
-  return profile === "drone" ? ["offload.stream", "atlas.ingest", "jobs.submit"] : null;
+  return profile === "drone" ? ["offload.stream", "capture.ingest", "jobs.submit"] : null;
 }
 
 export const CAPTURE_CREDENTIALS: CredentialTarget = {

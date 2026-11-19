@@ -29,7 +29,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ados_capture_contract::LidarModel;
-use ados_mapping_protocol::atlas::{LidarHealth, LidarStatus};
+use ados_mapping_protocol::capture::{LidarHealth, LidarStatus};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;

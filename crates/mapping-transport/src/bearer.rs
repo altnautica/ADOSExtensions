@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use ados_mapping_protocol::atlas::AtlasEvent;
+use ados_mapping_protocol::capture::NodeEvent;
 
 use crate::TransportError;
 
@@ -34,11 +34,11 @@ impl BearerKind {
     }
 }
 
-/// One carrier for the Atlas stream lane. Bearers are interchangeable: the
-/// framed [`AtlasEvent`] is identical on every one, so the [`crate::BearerLadder`]
-/// can fail over from one to the next without the world-model contract changing.
+/// One carrier for the capture stream lane. Bearers are interchangeable: the
+/// framed [`NodeEvent`] is identical on every one, so the [`crate::BearerLadder`]
+/// can fail over from one to the next without the reconstruction contract changing.
 #[async_trait::async_trait]
-pub trait AtlasBearer: Send + Sync {
+pub trait EventBearer: Send + Sync {
     /// The carrier this bearer is.
     fn kind(&self) -> BearerKind;
 
@@ -47,5 +47,5 @@ pub trait AtlasBearer: Send + Sync {
     async fn is_available(&self) -> bool;
 
     /// Send one framed event over this bearer.
-    async fn send(&self, event: &AtlasEvent) -> Result<(), TransportError>;
+    async fn send(&self, event: &NodeEvent) -> Result<(), TransportError>;
 }

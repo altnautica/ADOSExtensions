@@ -2,7 +2,8 @@
 #
 # The per-extension gate. Runs on every pull request and push to main over the
 # full extension matrix, and is called by the release workflows
-# (release.yml, navigation-release.yml, world-engine-release.yml) with the one
+# (release.yml, navigation-release.yml, capture-release.yml,
+# reconstruct-release.yml) with the one
 # extension being tagged, so a release runs exactly the checks a pull request
 # does before anything is packed or signed.
 #

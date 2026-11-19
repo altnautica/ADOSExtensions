@@ -1,5 +1,5 @@
 /**
- * @module agent/gs-atlas-relay
+ * @module agent/relay-client
  * @description capture keyframe relay status on a ground-station node.
  *
  * The ground station bridges the drone's WFB aux lane (small capture events)
@@ -15,7 +15,7 @@ import type { InlineAgentApi } from "@altnautica/plugin-sdk/inline";
 import { requestJson } from "@altnautica/mapping-ui/lib/agent/plugin-http";
 
 /** Path of the relay status route on the extension's ground-station server. */
-export const RELAY_STATUS_PATH = "atlas-relay/status";
+export const RELAY_STATUS_PATH = "capture/relay/status";
 
 /** Counters and config for the ground-station capture keyframe relay. With no
  * current snapshot the agent nulls every key under `stale: true`; those

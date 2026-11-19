@@ -95,19 +95,19 @@ fn unix_ms_of_mono(ts_ns: u64) -> i64 {
 }
 
 /// The frame source the capture loop runs with.
-pub enum AtlasFrameSource {
+pub enum FrameFeed {
     Engine(EngineFrameSource),
     Synthetic(SyntheticFrameSource),
 }
 
-impl AtlasFrameSource {
+impl FrameFeed {
     /// Pull the next frame. `None` means the source needs a moment (a detached
     /// engine source, or an exhausted synthetic sequence); the caller backs off
     /// and calls again.
     pub async fn next(&mut self) -> Option<CapturedFrame> {
         match self {
-            AtlasFrameSource::Engine(e) => e.next().await,
-            AtlasFrameSource::Synthetic(s) => s.next().await,
+            FrameFeed::Engine(e) => e.next().await,
+            FrameFeed::Synthetic(s) => s.next().await,
         }
     }
 }
@@ -195,7 +195,7 @@ impl FrameRouter {
                 tracing::warn!(
                     camera_id = %camera_id,
                     enabled = ?enabled,
-                    "atlas dropping frames: camera id not in the enabled set (engine/capture camera id mismatch)"
+                    "capture dropping frames: camera id not in the enabled set (engine/capture camera id mismatch)"
                 );
             }
             return;
@@ -207,7 +207,7 @@ impl FrameRouter {
         match sink.tx.try_send(CapturedFrame::from(frame)) {
             Ok(()) => {}
             Err(mpsc::error::TrySendError::Full(f)) => {
-                tracing::trace!(camera = %f.camera_id, "atlas_frame_dropped_loop_behind");
+                tracing::trace!(camera = %f.camera_id, "frame_dropped_loop_behind");
                 *self.drops.lock().entry(f.camera_id).or_default() += 1;
             }
             // The run's source was dropped; stop routing to it.
@@ -290,8 +290,7 @@ mod tests {
 
     #[tokio::test]
     async fn synthetic_source_replays_then_exhausts() {
-        let mut s =
-            AtlasFrameSource::Synthetic(SyntheticFrameSource::solid("front", 8, 8, 3, 0, 100));
+        let mut s = FrameFeed::Synthetic(SyntheticFrameSource::solid("front", 8, 8, 3, 0, 100));
         let f0 = s.next().await.unwrap();
         assert_eq!(f0.camera_id, "front");
         assert_eq!(f0.ts_ms, 0);

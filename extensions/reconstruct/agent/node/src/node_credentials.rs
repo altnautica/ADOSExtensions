@@ -287,17 +287,17 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let s = store(dir.path());
         let m = s
-            .mint("drone-1", &[crate::lanes::ATLAS_INGEST], 10)
+            .mint("drone-1", &[crate::lanes::CAPTURE_INGEST], 10)
             .unwrap();
         assert_eq!(m.workstation_node_id, "ws-node");
-        assert!(s.admits(&m.credential, &crate::lanes::ATLAS_INGEST));
+        assert!(s.admits(&m.credential, &crate::lanes::CAPTURE_INGEST));
         // Another lane is refused.
         assert!(!s.admits(&m.credential, &crate::lanes::JOB_SUBMIT));
         // A tampered secret is refused.
         let forged = format!("{}x", m.credential);
-        assert!(!s.admits(&forged, &crate::lanes::ATLAS_INGEST));
-        assert!(!s.admits("", &crate::lanes::ATLAS_INGEST));
-        assert!(!s.admits("nc1.nope.nope", &crate::lanes::ATLAS_INGEST));
+        assert!(!s.admits(&forged, &crate::lanes::CAPTURE_INGEST));
+        assert!(!s.admits("", &crate::lanes::CAPTURE_INGEST));
+        assert!(!s.admits("nc1.nope.nope", &crate::lanes::CAPTURE_INGEST));
     }
 
     #[test]
@@ -306,8 +306,8 @@ mod tests {
         let s = store(dir.path());
         let first = s.mint("drone-1", &crate::lanes::ALL, 1).unwrap();
         let second = s.mint("drone-1", &crate::lanes::ALL, 2).unwrap();
-        assert!(!s.admits(&first.credential, &crate::lanes::ATLAS_INGEST));
-        assert!(s.admits(&second.credential, &crate::lanes::ATLAS_INGEST));
+        assert!(!s.admits(&first.credential, &crate::lanes::CAPTURE_INGEST));
+        assert!(s.admits(&second.credential, &crate::lanes::CAPTURE_INGEST));
         assert_eq!(s.list().len(), 1);
     }
 
@@ -319,11 +319,11 @@ mod tests {
         let b = s.mint("drone-b", &crate::lanes::ALL, 1).unwrap();
         assert!(s.revoke(&a.id).unwrap());
         assert!(!s.revoke(&a.id).unwrap());
-        assert!(!s.admits(&a.credential, &crate::lanes::ATLAS_INGEST));
+        assert!(!s.admits(&a.credential, &crate::lanes::CAPTURE_INGEST));
 
         let reopened = store(dir.path());
-        assert!(!reopened.admits(&a.credential, &crate::lanes::ATLAS_INGEST));
-        assert!(reopened.admits(&b.credential, &crate::lanes::ATLAS_INGEST));
+        assert!(!reopened.admits(&a.credential, &crate::lanes::CAPTURE_INGEST));
+        assert!(reopened.admits(&b.credential, &crate::lanes::CAPTURE_INGEST));
         let listed = reopened.list();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].peer_device_id, "drone-b");

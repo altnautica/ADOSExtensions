@@ -19,10 +19,10 @@ use std::time::Duration;
 
 use ados_mapping_pose::budget::{self, Budget};
 use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
+use ados_mapping_pose::frame_source::{FrameFeed, FrameRouter};
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
-use ados_mapping_protocol::atlas::{LidarStatus, PoseSource};
+use ados_mapping_protocol::capture::{LidarStatus, PoseSource};
 use ados_protocol::shutdown::Shutdown;
 use ados_sdk::PluginContext;
 use parking_lot::Mutex;
@@ -136,7 +136,7 @@ impl Run {
             Some(PoseSource::Vio) => {
                 subscribe_frames(ctx, feeds, frames_subscribed).await;
                 let ids = HashSet::from([config.vio.left.clone(), config.vio.right.clone()]);
-                Some(AtlasFrameSource::Engine(feeds.router.attach(ids)))
+                Some(FrameFeed::Engine(feeds.router.attach(ids)))
             }
             _ => None,
         };

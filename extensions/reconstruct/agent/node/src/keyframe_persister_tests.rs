@@ -2,7 +2,7 @@ use super::*;
 use std::path::Path;
 
 use ados_capture_contract::{GeoAnchorDatum, GeoAnchorSource, Timebase};
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CameraRole, ImageEncoding, KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseSource,
     TimeAlignment,
 };
@@ -50,7 +50,7 @@ fn keyframe(session: &str, kf_id: u64, camera: &str, fx: f64) -> KeyframeEnvelop
             t: [1.5, -2.0, 0.5],
             cov: None,
         },
-        pose_cov: vec![0.0009; ados_mapping_protocol::atlas::POSE_COV_LEN],
+        pose_cov: vec![0.0009; ados_mapping_protocol::capture::POSE_COV_LEN],
         pose_source: PoseSource::FcEkf,
         time: TimeAlignment {
             t_exposure_mid_ns: 5_000_000_000 + kf_id * 100_000_000,
@@ -240,7 +240,7 @@ fn snapshot_writes_a_manifest_without_consuming_and_grows_with_the_session() {
     assert_eq!(t["frames"].as_array().unwrap().len(), 2);
 
     // The snapshot did NOT consume: more keyframes accumulate, and a later
-    // snapshot reflects the grown set (the live world model updates).
+    // snapshot reflects the grown set (the live reconstruction updates).
     assert_eq!(p.frame_count(&id), 2);
     p.persist(&keyframe("live", 2, "front", 900.0)).unwrap();
     let ds_dir = p.snapshot(&id).unwrap().expect("a grown snapshot");

@@ -28,7 +28,7 @@ pub enum ComputeRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ComputeJobKind {
-    /// Reconstruct a world model: from a keyframe bag (the live lane), or from
+    /// Reconstruct a reconstruction: from a keyframe bag (the live lane), or from
     /// an uploaded capture session with a preset (the staged pipeline).
     Reconstruct,
     /// A streaming session: frames in, detections back (for an NPU-less drone).

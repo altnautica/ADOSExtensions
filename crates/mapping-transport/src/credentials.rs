@@ -3,7 +3,7 @@
 //! A node's own pairing key means nothing to a workstation, so the ground
 //! station (which holds the owner key of both) asks the workstation to issue
 //! this node a credential scoped to the lanes it uses and installs it here. The
-//! lanes (the Atlas forwarder, the offload session, a ground station's Atlas
+//! lanes (the keyframe forwarder, the offload session, a ground station's capture
 //! relay) present it to the workstation that issued it, picked by that
 //! workstation's node id (advertised over mDNS, or read from a pinned node);
 //! see [`CredentialStore::select`].
@@ -37,8 +37,8 @@ fn detail(status: StatusCode, message: impl Into<String>) -> Response {
 /// The extension store's file name under the plugin data dir.
 pub const STORE_FILE: &str = "workstation-credentials.json";
 
-/// The lane the Atlas forwarder and the ground-station relay present.
-pub const ATLAS_INGEST_LANE: NodeLane = NodeLane::from_static("atlas.ingest");
+/// The lane the keyframe forwarder and the ground-station relay present.
+pub const CAPTURE_INGEST_LANE: NodeLane = NodeLane::from_static("capture.ingest");
 /// The lane the perception-offload session presents.
 pub const OFFLOAD_STREAM_LANE: NodeLane = NodeLane::from_static("offload.stream");
 /// The lane the session uploader presents (`/api/compute/sessions/<id>/...`).
@@ -281,7 +281,7 @@ mod tests {
         InstallRequest {
             workstation_node_id: node.into(),
             credential: cred.into(),
-            lanes: vec![ATLAS_INGEST_LANE, OFFLOAD_STREAM_LANE],
+            lanes: vec![CAPTURE_INGEST_LANE, OFFLOAD_STREAM_LANE],
             node_addr: None,
         }
     }
@@ -328,7 +328,7 @@ mod tests {
                 Request::post("/node-credential")
                     .header("content-type", "application/json")
                     .body(Body::from(
-                        r#"{"workstation_node_id":"ws-a","credential":"nc1.ID.SECRET","lanes":["atlas.ingest"],"node_addr":"192.0.2.5:9000"}"#,
+                        r#"{"workstation_node_id":"ws-a","credential":"nc1.ID.SECRET","lanes":["capture.ingest"],"node_addr":"192.0.2.5:9000"}"#,
                     ))
                     .unwrap(),
             )
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(body["node_addr"], "192.0.2.5:9000");
         assert_eq!(
             stores
-                .select(Some("ws-a"), None, &ATLAS_INGEST_LANE)
+                .select(Some("ws-a"), None, &CAPTURE_INGEST_LANE)
                 .as_deref(),
             Ok("nc1.ID.SECRET")
         );
@@ -399,8 +399,8 @@ mod tests {
         write_store(
             &ext,
             &[
-                ("ws-a", "ext-a", &[ATLAS_INGEST_LANE]),
-                ("ws-b", "ext-b", &[ATLAS_INGEST_LANE]),
+                ("ws-a", "ext-a", &[CAPTURE_INGEST_LANE]),
+                ("ws-b", "ext-b", &[CAPTURE_INGEST_LANE]),
             ],
         );
         let stores = CredentialStore {
@@ -409,19 +409,19 @@ mod tests {
         };
         assert_eq!(
             stores
-                .select(Some("ws-b"), Some("192.0.2.5"), &ATLAS_INGEST_LANE)
+                .select(Some("ws-b"), Some("192.0.2.5"), &CAPTURE_INGEST_LANE)
                 .as_deref(),
             Ok("ext-b")
         );
         // A node the store does not hold gets nothing, never another node's.
         assert_eq!(
-            stores.select(Some("ws-c"), None, &ATLAS_INGEST_LANE),
+            stores.select(Some("ws-c"), None, &CAPTURE_INGEST_LANE),
             Err(CredentialGap::NoCredential)
         );
-        assert_eq!(stores.issuers(&ATLAS_INGEST_LANE), ["ws-a", "ws-b"]);
+        assert_eq!(stores.issuers(&CAPTURE_INGEST_LANE), ["ws-a", "ws-b"]);
         // An empty id is no id: the pinned-address rule applies.
         assert_eq!(
-            stores.select(Some(""), None, &ATLAS_INGEST_LANE),
+            stores.select(Some(""), None, &CAPTURE_INGEST_LANE),
             Err(CredentialGap::Ambiguous)
         );
     }
@@ -557,11 +557,11 @@ mod tests {
             pin_key: PIN_KEY,
         };
         assert_eq!(
-            stores.select(Some("ws-a"), None, &ATLAS_INGEST_LANE),
+            stores.select(Some("ws-a"), None, &CAPTURE_INGEST_LANE),
             Err(CredentialGap::NoCredential)
         );
         assert_eq!(
-            stores.select(None, None, &ATLAS_INGEST_LANE),
+            stores.select(None, None, &CAPTURE_INGEST_LANE),
             Err(CredentialGap::NoCredential)
         );
         assert_eq!(
@@ -570,6 +570,6 @@ mod tests {
                 .as_deref(),
             Ok("ext-a")
         );
-        assert!(stores.issuers(&ATLAS_INGEST_LANE).is_empty());
+        assert!(stores.issuers(&CAPTURE_INGEST_LANE).is_empty());
     }
 }

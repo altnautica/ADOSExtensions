@@ -1,7 +1,7 @@
 //! [`ReplayPose`]: a fixed estimate list, for tests and simulation runs that
 //! carry a ground-truth trajectory.
 
-use ados_mapping_protocol::atlas::PoseSource;
+use ados_mapping_protocol::capture::PoseSource;
 
 use crate::pose::{PoseEstimate, PoseProvider, PoseTrack};
 

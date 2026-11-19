@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use crate::PIN_KEY;
-use ados_mapping_protocol::atlas::{PolarScan, VioHealth};
-use ados_mapping_transport::atlas_event_router;
+use ados_mapping_protocol::capture::{PolarScan, VioHealth, RECONSTRUCT_LIVE_SCAN_TOPIC};
+use ados_mapping_transport::event_router;
 use ados_mapping_transport::testing::FakeHost;
 use serde_json::json;
 
@@ -42,7 +42,7 @@ async fn scans_reach_the_node_only_while_navigation_streams_the_map() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(16);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move { axum::serve(listener, atlas_event_router(tx)).await.unwrap() });
+    tokio::spawn(async move { axum::serve(listener, event_router(tx)).await.unwrap() });
 
     let dir = tempfile::tempdir().unwrap();
     let host = FakeHost::new();
@@ -79,7 +79,7 @@ async fn scans_reach_the_node_only_while_navigation_streams_the_map() {
     host.deliver_event(SCAN_POLAR_TOPIC, scan(3));
     wait_for(&view, |v| v.forwarded == 1).await;
     let event = rx.recv().await.unwrap();
-    assert_eq!(event.topic, LIVE_SCAN_TOPIC);
+    assert_eq!(event.topic, RECONSTRUCT_LIVE_SCAN_TOPIC);
     assert_eq!(event.device_id.as_deref(), Some("drone-7"));
     let (sent, _) = PolarScan::decode(&event.payload).unwrap();
     assert_eq!((sent.t_ns, sent.range_mm.clone()), (3, vec![1000, 0, 2000]));

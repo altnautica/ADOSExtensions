@@ -87,9 +87,10 @@ An extension adds a capability to ADOS without forking it: a new panel in Missio
 | [siyi-pod](extensions/siyi-pod/README.md) | ADOS SIYI Optical Pod | Agent + GCS | Native SIYI optical-pod driver with per-model capability negotiation: gimbal, zoom, thermal, and a laser rangefinder with subject geolocation |
 | [thermal-camera-flir-lepton-usb](extensions/thermal-camera-flir-lepton-usb/README.md) | ADOS Thermal Camera FLIR Lepton USB UVC | Agent + GCS | FLIR Lepton 3.5 radiometric driver, palettes and spot metering with a GCS overlay. The capture path needs a UVC backend that this repository does not include, so it reports an explicit unavailable state instead of producing readings |
 | [navigation](extensions/navigation/README.md) | ADOS Navigation | Agent (Rust) + GCS | GPS-denied navigation from downward optical flow, with a camera-IMU calibration check and an advisory pre-arm status |
-| [world-engine](extensions/world-engine/README.md) | ADOS Capture and Reconstruct | Agent (Rust) + GCS | Beta. **Capture** on the aircraft: pose-tagged keyframes, the live map, sessions and the relay. **Reconstruct** on a LAN GPU node: splat, mesh, point cloud, ortho and DSM from keyframes posed by the flight controller, visual-inertial odometry or LiDAR SLAM. Plus perception offload for drones without an NPU. One signed archive provides both halves |
+| [capture](extensions/capture/README.md) | ADOS Capture | Agent (Rust) + GCS | Beta. Capture sessions on a drone or Visor: every camera, IMU, GNSS and Navigation's LiDAR, posed by Navigation or the flight controller; pose-tagged keyframes, session upload and the ground-station relay |
+| [reconstruct](extensions/reconstruct/README.md) | ADOS Reconstruct | Agent (Rust) + GCS | Beta. Reconstruction on a LAN GPU node: splat, mesh, point cloud, occupancy and indoor products from captured sessions, a live map from a streaming drone's scans, and perception offload for drones without an NPU |
 
-The 3D-capture archive names its two halves because they run on different machines and ask for different permissions: Capture reads the cameras and the flight controller's pose, Reconstruct owns the GPU and the job queue. An operator on a ground station installs neither. The archive ships both until they are packaged separately.
+Capture and Reconstruct ship as two archives because they run on different machines and ask for different permissions: Capture reads the cameras, the sensors and the pose; Reconstruct owns the GPU and the job queue. Navigation provides the pose and LiDAR both use.
 
 These extensions are under active development and grow with every release; build on them, or start your own, with the SDKs below.
 
@@ -184,18 +185,22 @@ extensions/                        first-party extensions, versioned independent
   siyi-pod/
   thermal-camera-flir-lepton-usb/
   navigation/
-  world-engine/
+  capture/
+  reconstruct/
 packages/
   create-ados-plugin/              scaffolder + templates
   plugin-sdk/                      TypeScript GCS SDK
   extension-ui/                    shared React UI primitives
+  mapping-ui/                      viewers, node client and UI kit shared by Capture and Reconstruct
 scripts/
   pack.sh                          build + manifest hash + zip to .adosplug
   pack-rust.sh                     same, for an extension whose agent half is a crate
   _pack-exclude.sh                 shared packing helpers: archive excludes, entrypoint guard
   build-rust.sh                    cross-compile a Rust agent half
-  pack-world-engine-local.sh       build, pack and sign a World Engine archive for bench tests
-  world-engine-payloads.tsv        World Engine release payloads fetched at install
+  pack-local.sh                    build, pack and sign a Capture or Reconstruct archive for bench tests
+  capture-payloads.tsv             Capture release payloads fetched at install
+  reconstruct-payloads.tsv         Reconstruct release payloads fetched at install
+  navigation-payloads.tsv          Navigation release payloads fetched at install
   lint-manifest.mjs                check a manifest against the code it describes
   lint-fixtures/                   fixtures for the manifest linter
   emit-reference.mjs               write docs/reference/extensions.json from the manifests
@@ -210,8 +215,9 @@ scripts/
   reference.yml                    keep docs/reference/extensions.json in sync
   release.yml                      build, sign, and release on tag push
   navigation-release.yml           Navigation release pipeline
-  world-engine-release.yml         World Engine release pipeline
-  world-engine-deep.yml            on-demand deep World Engine test run
+  capture-release.yml              Capture release pipeline
+  reconstruct-release.yml          Reconstruct release pipeline
+  reconstruct-deep.yml             on-demand real-model offload test
 ```
 
 `pnpm-workspace.yaml` declares the GCS halves and root tooling (run `pnpm install` at the repo root). `pyproject.toml` declares the agent halves and shared Python utilities. Each extension carries its own `CHANGELOG.md` and is versioned independently through its own release tags.
@@ -241,7 +247,7 @@ It fails on a declared permission with no call site, a declared UI slot with no 
 
 The Rust agent SDK is [`ados-sdk`](https://crates.io/crates/ados-sdk), published on crates.io with API docs on [docs.rs](https://docs.rs/ados-sdk). An out-of-tree plugin adds it with `cargo add ados-sdk`; its version tracks the agent release it targets. See the [Rust SDK guide](https://docs.altnautica.com/developers/sdk-rust).
 
-First-party extensions in this repo (`navigation`, `world-engine`) build against a sibling agent checkout instead, so the two repositories have to sit next to each other:
+First-party extensions in this repo (`navigation`, `capture`, `reconstruct`) build against a sibling agent checkout instead, so the two repositories have to sit next to each other:
 
 ```
 <root>/ADOSDroneAgent

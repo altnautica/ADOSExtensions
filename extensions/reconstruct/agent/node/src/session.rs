@@ -1,8 +1,8 @@
 //! The live (in-flight) reconstruction cadence.
 //!
 //! The post-flight pipeline ([`crate::pipeline`]) trains a deliverable from a
-//! finished bag. The live world model is the other path: keyframes arrive over
-//! the relay as the drone flies, and the node keeps the world model fresh by
+//! finished bag. The live reconstruction is the other path: keyframes arrive over
+//! the relay as the drone flies, and the node keeps the reconstruction fresh by
 //! periodically running a REAL reconstruct over the keyframes accumulated so far.
 //!
 //! "Live" here is honest, real periodic reconstruction — NOT per-frame
@@ -10,7 +10,7 @@
 //! scope). On a cadence (every N new keyframes, or every T since the last cycle,
 //! whichever comes first) the node finalizes a snapshot of the growing dataset
 //! and submits a fresh reconstruct job; each cycle yields a real `.ply` + `.rrd`
-//! tagged to the session so the GCS shows the latest world model.
+//! tagged to the session so the GCS shows the latest reconstruction.
 //!
 //! This module owns the PURE cadence decision: given the keyframes persisted and
 //! the time elapsed since the last cycle, and whether a cycle is still running,
@@ -27,13 +27,13 @@ pub const DEFAULT_RECONSTRUCT_EVERY_KEYFRAMES: u64 = 30;
 pub const DEFAULT_RECONSTRUCT_INTERVAL_MS: i64 = 20_000;
 /// The minimum keyframes a session needs before the FIRST periodic reconstruct
 /// is worth attempting — a reconstruct over one or two frames is not a useful
-/// world model.
+/// reconstruction.
 pub const DEFAULT_MIN_KEYFRAMES: u64 = 8;
 
 /// Live-reconstruction cadence configuration for a node.
 ///
 /// Opt-in: when `enabled` is false the node only reconstructs the final bag (the
-/// post-flight path), so a node that does not want a live-updating world model is
+/// post-flight path), so a node that does not want a live-updating reconstruction is
 /// byte-unchanged. The thresholds are the cadence: a new cycle becomes due once
 /// `every_keyframes` new keyframes have arrived since the last cycle OR
 /// `interval_ms` has elapsed since it, whichever first, provided the session has

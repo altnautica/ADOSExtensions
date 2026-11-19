@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
-    AtlasBearer, AtlasEvent, AuxLane, BearerKind, DetectionPublisher, DetectionTee, TransportError,
+    AuxLane, BearerKind, DetectionPublisher, DetectionTee, EventBearer, NodeEvent, TransportError,
 };
 use ados_protocol::aux_mux::AuxChannel;
 use ados_protocol::cloud_publish::{MAX_PAYLOAD, VISION_DETECTIONS_STREAM};
@@ -96,7 +96,7 @@ pub fn cloud_stream(topic: &str) -> Option<String> {
     valid.then(|| topic.to_string())
 }
 
-/// The last rung of the bearer ladder: the whole framed [`AtlasEvent`] published
+/// The last rung of the bearer ladder: the whole framed [`NodeEvent`] published
 /// on the plugin's own cloud stream for an off-LAN operator.
 ///
 /// The cloud lane carries descriptors, not artifacts: a framed event over the
@@ -127,7 +127,7 @@ impl CloudPublishBearer {
 }
 
 #[async_trait::async_trait]
-impl AtlasBearer for CloudPublishBearer {
+impl EventBearer for CloudPublishBearer {
     fn kind(&self) -> BearerKind {
         BearerKind::Cloud
     }
@@ -136,7 +136,7 @@ impl AtlasBearer for CloudPublishBearer {
         !self.marked_down()
     }
 
-    async fn send(&self, event: &AtlasEvent) -> Result<(), TransportError> {
+    async fn send(&self, event: &NodeEvent) -> Result<(), TransportError> {
         if self.marked_down() {
             return Err(TransportError::Unavailable);
         }
@@ -240,8 +240,8 @@ mod tests {
     use ados_protocol::framebus::{BoundingBox, Detection, VISION_DETECTION_VERSION};
     use rmpv::Value;
 
-    fn event(topic: &str, payload: Vec<u8>) -> AtlasEvent {
-        AtlasEvent::new(topic, None, payload)
+    fn event(topic: &str, payload: Vec<u8>) -> NodeEvent {
+        NodeEvent::new(topic, None, payload)
     }
 
     #[test]
@@ -269,7 +269,7 @@ mod tests {
         let pubs = host.cloud.lock();
         assert_eq!(pubs.len(), 1);
         assert_eq!(pubs[0].0, "capture.keyframe");
-        assert_eq!(AtlasEvent::decode(&pubs[0].1).unwrap(), ev);
+        assert_eq!(NodeEvent::decode(&pubs[0].1).unwrap(), ev);
     }
 
     #[tokio::test]

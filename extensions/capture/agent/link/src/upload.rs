@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ados_mapping_protocol::atlas::{CaptureState, ComputePlacement};
+use ados_mapping_protocol::capture::{CaptureState, ComputePlacement};
 use ados_mapping_transport::{BulkClient, BulkConfig, SessionPlan};
 use axum::http::StatusCode;
 use capture_service::storage::UPLOADED_MARKER;

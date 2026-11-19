@@ -1,14 +1,14 @@
 //! The private bus: the capture service publishes keyframes and capture state
 //! on a single Unix-socket broadcast, every message wrapped in an
-//! [`AtlasEvent`] tagged with its topic so a subscriber demultiplexes one
+//! [`NodeEvent`] tagged with its topic so a subscriber demultiplexes one
 //! connection. Heavy keyframe images (JPEG) ride the same bus; the frame cap is
 //! the plugin-envelope ceiling (4 MiB), generous for a compressed keyframe.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use ados_mapping_protocol::atlas::{
-    AtlasEvent, CaptureStatus, KeyframeEnvelope, CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC,
+use ados_mapping_protocol::capture::{
+    CaptureStatus, KeyframeEnvelope, NodeEvent, CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC,
 };
 use ados_protocol::frame::{encode_frame, FrameError, PLUGIN_MAX_FRAME};
 use ados_protocol::ipc::IpcBroadcast;
@@ -18,12 +18,12 @@ use ados_protocol::ipc::IpcBroadcast;
 /// giving a transient stall room before the slow subscriber is pruned.
 const BUS_QUEUE_DEPTH: usize = 16;
 
-/// Encode an [`AtlasEvent`] as a complete broadcast frame: a 4-byte big-endian
+/// Encode an [`NodeEvent`] as a complete broadcast frame: a 4-byte big-endian
 /// length prefix followed by the msgpack body.
 pub fn encode_event_frame(topic: &str, payload: Vec<u8>) -> anyhow::Result<Vec<u8>> {
     // Unstamped on the local publish bus; the drone-side forwarder stamps the
     // device id on egress (the single choke point every bearer passes through).
-    let ev = AtlasEvent::new(topic, None, payload);
+    let ev = NodeEvent::new(topic, None, payload);
     let body = ev
         .encode()
         .map_err(|e| anyhow::anyhow!("encode capture event: {e}"))?;
@@ -120,7 +120,7 @@ impl CapturePublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
+    use ados_mapping_protocol::capture::{CaptureState, PoseSource, VioHealth};
 
     fn status() -> CaptureStatus {
         CaptureStatus {
@@ -144,7 +144,7 @@ mod tests {
         let frame = encode_event_frame(CAPTURE_STATE_TOPIC, status.to_msgpack().unwrap()).unwrap();
         let len = u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize;
         assert_eq!(len, frame.len() - 4);
-        let ev = AtlasEvent::decode(&frame[4..]).unwrap();
+        let ev = NodeEvent::decode(&frame[4..]).unwrap();
         assert_eq!(ev.topic, CAPTURE_STATE_TOPIC);
         let back = CaptureStatus::from_msgpack(&ev.payload).unwrap();
         assert_eq!(back, status);
@@ -174,7 +174,7 @@ mod tests {
         sub.read_exact(&mut len).await.unwrap();
         let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
         sub.read_exact(&mut body).await.unwrap();
-        let ev = AtlasEvent::decode(&body).unwrap();
+        let ev = NodeEvent::decode(&body).unwrap();
         assert_eq!(ev.topic, CAPTURE_STATE_TOPIC);
         assert_eq!(CaptureStatus::from_msgpack(&ev.payload).unwrap(), status());
         // The socket lives until the last publisher goes.

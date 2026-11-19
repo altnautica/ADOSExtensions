@@ -12,8 +12,8 @@ pub use sweep::SweepCloud;
 
 use std::path::Path;
 
-use ados_mapping_protocol::atlas::nav::OCCUPANCY_TILE_CELLS;
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::nav::OCCUPANCY_TILE_CELLS;
+use ados_mapping_protocol::capture::{
     LiveOccupancy, LivePointCloud, MapPayloadKind, NavFrame, PolarScan, VioHealth,
 };
 

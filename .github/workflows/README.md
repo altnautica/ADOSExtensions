@@ -10,7 +10,9 @@ release manager can pick the pipeline that matches the situation.
 |--------------------------------|------------------------------------|-------------|
 | `release.yml`                  | `mavlink-gimbal-v2-v*`, `follow-me-v*`, `siyi-pod-v*` | Per-extension release: builds, packs with `scripts/pack.sh`, signs with `scripts/sign.sh`, publishes. The tag list is the publish allowlist. |
 | `navigation-release.yml`       | `navigation-v*`                    | Pipeline for navigation: cross-compiles the Rust agent half against the SDK revision pinned in `ADOS_AGENT_REV`, then packs with `scripts/pack-rust.sh` and signs. |
-| `world-engine-release.yml`     | `world-engine-v*`                  | Pipeline for the World Engine: builds its binaries per arch (aarch64-linux, x86_64-linux, aarch64-macos), attaches them and the Rerun viewer wasm to the release as install-time payloads, then packs the small archive with `scripts/pack-rust.sh --payload-manifest` and signs. |
+| `capture-release.yml`          | `capture-v*`                       | Pipeline for Capture: builds `capture-link` and `capture-service` per arch (aarch64-linux, x86_64-linux; the link on aarch64-macos), attaches them and the Rerun viewer wasm to the release as install-time payloads, then packs the small archive with `scripts/pack-rust.sh --payload-manifest` and signs. |
+| `reconstruct-release.yml`      | `reconstruct-v*`                   | Pipeline for Reconstruct: builds `reconstruct-offload` and `reconstruct-node` per arch (aarch64-linux, x86_64-linux, aarch64-macos; the node on x86_64-windows), attaches them and the Rerun viewer wasm as install-time payloads, then packs and signs the same way. |
+| `reconstruct-deep.yml`         | manual                             | The reconstruction node's real-model perception-offload test. |
 | `extensions.yml`               | pull request, push to main, called by each release workflow | Per-extension checks: validates the manifest against the agent's plugin manifest schema, runs `scripts/lint-manifest.mjs`, the GCS tests, the agent pytest suite when one exists, and `cargo test` for navigation. |
 | `rust-check.yml`               | pull request, push to main         | Builds, clippies and tests the Rust agent half against the pinned SDK revision. |
 | `typecheck.yml`                | pull request, push to main         | TypeScript typecheck across every GCS package. |
@@ -19,7 +21,7 @@ release manager can pick the pipeline that matches the situation.
 
 An extension is publishable only once a tag pattern for it exists in
 `release.yml`, or in the trigger of its own release workflow for the
-extensions that have one (`navigation-v*`, `world-engine-v*`; never both,
+extensions that have one (`navigation-v*`, `capture-v*`, `reconstruct-v*`; never both,
 or one tag publishes twice). Adding that pattern is the act that makes its archive
 publishable, so do not add one for an extension whose advertised
 capability cannot execute:
@@ -52,22 +54,23 @@ it, not secrets to configure.
 
 | Secret name                  | Format                                   | Used by |
 |------------------------------|------------------------------------------|--------|
-| `ALTNAUTICA_PLUGIN_KEY_A`    | Base64-encoded Ed25519 private PEM (PKCS#8) | `release.yml`, `navigation-release.yml`, `world-engine-release.yml` |
+| `ALTNAUTICA_PLUGIN_KEY_A`    | Base64-encoded Ed25519 private PEM (PKCS#8) | `release.yml`, `navigation-release.yml`, `capture-release.yml`, `reconstruct-release.yml` |
 
 Set secrets via GitHub repo settings: **Settings > Secrets and
 variables > Actions**.
 
-## World Engine payloads
+## Capture and Reconstruct payloads
 
-The World Engine archive carries no binaries. Its manifest lists each binary
-and the Rerun viewer wasm under `agent.payloads`, and a node fetches only the
-entries for its own arch and profile at install. The asset table lives in
-`scripts/world-engine-payloads.tsv`. To pack the same way on an Apple Silicon
-Mac for bench testing (aarch64-macos payloads only):
+The Capture and Reconstruct archives carry no binaries. Each manifest lists
+its binaries and the Rerun viewer wasm under `agent.payloads`, and a node
+fetches only the entries for its own arch and profile at install. The asset
+tables live in `scripts/capture-payloads.tsv` and
+`scripts/reconstruct-payloads.tsv`. To pack the same way locally for bench
+testing (this machine's arch only):
 
 ```bash
-ADOS_SIGNING_KEY=/path/to/bench-key.pem \
-  scripts/pack-world-engine-local.sh /tmp/we-bench https://<allowlisted-host>/<path>
+ADOS_SIGNING_KEY=/path/to/bench-key.pem ADOS_SIGNING_KEY_ID=<signer-id> \
+  scripts/pack-local.sh capture /tmp/capture-bench https://<allowlisted-host>/<path>
 ```
 
 Serve the output directory at that base URL. The host accepts only an

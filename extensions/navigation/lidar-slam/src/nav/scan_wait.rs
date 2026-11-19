@@ -72,7 +72,7 @@ impl ScanWait {
 mod tests {
     use super::*;
     use ados_mapping_pose::{interpolate, se3};
-    use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
+    use ados_mapping_protocol::capture::{PoseSource, VioHealth};
 
     fn scan(t_ns: u64) -> LidarScan {
         LidarScan {

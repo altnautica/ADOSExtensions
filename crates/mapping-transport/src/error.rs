@@ -1,6 +1,6 @@
 //! Transport errors.
 
-/// A failure sending an Atlas event over a bearer.
+/// A failure sending an node event over a bearer.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
     /// The bearer's channel/socket is closed (the receiver is gone).

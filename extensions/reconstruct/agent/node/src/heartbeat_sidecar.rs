@@ -86,10 +86,9 @@ impl ComputeHeartbeatSidecar {
     }
 }
 
-/// The `status` telemetry payload the node publishes: its compute status, and
-/// `atlas: null` (the drone half owns the atlas member).
+/// The `status` telemetry payload the node publishes: `{"compute": …}`.
 pub fn status_payload(compute: &ComputeHeartbeatSidecar) -> serde_json::Value {
-    serde_json::json!({ "atlas": null, "compute": compute })
+    serde_json::json!({ "compute": compute })
 }
 
 #[cfg(test)]
@@ -159,10 +158,10 @@ mod tests {
     }
 
     #[test]
-    fn the_status_payload_carries_the_compute_status_and_a_null_atlas() {
+    fn the_status_payload_carries_the_compute_status_alone() {
         let sidecar = ComputeHeartbeatSidecar::from_heartbeat(&heartbeat(), sample_gpu(), 1700);
         let v = status_payload(&sidecar);
-        assert!(v["atlas"].is_null());
+        assert_eq!(v.as_object().map(|o| o.len()), Some(1));
         assert_eq!(v["compute"], serde_json::to_value(&sidecar).unwrap());
         assert_eq!(v["compute"]["computeRole"], "master");
         assert_eq!(v["compute"]["gpu"]["cores"], 16);

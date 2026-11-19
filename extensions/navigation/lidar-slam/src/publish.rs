@@ -3,7 +3,7 @@
 //! the host (`event.publish`, [`forward`]), so a slow host call never stalls
 //! the pose lane, and a test reads the queue directly.
 
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     LidarStatus, LiveOccupancy, MapStatus, PolarScan, PoseDescriptor, PoseTrackBatch, ScanChunk,
     ScanDescriptor,
 };

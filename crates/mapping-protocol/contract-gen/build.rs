@@ -214,7 +214,7 @@ fn gen_proto_types(contract_proto: &Path, foxglove: &Path, out: &Path) {
     fs::write(out.join("capture_fds.bin"), lean.encode_to_vec()).unwrap();
     prost_build::Config::new()
         .enable_type_names()
-        // Contract messages also cross the msgpack Atlas envelope (an IMU
+        // Contract messages also cross the msgpack event envelope (an IMU
         // window inside a keyframe), so they carry serde as well.
         .type_attribute(
             ".ados.capture.v1",

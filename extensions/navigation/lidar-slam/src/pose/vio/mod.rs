@@ -36,7 +36,7 @@ use std::sync::Arc;
 
 use ados_capture_contract::v1::ImuBatch;
 use ados_capture_contract::Rig;
-use ados_mapping_protocol::atlas::PoseSource;
+use ados_mapping_protocol::capture::PoseSource;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;

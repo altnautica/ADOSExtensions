@@ -60,7 +60,7 @@ const INSTALL = "example/node-credential";
 /** A test extension's lanes: a drone presents two, a ground station one. */
 function lanesFor(profile: InlineNodeSummary["profile"]): readonly NodeLane[] | null {
   if (isComputeProfile(profile)) return null;
-  return profile === "ground-station" ? ["atlas.ingest"] : ["atlas.ingest", "jobs.submit"];
+  return profile === "ground-station" ? ["capture.ingest"] : ["capture.ingest", "jobs.submit"];
 }
 
 const WS = node("ws", "workstation");
@@ -79,7 +79,7 @@ function link(over: Partial<WorkstationLink>): WorkstationLink {
 }
 
 function listed(id: string, current: boolean): ListedNodeCredential {
-  return { id, peerDeviceId: "drone", lanes: ["atlas.ingest"], createdAtMs: 1, current };
+  return { id, peerDeviceId: "drone", lanes: ["capture.ingest"], createdAtMs: 1, current };
 }
 
 const KEY = workstationLinkKey("ws", "drone");
@@ -107,7 +107,7 @@ describe("planProvisioning", () => {
     ]);
     // Each peer gets the lanes the extension gives its profile.
     expect(plan[0]?.lanes).toContain("jobs.submit");
-    expect(plan[1]?.lanes).toEqual(["atlas.ingest"]);
+    expect(plan[1]?.lanes).toEqual(["capture.ingest"]);
   });
 
   it("needs a workstation and a peer, both reachable", () => {
@@ -167,7 +167,7 @@ describe("provisionAndRecord", () => {
   const ISSUED = {
     id: "CRED1",
     peer_device_id: "drone",
-    lanes: ["atlas.ingest", "jobs.submit"],
+    lanes: ["capture.ingest", "jobs.submit"],
     created_at_ms: 5,
     credential: "nc1.CRED1.SECRET",
     workstation_node_id: "compute-abc",
@@ -181,7 +181,7 @@ describe("provisionAndRecord", () => {
     const ws = stubAgent(() => json(201, ISSUED));
     const drone = stubAgent(() => json(200, { installed: true }));
     const result = await provisionAndRecord(
-      { workstation: WS, peer: DRONE, lanes: ["atlas.ingest", "jobs.submit"] },
+      { workstation: WS, peer: DRONE, lanes: ["capture.ingest", "jobs.submit"] },
       agents(ws, drone),
       agents(ws, drone),
       INSTALL,
@@ -195,7 +195,7 @@ describe("provisionAndRecord", () => {
     expect(issue.init.method).toBe("POST");
     expect(JSON.parse(String(issue.init.body))).toEqual({
       peer_device_id: "drone",
-      lanes: ["atlas.ingest", "jobs.submit"],
+      lanes: ["capture.ingest", "jobs.submit"],
     });
     // Installed on the drone, filed under the id the workstation advertises.
     const install = callAt(drone.fetch);
@@ -203,7 +203,7 @@ describe("provisionAndRecord", () => {
     expect(JSON.parse(String(install.init.body))).toEqual({
       workstation_node_id: "compute-abc",
       credential: "nc1.CRED1.SECRET",
-      lanes: ["atlas.ingest", "jobs.submit"],
+      lanes: ["capture.ingest", "jobs.submit"],
     });
     expect(useWorkstationLinkStore.getState().links[KEY]?.state).toBe("provisioned");
     expect(useWorkstationLinkStore.getState().inFlight[KEY]).toBeUndefined();
@@ -213,7 +213,7 @@ describe("provisionAndRecord", () => {
     const ws = stubAgent(() => json(409, { error: "this node is not paired" }));
     const drone = stubAgent(() => json(200, { installed: true }));
     const result = await provisionAndRecord(
-      { workstation: WS, peer: DRONE, lanes: ["atlas.ingest"] },
+      { workstation: WS, peer: DRONE, lanes: ["capture.ingest"] },
       agents(ws, drone),
       agents(ws, drone),
       INSTALL,
@@ -228,7 +228,7 @@ describe("provisionAndRecord", () => {
     const ws = stubAgent(() => json(201, ISSUED));
     const drone = stubAgent(() => json(500, { detail: "store is read-only" }));
     const result = await provisionAndRecord(
-      { workstation: WS, peer: DRONE, lanes: ["atlas.ingest"] },
+      { workstation: WS, peer: DRONE, lanes: ["capture.ingest"] },
       agents(ws, drone),
       agents(ws, drone),
       INSTALL,
@@ -242,7 +242,7 @@ describe("provisionAndRecord", () => {
 
   it("records a host refusal as a failed attempt and clears the in-flight mark", async () => {
     const result = await provisionAndRecord(
-      { workstation: WS, peer: DRONE, lanes: ["atlas.ingest"] },
+      { workstation: WS, peer: DRONE, lanes: ["capture.ingest"] },
       () => {
         throw new Error("node_unreachable");
       },
@@ -258,7 +258,7 @@ describe("provisionAndRecord", () => {
     const ws = stubAgent(() => json(201, ISSUED));
     const drone = stubAgent(() => json(200, { installed: true }));
     await provisionAndRecord(
-      { workstation: WS, peer: DRONE, lanes: ["atlas.ingest"] },
+      { workstation: WS, peer: DRONE, lanes: ["capture.ingest"] },
       agents(ws, drone),
       agents(ws, drone),
       INSTALL,

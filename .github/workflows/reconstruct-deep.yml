@@ -1,7 +1,7 @@
-name: world-engine-deep
+name: reconstruct-deep
 
-# The World Engine node's real-model perception-offload test
-# (`extensions/world-engine/agent/node/tests/onnx_offload.rs`) runs a real ONNX
+# The reconstruction node's real-model perception-offload test
+# (`extensions/reconstruct/agent/node/tests/onnx_offload.rs`) runs a real ONNX
 # detector against real pixels. It is `#[ignore]`d and feature-gated on `onnx`,
 # so the push-path `rust-check` compiles nothing of it; this workflow is the
 # only place it executes.
@@ -48,8 +48,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: arm64-world-engine-deep-${{ hashFiles('Cargo.lock') }}
-          restore-keys: arm64-world-engine-deep-
+          key: arm64-reconstruct-deep-${{ hashFiles('Cargo.lock') }}
+          restore-keys: arm64-reconstruct-deep-
 
       - name: Fetch the COCO model when a source is configured
         id: model
@@ -65,7 +65,7 @@ jobs:
               echo
               echo "\`ADOS_TEST_COCO_ONNX_URL\` is not set on this repository, so the"
               echo "COCO ONNX model cannot be fetched and"
-              echo "\`world-engine-node/tests/onnx_offload.rs\` did not execute."
+              echo "\`reconstruct-node/tests/onnx_offload.rs\` did not execute."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "configured=no" >> "$GITHUB_OUTPUT"
             echo "NOTICE: ADOS_TEST_COCO_ONNX_URL is unset; the real-model test did not run."
@@ -98,7 +98,7 @@ jobs:
           set -uo pipefail
           # ADOS_TEST_RTSP is left unset on purpose: offload_live_rtsp needs a
           # live camera, which a hosted runner does not have.
-          cargo test --features onnx -p world-engine-node --test onnx_offload -- --ignored --nocapture
+          cargo test --features onnx -p reconstruct-node --test onnx_offload -- --ignored --nocapture
 
       - name: Record the outcome
         if: always()
@@ -110,5 +110,5 @@ jobs:
           {
             echo
             echo "Never runnable on a hosted runner, by design:"
-            echo "- \`world-engine-node/tests/offload_live_rtsp.rs\` — needs a live RTSP camera"
+            echo "- \`reconstruct-node/tests/offload_live_rtsp.rs\` — needs a live RTSP camera"
           } >> "$GITHUB_STEP_SUMMARY"

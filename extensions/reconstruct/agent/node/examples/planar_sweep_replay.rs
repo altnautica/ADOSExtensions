@@ -19,7 +19,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use ados_mapping_protocol::atlas::{PolarScan, VioHealth};
+use ados_mapping_protocol::capture::{PolarScan, VioHealth};
 use reconstruct_node::recon::planar_sweep::{close_loops, sweep};
 
 /// The sweep's z-up world (`x`, `-y`, `-z`) back to `map_ned`.

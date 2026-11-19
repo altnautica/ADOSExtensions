@@ -8,8 +8,8 @@
 
 use std::f32::consts::TAU;
 
-use ados_mapping_protocol::atlas::nav::SCAN_BINS;
-use ados_mapping_protocol::atlas::{NavFrame, PolarScan, ScanDescriptor, VioHealth};
+use ados_mapping_protocol::capture::nav::SCAN_BINS;
+use ados_mapping_protocol::capture::{NavFrame, PolarScan, ScanDescriptor, VioHealth};
 
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::se3;

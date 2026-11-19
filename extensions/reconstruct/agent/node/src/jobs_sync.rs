@@ -3,7 +3,7 @@
 //! The node mirrors its reconstruct jobs into the extension's cloud records
 //! (collection [`JOBS_COLLECTION`], one record per job id, subject = the drone
 //! that captured it) through the plugin host's `cloud.records.put`, so the GCS
-//! can show a drone's world models when no compute node is reachable on the
+//! can show a drone's reconstructions when no compute node is reachable on the
 //! LAN. The GCS reads the reconstruction LOCAL-FIRST off the node; the cloud
 //! record is the secondary/remote path.
 //!
@@ -30,12 +30,12 @@ pub const JOBS_COLLECTION: &str = "jobs";
 /// One reconstruct job in the camelCase wire shape the GCS reads.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AtlasJobEntry {
+pub struct CloudJobEntry {
     /// The capturing drone; never empty (a job without one is skipped upstream).
     pub device_id: String,
-    /// The capture session the world model reconstructs.
+    /// The capture session the reconstruction reconstructs.
     pub session_id: String,
-    /// The job kind (always `reconstruct` for a world model).
+    /// The job kind (always `reconstruct` for a reconstruction).
     pub kind: String,
     /// The status vocabulary the GCS reads: `queued` / `running` / `done` /
     /// `error` / `cancelled` (mapped from the engine state).
@@ -59,12 +59,12 @@ pub struct AtlasJobEntry {
 
 /// A session's representative job: the job id (the record key) and its entry.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AtlasJob {
+pub struct CloudJob {
     pub job_id: String,
-    pub entry: AtlasJobEntry,
+    pub entry: CloudJobEntry,
 }
 
-impl AtlasJob {
+impl CloudJob {
     /// The record body: the entry's fields plus this node's identity as both
     /// the poster and the compute node (the reconstructor is this node).
     pub fn record_data(&self, compute_node_id: &str) -> serde_json::Value {
@@ -79,7 +79,7 @@ impl AtlasJob {
 
 /// Map the engine's job state to the status vocabulary the GCS reads
 /// (`done`/`error`, not `completed`/`failed`).
-fn cmd_atlas_status(state: ComputeJobState) -> &'static str {
+fn cloud_job_status(state: ComputeJobState) -> &'static str {
     match state {
         ComputeJobState::Queued => "queued",
         ComputeJobState::Running => "running",
@@ -109,7 +109,7 @@ fn str_param<'a>(job: &'a JobRecord, key: &str) -> Option<&'a str> {
 }
 
 /// Prefer a completed job over a non-completed one; among equal completeness, the
-/// newer update wins. So a session's row reflects its latest completed world model
+/// newer update wins. So a session's row reflects its latest completed reconstruction
 /// (else the latest in-flight job, so the operator still sees progress).
 fn is_better(new: &JobRecord, cur: &JobRecord) -> bool {
     let rank = |s: ComputeJobState| (s == ComputeJobState::Completed) as u8;
@@ -123,7 +123,7 @@ fn is_better(new: &JobRecord, cur: &JobRecord) -> bool {
 /// Build the reconstruct-job entries from the store: one representative per
 /// session that carries a capturing drone id, with the honest backend + artifact
 /// lifted from the job's first output. Sorted by session id.
-pub fn build_atlas_jobs(store: &JobStore) -> Result<Vec<AtlasJob>, ComputeError> {
+pub fn build_cloud_jobs(store: &JobStore) -> Result<Vec<CloudJob>, ComputeError> {
     // Collapse each session to one representative reconstruct job.
     let mut by_session: HashMap<String, JobRecord> = HashMap::new();
     for job in store.list_jobs()? {
@@ -178,12 +178,12 @@ pub fn build_atlas_jobs(store: &JobStore) -> Result<Vec<AtlasJob>, ComputeError>
         }
 
         let terminal = job.state.is_terminal();
-        jobs.push(AtlasJob {
-            entry: AtlasJobEntry {
+        jobs.push(CloudJob {
+            entry: CloudJobEntry {
                 device_id,
                 session_id,
                 kind: "reconstruct".into(),
-                status: cmd_atlas_status(job.state).into(),
+                status: cloud_job_status(job.state).into(),
                 input_bag: job.dataset_id.clone(),
                 output_url,
                 metadata: serde_json::Value::Object(metadata),
@@ -223,7 +223,7 @@ impl JobsCloudSync {
 
     /// The records among `jobs` that are new or differ from what the cloud
     /// last accepted.
-    pub fn pending(&self, jobs: &[AtlasJob], compute_node_id: &str) -> Vec<PendingRecord> {
+    pub fn pending(&self, jobs: &[CloudJob], compute_node_id: &str) -> Vec<PendingRecord> {
         jobs.iter()
             .filter_map(|job| {
                 let data = job.record_data(compute_node_id);
@@ -320,7 +320,7 @@ mod tests {
         out.meta = serde_json::json!({ "gaussian_count": 250000, "backend": "brush" });
         store.insert_output(&out).unwrap();
 
-        let jobs = build_atlas_jobs(&store).unwrap();
+        let jobs = build_cloud_jobs(&store).unwrap();
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].job_id, "recon-s1");
         let e = &jobs[0].entry;
@@ -349,7 +349,7 @@ mod tests {
             "drone-1",
             ComputeJobState::Running,
         )]);
-        let jobs = build_atlas_jobs(&store).unwrap();
+        let jobs = build_cloud_jobs(&store).unwrap();
         let job = jobs[0].record_data("ws-7");
         // The keys the GCS cloud-jobs reader reads, camelCased.
         assert_eq!(job["deviceId"], "drone-1");
@@ -369,13 +369,13 @@ mod tests {
         let mut job = recon_job("recon-x", "sx", "drone-x", ComputeJobState::Completed);
         job.params = serde_json::json!({ "backend": "brush", "session_id": "sx" });
         let store = store_with(&[job]);
-        assert!(build_atlas_jobs(&store).unwrap().is_empty());
+        assert!(build_cloud_jobs(&store).unwrap().is_empty());
     }
 
     #[test]
     fn offload_jobs_and_sessionless_jobs_are_excluded() {
         let store = JobStore::open_in_memory().unwrap();
-        // An offload job (no world model, no session) is not a reconstruct.
+        // An offload job (no reconstruction, no session) is not a reconstruct.
         let offload = JobRecord {
             id: "off-1".into(),
             kind: ComputeJobKind::PerceptionOffload,
@@ -389,20 +389,20 @@ mod tests {
             updated_ms: 2,
         };
         store.submit_job(&offload).unwrap();
-        assert!(build_atlas_jobs(&store).unwrap().is_empty());
+        assert!(build_cloud_jobs(&store).unwrap().is_empty());
     }
 
     #[test]
     fn the_representative_prefers_the_completed_cycle_over_a_running_one() {
         // A live session with two cycles: c0 completed, c1 running. The row shows
-        // the completed world model, not the in-flight cycle (no done→running
+        // the completed reconstruction, not the in-flight cycle (no done→running
         // regression).
         let mut c0 = recon_job("recon-s-c0", "s", "drone-1", ComputeJobState::Completed);
         c0.updated_ms = 300;
         let mut c1 = recon_job("recon-s-c1", "s", "drone-1", ComputeJobState::Running);
         c1.updated_ms = 400; // newer, but not completed
         let store = store_with(&[c0, c1]);
-        let jobs = build_atlas_jobs(&store).unwrap();
+        let jobs = build_cloud_jobs(&store).unwrap();
         assert_eq!(jobs.len(), 1, "one row per session");
         assert_eq!(jobs[0].job_id, "recon-s-c0");
         assert_eq!(jobs[0].entry.status, "done");
@@ -416,7 +416,7 @@ mod tests {
             "drone-1",
             ComputeJobState::Failed,
         )]);
-        let jobs = build_atlas_jobs(&store).unwrap();
+        let jobs = build_cloud_jobs(&store).unwrap();
         assert_eq!(jobs[0].entry.status, "error");
         assert_eq!(jobs[0].entry.finished_at, Some(200));
     }
@@ -430,7 +430,7 @@ mod tests {
             ComputeJobState::Running,
         )]);
         let mut sync = JobsCloudSync::new();
-        let jobs = build_atlas_jobs(&store).unwrap();
+        let jobs = build_cloud_jobs(&store).unwrap();
 
         // New: due, with the capturing drone as the subject.
         let due = sync.pending(&jobs, "ws-7");
@@ -449,7 +449,7 @@ mod tests {
         store
             .set_job_state("recon-s1", ComputeJobState::Completed, 1.0, None, None, 900)
             .unwrap();
-        let jobs = build_atlas_jobs(&store).unwrap();
+        let jobs = build_cloud_jobs(&store).unwrap();
         let due = sync.pending(&jobs, "ws-7");
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].data["status"], "done");

@@ -10,7 +10,7 @@
 #   scripts/pack-rust.sh _hello-rust
 #   scripts/pack-rust.sh _hello-rust aarch64-unknown-linux-musl
 #   scripts/pack-rust.sh ./extensions/_hello-rust
-#   scripts/pack-rust.sh world-engine --payload-manifest payloads/payloads.tsv
+#   scripts/pack-rust.sh capture --payload-manifest payloads/payloads.tsv
 #
 # Binary mode (the default) is for a single-binary extension:
 #   1. Reads the manifest's agent.entrypoint, which for a rust runtime is the

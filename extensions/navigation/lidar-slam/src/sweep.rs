@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 
 use base64::Engine as _;
 
-use ados_mapping_protocol::atlas::LivePointCloud;
+use ados_mapping_protocol::capture::LivePointCloud;
 
 /// Deltas kept.
 pub const HISTORY: usize = 64;
@@ -114,7 +114,7 @@ pub fn encode(seq: u64, voxel_m: f32, reset: bool, points: &[u8]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::{MapPayloadKind, NavFrame};
+    use ados_mapping_protocol::capture::{MapPayloadKind, NavFrame};
 
     fn delta(seq: u64, voxel_m: f32, n: usize) -> LivePointCloud {
         let bytes: Vec<u8> = (0..n * 12).map(|i| (seq as usize + i) as u8).collect();

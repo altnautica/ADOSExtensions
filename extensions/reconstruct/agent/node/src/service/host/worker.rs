@@ -1,5 +1,5 @@
 //! The host-service worker: streaming offload sessions, staged jobs, and the
-//! live-lane reconstructions whose generations fan out as world-model data.
+//! live-lane reconstructions whose generations fan out as reconstruction data.
 
 use super::*;
 
@@ -79,7 +79,7 @@ pub(super) async fn worker_loop(
                 // runtime thread so a long reconstruction never starves the HTTP
                 // surface. The owned job + input move into the blocking task and
                 // back out (PreparedInput is not Clone, and both are needed after
-                // the run — input for the rerun/world-model write, job for finalize).
+                // the run — input for the rerun/reconstruction write, job for finalize).
                 let now = now_ms();
                 let failed_job = job.clone();
                 let joined = tokio::task::spawn_blocking(move || {
@@ -110,10 +110,10 @@ pub(super) async fn worker_loop(
                         continue;
                     }
                 };
-                // Write the Rerun world-model .rrd from the real capture + the
+                // Write the Rerun reconstruction .rrd from the real capture + the
                 // reconstruction geometry so the GCS World viewer renders real data
                 // (camera trajectory + the reconstructed point cloud). Reconstruct
-                // jobs only; an offload job has no world model. Best-effort: a write
+                // jobs only; an offload job has no reconstruction. Best-effort: a write
                 // fault is logged and the job still completes with its other output.
                 if let PreparedInput::Reconstruct(dataset) = &input {
                     let input_path = dataset
@@ -129,15 +129,15 @@ pub(super) async fn worker_loop(
                         Ok(Some(rerun_out)) => result.outputs.push(rerun_out),
                         Ok(None) => {}
                         Err(e) => {
-                            tracing::warn!(job = %job.id, error = %e, "rerun world-model write failed")
+                            tracing::warn!(job = %job.id, error = %e, "rerun reconstruction write failed")
                         }
                     }
                 }
                 for output in &mut result.outputs {
                     rewrite_output_to_artifact_url(output, &work_root, &public_base);
                 }
-                // Publish the generation as shared world-model DATA before
-                // finalize consumes the result. This is the step that turns Atlas
+                // Publish the generation as shared reconstruction DATA before
+                // finalize consumes the result. This is the step that turns captured
                 // from a private pipeline ending in a viewer into a consumable
                 // data product: a plugin, a planner, or the GCS reads the
                 // descriptors and pulls only the artifact it needs.
@@ -181,7 +181,7 @@ pub(super) async fn worker_loop(
     }
 }
 
-/// Publish one completed reconstruction generation onto the world-model
+/// Publish one completed reconstruction generation onto the reconstruction
 /// descriptor stream, tagged with the drone that captured it.
 ///
 /// Derived facts only: a gaussian count comes from the backend's own metadata or
@@ -199,15 +199,15 @@ pub(super) async fn publish_world_generation(
     placement: &ados_capture_contract::Placement,
 ) {
     // A reconstruct job always carries its capture session; without one there is
-    // nothing to attribute a world model to.
+    // nothing to attribute a reconstruction to.
     let Some(session_id) = job.params.get("session_id").and_then(|v| v.as_str()) else {
         return;
     };
     // The drone the descriptors belong to. Absent on a pre-attribution capture,
     // and the per-device stream cannot route without it, so skip rather than
-    // publish a world model under an empty device id.
+    // publish a reconstruction under an empty device id.
     let Some(device_id) = job.params.get("device_id").and_then(|v| v.as_str()) else {
-        tracing::debug!(job = %job.id, "world-model generation has no device attribution; not published");
+        tracing::debug!(job = %job.id, "reconstruction generation has no device attribution; not published");
         return;
     };
     let generation = job
@@ -241,13 +241,13 @@ pub(super) async fn publish_world_generation(
                 dims = ?desc.dims,
                 resolution_m = desc.resolution_m,
                 voxels = grid.distances.len(),
-                "atlas esdf derived"
+                "esdf derived"
             );
             set.occupancy = Some(desc);
         }
         Ok(Ok(None)) => {}
-        Ok(Err(e)) => tracing::warn!(job = %job.id, error = %e, "atlas_esdf_derive_failed"),
-        Err(e) => tracing::warn!(job = %job.id, error = %e, "atlas_esdf_task_panicked"),
+        Ok(Err(e)) => tracing::warn!(job = %job.id, error = %e, "esdf_derive_failed"),
+        Err(e) => tracing::warn!(job = %job.id, error = %e, "esdf_task_panicked"),
     }
 
     if set.is_empty() {
@@ -256,19 +256,19 @@ pub(super) async fn publish_world_generation(
     let mut published = 0usize;
     for (topic, payload) in [
         (
-            ados_mapping_protocol::atlas::PLUGIN_ATLAS_SPLAT_TOPIC,
+            ados_mapping_protocol::capture::RECONSTRUCT_SPLAT_TOPIC,
             set.splat.as_ref().map(|d| d.to_msgpack()),
         ),
         (
-            ados_mapping_protocol::atlas::PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+            ados_mapping_protocol::capture::RECONSTRUCT_POINTCLOUD_TOPIC,
             set.pointcloud.as_ref().map(|d| d.to_msgpack()),
         ),
         (
-            ados_mapping_protocol::atlas::PLUGIN_ATLAS_MESH_TOPIC,
+            ados_mapping_protocol::capture::RECONSTRUCT_MESH_TOPIC,
             set.mesh.as_ref().map(|d| d.to_msgpack()),
         ),
         (
-            ados_mapping_protocol::atlas::PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+            ados_mapping_protocol::capture::RECONSTRUCT_OCCUPANCY_TOPIC,
             set.occupancy.as_ref().map(|d| d.to_msgpack()),
         ),
     ] {
@@ -276,7 +276,7 @@ pub(super) async fn publish_world_generation(
             Some(Ok(body)) => {
                 world.publish(
                     device_id,
-                    AtlasEvent::new(topic, Some(device_id.to_string()), body),
+                    NodeEvent::new(topic, Some(device_id.to_string()), body),
                 );
                 published += 1;
             }
@@ -293,6 +293,6 @@ pub(super) async fn publish_world_generation(
         generation,
         descriptors = published,
         subscribers = world.subscriber_count(),
-        "world-model generation published as shared data"
+        "reconstruction generation published as shared data"
     );
 }

@@ -16,7 +16,7 @@
 //! `map_ned` starts as the SLAM world rotated to north, origin at the first
 //! scan. Its north ([`MapNorth`]) comes from one of two places:
 //!
-//! - **Declared** (`atlas.takeoff_heading_deg` set): latched once at the first
+//! - **Declared** (`navigation.takeoff_heading_deg` set): latched once at the first
 //!   pose from the configured heading the vehicle faces there, and never taken
 //!   from the flight controller. This is the north a flight controller may
 //!   take its yaw from (ArduPilot `EK3_SRCn_YAW` 6): with the FC's yaw coming
@@ -47,7 +47,7 @@ mod tests;
 use std::path::PathBuf;
 
 use ados_livemap::LiveMap;
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapStatus, NavFrame, NavPoseSource,
     PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, VioHealth,
 };

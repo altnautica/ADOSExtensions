@@ -1,4 +1,4 @@
-# Livox SDK2 point-cloud and IMU packet decoding for the World Engine capture
+# Livox SDK2 point-cloud and IMU packet decoding for Navigation's lidar-slam
 # service: a pure-Rust decoder of the LiDAR's Ethernet data packets, scan
 # assembly and device-to-host time mapping. The optional `sdk` feature loads
 # the upstream Livox SDK2 shared library (MIT) at run time and feeds the
@@ -11,7 +11,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Livox SDK2 packet decoder, scan assembly and run-time SDK2 binding for World Engine capture."
+description = "Livox SDK2 packet decoder, scan assembly and run-time SDK2 binding for the Navigation extension."
 
 [lib]
 name = "ados_livox"

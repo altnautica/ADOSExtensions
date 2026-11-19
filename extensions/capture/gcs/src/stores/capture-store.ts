@@ -1,5 +1,5 @@
 /**
- * @module atlas-store
+ * @module capture-store
  * @description Per-drone capture telemetry: the
  * during-flight Live World state (capture session, ingest stats, the paired
  * reconstructor, and the active transport bearer), keyed by the drone's
@@ -7,7 +7,7 @@
  * (gaussian count, training rate) live on the compute node's World Model
  * surface, not here.
  *
- * Fed from the `atlas` slice of the extension's agent state (see
+ * Fed from the `capture` slice of the extension's agent state (see
  * `use-world-engine-state`). A drone's slice stays empty (every field null)
  * until its capture service reports, so the Live World view renders an
  * "awaiting capture" state otherwise.
@@ -15,7 +15,7 @@
 
 import { create } from "zustand";
 
-/** A drone's live capture capture state. Every field is null until a capturing
+/** A drone's live capture state. Every field is null until a capturing
  * heartbeat populates it. */
 export interface CaptureLiveState {
   /** "idle" | "capturing" | "ready" | "active" | "paused" | "ended" | "error". */

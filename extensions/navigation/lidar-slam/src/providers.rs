@@ -7,7 +7,7 @@ use std::sync::Arc;
 use ados_capture_contract::{LidarModelPattern, Rig};
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::pose::PoseProvider;
-use ados_mapping_protocol::atlas::PoseSource;
+use ados_mapping_protocol::capture::PoseSource;
 
 use crate::install_path;
 use crate::lidar_source::{self, LidarRunner};

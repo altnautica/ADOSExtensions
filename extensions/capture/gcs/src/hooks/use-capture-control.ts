@@ -1,8 +1,8 @@
 /**
- * @module use-atlas-control
+ * @module use-capture-control
  * @description Capture-control hook for a drone's capture service.
- * Polls `atlas/readiness` on the drone into the per-drone
- * `atlas-readiness-store`, and returns the enable/disable + capture lifecycle
+ * Polls `capture/readiness` on the drone into the per-drone
+ * `readiness-store`, and returns the enable/disable + capture lifecycle
  * callbacks.
  *
  * The poll runs whenever a drone is given: every 1.5 s while the capture
@@ -61,11 +61,11 @@ export interface CaptureControl {
   busy: boolean;
   /** True when a drone is targeted, so its capture service can be driven. */
   live: boolean;
-  /** Enable the capture capture service on this drone. Resolves false when the
+  /** Enable the capture service on this drone. Resolves false when the
    *  node refused or could not be reached — the caller must not flip a local
    *  flag on a write that did not land. */
   enable: () => Promise<boolean>;
-  /** Disable the capture capture service. False when the write did not land;
+  /** Disable the capture service. False when the write did not land;
    *  the node is still capturing. */
   disable: () => Promise<boolean>;
   /** Set the capture profile. */
@@ -80,7 +80,7 @@ export interface CaptureControl {
 }
 
 /**
- * Drive a drone's capture capture service. Polls readiness while mounted and
+ * Drive a drone's capture service. Polls readiness while mounted and
  * returns the capture-control callbacks. Inert when `deviceId` is null.
  */
 export function useCaptureControl(deviceId: string | null): CaptureControl {

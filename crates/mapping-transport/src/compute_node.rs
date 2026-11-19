@@ -6,9 +6,9 @@
 //! ([`NODE_IDENTITY_PATH`](ados_mapping_protocol::compute::NODE_IDENTITY_PATH))
 //! so the lanes present only the credential it issued. Otherwise the node is a
 //! compute-node job-API advert ([`COMPUTE_SERVICE`]) found through the host's
-//! `mdns.browse`, preferring one that issued this drone a credential. The Atlas
-//! forwarder, the offload reconciler and the ground-station relay share this
-//! rule.
+//! `mdns.browse`, preferring one that issued this drone a credential. The
+//! keyframe forwarder, the offload reconciler and the ground-station relay
+//! share this rule.
 
 use std::future::Future;
 use std::time::Duration;
@@ -168,7 +168,7 @@ pub async fn discover(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::credentials::{ATLAS_INGEST_LANE, SESSION_UPLOAD_LANE, STORE_FILE};
+    use crate::credentials::{CAPTURE_INGEST_LANE, SESSION_UPLOAD_LANE, STORE_FILE};
     use crate::testing::FakeHost;
     use ados_mapping_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
     use serde_json::json;
@@ -324,7 +324,7 @@ pub(crate) mod tests {
         };
         // The host cannot browse: nothing resolves, and nothing is guessed.
         assert_eq!(
-            resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE).await,
+            resolve(host.as_ref(), &stores, &CAPTURE_INGEST_LANE).await,
             None
         );
 
@@ -338,7 +338,7 @@ pub(crate) mod tests {
                 txt: crate::compute_advert_txt("ws-mdns"),
             }],
         );
-        let node = resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE)
+        let node = resolve(host.as_ref(), &stores, &CAPTURE_INGEST_LANE)
             .await
             .unwrap();
         assert_eq!(node.base_url(), "http://192.0.2.9:8092");
@@ -353,7 +353,7 @@ pub(crate) mod tests {
         store.upsert(InstalledCredential {
             workstation_node_id: "ws-a".into(),
             credential: "nc1.A.SECRET".into(),
-            lanes: vec![ATLAS_INGEST_LANE],
+            lanes: vec![CAPTURE_INGEST_LANE],
             installed_at_ms: 1,
             node_addr: Some("192.0.2.5".into()),
         });
@@ -368,20 +368,20 @@ pub(crate) mod tests {
             device_id: None,
         };
         assert_eq!(
-            pinned.credential(&stores, &ATLAS_INGEST_LANE).as_deref(),
+            pinned.credential(&stores, &CAPTURE_INGEST_LANE).as_deref(),
             Ok("nc1.A.SECRET")
         );
         // Another one, minted at another address, does not displace it.
         store.upsert(InstalledCredential {
             workstation_node_id: "ws-b".into(),
             credential: "nc1.B.SECRET".into(),
-            lanes: vec![ATLAS_INGEST_LANE],
+            lanes: vec![CAPTURE_INGEST_LANE],
             installed_at_ms: 2,
             node_addr: Some("192.0.2.6:8092".into()),
         });
         store.save(&ext).unwrap();
         assert_eq!(
-            pinned.credential(&stores, &ATLAS_INGEST_LANE).as_deref(),
+            pinned.credential(&stores, &CAPTURE_INGEST_LANE).as_deref(),
             Ok("nc1.A.SECRET")
         );
         // An address neither was installed for: no guess between the two.
@@ -390,7 +390,7 @@ pub(crate) mod tests {
             ..pinned
         };
         assert_eq!(
-            elsewhere.credential(&stores, &ATLAS_INGEST_LANE),
+            elsewhere.credential(&stores, &CAPTURE_INGEST_LANE),
             Err(CredentialGap::Ambiguous)
         );
     }

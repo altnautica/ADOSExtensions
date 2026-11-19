@@ -1,5 +1,5 @@
 /**
- * The capture capture lifecycle bar (Start / Pause / Resume / Stop & Reconstruct)
+ * The capture lifecycle bar (Start / Pause / Resume / Stop & Reconstruct)
  * plus an optional "Reconstruct now" action, driven by a `useCaptureControl`
  * result. Only the transitions valid for the reported capture state are shown.
  * A failure toasts: "capture service unavailable" for a 503, a generic message

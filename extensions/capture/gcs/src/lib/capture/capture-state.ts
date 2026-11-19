@@ -1,7 +1,7 @@
 /**
  * @module capture/capture-state
- * @description The capture service's live state (`GET atlas/capture/state`)
- * and its top-down coverage (`GET atlas/capture/coverage`), coerced to
+ * @description The capture service's live state (`GET capture/state`)
+ * and its top-down coverage (`GET capture/coverage`), coerced to
  * camelCase. Health ids are exactly the six the agent reports; an unknown id
  * is dropped rather than shown as a chip with no meaning.
  */
@@ -103,7 +103,7 @@ export function coerceExposure(raw: unknown): ExposureState {
   };
 }
 
-/** Coerce a `GET atlas/capture/state` body, or null when it is not an object. */
+/** Coerce a `GET capture/state` body, or null when it is not an object. */
 export function coerceCaptureState(raw: unknown): CaptureState | null {
   const e = objOrNull(raw);
   if (!e || typeof e.state !== "string") return null;
@@ -165,7 +165,7 @@ export interface CaptureCoverage {
   headingDeg: number | null;
 }
 
-/** Coerce a `GET atlas/capture/coverage` body, or null when it carries no grid. */
+/** Coerce a `GET capture/coverage` body, or null when it carries no grid. */
 export function coerceCoverage(raw: unknown): CaptureCoverage | null {
   const e = objOrNull(raw);
   const cellM = num(e?.cell_m);

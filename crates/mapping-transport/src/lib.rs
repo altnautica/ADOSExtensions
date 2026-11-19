@@ -1,10 +1,10 @@
-//! World Engine transport: the Atlas world-model stream lane plus the
-//! drone-side client of a compute node.
+//! Mapping transport: the capture stream lane plus the device-side client of a
+//! reconstruction node.
 //!
-//! The keyframe stream (drone -> compute) and the world-model descriptor stream
-//! (compute -> GCS) get their own lane so the world model never competes with
+//! The keyframe stream (drone -> compute) and the reconstruction descriptor stream
+//! (compute -> GCS) get their own lane so the reconstruction never competes with
 //! the bounded MAVLink queue or the video pipeline. The same framed
-//! [`AtlasEvent`] rides any bearer; the bearer is chosen by topology through a
+//! [`NodeEvent`] rides any bearer; the bearer is chosen by topology through a
 //! priority failover ladder:
 //!
 //! 1. **Direct LAN/WiFi** ([`LanHttpBearer`]) — first-class. The drone, compute
@@ -15,12 +15,12 @@
 //!    cloud publish method.
 //!
 //! [`LoopbackBearer`] is the in-process bearer for tests and the same-host case.
-//! [`WorldBroadcaster`] is the compute-side fan-out a world-model consumer (the
+//! [`WorldBroadcaster`] is the compute-side fan-out a reconstruction consumer (the
 //! GCS Live World, or the drone republishing onto its own plugin bus) subscribes
 //! to over a per-device WebSocket. All carry the identical envelope, so swapping
-//! a bearer never changes the world-model contract.
+//! a bearer never changes the reconstruction contract.
 //!
-//! The compute->GCS lane carries generation-versioned world-model DESCRIPTORS,
+//! The compute->GCS lane carries generation-versioned reconstruction DESCRIPTORS,
 //! not splat deltas. See [`world_stream`] for why: SPZ and SOG are whole-scene
 //! containers with global quantisation and Morton ordering, and neither the
 //! formats nor the Khronos glTF extensions define an incremental append or delta
@@ -69,7 +69,7 @@ mod unix_http;
 mod wfb_relay;
 mod world_stream;
 
-pub use bearer::{AtlasBearer, BearerKind};
+pub use bearer::{BearerKind, EventBearer};
 pub use bulk::BulkClient;
 pub use bulk_plan::{
     BulkConfig, BulkError, Committed, PlanFile, SessionPlan, CHECKSUMS_FILE, MANIFEST_FILE,
@@ -79,7 +79,7 @@ pub use client::{node_identity, ClientError, ComputeClient, PinnedHost};
 pub use error::TransportError;
 pub use job_status::{JobError, JobGpu, JobStage, JobStatus};
 pub use ladder::BearerLadder;
-pub use lan_http::{atlas_event_router, LanHttpBearer};
+pub use lan_http::{event_router, LanHttpBearer};
 pub use loopback::LoopbackBearer;
 pub use mdns::{
     compute_advert_txt, pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE, DEVICE_ID_TXT,
@@ -94,4 +94,4 @@ pub use wfb_relay::{AuxLane, WfbRelayBearer, WFB_MAX_DATAGRAM};
 pub use world_stream::{world_ws_path, world_ws_router, WorldBroadcaster, WORLD_WS_ROUTE};
 
 // Re-export the framed event the lane carries so callers get one import surface.
-pub use ados_mapping_protocol::atlas::AtlasEvent;
+pub use ados_mapping_protocol::capture::NodeEvent;

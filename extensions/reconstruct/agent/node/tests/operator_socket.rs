@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use ados_mapping_transport::{serve_unix, WorldBroadcaster};
 use reconstruct_node::{
-    build_router, lane_router, operator_socket_router, AtlasLanes, Cluster, ComputeAuth,
+    build_router, lane_router, operator_socket_router, CaptureLanes, Cluster, ComputeAuth,
     ComputeGpu, ComputeHeartbeatSidecar, DetectionBroadcaster, Engine, JobStore, LaneRoutes,
     LatestComputeStatus, MockDetector, MockReconstructor, NodeCredentialStore, Scheduler,
 };
@@ -73,7 +73,7 @@ async fn the_operator_socket_is_the_owner_while_tcp_without_a_key_is_refused() {
                 Arc::new(|_| Ok(())),
             ),
             offload: Arc::new(DetectionBroadcaster::new(8)),
-            atlas: AtlasLanes {
+            capture: CaptureLanes {
                 events,
                 world: Arc::new(WorldBroadcaster::new(8)),
             },

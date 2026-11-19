@@ -5,20 +5,20 @@
 //! next on failure. This is the same topology-driven failover the network uplink
 //! matrix uses: a usable local bearer always wins over the cloud lane.
 
-use ados_mapping_protocol::atlas::AtlasEvent;
+use ados_mapping_protocol::capture::NodeEvent;
 
-use crate::{AtlasBearer, BearerKind, TransportError};
+use crate::{BearerKind, EventBearer, TransportError};
 
 /// An ordered set of bearers with priority failover.
 pub struct BearerLadder {
-    bearers: Vec<Box<dyn AtlasBearer>>,
+    bearers: Vec<Box<dyn EventBearer>>,
 }
 
 impl BearerLadder {
     /// Build a ladder from a set of bearers; they are sorted by priority so the
     /// most-preferred (local-first) bearer is tried first regardless of the order
     /// they are passed in.
-    pub fn new(mut bearers: Vec<Box<dyn AtlasBearer>>) -> Self {
+    pub fn new(mut bearers: Vec<Box<dyn EventBearer>>) -> Self {
         bearers.sort_by_key(|b| b.kind().priority());
         Self { bearers }
     }
@@ -36,7 +36,7 @@ impl BearerLadder {
     /// reject it) returns immediately rather than burning down to the cloud lane.
     /// Returns [`TransportError::NoBearer`] only when no bearer carried the event
     /// and none produced an error (an empty or all-unavailable ladder).
-    pub async fn send(&self, event: &AtlasEvent) -> Result<BearerKind, TransportError> {
+    pub async fn send(&self, event: &NodeEvent) -> Result<BearerKind, TransportError> {
         let mut last_err: Option<TransportError> = None;
         for bearer in &self.bearers {
             if !bearer.is_available().await {
@@ -46,7 +46,7 @@ impl BearerLadder {
                 Ok(()) => return Ok(bearer.kind()),
                 Err(e) if !e.is_retriable() => return Err(e),
                 Err(e) => {
-                    tracing::debug!(kind = ?bearer.kind(), error = %e, "atlas bearer send failed, falling over");
+                    tracing::debug!(kind = ?bearer.kind(), error = %e, "bearer send failed, falling over");
                     last_err = Some(e);
                 }
             }
@@ -60,8 +60,8 @@ mod tests {
     use super::*;
     use crate::LoopbackBearer;
 
-    fn event() -> AtlasEvent {
-        AtlasEvent::new("capture.keyframe", None, vec![9])
+    fn event() -> NodeEvent {
+        NodeEvent::new("capture.keyframe", None, vec![9])
     }
 
     #[tokio::test]
@@ -122,14 +122,14 @@ mod tests {
     }
 
     #[async_trait::async_trait]
-    impl AtlasBearer for FailingBearer {
+    impl EventBearer for FailingBearer {
         fn kind(&self) -> BearerKind {
             BearerKind::Loopback
         }
         async fn is_available(&self) -> bool {
             true
         }
-        async fn send(&self, _event: &AtlasEvent) -> Result<(), TransportError> {
+        async fn send(&self, _event: &NodeEvent) -> Result<(), TransportError> {
             self.calls
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             Err(if self.retriable {

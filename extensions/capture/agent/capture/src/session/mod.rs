@@ -11,7 +11,7 @@ use crate::config::CaptureConfig;
 use crate::selector::KeyframeSelector;
 use ados_capture_contract::v1::ImuSample;
 use ados_capture_contract::{CameraModel, GeoAnchor};
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CaptureState, CaptureStatus, KeyframeEnvelope, KeyframeFlags, KeyframeImage, KeyframeTier,
     Pose, PoseSource, TimeAlignment, VioHealth,
 };
@@ -33,7 +33,7 @@ pub struct FrameInput {
     pub pose: Pose,
     /// Row-major 6x6 covariance of `pose`. Empty when the producer could state
     /// none, which makes the keyframe fail
-    /// [`KeyframeEnvelope::validate`](ados_mapping_protocol::atlas::KeyframeEnvelope::validate)
+    /// [`KeyframeEnvelope::validate`](ados_mapping_protocol::capture::KeyframeEnvelope::validate)
     /// downstream rather than silently reconstructing without a prior sigma.
     pub pose_cov: Vec<f64>,
     pub pose_source: PoseSource,

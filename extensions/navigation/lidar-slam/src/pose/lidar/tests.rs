@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use ados_capture_contract::Rig;
-use ados_mapping_protocol::atlas::VioHealth;
+use ados_mapping_protocol::capture::VioHealth;
 use serde_json::json;
 
 use super::supervise::{apply_line, health_of, world_from_body};

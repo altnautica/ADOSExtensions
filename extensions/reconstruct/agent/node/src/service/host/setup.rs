@@ -8,7 +8,7 @@ pub(super) fn env_or(key: &str, default: &str) -> String {
 }
 
 /// Pick the perception-offload detector. When the `onnx` feature is built AND
-/// `ADOS_COMPUTE_DETECTOR_MODEL` (or the `serving.detector_model` plugin config)
+/// `ADOS_COMPUTE_DETECTOR_MODEL` (or the `reconstruct.serving.detector_model` plugin config)
 /// names an `.onnx` file, load the real ONNX detector (CoreML-accelerated on
 /// macOS via the `coreml` feature); otherwise the node has no detector and
 /// refuses offload inference with the reason. A load failure logs and leaves
@@ -20,7 +20,7 @@ pub(super) fn select_detector(config_model_path: Option<&str>) -> Arc<dyn Detect
     #[cfg(feature = "onnx")]
     {
         // The env wins (the bench override); else the operator-picked model from
-        // `serving.detector_model` (resolved to a path). Empty ⇒ mock.
+        // `reconstruct.serving.detector_model` (resolved to a path). Empty ⇒ mock.
         let path = match env_or("ADOS_COMPUTE_DETECTOR_MODEL", "") {
             p if !p.is_empty() => p,
             _ => config_model_path.unwrap_or("").to_string(),
@@ -158,8 +158,8 @@ impl StatePaths {
 }
 
 /// Whether every session is reconstructed live regardless of what its drone
-/// asked for: the `ADOS_ATLAS_LIVE` env override (a bench switch). Off by
-/// default; a drone opts its own session in with `atlas.compute_placement =
+/// asked for: the `ADOS_RECONSTRUCT_LIVE` env override (a bench switch). Off by
+/// default; a drone opts its own session in with `navigation.map_placement =
 /// stream`, which reaches the ingest through its `map_status`.
 pub(super) fn live_forced(env: Option<&str>) -> bool {
     env.is_some_and(is_truthy)
@@ -171,16 +171,16 @@ pub(super) fn live_forced(env: Option<&str>) -> bool {
 /// the thresholds can be tuned via env.
 pub(super) fn live_reconstruct_config() -> LiveReconstructConfig {
     let mut cfg = LiveReconstructConfig {
-        enabled: live_forced(std::env::var("ADOS_ATLAS_LIVE").ok().as_deref()),
+        enabled: live_forced(std::env::var("ADOS_RECONSTRUCT_LIVE").ok().as_deref()),
         ..LiveReconstructConfig::default()
     };
-    if let Some(v) = env_u64("ADOS_ATLAS_LIVE_EVERY_KEYFRAMES") {
+    if let Some(v) = env_u64("ADOS_RECONSTRUCT_LIVE_EVERY_KEYFRAMES") {
         cfg.every_keyframes = v.max(1);
     }
-    if let Some(s) = env_u64("ADOS_ATLAS_LIVE_INTERVAL_S") {
+    if let Some(s) = env_u64("ADOS_RECONSTRUCT_LIVE_INTERVAL_S") {
         cfg.interval_ms = (s as i64).saturating_mul(1000);
     }
-    if let Some(v) = env_u64("ADOS_ATLAS_LIVE_MIN_KEYFRAMES") {
+    if let Some(v) = env_u64("ADOS_RECONSTRUCT_LIVE_MIN_KEYFRAMES") {
         cfg.min_keyframes = v.max(1);
     }
     cfg

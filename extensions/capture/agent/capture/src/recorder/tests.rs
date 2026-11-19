@@ -8,7 +8,7 @@ use ados_capture_contract::{
 };
 
 use ados_mapping_pose::{diagonal_cov, se3, PoseEstimate};
-use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
+use ados_mapping_protocol::capture::{PoseSource, VioHealth};
 
 const I4: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,

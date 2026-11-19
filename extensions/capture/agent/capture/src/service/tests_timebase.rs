@@ -22,7 +22,7 @@ use crate::publish::CapturePublisher;
 use crate::runtime::{CaptureRuntimeConfig, SharedSteps};
 use ados_mapping_pose::clock::mono_ns;
 use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, SyntheticFrameSource};
+use ados_mapping_pose::frame_source::{FrameFeed, SyntheticFrameSource};
 use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
 
@@ -77,7 +77,7 @@ async fn a_hub_session_records_on_its_own_timebase() {
     let deps = LoopDeps {
         cfg: CaptureRuntimeConfig::from_values("bench", &BTreeMap::new()).unwrap(),
         profile: "visor".into(),
-        frames: AtlasFrameSource::Synthetic(SyntheticFrameSource::new(Vec::new())),
+        frames: FrameFeed::Synthetic(SyntheticFrameSource::new(Vec::new())),
         router: None,
         pose: Arc::new(FcEkfPose::new()),
         fc: None,

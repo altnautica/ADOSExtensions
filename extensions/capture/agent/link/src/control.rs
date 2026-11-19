@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ados_mapping_protocol::atlas::CaptureStatus;
+use ados_mapping_protocol::capture::CaptureStatus;
 use ados_mapping_protocol::capture_ctl::{self, CtlReply, CtlRequest, CONTROL_REQUEST_TIMEOUT_MS};
 use ados_mapping_transport::reply::{codes, ApiError};
 use axum::http::StatusCode;
@@ -174,7 +174,7 @@ impl From<ControlError> for ApiError {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
+    use ados_mapping_protocol::capture::{CaptureState, PoseSource, VioHealth};
     use parking_lot::Mutex;
     use std::path::Path;
     use std::sync::Arc;

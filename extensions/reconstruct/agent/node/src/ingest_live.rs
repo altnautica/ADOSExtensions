@@ -1,12 +1,12 @@
-//! Live reconstruction for [`AtlasIngest`]: the per-session cadence and the
+//! Live reconstruction for [`CaptureIngest`]: the per-session cadence and the
 //! periodic snapshot reconstruct jobs it yields during a flight.
 
 use std::collections::HashSet;
 
-use ados_mapping_protocol::atlas::KeyframeEnvelope;
+use ados_mapping_protocol::capture::KeyframeEnvelope;
 use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
 
-use super::{AtlasIngest, DEFAULT_RECONSTRUCT_BACKEND};
+use super::{CaptureIngest, DEFAULT_RECONSTRUCT_BACKEND};
 use crate::keyframe_persister::dataset_id_for;
 use crate::session::{LiveReconstructConfig, LiveReconstructDriver};
 use crate::{Dataset, JobRecord};
@@ -34,7 +34,7 @@ impl SessionLive {
     }
 }
 
-impl AtlasIngest {
+impl CaptureIngest {
     /// Record a successfully-persisted keyframe against its session's live
     /// cadence. A no-op when the session is not reconstructed live (neither the
     /// node-wide override nor a streaming drone), so no per-session state is
@@ -89,7 +89,7 @@ impl AtlasIngest {
     /// lands in its own directory, while the dataset's `input_path` points at the
     /// shared, growing image directory + the latest snapshot manifest. The worker
     /// runs these exactly like a final-bag reconstruct, so each completed cycle is
-    /// a fresh world-model artifact the GCS polls off the per-job output list.
+    /// a fresh reconstruction artifact the GCS polls off the per-job output list.
     ///
     /// Only a filesystem fault from writing a snapshot manifest propagates.
     pub fn due_reconstructs(&mut self, now_ms: i64) -> std::io::Result<Vec<(Dataset, JobRecord)>> {
@@ -135,10 +135,10 @@ impl AtlasIngest {
                 "cycle": cycle,
             });
             // The job carries its capturing session AND the capturing drone so the
-            // compute→cloud producer can attribute the world model to the drone
+            // compute→cloud producer can attribute the reconstruction to the drone
             // (the cloud job record's subject). Both stay absent when unknown rather than
             // asserting a wrong id.
-            // The generation is the world-model artifact set's monotonic
+            // The generation is the reconstruction artifact set's monotonic
             // version, and the cycle index IS that version for a live session:
             // each cycle publishes an immutable set the viewer can diff against
             // the last. The worker reads it back off the job to stamp the

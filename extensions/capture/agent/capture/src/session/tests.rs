@@ -1,7 +1,7 @@
 use super::*;
 use crate::config::{CameraConfig, CaptureProfile, SelectionParams};
 use ados_capture_contract::{CameraModelModel, GeoAnchorDatum, GeoAnchorSource};
-use ados_mapping_protocol::atlas::{CameraRole, ImageEncoding};
+use ados_mapping_protocol::capture::{CameraRole, ImageEncoding};
 
 pub(super) fn cam(id: &str, role: CameraRole, enabled: bool) -> CameraConfig {
     CameraConfig {

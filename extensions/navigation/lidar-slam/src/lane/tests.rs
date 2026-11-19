@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use ados_mapping_pose::{PoseProvider, PoseTrack};
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CaptureState, MapStatus, PoseSource, PoseTrackBatch, ScanChunk, VioHealth, POSE_COV_LEN,
 };
 

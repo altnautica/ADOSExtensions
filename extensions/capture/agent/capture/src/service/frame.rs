@@ -1,7 +1,7 @@
 //! Per-frame work: rates, pose feed, quality, coverage, recording, keyframes.
 
 use ados_capture_contract::{RigSensorKind, Timebase};
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     ImageEncoding as KfEncoding, KeyframeImage, Pose, TimeAlignment,
 };
 use ados_protocol::framebus::TIMEBASE_SIM;

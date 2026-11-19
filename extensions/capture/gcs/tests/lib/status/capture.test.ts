@@ -1,6 +1,6 @@
 /**
- * `mapCaptureSlice`: maps the `atlas` slice of the extension's agent state (the
- * capture service's own report) into the atlas store's live slice. Covers the
+ * `mapCaptureSlice`: maps the `capture` slice of the extension's agent state (the
+ * capture service's own report) into the capture store's live slice. Covers the
  * empty-slice no-op, full + sparse mapping (merge over current), and defensive
  * coercion.
  */
@@ -12,17 +12,17 @@ import { EMPTY_CAPTURE_LIVE } from "../../../src/stores/capture-store";
 const current = { live: { ...EMPTY_CAPTURE_LIVE } };
 
 describe("mapCaptureSlice", () => {
-  it("returns null when the slice carries no atlas field", () => {
+  it("returns null when the slice carries no capture field", () => {
     // A present-but-empty slice carries nothing to merge.
     expect(mapCaptureSlice({}, current, 1)).toBeNull();
-    // Unknown keys and wrong-typed known keys are not atlas facts either.
+    // Unknown keys and wrong-typed known keys are not capture facts either.
     expect(mapCaptureSlice({ other: { x: 1 } }, current, 1)).toBeNull();
     expect(
       mapCaptureSlice({ state: "", keyframesIngested: "12", capped: "yes" }, current, 1),
     ).toBeNull();
   });
 
-  it("maps the atlas slice's capture + transport fields", () => {
+  it("maps the capture slice's capture + transport fields", () => {
     const patch = mapCaptureSlice(
       {
         state: "capturing",

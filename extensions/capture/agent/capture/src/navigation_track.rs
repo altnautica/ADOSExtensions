@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use ados_mapping_pose::pose::{PoseProvider, PoseTrack};
 use ados_mapping_pose::PoseEstimate;
-use ados_mapping_protocol::atlas::{PoseSource, PoseTrackBatch, VioHealth, POSE_COV_LEN};
+use ados_mapping_protocol::capture::{PoseSource, PoseTrackBatch, VioHealth, POSE_COV_LEN};
 use parking_lot::Mutex;
 
 /// No batch for this long: the pose is lost.
@@ -111,7 +111,7 @@ impl PoseProvider for NavigationTrack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::PoseTrackEntry;
+    use ados_mapping_protocol::capture::PoseTrackEntry;
 
     fn entry(t_ns: u64, x: f64) -> PoseTrackEntry {
         PoseTrackEntry {

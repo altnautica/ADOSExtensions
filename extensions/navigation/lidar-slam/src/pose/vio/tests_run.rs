@@ -2,7 +2,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::{Duration, Instant};
 
 use ados_capture_contract::CameraModelModel;
-use ados_mapping_protocol::atlas::VioHealth;
+use ados_mapping_protocol::capture::VioHealth;
 use ados_protocol::framebus::FrameFormat;
 
 use super::pairing::{PairOutcome, StereoPairer, VioScale};

@@ -151,11 +151,11 @@ fn descriptors_carry_the_session_the_generation_and_real_measured_counts() {
         ),
     ];
     let placement = Placement::identity(None);
-    let set = derive_descriptors("atlas-drone-1-1000", 7, &placement, &outputs, dir.path());
+    let set = derive_descriptors("s-drone-1-1000", 7, &placement, &outputs, dir.path());
     assert!(!set.is_empty());
 
     let cloud = set.pointcloud.expect("a point cloud descriptor");
-    assert_eq!(cloud.session_id, "atlas-drone-1-1000");
+    assert_eq!(cloud.session_id, "s-drone-1-1000");
     assert_eq!(cloud.generation, 7);
     assert_eq!(
         cloud.point_count, 3,

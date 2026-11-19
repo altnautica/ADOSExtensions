@@ -290,12 +290,12 @@ mod tests {
         let m = s
             .mint(
                 "drone-1",
-                &[crate::lanes::ATLAS_INGEST, crate::lanes::JOB_SUBMIT],
+                &[crate::lanes::CAPTURE_INGEST, crate::lanes::JOB_SUBMIT],
                 1,
             )
             .unwrap();
         let cred = Some(m.credential.as_str());
-        assert!(admits(cred, Some(&crate::lanes::ATLAS_INGEST), &s));
+        assert!(admits(cred, Some(&crate::lanes::CAPTURE_INGEST), &s));
         assert!(admits(cred, Some(&crate::lanes::JOB_SUBMIT), &s));
         // A lane it was not issued for.
         assert!(!admits(cred, Some(&crate::lanes::ARTIFACTS), &s));

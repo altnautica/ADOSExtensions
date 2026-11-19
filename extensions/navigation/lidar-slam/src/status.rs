@@ -2,7 +2,7 @@
 //! `GET /navigation/status`, the sweep history of `GET /navigation/sweep`
 //! and the way to ask the lane for the whole cloud.
 
-use ados_mapping_protocol::atlas::{LidarStatus, MapStatus, NavPoseSource, VioHealth};
+use ados_mapping_protocol::capture::{LidarStatus, MapStatus, NavPoseSource, VioHealth};
 use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::mpsc;

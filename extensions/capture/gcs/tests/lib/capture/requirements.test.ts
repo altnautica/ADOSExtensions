@@ -1,5 +1,5 @@
 /**
- * Tests for the capture capture-gate logic (`computeCaptureGate`): the
+ * Tests for the capture-gate logic (`computeCaptureGate`): the
  * requirements checklist tones and the Start gate + its blocked reason. This is
  * the pure "tab / setup surface" gating that decides whether Start capture is
  * allowed and what the requirements rows report.

@@ -1,7 +1,7 @@
 //! The node's offload-serving config, read from the plugin config
-//! (`serving.enabled`, `serving.detector_model`).
+//! (`reconstruct.serving.enabled`, `reconstruct.serving.detector_model`).
 //!
-//! The node auto-serves perception offload by default (`serving.enabled:
+//! The node auto-serves perception offload by default (`reconstruct.serving.enabled:
 //! auto`). The two operator controls are whether to serve at all and which
 //! detector model to serve. The `ADOS_COMPUTE_DETECTOR_MODEL` env still wins
 //! over the config (the bench override, applied where the detector is loaded).
@@ -14,18 +14,18 @@ use ados_sdk::PluginContext;
 const DEFAULT_MODELS_DIR: &str = "/opt/ados/models/vision";
 
 /// Plugin config key: `auto` | `on` | `off`.
-const SERVING_ENABLED_KEY: &str = "serving.enabled";
+const SERVING_ENABLED_KEY: &str = "reconstruct.serving.enabled";
 /// Plugin config key: a model path or a bare model id, or null.
-const SERVING_DETECTOR_MODEL_KEY: &str = "serving.detector_model";
+const SERVING_DETECTOR_MODEL_KEY: &str = "reconstruct.serving.detector_model";
 
 /// The resolved serving config the node acts on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServingConfig {
-    /// Whether to accept perception-offload sessions (`serving.enabled` !=
+    /// Whether to accept perception-offload sessions (`reconstruct.serving.enabled` !=
     /// "off"). Default true (auto-serve).
     pub serve_offload: bool,
     /// A model-path fallback for the served detector, resolved from
-    /// `serving.detector_model` (a path, or a bare id under the models dir).
+    /// `reconstruct.serving.detector_model` (a path, or a bare id under the models dir).
     /// `None` ⇒ the node uses the env / the mock.
     pub detector_model_path: Option<String>,
 }

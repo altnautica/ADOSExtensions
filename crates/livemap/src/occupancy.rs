@@ -13,10 +13,10 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
-use ados_mapping_protocol::atlas::nav::{
+use ados_mapping_protocol::capture::nav::{
     OCCUPANCY_FREE, OCCUPANCY_OCCUPIED, OCCUPANCY_TILE_CELLS, OCCUPANCY_UNKNOWN,
 };
-use ados_mapping_protocol::atlas::OccupancyTile;
+use ados_mapping_protocol::capture::OccupancyTile;
 use base64::Engine as _;
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};

@@ -282,7 +282,7 @@ pub fn run(
     let sidecar = place("scene.ply", Kind::Splat, Fmt::Ply)?;
     arts.push(art("splat", "scene.ply", "ply", Some(sidecar)));
     // PLY -> SPZ. Version 4 (ZSTD streams) is named, not left to the
-    // converter's default: the viewer (Spark >= 2.4) and the world-engine
+    // converter's default: the viewer (Spark >= 2.4) and the Spark LoD
     // tiler read it.
     runner.run(
         &ToolInvocation::new("splat-transform", &out)

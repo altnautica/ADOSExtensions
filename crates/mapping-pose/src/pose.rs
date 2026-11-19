@@ -24,7 +24,7 @@
 use std::collections::VecDeque;
 
 use ados_capture_contract::v1::ImuBatch;
-use ados_mapping_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
+use ados_mapping_protocol::capture::{PoseSource, VioHealth, POSE_COV_LEN};
 use ados_scan2d::{HeightSample, VelocitySample};
 use parking_lot::Mutex;
 

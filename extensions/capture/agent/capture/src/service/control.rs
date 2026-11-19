@@ -2,7 +2,7 @@
 //! exposure, and the state/coverage reads.
 
 use ados_capture_contract::{SessionHealth, Timebase};
-use ados_mapping_protocol::atlas::CaptureState;
+use ados_mapping_protocol::capture::CaptureState;
 use ados_mapping_protocol::capture_ctl::{codes, CtlReply, CtlRequest, ExposureView, StartArgs};
 use serde_json::json;
 use tokio::sync::oneshot;

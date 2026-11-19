@@ -1,4 +1,4 @@
-# RPLIDAR serial protocol driver for the World Engine capture service: the
+# RPLIDAR serial protocol driver for Navigation's lidar-slam service: the
 # standard-scan byte protocol, serial and TCP transports, USB discovery, and a
 # reader thread that turns the node stream into timed 360-degree revolutions.
 [package]
@@ -8,7 +8,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "RPLIDAR standard-scan protocol, transports and revolution assembly for World Engine capture."
+description = "RPLIDAR standard-scan protocol, transports and revolution assembly for the Navigation extension."
 
 [lib]
 name = "ados_rplidar"

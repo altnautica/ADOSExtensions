@@ -275,7 +275,7 @@ impl Engine {
 
     /// The keyframe session's status, carrying the drone's live
     /// `capture.reconstruct_steps` for the compute node.
-    pub(super) fn capture_status(&self) -> ados_mapping_protocol::atlas::CaptureStatus {
+    pub(super) fn capture_status(&self) -> ados_mapping_protocol::capture::CaptureStatus {
         let mut status = self.keyframes.status();
         status.reconstruct_steps = self.reconstruct_steps.get();
         status

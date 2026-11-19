@@ -52,7 +52,7 @@ describe("PresetPicker", () => {
     await waitFor(() => expect(onStarted).toHaveBeenCalled());
 
     const { path, init } = callAt(fetch);
-    expect(path).toBe(`atlas/sessions/${SESSION}/reconstruct`);
+    expect(path).toBe(`capture/sessions/${SESSION}/reconstruct`);
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual({ preset: "tour" });
     expect(onStarted).toHaveBeenCalledWith({ node: "workstation-1", jobId: "j-42", preset: "tour" });

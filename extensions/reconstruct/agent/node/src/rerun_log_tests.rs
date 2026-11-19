@@ -1,7 +1,7 @@
 use super::*;
 use ados_capture_contract::v1::ImuSample;
 use ados_capture_contract::{CameraModel, CameraModelModel, Placement, Timebase};
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CameraRole, KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseSource, TimeAlignment,
 };
 
@@ -36,7 +36,7 @@ fn keyframe() -> KeyframeEnvelope {
             t: [1.0, 2.0, 3.0],
             cov: None,
         },
-        pose_cov: vec![0.0009; ados_mapping_protocol::atlas::POSE_COV_LEN],
+        pose_cov: vec![0.0009; ados_mapping_protocol::capture::POSE_COV_LEN],
         pose_source: PoseSource::FcEkf,
         time: TimeAlignment {
             t_exposure_mid_ns: 7_000_000_000,
@@ -111,7 +111,7 @@ fn hevc_encoding_serializes_hyphenated() {
 }
 
 #[test]
-fn world_model_descriptors_map_to_world_subtree_with_payloads() {
+fn reconstruction_descriptors_map_to_world_subtree_with_payloads() {
     let splat = log_splat(
         &SplatDescriptor {
             session_id: "sess-test".into(),
@@ -138,7 +138,7 @@ fn world_model_descriptors_map_to_world_subtree_with_payloads() {
 
     let cloud = log_pointcloud(
         &PointCloudDescriptor {
-            kind: ados_mapping_protocol::atlas::MapPayloadKind::Product,
+            kind: ados_mapping_protocol::capture::MapPayloadKind::Product,
             session_id: "sess-test".into(),
             generation: 1,
             placement: Placement::identity(None),
@@ -183,11 +183,11 @@ fn world_model_descriptors_map_to_world_subtree_with_payloads() {
 
     let occ = log_occupancy(
         &OccupancyDescriptor {
-            kind: ados_mapping_protocol::atlas::MapPayloadKind::Product,
+            kind: ados_mapping_protocol::capture::MapPayloadKind::Product,
             session_id: "sess-test".into(),
             generation: 1,
             placement: Placement::identity(None),
-            field: ados_mapping_protocol::atlas::OccupancyField::Esdf,
+            field: ados_mapping_protocol::capture::OccupancyField::Esdf,
             truncation_m: 4.0,
             url: None,
             origin: [0.5, 0.0, 0.0],

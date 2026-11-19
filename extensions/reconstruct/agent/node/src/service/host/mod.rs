@@ -1,4 +1,4 @@
-//! The World Engine extension's `node` service on a workstation or compute
+//! The Reconstruct extension's `node` service on a workstation or compute
 //! node, run by the plugin host. It opens the job store, builds the node
 //! engine, runs a worker loop that drains the queue and periodically reclaims
 //! terminal jobs, and serves the REST job API plus the drone lanes on one TCP
@@ -8,7 +8,7 @@
 //! `reconstruct-node com.altnautica.reconstruct` with its launch values
 //! (socket, token, data dir) in the unit's token credential; it then connects
 //! to the host and uses the plugin
-//! config (`serving.*`), publishes its compute status
+//! config (`reconstruct.serving.*`), publishes its compute status
 //! on the `status` telemetry channel, and mirrors its reconstruct jobs into the
 //! `jobs` cloud records. Without them (a standalone dev run) it runs on
 //! defaults and makes no host call. A lost host session (a plugin-host
@@ -47,8 +47,8 @@
 //! - `ADOS_COMPUTE_NODE_ID`   this node's id (default derived from the machine id)
 //! - `ADOS_COMPUTE_WORKERS`   worker slots (default `1`)
 //! - `ADOS_COMPUTE_RETENTION_S` terminal-job retention seconds (default `86400`)
-//! - `ADOS_ATLAS_LIVE`        reconstruct every session live (in flight); by
-//!   default only a session whose drone streams (`atlas.compute_placement =
+//! - `ADOS_RECONSTRUCT_LIVE`        reconstruct every session live (in flight); by
+//!   default only a session whose drone streams (`navigation.map_placement =
 //!   stream`) is
 
 mod loops;
@@ -65,13 +65,13 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ados_mapping_protocol::STATUS_CHANNEL;
-use ados_mapping_transport::{AtlasEvent, WorldBroadcaster};
+use ados_mapping_transport::{NodeEvent, WorldBroadcaster};
 use ados_sdk::{PluginContext, PluginIpcClient, RunnerArgs};
 use reconstruct_node::{
-    build_atlas_jobs, build_rerun_output, build_router_with_base, derive_descriptors,
+    build_cloud_jobs, build_rerun_output, build_router_with_base, derive_descriptors,
     derive_occupancy, derive_public_base, lane_router, load_serving_config, operator_socket_router,
     put_accepted, rewrite_output_to_artifact_url, status_payload, submit_reconstruct_job,
-    AtlasIngest, AtlasLanes, BackendResult, Cluster, ComputeAuth, ComputeHeartbeatSidecar,
+    BackendResult, CaptureIngest, CaptureLanes, Cluster, ComputeAuth, ComputeHeartbeatSidecar,
     ComputeJobState, DetectionBroadcaster, Detector, Engine, JobStore, JobsCloudSync, LaneRoutes,
     LatestComputeStatus, LiveReconstructConfig, NoDetector, NodeCredentialStore,
     OffloadSessionManager, Prepared, PreparedInput, Scheduler, SelectingReconstructor, SessionSpec,
@@ -81,10 +81,10 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, Mutex};
 use tower_http::cors::CorsLayer;
 
-/// Bounded capacity of the Atlas event receive channel. When it fills, the event
+/// Bounded capacity of the node event receive channel. When it fills, the event
 /// router returns `503` so the sender's failover ladder retries or drops — the
 /// reconstructor running behind never grows an unbounded in-memory queue.
-const ATLAS_EVENT_CHANNEL_CAP: usize = 256;
+const EVENT_CHANNEL_CAP: usize = 256;
 /// How often the live-reconstruction cadence is evaluated (the interval trigger's
 /// granularity + the skip-while-running reconcile). The cadence's own thresholds
 /// are much coarser (tens of seconds / keyframes); this is just the poll period.
@@ -96,7 +96,7 @@ const IDLE_SWEEP: Duration = Duration::from_secs(60);
 /// lane. A slow WS subscriber past this buffer lags and skips (never blocking the
 /// detector); the pump keeps pace with the detector on this bound.
 const OFFLOAD_WS_CHANNEL_CAP: usize = 64;
-/// Per-subscriber buffer depth (descriptors) on the world-model descriptor
+/// Per-subscriber buffer depth (descriptors) on the reconstruction descriptor
 /// stream. A descriptor is a few hundred bytes and one generation emits at most
 /// four, so 64 gives a subscriber room to miss several generations of a fast
 /// live cadence before it lags and skips.
@@ -163,7 +163,9 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     // on the next service restart).
     let serving = load_serving_config(ctx.as_ref()).await;
     if !serving.serve_offload {
-        tracing::info!("perception offload serving disabled by config (serving.enabled=off)");
+        tracing::info!(
+            "perception offload serving disabled by config (reconstruct.serving.enabled=off)"
+        );
     }
     // The detector is shared between the one-shot job path (the scheduler) and the
     // streaming-session path (the session manager below), so both run the same
@@ -214,8 +216,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Fan-out for world-model descriptors: the workers publish each completed
-    // generation into it and `/ws/atlas/<device_id>` subscribers read it.
+    // Fan-out for reconstruction descriptors: the workers publish each completed
+    // generation into it and `/ws/live/<device_id>` subscribers read it.
     let world_broadcaster = Arc::new(WorldBroadcaster::new(WORLD_WS_CHANNEL_CAP));
 
     // One worker task per configured slot. Each claims a distinct job atomically
@@ -276,31 +278,31 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let credentials = NodeCredentialStore::open(paths.credentials.clone(), node_id.clone());
     let auth = Arc::new(ComputeAuth::new(credentials));
 
-    // Atlas world-model receiver: POST /api/atlas/event is mounted beside the job
+    // Capture event receiver: POST /api/capture/event is mounted beside the job
     // API and decoded events drain into the job queue (a bagged capture-state
     // submits the reconstruct job the workers pick up), and every completed
-    // generation's descriptors are served per device at /ws/atlas/<device_id>.
+    // generation's descriptors are served per device at /ws/live/<device_id>.
     // Installing the extension on a node is the opt-in, so both always mount.
     let live_config = live_reconstruct_config();
-    let (atlas_tx, atlas_rx) = mpsc::channel::<AtlasEvent>(ATLAS_EVENT_CHANNEL_CAP);
+    let (event_tx, event_rx) = mpsc::channel::<NodeEvent>(EVENT_CHANNEL_CAP);
     {
         let rs = state.clone();
         let wr = work_root.clone();
         let world = world_broadcaster.clone();
         tokio::spawn(
-            async move { atlas_receiver_loop(atlas_rx, rs, wr, live_config, world).await },
+            async move { capture_receiver_loop(event_rx, rs, wr, live_config, world).await },
         );
     }
     tracing::info!(
-        channel_cap = ATLAS_EVENT_CHANNEL_CAP,
+        channel_cap = EVENT_CHANNEL_CAP,
         live_reconstruct = live_config.enabled,
-        "world-model event receiver mounted at POST /api/atlas/event, \
-         descriptor stream at GET /ws/atlas/<device_id>"
+        "reconstruction event receiver mounted at POST /api/capture/event, \
+         descriptor stream at GET /ws/live/<device_id>"
     );
 
     // The owner's job API and job files, plus the lanes a drone or a capture
     // device uses on the same listener (artifacts, session upload, the offload
-    // detection return stream, the Atlas ingest and world stream), each behind
+    // detection return stream, the capture ingest and live stream), each behind
     // its own credential gate.
     let on_commit: reconstruct_node::bulk::CommitHook = Arc::new(|s| {
         tracing::info!(session = %s.session_id, files = s.files, bytes = s.bytes, "capture session committed");
@@ -327,8 +329,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 on_commit,
             ),
             offload: offload_broadcaster.clone(),
-            atlas: AtlasLanes {
-                events: atlas_tx,
+            capture: CaptureLanes {
+                events: event_tx,
                 world: world_broadcaster.clone(),
             },
         },

@@ -1,4 +1,4 @@
-//! Shared helpers for the Atlas SITL gate harness (`atlas_sitl*.rs`): a mock
+//! Shared helpers for the Capture SITL harness (`capture_sitl*.rs`): a mock
 //! engine, persistable keyframes and the bag that closes their session.
 // Each test binary uses a subset of these helpers.
 #![allow(dead_code)]
@@ -7,12 +7,12 @@ use ados_capture_contract::v1::ImuSample;
 use ados_capture_contract::{
     CameraModel, CameraModelModel, GeoAnchor, GeoAnchorDatum, GeoAnchorSource,
 };
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeEnvelope, KeyframeFlags,
     KeyframeImage, KeyframeTier, Pose, PoseSource, TimeAlignment, VioHealth,
     CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC, POSE_COV_LEN,
 };
-use ados_mapping_transport::AtlasEvent;
+use ados_mapping_transport::NodeEvent;
 use reconstruct_node::{Cluster, Engine, JobStore, MockDetector, MockReconstructor, Scheduler};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -28,15 +28,15 @@ pub fn engine() -> Engine {
 /// bag can finalize into a reconstruct job — the pipeline the G0 / G2 / loopback
 /// gates prove. A keyframe whose bytes never decode would count as received but
 /// persist nothing, and an empty bag enqueues no job.
-pub fn keyframe(i: usize) -> AtlasEvent {
-    AtlasEvent::new(
+pub fn keyframe(i: usize) -> NodeEvent {
+    NodeEvent::new(
         CAPTURE_KEYFRAME_TOPIC,
         None,
         keyframe_env("g0", "front", i as u64).to_msgpack().unwrap(),
     )
 }
 
-pub fn bagged(keyframes: u64) -> AtlasEvent {
+pub fn bagged(keyframes: u64) -> NodeEvent {
     let status = CaptureStatus {
         session_id: "g0".into(),
         state: CaptureState::Bagged,
@@ -50,7 +50,7 @@ pub fn bagged(keyframes: u64) -> AtlasEvent {
         dropped_keyframes: 0,
         reconstruct_steps: None,
     };
-    AtlasEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap())
+    NodeEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap())
 }
 
 /// A full keyframe envelope for `session_id` / `camera_id`, with an IMU sample so
@@ -118,9 +118,9 @@ pub fn keyframe_env(session_id: &str, camera_id: &str, kf_id: u64) -> KeyframeEn
 /// exactly one and applies the `dev != device_id` filter, returning the event
 /// only when it belongs to `device_id`.
 pub async fn deliver_for(
-    rx: &mut broadcast::Receiver<(String, AtlasEvent)>,
+    rx: &mut broadcast::Receiver<(String, NodeEvent)>,
     device_id: &str,
-) -> Option<AtlasEvent> {
+) -> Option<NodeEvent> {
     match rx.recv().await {
         Ok((dev, event)) if dev == device_id => Some(event),
         Ok(_) => None, // another drone's delta — not this view

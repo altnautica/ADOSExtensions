@@ -1,4 +1,4 @@
-//! The reconstructor backend: turns a keyframe-bag dataset into a world-model
+//! The reconstructor backend: turns a keyframe-bag dataset into a reconstruction
 //! artifact (gaussian splat). Real backends shell out to the pinned trainers
 //! ([`crate::backends`]); the stand-in exists only for tests (`cfg(test)` or
 //! feature `mock`) and is never part of a release build.

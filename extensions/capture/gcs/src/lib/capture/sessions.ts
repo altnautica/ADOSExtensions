@@ -1,6 +1,6 @@
 /**
  * @module capture/sessions
- * @description The device's recorded capture sessions (`GET atlas/sessions`),
+ * @description The device's recorded capture sessions (`GET capture/sessions`),
  * their upload progress, and the reconstruction presets an operator picks.
  */
 
@@ -65,7 +65,7 @@ export function coerceSession(raw: unknown): CaptureSession | null {
   };
 }
 
-/** Coerce a `GET atlas/sessions` body: `{sessions:[...]}`. */
+/** Coerce a `GET capture/sessions` body: `{sessions:[...]}`. */
 export function coerceSessions(raw: unknown): CaptureSession[] {
   return arr(obj(raw).sessions).flatMap((s) => {
     const session = coerceSession(s);

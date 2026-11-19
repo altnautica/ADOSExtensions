@@ -6,7 +6,7 @@
 //! enabled count, it never forks on it).
 
 use crate::CaptureError;
-use ados_mapping_protocol::atlas::CameraRole;
+use ados_mapping_protocol::capture::CameraRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
-use ados_mapping_protocol::atlas::LidarHealth;
+use ados_mapping_protocol::capture::LidarHealth;
 use ados_rplidar::{Health, HealthStatus, RawScan, Rplidar, RplidarConfig};
 use tokio::sync::mpsc;
 

@@ -37,7 +37,7 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use ados_capture_contract::GeoAnchor;
-use ados_mapping_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
+use ados_mapping_protocol::capture::{PoseSource, VioHealth, POSE_COV_LEN};
 use parking_lot::Mutex;
 
 use crate::align::GNSS_SETTLE_MS;

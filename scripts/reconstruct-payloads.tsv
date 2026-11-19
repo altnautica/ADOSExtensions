@@ -1,0 +1,22 @@
+# Reconstruct release payloads: the files a node fetches at install instead of
+# finding them in the .adosplug archive. One row per release asset:
+#
+#   <asset-name> <path-in-archive> <arch_os|-> <profiles|->
+#
+# The asset name is the GitHub release asset (and the file name the release
+# workflow and scripts/pack-local.sh stage it under). Both append a fifth
+# column, the download URL, then hand the list to
+# `scripts/pack-rust.sh --payload-manifest`. Every `agent.binaries` path in
+# extensions/reconstruct/manifest.yaml needs a row here.
+reconstruct-offload-aarch64-linux     bin/aarch64-linux/reconstruct-offload     aarch64-linux  -
+reconstruct-offload-x86_64-linux      bin/x86_64-linux/reconstruct-offload      x86_64-linux   -
+reconstruct-offload-aarch64-macos     bin/aarch64-macos/reconstruct-offload     aarch64-macos  -
+reconstruct-node-aarch64-linux        bin/aarch64-linux/reconstruct-node        aarch64-linux  workstation,compute
+reconstruct-node-x86_64-linux         bin/x86_64-linux/reconstruct-node         x86_64-linux   workstation,compute
+reconstruct-node-aarch64-macos        bin/aarch64-macos/reconstruct-node        aarch64-macos  workstation,compute
+# The standalone reconstruction node for a Windows workstation
+# (`reconstruct-node --standalone`), built on the windows release leg.
+reconstruct-node-x86_64-windows.exe   bin/x86_64-windows/reconstruct-node.exe   x86_64-windows workstation,compute
+# The Rerun web viewer's wasm, served to the GCS half as a plugin asset. Every
+# profile serves the GCS module, so every node fetches it.
+re_viewer_bg.wasm                     gcs/assets/re_viewer_bg.wasm              -              -

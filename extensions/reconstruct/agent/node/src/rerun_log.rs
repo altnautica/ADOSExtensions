@@ -1,10 +1,10 @@
-//! The Rerun-aligned world-model recording adapter.
+//! The Rerun-aligned reconstruction recording adapter.
 //!
-//! The world model is logged as Rerun entity paths so the wire contract and the
-//! visualizer are one model. The Atlas keyframe envelope is already a Rerun
+//! The reconstruction is logged as Rerun entity paths so the wire contract and the
+//! visualizer are one model. The keyframe envelope is already a Rerun
 //! frame (a `Pinhole` for the intrinsics, a `Transform3D` for the pose, an
 //! `Image`, and IMU `Scalars`), so this is the thin adapter that maps an
-//! envelope + the world-model descriptors onto the entity tree:
+//! envelope + the reconstruction descriptors onto the entity tree:
 //!
 //! ```text
 //! world/                       the reconstruction (static, grows)
@@ -22,12 +22,12 @@
 
 use serde::{Deserialize, Serialize};
 
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     ImageEncoding, KeyframeEnvelope, MeshDescriptor, OccupancyDescriptor, PointCloudDescriptor,
     SplatDescriptor,
 };
 
-/// A Rerun archetype, the subset the Atlas world model logs. The variant names
+/// A Rerun archetype, the subset a reconstruction logs. The variant names
 /// are the manifest discriminators a viewer maps, so they are the Rerun
 /// archetype names verbatim (no `rename_all`, which would mangle `Transform3D`
 /// into `transform3_d`).
@@ -219,7 +219,7 @@ impl RerunRecording {
     }
 
     /// Append a keyframe's entries. The camera's static Pinhole intrinsics are
-    /// logged only on the first keyframe from that camera (per the world-model
+    /// logged only on the first keyframe from that camera (per the reconstruction
     /// schema, "logged once"); the per-frame Transform / Image / IMU entries are
     /// always appended.
     pub fn push_keyframe(&mut self, kf: &KeyframeEnvelope) {

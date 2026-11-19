@@ -10,7 +10,7 @@
 //!   bus speaks, and stamps the designated track's lock state from the gate. No
 //!   I/O, so the safety behaviour is unit-tested with no sockets.
 //! - [`DetectionPublisher`] is where a converted batch goes: the drone's local
-//!   `vision.detection` bus. The World Engine link implements it with the plugin
+//!   `vision.detection` bus. Reconstruct's offload process implements it with the plugin
 //!   host's `vision.publish_detection` method.
 //!
 //! Safety invariant (the whole reason `ados-offload` exists): an offloaded

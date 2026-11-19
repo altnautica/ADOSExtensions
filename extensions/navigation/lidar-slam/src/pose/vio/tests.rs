@@ -3,7 +3,7 @@ use ados_capture_contract::{
     CameraModel, CameraModelModel, ContractId, ImuNoise, Rig, RigSensor, RigSensorKind,
     RigSensorRole, Transform,
 };
-use ados_mapping_protocol::atlas::VioHealth;
+use ados_mapping_protocol::capture::VioHealth;
 
 use super::calib::{basalt_calib, basalt_config, scaled_rig, CalibError, DEFAULT_IMU_NOISE};
 use super::pairing::VioScale;

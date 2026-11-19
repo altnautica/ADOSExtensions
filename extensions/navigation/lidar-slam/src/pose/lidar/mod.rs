@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ados_capture_contract::{LidarModel, Rig, RigSensorKind};
-use ados_mapping_protocol::atlas::PoseSource;
+use ados_mapping_protocol::capture::PoseSource;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;

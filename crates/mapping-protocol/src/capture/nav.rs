@@ -85,7 +85,7 @@ pub enum MapPayloadKind {
 }
 
 /// One planar scan in the body frame, binned to [`SCAN_BINS`] 1° bins
-/// (`plugin.world-engine.scan`, 10 Hz).
+/// (`plugin.navigation.scan`, 10 Hz).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanDescriptor {
     /// Host monotonic ns of the scan's first point.
@@ -115,7 +115,7 @@ pub struct OccupancyTile {
     pub png_b64: String,
 }
 
-/// The live occupancy delta on `plugin.world-engine.occupancy` (1 Hz, only
+/// The live occupancy delta on `plugin.navigation.occupancy` (1 Hz, only
 /// tiles that changed since the previous one).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveOccupancy {
@@ -129,7 +129,7 @@ pub struct LiveOccupancy {
     pub tiles: Vec<OccupancyTile>,
 }
 
-/// The live sweep-cloud delta on `plugin.world-engine.pointcloud` (1 Hz, at
+/// The live sweep-cloud delta on `plugin.navigation.pointcloud` (1 Hz, at
 /// most [`POINTCLOUD_DELTA_MAX_POINTS`] voxel centroids new since the last).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LivePointCloud {
@@ -145,7 +145,7 @@ pub struct LivePointCloud {
     pub points_b64: String,
 }
 
-/// Where the heavy map products are built (`atlas.compute_placement`).
+/// Where the heavy map products are built (`navigation.map_placement`).
 /// Navigation SLAM and the operator's live occupancy stay on board in every
 /// mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -291,7 +291,7 @@ impl ImuFeedReason {
 }
 
 /// [`MapStatus::imu_feed`]: the FC IMU feed of a planar LiDAR pose that
-/// takes the flight controller as its IMU (`atlas.lidar.imu = "fc"`). The
+/// takes the flight controller as its IMU (`navigation.lidar.imu = "fc"`). The
 /// pose is degraded or lost while the feed is ([`ImuFeedReason::state`]).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ImuFeedStatus {
@@ -336,7 +336,7 @@ pub enum LidarHealth {
     Error,
 }
 
-/// The configured LiDAR's link on `plugin.world-engine.lidar`, 1 Hz while
+/// The configured LiDAR's link on `plugin.navigation.lidar`, 1 Hz while
 /// the rig declares the sensor. A driver that is not running (the device
 /// absent at start, or not configured) reports `connected: false`, null
 /// device, health, rate and returns, and zero counters.

@@ -1,7 +1,7 @@
 /**
  * @module capture/calibration
  * @description The calibration wizard's steps, the device's stored calibration
- * versions (`GET atlas/calib`) and a node `calibrate` job's report.
+ * versions (`GET capture/calib`) and a node `calibrate` job's report.
  */
 
 import type { Rig, RigSensor } from "@altnautica/mapping-ui/lib/contract/generated";
@@ -101,7 +101,7 @@ export interface CalibStore {
   versions: CalibVersion[];
 }
 
-/** Coerce a `GET atlas/calib` body. */
+/** Coerce a `GET capture/calib` body. */
 export function coerceCalibStore(raw: unknown): CalibStore {
   const e = obj(raw);
   return {

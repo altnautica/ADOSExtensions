@@ -3,7 +3,7 @@
 //! The drone radiates small capture events on the aux application stream. The
 //! ground station receives them through its own aux subscription
 //! (`radio.aux_stream.subscribe`); this relay decodes each application-stream
-//! payload as a framed [`AtlasEvent`] and re-POSTs it onto the LAN into the
+//! payload as a framed [`NodeEvent`] and re-POSTs it onto the LAN into the
 //! compute node's event router, so the field radio lane reaches the same
 //! receiver the direct-LAN bearer uses.
 //!
@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_mapping_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
+use ados_mapping_transport::{EventBearer, LanHttpBearer, NodeEvent};
 use ados_protocol::aux_mux::AuxChannel;
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -28,7 +28,7 @@ use tokio::time::Instant;
 
 use crate::forward::now_ms;
 use ados_mapping_transport::compute_node;
-use ados_mapping_transport::credentials::{CredentialStore, ATLAS_INGEST_LANE};
+use ados_mapping_transport::credentials::{CredentialStore, CAPTURE_INGEST_LANE};
 use ados_mapping_transport::host::{config_bool, config_string, node_info, Host};
 use ados_protocol::node_info::NodeInfo;
 
@@ -131,9 +131,9 @@ pub fn status_body(snapshot: Option<&(RelaySnapshot, Instant)>) -> serde_json::V
 
 /// Decode one received payload and forward it to the compute node. Never
 /// panics: a non-decoding payload is counted as malformed and dropped.
-async fn forward_payload(bearer: &dyn AtlasBearer, payload: &[u8], stats: &mut RelayStats) {
+async fn forward_payload(bearer: &dyn EventBearer, payload: &[u8], stats: &mut RelayStats) {
     stats.datagrams_seen += 1;
-    match AtlasEvent::decode(payload) {
+    match NodeEvent::decode(payload) {
         Ok(event) => match bearer.send(&event).await {
             Ok(()) => stats.forwarded += 1,
             Err(e) => {
@@ -263,7 +263,7 @@ impl Relay {
                 (url, id)
             }
             None => {
-                let issuers = self.credentials.issuers(&ATLAS_INGEST_LANE);
+                let issuers = self.credentials.issuers(&CAPTURE_INGEST_LANE);
                 let Some(node) =
                     compute_node::discover(self.host.as_ref(), &issuers, RESOLVE_TIMEOUT).await
                 else {
@@ -294,7 +294,7 @@ impl Relay {
             .select(
                 node_id,
                 Some(url_authority(compute_url)),
-                &ATLAS_INGEST_LANE,
+                &CAPTURE_INGEST_LANE,
             )
             .ok()
     }
@@ -325,7 +325,7 @@ fn url_authority(url: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_transport::atlas_event_router;
+    use ados_mapping_transport::event_router;
     use ados_mapping_transport::testing::FakeHost;
 
     #[test]
@@ -337,12 +337,12 @@ mod tests {
 
     /// Spawn the compute receiver on an ephemeral port; return its base URL and
     /// the channel events land on.
-    async fn spawn_receiver() -> (String, mpsc::Receiver<AtlasEvent>) {
+    async fn spawn_receiver() -> (String, mpsc::Receiver<NodeEvent>) {
         let (tx, rx) = mpsc::channel(16);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            let _ = axum::serve(listener, atlas_event_router(tx)).await;
+            let _ = axum::serve(listener, event_router(tx)).await;
         });
         (format!("http://{addr}"), rx)
     }
@@ -352,7 +352,7 @@ mod tests {
         let (base, mut rx) = spawn_receiver().await;
         let bearer = LanHttpBearer::new(base, None);
         let mut stats = RelayStats::default();
-        let ev = AtlasEvent::new("capture.occupancy", None, vec![1, 2, 3]);
+        let ev = NodeEvent::new("capture.occupancy", None, vec![1, 2, 3]);
         forward_payload(&bearer, &ev.encode().unwrap(), &mut stats).await;
         assert_eq!(rx.recv().await.unwrap(), ev);
         assert_eq!(
@@ -407,7 +407,7 @@ mod tests {
 
         host.wait_for(|h| h.aux_callback.lock().is_some()).await;
         let callback = host.aux_callback.lock().clone().unwrap();
-        let ev = AtlasEvent::new("capture.pose", None, vec![7]);
+        let ev = NodeEvent::new("capture.pose", None, vec![7]);
         callback(9, ev.encode().unwrap());
         callback(APP_STREAM, ev.encode().unwrap());
         assert_eq!(rx.recv().await.unwrap(), ev);

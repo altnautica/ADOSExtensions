@@ -1,7 +1,7 @@
 /**
- * @module atlas-readiness-store
- * @description Per-drone capture capture-readiness cache, keyed by the bare device
- * id. `use-atlas-control` polls `GET /api/atlas/readiness` for the focused drone
+ * @module readiness-store
+ * @description Per-drone capture-readiness cache, keyed by the bare device
+ * id. `use-capture-control` polls `GET /api/plugins/com.altnautica.capture/x/capture/readiness` for the focused drone
  * (local-first) and writes the snapshot here; the node-detail surface reads
  * {@link CaptureReadinessState.isCapturing} to decide whether the "Live World"
  * tab is shown — one tab when the drone is not capturing, two while it is.

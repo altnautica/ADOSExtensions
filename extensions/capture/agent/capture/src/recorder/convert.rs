@@ -156,7 +156,7 @@ pub fn location_fix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
+    use ados_mapping_protocol::capture::{PoseSource, VioHealth};
 
     #[test]
     fn formats_pick_their_message() {

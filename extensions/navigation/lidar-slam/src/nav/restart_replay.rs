@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use ados_capture_contract::v1::{ImuBatch, ImuSample as BusImu};
 use ados_capture_contract::Rig;
-use ados_mapping_protocol::atlas::ComputePlacement;
+use ados_mapping_protocol::capture::ComputePlacement;
 use serde_json::json;
 
 use super::*;

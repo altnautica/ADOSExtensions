@@ -1,18 +1,18 @@
-//! Shared-data world-model artifact descriptors. Each carries the capture
+//! Shared-data reconstruction artifact descriptors. Each carries the capture
 //! contract's [`Placement`]: where its coordinates sit in the world (the ENU
 //! frame at the session anchor, or a local frame when the anchor is `null`).
 
 use ados_capture_contract::Placement;
 use serde::{Deserialize, Serialize};
 
-/// The monotonic generation counter every world-model artifact set is stamped
+/// The monotonic generation counter every reconstruction artifact set is stamped
 /// with. A reconstruction is a JOB producing an immutable artifact set, not a
 /// stream: generation N's splat, cloud, mesh and occupancy all describe the
 /// same capture state, so a consumer can diff generations and a viewer can
 /// fetch coarse chunks of N while N-1 is still on screen.
 pub type Generation = u32;
 
-/// Shared-data descriptor on [`super::PLUGIN_ATLAS_POINTCLOUD_TOPIC`]. The heavy buffer
+/// Descriptor on [`super::RECONSTRUCT_POINTCLOUD_TOPIC`]. The heavy buffer
 /// rides the shm ring (`shm_name`/`slot`/`seq`) or a
 /// stream-lane `url`; this carries the summary only.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,7 +53,7 @@ pub enum OccupancyField {
     Esdf,
 }
 
-/// Shared-data descriptor on [`super::PLUGIN_ATLAS_OCCUPANCY_TOPIC`].
+/// Descriptor on [`super::RECONSTRUCT_OCCUPANCY_TOPIC`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OccupancyDescriptor {
     /// Always [`super::nav::MapPayloadKind::Product`]: the same topic also
@@ -95,7 +95,7 @@ pub struct OccupancyDescriptor {
     pub url: Option<String>,
 }
 
-/// Shared-data descriptor on [`super::PLUGIN_ATLAS_SPLAT_TOPIC`].
+/// Descriptor on [`super::RECONSTRUCT_SPLAT_TOPIC`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SplatDescriptor {
     /// The capture session this splat was trained from.
@@ -130,7 +130,7 @@ pub struct SplatDescriptor {
     pub lod_levels: u8,
 }
 
-/// Shared-data descriptor on [`super::PLUGIN_ATLAS_MESH_TOPIC`].
+/// Descriptor on [`super::RECONSTRUCT_MESH_TOPIC`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MeshDescriptor {
     /// The capture session this mesh was extracted from.

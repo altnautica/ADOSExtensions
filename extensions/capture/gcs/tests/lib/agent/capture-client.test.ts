@@ -1,5 +1,5 @@
 /**
- * The capture device client: each action hits its `atlas/` route with the
+ * The capture device client: each action hits its `capture/` route with the
  * snake_case body the device expects, a refusal carries the device's error
  * code, and reads degrade to null.
  */
@@ -20,7 +20,7 @@ describe("CaptureClient", () => {
     });
     expect(res).toEqual({ ok: true, value: { sessionId: "visor-1-x" } });
     const { path, init } = callAt(fetch);
-    expect(path).toBe("atlas/capture/start");
+    expect(path).toBe("capture/start");
     expect(JSON.parse(String(init.body))).toEqual({
       site: "Warehouse 3",
       floor: 1,
@@ -47,7 +47,7 @@ describe("CaptureClient", () => {
   it("marks a segment with room and floor", async () => {
     const { agent, fetch } = stubAgent(() => json(200, { ok: true, segment: 3 }));
     expect(await new CaptureClient(agent).mark("Kitchen", 0)).toEqual({ ok: true, value: { segment: 3 } });
-    expect(callAt(fetch).path).toBe("atlas/capture/mark");
+    expect(callAt(fetch).path).toBe("capture/mark");
     expect(JSON.parse(String(callAt(fetch).init.body))).toEqual({ room: "Kitchen", floor: 0 });
   });
 
@@ -66,7 +66,7 @@ describe("CaptureClient", () => {
   it("deletes a session only with force when it is not uploaded", async () => {
     const { agent, fetch } = stubAgent(() => json(200, {}));
     await new CaptureClient(agent).deleteSession("a b", true);
-    expect(callAt(fetch).path).toBe("atlas/sessions/a%20b?force=true");
+    expect(callAt(fetch).path).toBe("capture/sessions/a%20b?force=true");
     expect(callAt(fetch).init.method).toBe("DELETE");
   });
 
@@ -74,7 +74,7 @@ describe("CaptureClient", () => {
     const { agent, fetch } = stubAgent(() => json(200, { ok: true, rig_id: "r1", calib_version: "v2" }));
     const rig = { contract: "ados.capture/1" as const, rig_id: "r1", calib_version: "v2", sensors: [] };
     expect(await new CaptureClient(agent).putRig(rig)).toEqual({ ok: true, value: { rigId: "r1", calibVersion: "v2" } });
-    expect(callAt(fetch).path).toBe("atlas/rig");
+    expect(callAt(fetch).path).toBe("capture/rig");
     expect(JSON.parse(String(callAt(fetch).init.body))).toEqual(rig);
   });
 
@@ -88,16 +88,16 @@ describe("CaptureClient", () => {
 
   it("negotiates a WHEP preview through the device and tears it down", async () => {
     const { agent, fetch } = stubAgent((path) =>
-      path.startsWith("atlas/capture/whep")
+      path.startsWith("capture/whep")
         ? Promise.resolve(new Response("v=0 answer", { status: 201, headers: { Location: "whep/s1?camera=cam_fl" } }))
         : Promise.resolve(new Response(null, { status: 200 })),
     );
     const c = new CaptureClient(agent);
     expect(await c.whepOffer("cam_fl", "v=0 offer")).toEqual({ answer: "v=0 answer", location: "whep/s1?camera=cam_fl" });
-    expect(callAt(fetch).path).toBe("atlas/capture/whep?camera=cam_fl");
+    expect(callAt(fetch).path).toBe("capture/whep?camera=cam_fl");
     expect(callAt(fetch).init.body).toBe("v=0 offer");
     await c.whepClose("whep/s1?camera=cam_fl");
-    expect(callAt(fetch, 1).path).toBe("atlas/capture/whep/s1?camera=cam_fl");
+    expect(callAt(fetch, 1).path).toBe("capture/whep/s1?camera=cam_fl");
     expect(callAt(fetch, 1).init.method).toBe("DELETE");
   });
 });

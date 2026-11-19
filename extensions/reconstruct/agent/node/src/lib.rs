@@ -1,4 +1,4 @@
-//! World Engine compute node.
+//! Reconstruct: the reconstruction node.
 //!
 //! The engine behind the extension's `node` service on a workstation or
 //! compute node: a SQLite-backed job store, a queue and scheduler with a
@@ -89,15 +89,15 @@ pub use engine::Engine;
 pub use heartbeat_sidecar::{
     status_payload, ComputeHeartbeatSidecar, SlaveEntry, COMPUTE_HEARTBEAT_SIDECAR_VERSION,
 };
-pub use ingest::{submit_reconstruct_job, AtlasIngest};
+pub use ingest::{submit_reconstruct_job, CaptureIngest};
 pub use jobs_sync::{
-    build_atlas_jobs, put_accepted, AtlasJob, AtlasJobEntry, JobsCloudSync, PendingRecord,
+    build_cloud_jobs, put_accepted, CloudJob, CloudJobEntry, JobsCloudSync, PendingRecord,
     JOBS_COLLECTION,
 };
 pub use keyframe_persister::{dataset_anchor, dataset_id_for, KeyframePersister};
 pub use lanes::{gate, upload_and_artifact_lanes};
 #[cfg(unix)]
-pub use lanes::{lane_router, AtlasLanes, LaneRoutes};
+pub use lanes::{lane_router, CaptureLanes, LaneRoutes};
 pub use node_credentials::{
     CredentialError, IssuedCredential, MintedCredential, NodeCredentialStore,
     DEFAULT_NODE_CREDENTIALS_PATH,

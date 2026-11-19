@@ -1,4 +1,4 @@
-//! Serialize a world-model recording to a real Rerun `.rrd` the GCS World viewer
+//! Serialize a reconstruction recording to a real Rerun `.rrd` the GCS World viewer
 //! loads, and build that recording from a finished reconstruction's real files.
 //!
 //! [`rerun_log`](crate::rerun_log) builds the lightweight summary manifest (camera
@@ -38,7 +38,7 @@ const TIMELINE: &str = "capture";
 /// The `.rrd` artifact filename written under a finished job's work directory.
 pub const RERUN_OUTPUT_FILE: &str = "output.rrd";
 /// The recording's application id, embedded in the `.rrd` and shown by the viewer.
-const APP_ID: &str = "ados_atlas_world_model";
+const APP_ID: &str = "ados_reconstruction";
 /// Cap on points logged from one `.ply`; a larger cloud is decimated to a real
 /// (every-k-th) subset so the recording stays bounded. Honest downsample, not fake.
 const MAX_POINTS: usize = 1_000_000;
@@ -304,7 +304,7 @@ pub fn build_world_recording(
     rec
 }
 
-/// Build + write the rerun world-model `.rrd` for a finished reconstruct job and
+/// Build + write the rerun reconstruction `.rrd` for a finished reconstruct job and
 /// return its registrable [`Output`] (kind `"rerun"`, a `file://` URI under the
 /// work root the caller rewrites to the LAN artifact URL). `geometry` is the
 /// reconstruction output's `(kind, uri)`; only a `.ply` `file://` URI under the
@@ -355,7 +355,7 @@ pub fn build_rerun_output(
     Ok(Some(output))
 }
 
-/// The world-model entity path a reconstruction artifact kind logs under.
+/// The reconstruction entity path a reconstruction artifact kind logs under.
 fn entity_for_kind(kind: &str) -> &'static str {
     match kind {
         "splat" => "world/splat",

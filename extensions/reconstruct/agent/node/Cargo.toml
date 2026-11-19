@@ -1,6 +1,6 @@
-# World Engine compute node (workstation / compute profiles): the job store,
-# scheduler and reconstruction pipeline, the Atlas ingest and world-model
-# fan-out, the perception-offload serving side, node credentials, and its
+# Reconstruct's reconstruction node (workstation / compute profiles): the
+# job store, scheduler and reconstruction pipeline, the capture ingest and the
+# live stream, the perception-offload serving side, node credentials, and its
 # job-API mDNS advert (published through the host).
 [package]
 name = "reconstruct-node"
@@ -9,7 +9,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "World Engine compute node: reconstruction jobs, world-model streaming, and perception offload serving for drones on the LAN."
+description = "Reconstruction node: reconstruction jobs, live map streaming, and perception offload serving for drones on the LAN."
 
 [lib]
 name = "reconstruct_node"
@@ -83,10 +83,10 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
-# The plugin host, the agent wire and the Atlas transport are unix-only (they
+# The plugin host, the agent wire and the capture transport are unix-only (they
 # speak unix sockets); a Windows build is the standalone reconstruction node.
 [target.'cfg(unix)'.dependencies]
-# The Atlas event receiver, the world-model WebSocket fan-out, the compute-node
+# The node event receiver, the reconstruction WebSocket fan-out, the compute-node
 # service type and TXT record, and the compute client the offload tests drive.
 ados-mapping-transport = { workspace = true }
 # The plugin host connection (plugin config, telemetry.extend) when the node

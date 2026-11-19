@@ -9,20 +9,20 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
-use ados_mapping_protocol::atlas::AtlasEvent;
+use ados_mapping_protocol::capture::NodeEvent;
 
-use crate::{AtlasBearer, BearerKind, TransportError};
+use crate::{BearerKind, EventBearer, TransportError};
 
 /// An in-process bearer over an unbounded channel.
 pub struct LoopbackBearer {
-    tx: UnboundedSender<AtlasEvent>,
+    tx: UnboundedSender<NodeEvent>,
     available: AtomicBool,
 }
 
 impl LoopbackBearer {
     /// Build a bearer and its receiving end. Events sent over the bearer arrive
     /// on the returned receiver.
-    pub fn channel() -> (Self, UnboundedReceiver<AtlasEvent>) {
+    pub fn channel() -> (Self, UnboundedReceiver<NodeEvent>) {
         let (tx, rx) = unbounded_channel();
         (
             Self {
@@ -40,7 +40,7 @@ impl LoopbackBearer {
 }
 
 #[async_trait::async_trait]
-impl AtlasBearer for LoopbackBearer {
+impl EventBearer for LoopbackBearer {
     fn kind(&self) -> BearerKind {
         BearerKind::Loopback
     }
@@ -49,7 +49,7 @@ impl AtlasBearer for LoopbackBearer {
         self.available.load(Ordering::Relaxed) && !self.tx.is_closed()
     }
 
-    async fn send(&self, event: &AtlasEvent) -> Result<(), TransportError> {
+    async fn send(&self, event: &NodeEvent) -> Result<(), TransportError> {
         if !self.available.load(Ordering::Relaxed) {
             return Err(TransportError::Unavailable);
         }
@@ -63,8 +63,8 @@ impl AtlasBearer for LoopbackBearer {
 mod tests {
     use super::*;
 
-    fn event(topic: &str) -> AtlasEvent {
-        AtlasEvent::new(topic, None, vec![1, 2, 3])
+    fn event(topic: &str) -> NodeEvent {
+        NodeEvent::new(topic, None, vec![1, 2, 3])
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 /**
- * @module atlas/capture-requirements
- * @description Pure gating logic for the capture capture "setup" surface. Turns a
+ * @module capture/requirements
+ * @description Pure gating logic for the capture "setup" surface. Turns a
  * drone's readiness snapshot plus the GCS's own knowledge of paired compute
  * nodes into (a) a requirements checklist and (b) whether "Start capture" is
  * allowed and, if not, why. Kept side-effect-free so it is unit-testable and so
@@ -31,7 +31,7 @@ export interface CaptureRequirement {
   met: boolean;
   /** Icon tone: met (green check), warning (amber), unmet (red). */
   tone: RequirementTone;
-  /** i18n key (under the `atlas` namespace) for the requirement title. */
+  /** i18n key (under the `setup.capture` namespace) for the requirement title. */
   labelKey: string;
   /** i18n key for the status / "what to do" detail line. */
   detailKey: string;

@@ -120,7 +120,7 @@ fn remove_if_present(p: &Path) -> Result<(), StageError> {
 mod tests {
     use std::io::Write;
 
-    use ados_mapping_protocol::atlas::{PolarScan, VioHealth};
+    use ados_mapping_protocol::capture::{PolarScan, VioHealth};
 
     use super::*;
 

@@ -52,7 +52,7 @@ use ados_mapping_pose::fc_ekf::{NavSample, NavSink};
 use ados_mapping_pose::geodesy::{R_ENU_NED, R_FRD_FLU};
 use ados_mapping_pose::mavlink_msg::RawImu;
 use ados_mapping_pose::{se3, PoseProvider};
-use ados_mapping_protocol::atlas::{ImuFeedReason, ImuFeedState, VioHealth};
+use ados_mapping_protocol::capture::{ImuFeedReason, ImuFeedState, VioHealth};
 
 /// The `navigation.lidar.imu` id that selects this stream.
 pub const FC_IMU_ID: &str = "fc";
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn a_feed_without_a_yaw_rate_loses_the_pose_and_a_starved_one_degrades_it() {
         use ados_mapping_pose::pose::PoseEstimate;
-        use ados_mapping_protocol::atlas::{PoseSource, POSE_COV_LEN};
+        use ados_mapping_protocol::capture::{PoseSource, POSE_COV_LEN};
         let poses = || {
             [VioHealth::Good, VioHealth::Degraded, VioHealth::Lost].map(|health| PoseEstimate {
                 t_ns: 0,
@@ -599,8 +599,8 @@ mod tests {
     }
 
     impl PoseProvider for Fed {
-        fn source(&self) -> ados_mapping_protocol::atlas::PoseSource {
-            ados_mapping_protocol::atlas::PoseSource::Lidar
+        fn source(&self) -> ados_mapping_protocol::capture::PoseSource {
+            ados_mapping_protocol::capture::PoseSource::Lidar
         }
         fn track(&self) -> &ados_mapping_pose::pose::PoseTrack {
             &self.track

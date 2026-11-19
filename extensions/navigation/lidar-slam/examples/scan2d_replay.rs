@@ -13,7 +13,7 @@
 use std::fs::File;
 use std::time::Instant;
 
-use ados_mapping_protocol::atlas::PolarScan;
+use ados_mapping_protocol::capture::PolarScan;
 use ados_scan2d::{ImuSample, LocalSlam, Scan2dConfig, ScanInput};
 
 fn scan_input(s: &PolarScan) -> ScanInput {

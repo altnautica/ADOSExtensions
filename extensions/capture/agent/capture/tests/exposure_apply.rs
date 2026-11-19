@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_mapping_pose::frame_source::{AtlasFrameSource, EngineFrameSource};
+use ados_mapping_pose::frame_source::{EngineFrameSource, FrameFeed};
 use ados_mapping_pose::replay::ReplayPose;
 use ados_mapping_pose::sensor_bus::SensorState;
 use ados_mapping_pose::vehicle::VehicleFeed;
@@ -71,7 +71,7 @@ async fn a_slow_camera_answers_pending_and_the_state_catches_up() {
     let deps = LoopDeps {
         cfg,
         profile: "visor".into(),
-        frames: AtlasFrameSource::Engine(EngineFrameSource::from_receiver(frx)),
+        frames: FrameFeed::Engine(EngineFrameSource::from_receiver(frx)),
         router: None,
         pose: Arc::new(ReplayPose::new(Vec::new())),
         fc: None,

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ados_mapping_protocol::atlas::ComputePlacement;
+use ados_mapping_protocol::capture::ComputePlacement;
 use ados_mapping_transport::host::{EventCallback, Host};
 use parking_lot::Mutex;
 use serde::Deserialize;

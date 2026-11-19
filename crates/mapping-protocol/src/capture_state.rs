@@ -1,29 +1,29 @@
-//! The Atlas telemetry slice: the `atlas` half of the extension's `status`
-//! telemetry channel, in the camelCase shape the GCS World Model pages read.
+//! The capture telemetry slice: the `capture` member of the capture link's
+//! `status` telemetry channel, in the camelCase shape the Capture GCS reads.
 //!
 //! The capture fields are the capture service's own (state / session /
 //! keyframes / cameras / VIO health), taken from the latest capture-state event
-//! on the private atlas bus. The three *transport* fields (the compute node, the
+//! on the capture service's private bus. The three *transport* fields (the compute node, the
 //! active bearer, and the last-forwarded-keyframe time) are known only by the
-//! drone-side forwarder, which passes its [`AtlasForwardStatus`] in; with no
+//! drone-side forwarder, which passes its [`KeyframeForwardStatus`] in; with no
 //! forward status the transport fields are omitted rather than defaulted.
 
 use serde::Serialize;
 
-use crate::atlas::{
-    bearer_carries_keyframes, bearer_keyframe_degraded_reason, AtlasForwardStatus, CaptureState,
-    CaptureStatus, PoseSource, VioHealth,
+use crate::capture::{
+    bearer_carries_keyframes, bearer_keyframe_degraded_reason, CaptureState, CaptureStatus,
+    KeyframeForwardStatus, PoseSource, VioHealth,
 };
 
 /// Schema version stamped on the slice, so a reader can detect a
 /// producer/reader drift.
-pub const ATLAS_STATE_VERSION: u16 = 1;
+pub const CAPTURE_STATE_VERSION: u16 = 1;
 
-/// The Atlas telemetry slice.
+/// The capture telemetry slice.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AtlasStateSlice<'a> {
-    /// Schema version, [`ATLAS_STATE_VERSION`].
+pub struct CaptureStateSlice<'a> {
+    /// Schema version, [`CAPTURE_STATE_VERSION`].
     version: u16,
     /// Local build time (epoch ms), for the consumer's own freshness reasoning.
     generated_at_ms: i64,
@@ -68,17 +68,17 @@ pub struct AtlasStateSlice<'a> {
 
 /// Build the slice from a capture status and the forwarder's (optional)
 /// transport facts, stamped `generated_at_ms`.
-pub fn atlas_state_slice<'a>(
+pub fn capture_state_slice<'a>(
     status: &'a CaptureStatus,
-    forward: Option<&'a AtlasForwardStatus>,
+    forward: Option<&'a KeyframeForwardStatus>,
     generated_at_ms: i64,
-) -> AtlasStateSlice<'a> {
+) -> CaptureStateSlice<'a> {
     // The keyframe-carrying fact is a pure property of the bearer name, decided
     // once in the contract so the forwarder, this slice and the GCS cannot give
     // three answers. With no known bearer both fields stay absent.
     let bearer = forward.and_then(|f| f.bearer.as_deref());
-    AtlasStateSlice {
-        version: ATLAS_STATE_VERSION,
+    CaptureStateSlice {
+        version: CAPTURE_STATE_VERSION,
         generated_at_ms,
         state: &status.state,
         session_id: &status.session_id,
@@ -98,20 +98,20 @@ pub fn atlas_state_slice<'a>(
     }
 }
 
-/// [`atlas_state_slice`] as a JSON value, ready for `telemetry.extend`.
-pub fn atlas_state_json(
+/// [`capture_state_slice`] as a JSON value, ready for `telemetry.extend`.
+pub fn capture_state_json(
     status: &CaptureStatus,
-    forward: Option<&AtlasForwardStatus>,
+    forward: Option<&KeyframeForwardStatus>,
     generated_at_ms: i64,
 ) -> serde_json::Value {
-    serde_json::to_value(atlas_state_slice(status, forward, generated_at_ms))
+    serde_json::to_value(capture_state_slice(status, forward, generated_at_ms))
         .unwrap_or(serde_json::Value::Null)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atlas::ATLAS_FORWARD_STATUS_VERSION;
+    use crate::capture::FORWARD_STATUS_VERSION;
 
     fn status() -> CaptureStatus {
         CaptureStatus {
@@ -131,14 +131,14 @@ mod tests {
 
     #[test]
     fn the_slice_uses_the_camelcase_gcs_field_names() {
-        let v = atlas_state_json(&status(), None, 7);
+        let v = capture_state_json(&status(), None, 7);
         assert_eq!(v["state"], "capturing");
         assert_eq!(v["sessionId"], "sess-1");
         assert_eq!(v["keyframesIngested"], 42);
         assert_eq!(v["ingestRateHz"], 9.5);
         assert_eq!(v["cameraCount"], 3);
         assert_eq!(v["vioHealth"], "good");
-        assert_eq!(v["version"], ATLAS_STATE_VERSION);
+        assert_eq!(v["version"], CAPTURE_STATE_VERSION);
         assert_eq!(v["generatedAtMs"], 7);
         // With no forward status, the transport fields are omitted (not null).
         assert!(v.get("computeNodeId").is_none());
@@ -149,14 +149,14 @@ mod tests {
 
     #[test]
     fn the_forward_status_folds_the_transport_fields_into_the_slice() {
-        let forward = AtlasForwardStatus {
-            version: ATLAS_FORWARD_STATUS_VERSION,
+        let forward = KeyframeForwardStatus {
+            version: FORWARD_STATUS_VERSION,
             compute_node_id: Some("rtx-box".into()),
             bearer: Some("wfb-relay".into()),
             last_kf_at_ms: Some(1_700),
             generated_at_ms: 1_699,
         };
-        let v = atlas_state_json(&status(), Some(&forward), 1_800);
+        let v = capture_state_json(&status(), Some(&forward), 1_800);
         assert_eq!(v["computeNodeId"], "rtx-box");
         assert_eq!(v["bearer"], "wfb-relay");
         assert_eq!(v["lastKfAt"], 1_700);

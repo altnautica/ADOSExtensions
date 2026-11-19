@@ -1,4 +1,4 @@
-//! Atlas SITL gate harness: the mock-runnable slices of the G0→Gn kill-gate
+//! Capture SITL harness: the mock-runnable slices of the G0→Gn kill-gate
 //! ladder, run in-process end-to-end with no real GPU / camera / RF.
 //!
 //! These prove the BUILT pipeline pieces COMPOSE — a simulated capture's events
@@ -6,29 +6,29 @@
 //! into the job queue, and are reconstructed (mock) into an output — which the
 //! per-crate unit tests do not exercise together. The real-GPU / real-camera /
 //! real-RF criteria of each gate are bench items (the stop boundary, M15); a
-//! WFB-relay or cloud lane substitutes the same `AtlasBearer` here.
+//! WFB-relay or cloud lane substitutes the same `EventBearer` here.
 // These tests drive the unix-socket transport and the issued-credential store.
 #![cfg(unix)]
 
 use ados_capture_contract::Placement;
-use ados_mapping_protocol::atlas::{SplatDescriptor, PLUGIN_ATLAS_SPLAT_TOPIC};
+use ados_mapping_protocol::capture::{SplatDescriptor, RECONSTRUCT_SPLAT_TOPIC};
 use ados_mapping_protocol::compute::{
     ComputeJobKind, ComputeJobState, ComputeRole, SlaveDescriptor,
 };
 use ados_mapping_transport::{
-    atlas_event_router, AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer,
-    LoopbackBearer, WorldBroadcaster,
+    event_router, BearerKind, BearerLadder, EventBearer, LanHttpBearer, LoopbackBearer, NodeEvent,
+    WorldBroadcaster,
 };
 use reconstruct_node::{
-    submit_reconstruct_job, AtlasIngest, JobRecord, RerunArchetype, RerunRecording,
+    submit_reconstruct_job, CaptureIngest, JobRecord, RerunArchetype, RerunRecording,
 };
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 
-#[path = "support/atlas_sitl.rs"]
-mod atlas_support;
+#[path = "support/capture_sitl.rs"]
+mod capture_support;
 
-use atlas_support::{bagged, deliver_for, engine, keyframe, keyframe_env};
+use capture_support::{bagged, deliver_for, engine, keyframe, keyframe_env};
 
 /// G0: a simulated single-camera capture flows drone→compute over the LAN bearer,
 /// is ingested into a dataset, reconstructed (mock), and yields a usable splat.
@@ -41,7 +41,7 @@ async fn g0_single_camera_capture_reconstructs_to_a_splat_end_to_end() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        let _ = axum::serve(listener, atlas_event_router(tx)).await;
+        let _ = axum::serve(listener, event_router(tx)).await;
     });
 
     // The drone forwards keyframes + a bagged state over the LAN bearer.
@@ -54,7 +54,7 @@ async fn g0_single_camera_capture_reconstructs_to_a_splat_end_to_end() {
 
     // The compute node ingests each received event; the bagged state submits a job.
     let tmp = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(tmp.path());
+    let mut ingest = CaptureIngest::new(tmp.path());
     let mut job_id = None;
     for _ in 0..(N + 1) {
         let ev = rx.recv().await.expect("the bearer delivered the event");
@@ -84,11 +84,11 @@ async fn g0_single_camera_capture_reconstructs_to_a_splat_end_to_end() {
 
 /// Integrated send-path gate: a drone publishes a capture's events over the
 /// in-process [`LoopbackBearer`] via the same [`BearerLadder`] the drone-side
-/// Atlas forwarder uses, and the compute node's receiver drain loop — the shape
-/// the node service's `atlas_receiver_loop` runs (`while let Some(ev) =
+/// keyframe forwarder uses, and the compute node's receiver drain loop — the shape
+/// the node service's `capture_receiver_loop` runs (`while let Some(ev) =
 /// rx.recv()`, terminating on channel close) — drains the bearer's channel,
 /// ingests each event, and enqueues a reconstruct job on the terminal `Bagged`
-/// state. Proves forwarder → bearer → receiver → [`AtlasIngest::ingest`] →
+/// state. Proves forwarder → bearer → receiver → [`CaptureIngest::ingest`] →
 /// enqueue composes in-process with no TCP, GPU, camera, or RF.
 #[tokio::test]
 async fn integrated_loopback_capture_drains_into_an_enqueued_reconstruct_job() {
@@ -117,13 +117,13 @@ async fn integrated_loopback_capture_drains_into_an_enqueued_reconstruct_job() {
     // daemon's receiver loop does on shutdown.
     drop(ladder);
 
-    // ── Compute side: the receiver drain loop. One `AtlasIngest` for the session
+    // ── Compute side: the receiver drain loop. One `CaptureIngest` for the session
     //    counts keyframes and, on the `Bagged` state, submits the reconstruct job
-    //    the workers pick up (mirrors `atlas_receiver_loop`, run inline against
+    //    the workers pick up (mirrors `capture_receiver_loop`, run inline against
     //    the engine's store). ──
     let store = engine.scheduler().store();
     let tmp = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(tmp.path());
+    let mut ingest = CaptureIngest::new(tmp.path());
     let mut enqueued_job = None;
     while let Some(event) = rx.recv().await {
         if let Some((dataset, job)) = ingest.step(&event, 200).unwrap() {
@@ -289,7 +289,7 @@ async fn g2_bag_pipeline_reconstructs_to_a_delivered_output() {
 
     // The PostFlightBulk bearer is not implemented; the in-process loopback
     // bearer stands in for the post-flight-bulk LAN lane here (identical
-    // AtlasEvent contract, no GPU / camera / RF).
+    // NodeEvent contract, no GPU / camera / RF).
     let (bearer, mut rx) = LoopbackBearer::channel();
     let ladder = BearerLadder::new(vec![Box::new(bearer)]);
 
@@ -302,7 +302,7 @@ async fn g2_bag_pipeline_reconstructs_to_a_delivered_output() {
 
     let store = engine.scheduler().store();
     let tmp = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(tmp.path());
+    let mut ingest = CaptureIngest::new(tmp.path());
     let mut job_id = None;
     while let Some(ev) = rx.recv().await {
         if let Some((dataset, job)) = ingest.step(&ev, 200).unwrap() {
@@ -355,7 +355,7 @@ async fn g3_plugin_data_share_isolates_per_device_and_offloads() {
     assert_eq!(broadcaster.subscriber_count(), 2);
 
     // One drone's splat generation is published for its device only.
-    let splat = AtlasEvent::new(PLUGIN_ATLAS_SPLAT_TOPIC, None, vec![1, 2, 3]);
+    let splat = NodeEvent::new(RECONSTRUCT_SPLAT_TOPIC, None, vec![1, 2, 3]);
     broadcaster.publish("drone-1", splat);
 
     // drone-1's plugin view receives it; drone-2's view filters it out.
@@ -363,7 +363,7 @@ async fn g3_plugin_data_share_isolates_per_device_and_offloads() {
     let for_two = deliver_for(&mut rx_two, "drone-2").await;
     assert_eq!(
         for_one.as_ref().map(|e| e.topic.as_str()),
-        Some(PLUGIN_ATLAS_SPLAT_TOPIC),
+        Some(RECONSTRUCT_SPLAT_TOPIC),
         "drone-1's plugin view receives its own world descriptor"
     );
     assert!(

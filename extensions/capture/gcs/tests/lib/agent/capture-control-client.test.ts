@@ -1,6 +1,6 @@
 /**
- * The capture capture-control client: defensive coercion of the wire shapes, the
- * `atlas/<path>` routing through the node agent, the snake_case config-patch
+ * The capture-control client: defensive coercion of the wire shapes, the
+ * `capture/<path>` routing through the node agent, the `capture.*` config-patch
  * mapping, and the 503 "capture service down" branch.
  */
 
@@ -39,7 +39,7 @@ const READINESS_WIRE = {
   service_running: true,
   capturing: true,
   state: "capturing",
-  session_id: "atlas-123",
+  session_id: "s-123",
   camera_count: 6,
   keyframes: 42,
   ingest_rate_hz: 6.5,
@@ -66,7 +66,7 @@ describe("coerceReadiness", () => {
       serviceRunning: true,
       capturing: true,
       state: "capturing",
-      sessionId: "atlas-123",
+      sessionId: "s-123",
       cameraCount: 6,
       keyframes: 42,
       ingestRateHz: 6.5,
@@ -123,12 +123,12 @@ describe("CaptureControlClient", () => {
     vi.restoreAllMocks();
   });
 
-  it("getReadiness GETs atlas/readiness through the node agent", async () => {
+  it("getReadiness GETs capture/readiness through the node agent", async () => {
     const { agent, fetch } = stubAgent(() => json(200, READINESS_WIRE));
     const r = await new CaptureControlClient(agent).getReadiness();
     expect(r?.capturing).toBe(true);
     const { path, init } = call(fetch);
-    expect(path).toBe("atlas/readiness");
+    expect(path).toBe("capture/readiness");
     expect(init.method).toBe("GET");
     expect(init.body).toBeUndefined();
   });
@@ -148,30 +148,30 @@ describe("CaptureControlClient", () => {
     expect(await new CaptureControlClient(agent).getReadiness()).toBeNull();
   });
 
-  it("setConfig PUTs atlas/config and maps the camelCase patch to snake_case", async () => {
+  it("setConfig PUTs capture/config and maps the camelCase patch to the capture keys", async () => {
     const { agent, fetch } = stubAgent(() =>
-      json(200, { status: "ok", enabled: true, restart: { ados_atlas: true } }),
+      json(200, { status: "ok", enabled: true, restart: { capture: true } }),
     );
     const out = await new CaptureControlClient(agent).setConfig({
       enabled: true,
       captureProfile: "fast",
       reconstructSteps: 7000,
     });
-    expect(out).toEqual({ ok: true, enabled: true, restart: { ados_atlas: true } });
+    expect(out).toEqual({ ok: true, enabled: true, restart: { capture: true } });
     const { path, init } = call(fetch);
-    expect(path).toBe("atlas/config");
+    expect(path).toBe("capture/config");
     expect(init.method).toBe("PUT");
     expect(JSON.parse(String(init.body))).toEqual({
-      enabled: true,
-      capture_profile: "fast",
-      reconstruct_steps: 7000,
+      "capture.enabled": true,
+      "capture.capture_profile": "fast",
+      "capture.reconstruct_steps": 7000,
     });
   });
 
   it("setConfig sends only the fields the patch names", async () => {
     const { agent, fetch } = stubAgent(() => json(200, { status: "ok", enabled: false }));
     await new CaptureControlClient(agent).setConfig({ enabled: false });
-    expect(JSON.parse(String(call(fetch).init.body))).toEqual({ enabled: false });
+    expect(JSON.parse(String(call(fetch).init.body))).toEqual({ "capture.enabled": false });
   });
 
   it("setConfig reports a failed service restart as a failure with its reason", async () => {
@@ -209,12 +209,12 @@ describe("CaptureControlClient", () => {
     expect(timeout.mock.calls[0]?.[0]).toBeGreaterThanOrEqual(40_000);
   });
 
-  it("captureStart POSTs atlas/capture/start and returns the coerced status", async () => {
+  it("captureStart POSTs capture/start and returns the coerced status", async () => {
     const { agent, fetch } = stubAgent(() => json(200, CAPTURE_WIRE));
     const r = await new CaptureControlClient(agent).captureStart();
     expect(r.ok && r.status.sessionId).toBe("s9");
     const { path, init } = call(fetch);
-    expect(path).toBe("atlas/capture/start");
+    expect(path).toBe("capture/start");
     expect(init.method).toBe("POST");
   });
 
@@ -225,9 +225,9 @@ describe("CaptureControlClient", () => {
     await c.capturePause();
     await c.captureResume();
     expect(fetch.mock.calls.map((args) => args[0])).toEqual([
-      "atlas/capture/stop",
-      "atlas/capture/pause",
-      "atlas/capture/resume",
+      "capture/stop",
+      "capture/pause",
+      "capture/resume",
     ]);
   });
 

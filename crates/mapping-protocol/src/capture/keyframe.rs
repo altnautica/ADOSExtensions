@@ -374,7 +374,7 @@ pub struct CaptureStatus {
     /// count claims.
     #[serde(default)]
     pub dropped_keyframes: u64,
-    /// The drone's `atlas.reconstruct_steps` for this session: the splat
+    /// The drone's `capture.reconstruct_steps` for this session: the splat
     /// training length the compute node stamps on the reconstruct jobs it
     /// submits for the session. Absent when the drone has no setting, and the
     /// node then uses its own default.
@@ -382,7 +382,7 @@ pub struct CaptureStatus {
     pub reconstruct_steps: Option<u64>,
 }
 
-/// Shared-data descriptor on [`super::PLUGIN_ATLAS_POSE_TOPIC`]: the body FRD
+/// Navigation's pose descriptor (`plugin.navigation.pose`): the body FRD
 /// pose in `frame` (`R` world-from-body, `t` body origin), the estimator that
 /// produced it and its health.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

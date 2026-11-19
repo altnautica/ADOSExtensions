@@ -108,7 +108,7 @@ fn keyframe_envelope_round_trips() {
 }
 
 #[test]
-fn world_model_descriptors_round_trip() {
+fn reconstruction_descriptors_round_trip() {
     let status = CaptureStatus {
         session_id: "sess-1".into(),
         state: CaptureState::Capturing,
@@ -132,7 +132,7 @@ fn world_model_descriptors_round_trip() {
         placement: Placement::identity(Some(sample_anchor())),
         point_count: 10_000,
         bounds: [-1.0, -1.0, -1.0, 1.0, 1.0, 1.0],
-        shm_name: Some("atlas-cloud-0".into()),
+        shm_name: Some("cloud-0".into()),
         slot: Some(2),
         seq: Some(99),
         url: None,
@@ -224,7 +224,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         dims: [100, 100, 40],
         field: OccupancyField::Esdf,
         truncation_m: 2.0,
-        shm_name: Some("atlas-occ-0".into()),
+        shm_name: Some("occ-0".into()),
         slot: Some(1),
         seq: Some(7),
         url: None,

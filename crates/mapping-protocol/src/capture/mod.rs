@@ -1,19 +1,14 @@
-//! Atlas world-model wire contract.
+//! The capture and reconstruction wire contract.
 //!
-//! The topic names and wire structs for the world-model program: a drone
-//! captures pose-tagged keyframes, a compute node reconstructs a 3D world model
-//! (splat / cloud / mesh / occupancy), and the result is consumable as shared
-//! data rather than only viewable. Two topic roots:
+//! The topic names and wire structs between a capture device and a
+//! reconstruction node: a drone or Visor captures pose-tagged keyframes, a
+//! node reconstructs a splat / cloud / mesh / occupancy from them. Two topic
+//! roots, neither on the plugin host's shared bus:
 //!
-//! - `atlas.*` is the extension's own internal namespace (capture state, the
-//!   keyframe lane). It stays between the
-//!   extension's processes and the compute node it streams to.
-//! - `plugin.world-engine.*` is the shared-data namespace other plugins
-//!   subscribe to through the extension's manifest `shared_topics` declaration.
-//!   It is not an open namespace: a reconstruction is derived imagery of
-//!   wherever the aircraft flew, and an occupancy field is a planning input, so
-//!   each topic names the capability a subscriber must hold
-//!   ([`atlas_topic_subscribe_capability`]).
+//! - `capture.*`: the capture service's private bus to its link (capture
+//!   state, the keyframe lane), forwarded to the node.
+//! - `reconstruct.*`: what a drone streams to the node for a live map
+//!   (`reconstruct.live.scan`) and what the node serves on its world stream.
 //!
 //! Heavy payloads ride the stream lane; these topics carry small descriptors
 //! only. The envelope is transport-agnostic: the identical struct travels on any
@@ -35,93 +30,36 @@ pub const CAPTURE_STATE_TOPIC: &str = "capture.state";
 /// A selected pose-tagged keyframe ([`KeyframeEnvelope`]) the capture service
 /// emits drone-to-compute. The extension's internal namespace (the keyframe is
 /// the capture artifact, not shared plugin data); a compute node and the
-/// world-model stream lane consume it.
+/// reconstruction stream lane consume it.
 pub const CAPTURE_KEYFRAME_TOPIC: &str = "capture.keyframe";
 
-/// Internal: one raw planar scan with its sensor pose, as a binary
-/// [`PolarScan`] record (not msgpack), sent to the compute node only while the
-/// drone streams (`atlas.compute_placement = stream`) so the node builds the
-/// full-resolution live map.
-pub const ATLAS_SCAN_TOPIC: &str = "atlas.scan";
+/// One raw planar scan with its sensor pose, as a binary [`PolarScan`]
+/// record (not msgpack), sent to the reconstruction node while the drone
+/// streams its map there, so the node builds the full-resolution live map.
+pub const RECONSTRUCT_LIVE_SCAN_TOPIC: &str = "reconstruct.live.scan";
 
-/// Shared-data: current 6-DoF navigation pose in `map_ned` (see [`nav`]),
-/// published while the pose provider runs.
-pub const PLUGIN_ATLAS_POSE_TOPIC: &str = "plugin.world-engine.pose";
+// --- The node's world stream (`/ws/live/:device_id`) ------------------------
 
-/// Shared-data: point-cloud descriptor (count, bounds, url), or the live
-/// sweep-cloud delta ([`LivePointCloud`]).
-pub const PLUGIN_ATLAS_POINTCLOUD_TOPIC: &str = "plugin.world-engine.pointcloud";
+/// A reconstructed point cloud's descriptor (count, bounds, url).
+pub const RECONSTRUCT_POINTCLOUD_TOPIC: &str = "reconstruct.pointcloud";
 
-/// Shared-data: occupancy-grid descriptor (origin, resolution, dims, handle),
-/// or the live occupancy tiles ([`LiveOccupancy`]).
-pub const PLUGIN_ATLAS_OCCUPANCY_TOPIC: &str = "plugin.world-engine.occupancy";
+/// A reconstructed occupancy grid's descriptor (origin, resolution, dims,
+/// handle).
+pub const RECONSTRUCT_OCCUPANCY_TOPIC: &str = "reconstruct.occupancy";
 
-/// Shared-data: "splat updated" descriptor (gaussian count, url / handle).
-pub const PLUGIN_ATLAS_SPLAT_TOPIC: &str = "plugin.world-engine.splat";
+/// "Splat updated" (gaussian count, url / handle).
+pub const RECONSTRUCT_SPLAT_TOPIC: &str = "reconstruct.splat";
 
-/// Shared-data: mesh descriptor (vertex / face count, handle / url).
-pub const PLUGIN_ATLAS_MESH_TOPIC: &str = "plugin.world-engine.mesh";
+/// A reconstructed mesh's descriptor (vertex / face count, handle / url).
+pub const RECONSTRUCT_MESH_TOPIC: &str = "reconstruct.mesh";
 
-/// Shared-data: the latest planar scan in the body frame ([`ScanDescriptor`],
-/// 10 Hz).
-pub const PLUGIN_ATLAS_SCAN_TOPIC: &str = "plugin.world-engine.scan";
+/// The node's live occupancy tiles ([`LiveOccupancy`]) from a streaming
+/// drone's scans.
+pub const RECONSTRUCT_LIVE_OCCUPANCY_TOPIC: &str = "reconstruct.live.occupancy";
 
-/// Shared-data: the live map's state ([`MapStatus`], 1 Hz).
-pub const PLUGIN_ATLAS_MAP_STATUS_TOPIC: &str = "plugin.world-engine.map_status";
-
-/// Shared-data: the configured LiDAR's link and health ([`LidarStatus`],
-/// 1 Hz while the rig declares the sensor).
-pub const PLUGIN_ATLAS_LIDAR_TOPIC: &str = "plugin.world-engine.lidar";
-
-/// Every shared-data world-model topic, in one place, so a consumer or a gate
-/// iterates the set rather than hard-coding string literals that drift.
-pub const PLUGIN_ATLAS_TOPICS: &[&str] = &[
-    PLUGIN_ATLAS_POSE_TOPIC,
-    PLUGIN_ATLAS_POINTCLOUD_TOPIC,
-    PLUGIN_ATLAS_OCCUPANCY_TOPIC,
-    PLUGIN_ATLAS_SPLAT_TOPIC,
-    PLUGIN_ATLAS_MESH_TOPIC,
-    PLUGIN_ATLAS_SCAN_TOPIC,
-    PLUGIN_ATLAS_MAP_STATUS_TOPIC,
-    PLUGIN_ATLAS_LIDAR_TOPIC,
-];
-
-// --- Shared-data access policy --------------------------------------------
-
-/// The capability a plugin must hold to subscribe to `topic`, or `None` when
-/// `topic` is not a world-model shared-data topic. The manifest's
-/// `shared_topics[].subscribe_capability` entries state the same mapping; the
-/// plugin host enforces it on top of `event.subscribe`, never instead of it.
-///
-/// **Exact match, never a prefix.** `plugin.world-engine.occupancy.evil`
-/// resolves to `None`, so it inherits nothing from
-/// `plugin.world-engine.occupancy`. A prefix match would let a topic minted
-/// under a gated prefix be handed that prefix's capability, which turns the
-/// gate into a naming convention.
-pub fn atlas_topic_subscribe_capability(topic: &str) -> Option<&'static str> {
-    match topic {
-        PLUGIN_ATLAS_POSE_TOPIC
-        | PLUGIN_ATLAS_SCAN_TOPIC
-        | PLUGIN_ATLAS_MAP_STATUS_TOPIC
-        | PLUGIN_ATLAS_LIDAR_TOPIC => Some(ATLAS_POSE_READ_CAP),
-        PLUGIN_ATLAS_POINTCLOUD_TOPIC
-        | PLUGIN_ATLAS_OCCUPANCY_TOPIC
-        | PLUGIN_ATLAS_SPLAT_TOPIC
-        | PLUGIN_ATLAS_MESH_TOPIC => Some(ATLAS_WORLD_READ_CAP),
-        _ => None,
-    }
-}
-
-/// The capability gating the world-model artifact descriptors (cloud /
-/// occupancy / splat / mesh). Declared by the extension itself
-/// (`agent.declared_capabilities`): a descriptor names where a reconstruction
-/// of the flown area can be fetched.
-pub const ATLAS_WORLD_READ_CAP: &str = "plugin.world-engine.world.read";
-
-/// The capability gating the live ~10 Hz world pose. It is the same class of
-/// data as the vehicle telemetry a plugin reads under `telemetry.read`,
-/// expressed in the world frame.
-pub const ATLAS_POSE_READ_CAP: &str = "telemetry.read";
+/// The node's live sweep-cloud delta ([`LivePointCloud`]) from a streaming
+/// drone's scans.
+pub const RECONSTRUCT_LIVE_POINTCLOUD_TOPIC: &str = "reconstruct.live.pointcloud";
 
 /// Whether a bearer can carry a full keyframe, from the bearer name the
 /// forwarder already reports (`direct-lan` / `wfb-relay` / `cloud`).
@@ -129,7 +67,7 @@ pub const ATLAS_POSE_READ_CAP: &str = "telemetry.read";
 /// This is a pure property of the bearer, not a runtime measurement: the WFB
 /// relay's datagram ceiling is 1300 bytes against a multi-MB JPEG keyframe, so
 /// on a no-LAN field topology the ladder degrades to pose and status only —
-/// i.e. NO world model — while the operator surface would otherwise report
+/// i.e. NO reconstruction — while the operator surface would otherwise report
 /// `bearer: "wfb-relay"` as though the lane were working. Deciding it here, at
 /// the contract, keeps one answer for the forwarder, the capture service and
 /// the GCS instead of three.
@@ -150,20 +88,20 @@ pub fn bearer_keyframe_degraded_reason(bearer: &str) -> Option<&'static str> {
 
 // --- Forwarder status -----------------------------------------------------
 
-/// Schema version stamped on an [`AtlasForwardStatus`] by its writer.
-pub const ATLAS_FORWARD_STATUS_VERSION: u16 = 1;
+/// Schema version stamped on an [`KeyframeForwardStatus`] by its writer.
+pub const FORWARD_STATUS_VERSION: u16 = 1;
 
 /// The drone-side forwarder's transport facts: the compute node it resolved,
 /// the bearer currently carrying the stream, and when a keyframe last left the
 /// drone. Only the forwarder knows these (the capture service never sees the
-/// bearer ladder), so they are folded into the atlas state the extension
+/// bearer ladder), so they are folded into the capture state the extension
 /// publishes. The bearer is already in the GCS vocabulary (`direct-lan` /
 /// `wfb-relay` / `cloud`); every field is optional so a forwarder with no
 /// resolved node reports an honest "nothing yet".
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AtlasForwardStatus {
-    /// Schema version, stamped [`ATLAS_FORWARD_STATUS_VERSION`] on write. An
+pub struct KeyframeForwardStatus {
+    /// Schema version, stamped [`FORWARD_STATUS_VERSION`] on write. An
     /// older writer emitted no field, so a reader defaults it to `0`.
     #[serde(default)]
     pub version: u16,
@@ -219,7 +157,7 @@ pub use stream::{
     ScanAssembler, ScanChunk, POINT_STRIDE, SCAN_CHUNK_POINTS,
 };
 
-/// The on-wire version stamped on every [`AtlasEvent`] envelope. Every atlas
+/// The on-wire version stamped on every [`NodeEvent`] envelope. Every node
 /// message crosses as an envelope, and the inner topic structs are decoded from
 /// its `payload` only after the envelope decodes, so versioning the envelope
 /// gates the whole contract.
@@ -227,41 +165,41 @@ pub use stream::{
 /// Version 2: keyframes carry the capture contract's camera model, geo anchor,
 /// timebase-stamped exposure time and IMU samples (`t_ns`, `seq`), and every
 /// artifact descriptor carries a placement.
-pub const ATLAS_ENVELOPE_VERSION: u16 = 2;
+pub const EVENT_ENVELOPE_VERSION: u16 = 2;
 
-/// Errors raised decoding an [`AtlasEvent`] envelope.
+/// Errors raised decoding an [`NodeEvent`] envelope.
 #[derive(Debug, Error)]
-pub enum AtlasError {
+pub enum EnvelopeError {
     /// The msgpack body did not decode into an envelope (also fires when the
     /// required version field is absent).
     #[error("msgpack decode error: {0}")]
     Decode(#[from] rmp_serde::decode::Error),
     /// The envelope carried a version this build does not speak.
-    #[error("unsupported atlas envelope version {got} (this build speaks {ours})")]
+    #[error("unsupported event envelope version {got} (this build speaks {ours})")]
     Version { got: u16, ours: u16 },
 }
 
-/// One framed message on the agent's local atlas bus. The capture service binds
-/// a single broadcast socket and tags every message with the topic it belongs to
-/// (one of the `atlas.*` / `plugin.world-engine.*` constants above) so a subscriber can
-/// demultiplex pose, keyframe, and capture-state streams off one connection.
-/// `payload` is the topic's own struct already msgpack-encoded (e.g. a
-/// [`KeyframeEnvelope`] for [`PLUGIN_ATLAS_POSE_TOPIC`]'s sibling keyframe lane),
-/// so the wrapper stays agnostic to which struct it carries.
+/// One framed message between a capture device and a reconstruction node (and
+/// on the capture service's private bus), tagged with the topic it belongs to
+/// (one of the `capture.*` / `reconstruct.*` constants above) so a receiver
+/// demultiplexes the streams off one connection. `payload` is the topic's own
+/// struct already msgpack-encoded (e.g. a [`KeyframeEnvelope`] on
+/// [`CAPTURE_KEYFRAME_TOPIC`]), so the wrapper stays agnostic to which struct
+/// it carries.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AtlasEvent {
+pub struct NodeEvent {
     /// On-wire envelope version, the first field. A decoder that sees a version
-    /// it does not speak rejects the frame in [`AtlasEvent::decode`] rather than
+    /// it does not speak rejects the frame in [`NodeEvent::decode`] rather than
     /// silently mis-parsing the payload; a frame missing this field also fails to
-    /// decode (no serde default). Stamped by [`AtlasEvent::new`]; held equal to
-    /// [`ATLAS_ENVELOPE_VERSION`].
+    /// decode (no serde default). Stamped by [`NodeEvent::new`]; held equal to
+    /// [`EVENT_ENVELOPE_VERSION`].
     #[serde(rename = "v")]
     pub v: u16,
     pub topic: String,
     /// The capturing drone's device id, stamped by the drone-side forwarder as
     /// the event leaves the drone (the single choke point every bearer passes
     /// through). The compute node reads it to attribute a reconstruct job to the
-    /// drone that captured it (the world-model job's `deviceId`). Additive +
+    /// drone that captured it (the reconstruction job's `deviceId`). Additive +
     /// optional: an event on the local publish bus (before egress) omits it, and
     /// a receiver decoding an older frame defaults it to `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -269,13 +207,13 @@ pub struct AtlasEvent {
     pub payload: Vec<u8>,
 }
 
-impl AtlasEvent {
-    /// Build an envelope stamped with the current [`ATLAS_ENVELOPE_VERSION`].
+impl NodeEvent {
+    /// Build an envelope stamped with the current [`EVENT_ENVELOPE_VERSION`].
     /// `device_id` is `None` on the local publish bus and `Some(..)` once the
     /// drone-side forwarder stamps it on egress.
     pub fn new(topic: impl Into<String>, device_id: Option<String>, payload: Vec<u8>) -> Self {
         Self {
-            v: ATLAS_ENVELOPE_VERSION,
+            v: EVENT_ENVELOPE_VERSION,
             topic: topic.into(),
             device_id,
             payload,
@@ -289,14 +227,14 @@ impl AtlasEvent {
 
     /// Decode a msgpack envelope, rejecting a frame whose version this build does
     /// not speak (and a frame missing the version field). Decoding the envelope
-    /// gates the whole atlas contract: a subscriber only reads the inner topic
+    /// gates the whole event contract: a subscriber only reads the inner topic
     /// struct out of `payload` once this succeeds.
-    pub fn decode(bytes: &[u8]) -> Result<Self, AtlasError> {
-        let event: AtlasEvent = rmp_serde::from_slice(bytes)?;
-        if event.v != ATLAS_ENVELOPE_VERSION {
-            return Err(AtlasError::Version {
+    pub fn decode(bytes: &[u8]) -> Result<Self, EnvelopeError> {
+        let event: NodeEvent = rmp_serde::from_slice(bytes)?;
+        if event.v != EVENT_ENVELOPE_VERSION {
+            return Err(EnvelopeError::Version {
                 got: event.v,
-                ours: ATLAS_ENVELOPE_VERSION,
+                ours: EVENT_ENVELOPE_VERSION,
             });
         }
         Ok(event)

@@ -6,7 +6,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ados_mapping_protocol::atlas::CaptureState;
+use ados_mapping_protocol::capture::CaptureState;
 use parking_lot::Mutex;
 use serde::Deserialize;
 

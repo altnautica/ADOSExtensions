@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ados_capture_contract::v1::ImuBatch;
 use ados_mapping_pose::PoseEstimate;
-use ados_mapping_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus, PoseSource};
+use ados_mapping_protocol::capture::{ImuFeedReason, ImuFeedState, ImuFeedStatus, PoseSource};
 
 use super::Lane;
 use crate::nav::fc_imu;
@@ -154,7 +154,7 @@ impl Lane {
         );
     }
 
-    /// [`ados_mapping_protocol::atlas::MapStatus::imu_feed`]: with the FC
+    /// [`ados_mapping_protocol::capture::MapStatus::imu_feed`]: with the FC
     /// feeding the LiDAR pose, whether its feed measures the heading, why
     /// not, and the `RAW_IMU` rate; `None` otherwise.
     pub(super) fn imu_feed_status(&self) -> Option<ImuFeedStatus> {

@@ -23,8 +23,8 @@ import { requestJson, type JsonReply } from "./plugin-http";
 
 /** The lanes a credential can be scoped to (the agent's wire names). */
 export type NodeLane =
-  | "atlas.ingest"
-  | "atlas.world"
+  | "capture.ingest"
+  | "reconstruct.live"
   | "offload.stream"
   | "artifacts.read"
   | "jobs.submit"
@@ -32,8 +32,8 @@ export type NodeLane =
 
 /** Every lane a node issues. */
 export const ALL_LANES: readonly NodeLane[] = [
-  "atlas.ingest",
-  "atlas.world",
+  "capture.ingest",
+  "reconstruct.live",
   "offload.stream",
   "artifacts.read",
   "jobs.submit",

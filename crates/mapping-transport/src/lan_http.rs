@@ -1,7 +1,7 @@
 //! The direct LAN/WiFi HTTP bearer — the first-class production path.
 //!
-//! The sender ([`LanHttpBearer`]) POSTs a msgpack-framed [`AtlasEvent`] to the
-//! compute node's atlas-event endpoint; the receiver ([`atlas_event_router`]) is
+//! The sender ([`LanHttpBearer`]) POSTs a msgpack-framed [`NodeEvent`] to the
+//! compute node's node-event endpoint; the receiver ([`event_router`]) is
 //! the axum router the compute node mounts to decode events onto a bounded
 //! channel its ingest loop drains. Plain HTTP on the LAN (no TLS); reach is
 //! local-first (mDNS + LAN-pair). The sender presents the credential the compute
@@ -21,15 +21,15 @@ use axum::{
 use reqwest::Client;
 use tokio::sync::mpsc::{error::TrySendError, Sender};
 
-use ados_mapping_protocol::atlas::AtlasEvent;
+use ados_mapping_protocol::capture::NodeEvent;
 use ados_mapping_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
-use crate::{AtlasBearer, BearerKind, TransportError};
+use crate::{BearerKind, EventBearer, TransportError};
 
-/// The path the compute node receives Atlas events on.
-const EVENT_PATH: &str = "/api/atlas/event";
+/// The path the compute node receives node events on.
+const EVENT_PATH: &str = "/api/capture/event";
 /// A cheap liveness path the sender can probe.
-const HEALTH_PATH: &str = "/api/atlas/health";
+const HEALTH_PATH: &str = "/api/capture/health";
 /// The largest event body the receiver accepts. A `Full`-tier keyframe is the
 /// full-resolution image bytes plus the IMU window (a few MB per camera), so the
 /// default 2 MB axum limit would reject the documented payload; bulk bags ride a
@@ -72,7 +72,7 @@ impl LanHttpBearer {
     }
 
     /// An explicit reachability probe (a cheap, short-timeout GET to the health
-    /// path). Distinct from [`AtlasBearer::is_available`], which stays optimistic
+    /// path). Distinct from [`EventBearer::is_available`], which stays optimistic
     /// so the ladder does not pay a network round-trip before every send — a send
     /// failure (now bounded by the request timeout) is the failover signal.
     pub async fn probe(&self) -> bool {
@@ -86,7 +86,7 @@ impl LanHttpBearer {
 }
 
 #[async_trait::async_trait]
-impl AtlasBearer for LanHttpBearer {
+impl EventBearer for LanHttpBearer {
     fn kind(&self) -> BearerKind {
         BearerKind::DirectLan
     }
@@ -98,7 +98,7 @@ impl AtlasBearer for LanHttpBearer {
         true
     }
 
-    async fn send(&self, event: &AtlasEvent) -> Result<(), TransportError> {
+    async fn send(&self, event: &NodeEvent) -> Result<(), TransportError> {
         let body = event.encode()?;
         let resp = self
             .authed(
@@ -118,13 +118,13 @@ impl AtlasBearer for LanHttpBearer {
     }
 }
 
-/// The axum router the compute node mounts to receive Atlas events. A decoded
+/// The axum router the compute node mounts to receive node events. A decoded
 /// event is forwarded on the bounded `sink`; the ingest loop drains the receiver.
 /// A malformed body is a `400`, a full or gone ingest channel a `503`
 /// (backpressure — the sender's ladder retries or drops), an over-limit body a
 /// `413`, never a panic or an unbounded queue. The routes carry no auth of their
 /// own: the node mounts them behind its ingest lane gate.
-pub fn atlas_event_router(sink: Sender<AtlasEvent>) -> Router {
+pub fn event_router(sink: Sender<NodeEvent>) -> Router {
     Router::new()
         .route(EVENT_PATH, post(receive_event))
         .route(HEALTH_PATH, get(health))
@@ -136,8 +136,8 @@ async fn health() -> StatusCode {
     StatusCode::OK
 }
 
-async fn receive_event(State(sink): State<Sender<AtlasEvent>>, body: Bytes) -> StatusCode {
-    match AtlasEvent::decode(&body) {
+async fn receive_event(State(sink): State<Sender<NodeEvent>>, body: Bytes) -> StatusCode {
+    match NodeEvent::decode(&body) {
         Ok(event) => match sink.try_send(event) {
             Ok(()) => StatusCode::ACCEPTED,
             // Full = the reconstructor is behind (backpressure); Closed = the
@@ -156,13 +156,13 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc::{channel, Receiver};
 
-    fn keyframe_event() -> AtlasEvent {
-        AtlasEvent::new("capture.keyframe", None, vec![1, 2, 3, 4])
+    fn keyframe_event() -> NodeEvent {
+        NodeEvent::new("capture.keyframe", None, vec![1, 2, 3, 4])
     }
 
-    async fn spawn_server() -> (std::net::SocketAddr, Receiver<AtlasEvent>) {
+    async fn spawn_server() -> (std::net::SocketAddr, Receiver<NodeEvent>) {
         let (sink, rx) = channel(64);
-        let app = atlas_event_router(sink);
+        let app = event_router(sink);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -188,7 +188,7 @@ mod tests {
         // default 2 MB limit; the raised limit must accept it on the primary path.
         let (addr, mut rx) = spawn_server().await;
         let bearer = LanHttpBearer::new(format!("http://{addr}"), None);
-        let big = AtlasEvent::new("capture.keyframe", None, vec![0xAB; 5 * 1024 * 1024]); // 5 MB
+        let big = NodeEvent::new("capture.keyframe", None, vec![0xAB; 5 * 1024 * 1024]); // 5 MB
         bearer.send(&big).await.unwrap(); // Ok(()) means a 2xx, not a 413
         let got = rx.recv().await.unwrap();
         assert_eq!(got.payload.len(), 5 * 1024 * 1024);

@@ -90,7 +90,7 @@ describe("RigEntryCard", () => {
     fireEvent.click(screen.getByRole("button", { name: messages.calibration.saveToRig }));
     await waitFor(() => expect(onApplied).toHaveBeenCalled());
     const pushed = JSON.parse(String(callAt(fetch).init.body)) as Rig;
-    expect(callAt(fetch).path).toBe("atlas/rig");
+    expect(callAt(fetch).path).toBe("capture/rig");
     expect(pushed.calib_version).toMatch(/^\d{8}T\d{6}Z-m$/);
     // The other sensor goes out exactly as stored (compared as the wire form).
     expect(pushed.sensors[0]).toEqual(JSON.parse(JSON.stringify(RIG.sensors[0])));

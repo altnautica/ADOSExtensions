@@ -1,5 +1,5 @@
 //! The host-service background loops: retention, compute status, the cloud
-//! job mirror and the Atlas event receiver.
+//! job mirror and the node event receiver.
 
 use super::*;
 /// Periodically reclaim terminal jobs older than the retention window.
@@ -73,7 +73,7 @@ pub(super) async fn jobs_sync_loop(
         tokio::time::sleep(JOBS_SYNC_INTERVAL).await;
         let jobs = {
             let engine = state.lock().await;
-            build_atlas_jobs(engine.scheduler().store())
+            build_cloud_jobs(engine.scheduler().store())
         };
         let jobs = match jobs {
             Ok(jobs) => jobs,
@@ -110,7 +110,7 @@ pub(super) async fn jobs_sync_loop(
     }
 }
 
-/// Drain the Atlas event receiver into the job queue. One [`AtlasIngest`] lives
+/// Drain the node event receiver into the job queue. One [`CaptureIngest`] lives
 /// for the task: it persists each keyframe's image to the work-root dataset (no
 /// store, no lock) and, on the terminal `Bagged` state, finalizes the dataset
 /// (writes `transforms.json`) and yields the reconstruct job. The disk writes run
@@ -125,17 +125,17 @@ pub(super) async fn jobs_sync_loop(
 /// snapshots the growing capture and enqueues a real reconstruct so the world
 /// model updates during the flight, not only at the end. In both modes a slow
 /// sweep finalizes any session that went silent without a `Bagged` frame (see
-/// [`AtlasIngest::idle_bags`]), so a capture whose bag was lost is still
+/// [`CaptureIngest::idle_bags`]), so a capture whose bag was lost is still
 /// reconstructed and its state released.
-pub(super) async fn atlas_receiver_loop(
-    mut rx: mpsc::Receiver<AtlasEvent>,
+pub(super) async fn capture_receiver_loop(
+    mut rx: mpsc::Receiver<NodeEvent>,
     state: Arc<Mutex<Engine>>,
     work_root: PathBuf,
     live_config: LiveReconstructConfig,
     world: Arc<WorldBroadcaster>,
 ) {
     let mut live_maps = reconstruct_node::live_stream::LiveStreams::new(work_root.join("live"));
-    let mut ingest = AtlasIngest::with_live_config(work_root, live_config);
+    let mut ingest = CaptureIngest::with_live_config(work_root, live_config);
     let mut live_tick = tokio::time::interval(Duration::from_secs(1));
     live_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -148,7 +148,8 @@ pub(super) async fn atlas_receiver_loop(
             maybe_event = rx.recv() => {
                 let Some(event) = maybe_event else { break };
                 // A streaming drone's raw scans build the live map, not a dataset.
-                if event.topic == ados_mapping_protocol::atlas::ATLAS_SCAN_TOPIC {
+                if event.topic == ados_mapping_protocol::capture::RECONSTRUCT_LIVE_SCAN_TOPIC {
+                    ingest.note_live_scan(event.device_id.as_deref(), now_ms());
                     live_maps.on_scan(&event);
                     continue;
                 }
@@ -172,25 +173,25 @@ pub(super) async fn atlas_receiver_loop(
                     for (dataset, job) in bags {
                         let engine = state.lock().await;
                         match submit_reconstruct_job(engine.scheduler().store(), &dataset, &job) {
-                            Ok(job_id) => tracing::info!(job = %job_id, "atlas idle session finalized: reconstruct job enqueued"),
-                            Err(e) => tracing::error!(error = %e, "atlas reconstruct submit failed"),
+                            Ok(job_id) => tracing::info!(job = %job_id, "capture idle session finalized: reconstruct job enqueued"),
+                            Err(e) => tracing::error!(error = %e, "capture reconstruct submit failed"),
                         }
                     }
                 }
-                Err(e) => tracing::error!(error = %e, "atlas idle session finalize failed"),
+                Err(e) => tracing::error!(error = %e, "capture idle session finalize failed"),
             },
         }
     }
-    tracing::info!("atlas receiver loop ended (event channel closed)");
+    tracing::info!("capture receiver loop ended (event channel closed)");
 }
 
-/// Handle one received Atlas event: persist a keyframe or, on the terminal bag,
+/// Handle one received node event: persist a keyframe or, on the terminal bag,
 /// enqueue the final reconstruct. A malformed frame is swallowed; a real disk or
 /// store fault is logged and the caller continues.
 pub(super) async fn drain_event(
-    ingest: &mut AtlasIngest,
+    ingest: &mut CaptureIngest,
     state: &Arc<Mutex<Engine>>,
-    event: &AtlasEvent,
+    event: &NodeEvent,
 ) {
     match ingest.step(event, now_ms()) {
         Ok(Some((dataset, job))) => {
@@ -203,13 +204,13 @@ pub(super) async fn drain_event(
                 Ok(job_id) => tracing::info!(
                     job = %job_id,
                     keyframes_received,
-                    "atlas capture bagged: reconstruct job enqueued"
+                    "capture bagged: reconstruct job enqueued"
                 ),
-                Err(e) => tracing::error!(error = %e, "atlas reconstruct submit failed"),
+                Err(e) => tracing::error!(error = %e, "capture reconstruct submit failed"),
             }
         }
         Ok(None) => {}
-        Err(e) => tracing::error!(error = %e, "atlas ingest disk write failed"),
+        Err(e) => tracing::error!(error = %e, "capture ingest disk write failed"),
     }
 }
 
@@ -219,7 +220,7 @@ pub(super) async fn drain_event(
 /// session now due. The store is the source of truth for "is the cycle done", so
 /// cycles coalesce instead of piling up. A snapshot or submit fault is logged; the
 /// cadence keeps running.
-pub(super) async fn run_live_cycles(ingest: &mut AtlasIngest, state: &Arc<Mutex<Engine>>) {
+pub(super) async fn run_live_cycles(ingest: &mut CaptureIngest, state: &Arc<Mutex<Engine>>) {
     // 1. Release the guard for any session whose in-flight cycle finished.
     let in_flight = ingest.in_flight_cycles();
     if !in_flight.is_empty() {
@@ -263,13 +264,13 @@ pub(super) async fn run_live_cycles(ingest: &mut AtlasIngest, state: &Arc<Mutex<
                     Ok(id) => tracing::info!(
                         job = %id,
                         keyframes,
-                        "atlas live reconstruct cycle enqueued"
+                        "capture live reconstruct cycle enqueued"
                     ),
-                    Err(e) => tracing::error!(error = %e, "atlas live reconstruct submit failed"),
+                    Err(e) => tracing::error!(error = %e, "capture live reconstruct submit failed"),
                 }
             }
         }
-        Err(e) => tracing::error!(error = %e, "atlas live snapshot write failed"),
+        Err(e) => tracing::error!(error = %e, "capture live snapshot write failed"),
     }
 }
 

@@ -1,8 +1,8 @@
 /**
- * The reconstruction detail-level picker for a drone's capture capture. The
+ * The reconstruction detail-level picker for a drone's capture. The
  * operator chooses how long the compute node trains a reconstruction (Draft to
  * Maximum, mapped to Brush training steps). The choice persists on the drone's
- * atlas config (`reconstruct_steps`) and rides the reconstruct job's
+ * capture config (`capture.reconstruct_steps`) and rides the reconstruct job's
  * `params.steps`.
  */
 

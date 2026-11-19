@@ -2,7 +2,7 @@
 //!
 //! A streaming offload session ([`crate::offload_stream::run_offload_session`])
 //! emits one [`OffloadDetectionBatch`] per frame; the node fans them out here,
-//! and the drone subscribes over a per-session WebSocket. This mirrors the atlas
+//! and the drone subscribes over a per-session WebSocket. This mirrors the live
 //! delta lane (`ados_mapping_transport::delta`): a broadcast channel + a WS router,
 //! a slow subscriber that lags is skipped (never blocking the detector), and a
 //! disconnected one is reaped even while the stream is idle.

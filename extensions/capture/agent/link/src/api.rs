@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use ados_mapping_protocol::atlas::CaptureState;
+use ados_mapping_protocol::capture::CaptureState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};

@@ -1,7 +1,7 @@
 use super::control::{stop_and_bag, unwritten_pct};
 use crate::config::{CameraConfig, CaptureConfig};
 use crate::session::CaptureSession;
-use ados_mapping_protocol::atlas::{CameraRole, CaptureState};
+use ados_mapping_protocol::capture::{CameraRole, CaptureState};
 
 #[test]
 fn stop_and_bag_moves_a_live_session_once() {

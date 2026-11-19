@@ -1,36 +1,7 @@
-//! The live navigation and mapping payloads: topic names, capabilities and
-//! the exact wire keys the operator surfaces read.
+//! The live navigation and mapping payloads: the exact wire keys the
+//! operator surfaces read.
 
 use super::*;
-
-#[test]
-fn the_nav_topics_are_shared_and_gated_by_telemetry_read() {
-    assert_eq!(PLUGIN_ATLAS_SCAN_TOPIC, "plugin.world-engine.scan");
-    assert_eq!(
-        PLUGIN_ATLAS_MAP_STATUS_TOPIC,
-        "plugin.world-engine.map_status"
-    );
-    assert_eq!(PLUGIN_ATLAS_LIDAR_TOPIC, "plugin.world-engine.lidar");
-    for topic in [
-        PLUGIN_ATLAS_SCAN_TOPIC,
-        PLUGIN_ATLAS_MAP_STATUS_TOPIC,
-        PLUGIN_ATLAS_LIDAR_TOPIC,
-    ] {
-        assert!(PLUGIN_ATLAS_TOPICS.contains(&topic));
-        assert_eq!(
-            atlas_topic_subscribe_capability(topic),
-            Some(ATLAS_POSE_READ_CAP)
-        );
-    }
-    assert_eq!(
-        atlas_topic_subscribe_capability("plugin.world-engine.scan.x"),
-        None
-    );
-    assert_eq!(
-        atlas_topic_subscribe_capability("plugin.world-engine.lidar.x"),
-        None
-    );
-}
 
 #[test]
 fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
@@ -279,9 +250,9 @@ fn the_lidar_status_carries_exactly_the_documented_keys() {
     }
 
     // The bus carries it as a named msgpack map inside the envelope.
-    let ev = AtlasEvent::new(PLUGIN_ATLAS_LIDAR_TOPIC, None, live.to_msgpack().unwrap());
-    let back = AtlasEvent::decode(&ev.encode().unwrap()).unwrap();
-    assert_eq!(back.topic, "plugin.world-engine.lidar");
+    let ev = NodeEvent::new("plugin.navigation.lidar", None, live.to_msgpack().unwrap());
+    let back = NodeEvent::decode(&ev.encode().unwrap()).unwrap();
+    assert_eq!(back.topic, "plugin.navigation.lidar");
     assert_eq!(LidarStatus::from_msgpack(&back.payload).unwrap(), live);
     let wire: serde_json::Value = rmp_serde::from_slice(&back.payload).unwrap();
     assert_eq!(keys(&wire), want);

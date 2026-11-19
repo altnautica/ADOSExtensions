@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub const NODE_CREDENTIAL_HEADER: &str = "x-ados-node-credential";
 
 /// One drone-to-workstation lane a credential can be scoped to, by its wire
-/// name (`atlas.ingest`, `offload.stream`, ...). The lane vocabulary belongs to
+/// name (`capture.ingest`, `offload.stream`, ...). The lane vocabulary belongs to
 /// the service that serves the lanes; this type only guarantees a name is well
 /// formed: 1-64 characters of `[a-z0-9._-]`. Anything else is refused when it
 /// is parsed or deserialized, so a stored or requested lane can never smuggle
@@ -180,7 +180,7 @@ mod tests {
         InstalledCredential {
             workstation_node_id: node.into(),
             credential: secret.into(),
-            lanes: vec![NodeLane::from_static("atlas.ingest")],
+            lanes: vec![NodeLane::from_static("capture.ingest")],
             installed_at_ms: 1,
             node_addr: None,
         }
@@ -199,9 +199,9 @@ mod tests {
         assert_eq!(back.as_str(), "jobs.submit");
         for bad in [
             "",
-            "Atlas.Ingest",
-            "atlas ingest",
-            "atlas/ingest",
+            "Capture.Ingest",
+            "capture ingest",
+            "capture/ingest",
             &"a".repeat(65),
         ] {
             assert!(NodeLane::parse(bad).is_none(), "{bad:?}");
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn a_store_without_addresses_still_loads() {
-        let old = br#"{"workstations":[{"workstation_node_id":"ws-a","credential":"c","lanes":["atlas.ingest"],"installed_at_ms":1}]}"#;
+        let old = br#"{"workstations":[{"workstation_node_id":"ws-a","credential":"c","lanes":["capture.ingest"],"installed_at_ms":1}]}"#;
         let store: WorkstationCredentials = serde_json::from_slice(old).unwrap();
         assert_eq!(store.workstations[0].node_addr, None);
         let back = serde_json::to_value(&store).unwrap();

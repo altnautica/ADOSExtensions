@@ -10,19 +10,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_mapping_protocol::atlas::PolarScan;
+use ados_mapping_protocol::capture::{PolarScan, RECONSTRUCT_LIVE_SCAN_TOPIC};
 use ados_mapping_transport::compute_node;
-use ados_mapping_transport::credentials::{CredentialStore, ATLAS_INGEST_LANE};
+use ados_mapping_transport::credentials::{CredentialStore, CAPTURE_INGEST_LANE};
 use ados_mapping_transport::host::Host;
-use ados_mapping_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
+use ados_mapping_transport::{EventBearer, LanHttpBearer, NodeEvent};
 use parking_lot::Mutex;
 use rmpv::Value;
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-/// What the node's ingest keys a forwarded scan on.
-pub const LIVE_SCAN_TOPIC: &str = "reconstruct.live.scan";
 /// Navigation's map status (its `placement` gates the stream).
 pub const MAP_STATUS_TOPIC: &str = "plugin.navigation.map_status";
 /// Navigation's placed planar scans.
@@ -140,7 +138,11 @@ impl Streamer {
                 self.view.lock().failed += 1;
                 continue;
             };
-            let event = AtlasEvent::new(LIVE_SCAN_TOPIC, Some(self.device_id.clone()), body);
+            let event = NodeEvent::new(
+                RECONSTRUCT_LIVE_SCAN_TOPIC,
+                Some(self.device_id.clone()),
+                body,
+            );
             match b.send(&event).await {
                 Ok(()) => self.view.lock().forwarded += 1,
                 Err(e) => {
@@ -156,9 +158,12 @@ impl Streamer {
     /// The paired node's capture-event lane, or `None` (the next scan tries
     /// again).
     async fn resolve(&self) -> Option<LanHttpBearer> {
-        let node = compute_node::resolve(self.host.as_ref(), &self.credentials, &ATLAS_INGEST_LANE)
-            .await?;
-        let credential = node.credential(&self.credentials, &ATLAS_INGEST_LANE).ok();
+        let node =
+            compute_node::resolve(self.host.as_ref(), &self.credentials, &CAPTURE_INGEST_LANE)
+                .await?;
+        let credential = node
+            .credential(&self.credentials, &CAPTURE_INGEST_LANE)
+            .ok();
         self.view.lock().node = Some(node.device_id.clone().unwrap_or_else(|| node.addr()));
         Some(LanHttpBearer::new(node.base_url(), credential))
     }

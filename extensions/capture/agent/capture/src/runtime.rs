@@ -21,7 +21,7 @@ use serde_json::Value;
 
 pub use ados_mapping_pose::config::ConfigError;
 use ados_mapping_pose::config::{integer, optional_unsigned, typed, unsigned};
-use ados_mapping_protocol::atlas::POSE_COV_LEN;
+use ados_mapping_protocol::capture::POSE_COV_LEN;
 use ados_mapping_protocol::capture_ctl::{ExposureMode, ExposureView};
 
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};

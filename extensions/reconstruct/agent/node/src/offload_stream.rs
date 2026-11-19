@@ -339,7 +339,7 @@ struct InferRequest {
 /// 1. **The blocking pool is shared.** The same runtime runs the reconstruct
 ///    backend (minutes per job, on `spawn_blocking`), the GPU sampler (which
 ///    shells out to `system_profiler` / `powermetrics` and can hang for
-///    seconds), and the Rerun world-model write. A long reconstruction or a
+///    seconds), and the Rerun reconstruction write. A long reconstruction or a
 ///    wedged `powermetrics` occupies pool workers and directly delays the next
 ///    frame's inference, on the one path whose whole product promise is that
 ///    detections track the moving scene.
@@ -432,7 +432,7 @@ impl Drop for InferenceWorker {
 }
 
 /// A short, thread-name-safe tag from a session id (OS thread names are capped
-/// at 15 bytes on Linux, so a full `atlas-<device>-<ms>` would be truncated
+/// at 15 bytes on Linux, so a full `<prefix>-<device>-<ms>` would be truncated
 /// arbitrarily).
 fn short_session_tag(session_id: &str) -> String {
     session_id

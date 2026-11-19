@@ -87,7 +87,7 @@ struct Target {
     rtsp_url: String,
 }
 
-/// The operator's `offload.enabled` setting.
+/// The operator's `reconstruct.offload.enabled` setting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OffloadMode {
     Auto,

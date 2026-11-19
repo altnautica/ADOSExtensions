@@ -415,7 +415,7 @@ fn reconstruct(
 fn planar_scans(
     reader: &SessionReader,
     session_dir: &Path,
-) -> Result<(String, Vec<ados_mapping_protocol::atlas::PolarScan>), StageError> {
+) -> Result<(String, Vec<ados_mapping_protocol::capture::PolarScan>), StageError> {
     let lidar = super::scan2d::rig_planar_lidar(reader.rig())
         .ok_or_else(|| StageError::input("the rig has no planar LiDAR"))?
         .id

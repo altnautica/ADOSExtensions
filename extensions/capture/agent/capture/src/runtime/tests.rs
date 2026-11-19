@@ -1,5 +1,5 @@
 use super::*;
-use ados_mapping_protocol::atlas::CameraRole;
+use ados_mapping_protocol::capture::CameraRole;
 use serde_json::json;
 
 fn values(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {

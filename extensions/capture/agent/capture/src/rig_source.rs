@@ -20,7 +20,7 @@ use ados_capture_contract::{
     CameraModel, ContractId, Rig, RigSensor, RigSensorKind, RigSensorRole,
 };
 use ados_mapping_pose::frame_source::CameraGeometry;
-use ados_mapping_protocol::atlas::CameraRole;
+use ados_mapping_protocol::capture::CameraRole;
 
 use crate::config::CameraConfig;
 use crate::runtime::CaptureRuntimeConfig;

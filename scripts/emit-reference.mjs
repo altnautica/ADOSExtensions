@@ -17,7 +17,7 @@ import { parse } from "yaml";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const EXT_DIR = join(ROOT, "extensions");
 const OUT = join(ROOT, "docs", "reference", "extensions.json");
-const RELEASE_WORKFLOWS = ["release.yml", "navigation-release.yml", "world-engine-release.yml"];
+const RELEASE_WORKFLOWS = ["release.yml", "navigation-release.yml", "capture-release.yml", "reconstruct-release.yml"];
 
 function releaseTriggers() {
   return RELEASE_WORKFLOWS.map((name) => join(ROOT, ".github", "workflows", name))

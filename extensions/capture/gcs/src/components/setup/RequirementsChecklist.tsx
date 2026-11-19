@@ -1,5 +1,5 @@
 /**
- * The capture capture requirements list (cameras / compute node reachable /
+ * The capture requirements list (cameras / compute node reachable /
  * capture service), one row per requirement with a check, warning, cross or
  * unknown icon and a "what to do" detail line. Pure presentation over the gate
  * `computeCaptureGate` returns: never a false green.

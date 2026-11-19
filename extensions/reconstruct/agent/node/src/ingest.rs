@@ -1,8 +1,8 @@
-//! Atlas capture ingest: turn the keyframe + capture-state events a drone
+//! Capture ingest: turn the keyframe + capture-state events a drone
 //! forwards to the compute node into a reconstructor-ingestible dataset and a
 //! reconstruct job.
 //!
-//! A compute node receives framed `AtlasEvent`s off a bearer (LAN / WFB / cloud)
+//! A compute node receives framed `NodeEvent`s off a bearer (LAN / WFB / cloud)
 //! into its event router. This is the seam between that receive side and the job
 //! queue. Two things happen here:
 //!
@@ -15,14 +15,13 @@
 //!   backend trains on the real images, not the empty default.
 //!
 //! A malformed frame is dropped + logged (never an error that could tear down the
-//! receive loop); only a real filesystem fault propagates from [`AtlasIngest::step`].
+//! receive loop); only a real filesystem fault propagates from [`CaptureIngest::step`].
 
 use std::collections::{HashMap, HashSet};
 
-use ados_mapping_protocol::atlas::{
-    AtlasEvent, CaptureState, CaptureStatus, KeyframeBudget, KeyframeEnvelope, MapStatus,
-    PoseSource, VioHealth, CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC,
-    PLUGIN_ATLAS_MAP_STATUS_TOPIC,
+use ados_mapping_protocol::capture::{
+    CaptureState, CaptureStatus, KeyframeBudget, KeyframeEnvelope, NodeEvent, PoseSource,
+    VioHealth, CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC,
 };
 use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
 
@@ -51,8 +50,8 @@ const DEFAULT_TRAIN_ITERS: u64 = 30_000;
 
 /// Resolve the node's default training length: the `ADOS_COMPUTE_TRAIN_ITERS`
 /// override when set to a valid `u64`, else [`DEFAULT_TRAIN_ITERS`]. Read once at
-/// ingest-construction time (the daemon builds one `AtlasIngest`). The drone's
-/// `atlas.reconstruct_steps`, carried on its capture status, wins over it for
+/// ingest-construction time (the daemon builds one `CaptureIngest`). The drone's
+/// `capture.reconstruct_steps`, carried on its capture status, wins over it for
 /// that drone's sessions.
 fn default_train_iters() -> u64 {
     std::env::var("ADOS_COMPUTE_TRAIN_ITERS")
@@ -64,6 +63,9 @@ fn default_train_iters() -> u64 {
 /// A session silent this long with no `Bagged` frame is finalized as-is.
 pub const SESSION_IDLE_MS: i64 = 10 * 60 * 1000;
 
+/// A device whose last streamed scan is older than this no longer streams.
+pub const STREAM_FRESH_MS: i64 = 10_000;
+
 /// One capture session's reconstruction-input accounting.
 #[derive(Debug, Clone, Default)]
 struct SessionAccount {
@@ -73,7 +75,7 @@ struct SessionAccount {
     persisted: u64,
     cameras: HashSet<String>,
     last_event_ms: i64,
-    /// The drone's `atlas.reconstruct_steps`, from the session's capture status.
+    /// The drone's `capture.reconstruct_steps`, from the session's capture status.
     reconstruct_steps: Option<u64>,
 }
 
@@ -81,14 +83,14 @@ struct SessionAccount {
 /// the bagged terminal state, finalizes the dataset and yields the reconstruct
 /// job. When live reconstruction is enabled, it also tracks a per-session cadence
 /// and, on a tick, snapshots the growing dataset into fresh periodic reconstruct
-/// jobs ([`due_reconstructs`](Self::due_reconstructs)) so the world model updates
+/// jobs ([`due_reconstructs`](Self::due_reconstructs)) so the reconstruction updates
 /// during the flight, not only at the end.
 #[derive(Debug)]
-pub struct AtlasIngest {
+pub struct CaptureIngest {
     /// Keyframe events seen this session (received-side delivery count).
     keyframes_seen: u64,
     /// Keyframe events REFUSED as reconstruction input (see
-    /// [`AtlasIngest::keyframes_rejected`]).
+    /// [`CaptureIngest::keyframes_rejected`]).
     keyframes_rejected: u64,
     /// Keyframes accepted whose clock offset was never measured, so the dataset
     /// can carry the honest fact rather than the reconstruction quietly
@@ -107,18 +109,17 @@ pub struct AtlasIngest {
     /// Per-session live state, keyed by session id. Empty when live reconstruction
     /// is disabled (the sessions are never tracked, so the path is byte-unchanged).
     sessions: HashMap<String, SessionLive>,
-    /// Sessions whose drone streams for live reconstruction: the drone's
-    /// navigation map status says `stream` and its capture state names the
-    /// session. Reconstructed live even when `live_config.enabled` is off.
+    /// Sessions whose device streams its scans here for a live map (a
+    /// `reconstruct.live.scan` from the device in the last
+    /// [`STREAM_FRESH_MS`]). Reconstructed live even when
+    /// `live_config.enabled` is off.
     streaming_sessions: HashSet<String>,
-    /// Whether the drone's latest map status places the map on a node live.
-    placement_streams: bool,
-    /// The session the drone's latest capture state names.
-    last_session: Option<String>,
+    /// When each streaming device last sent a scan (epoch ms).
+    streaming_devices: HashMap<String, i64>,
     /// The capturing drone's device id, keyed by session id, learned from each
     /// event's `device_id` (the drone-side forwarder stamps it on egress). Stamped
     /// into the dataset + reconstruct job so the compute→cloud producer can
-    /// attribute the world model to the drone that captured it. Empty when no event
+    /// attribute the reconstruction to the drone that captured it. Empty when no event
     /// carried an id (a pre-attribution capture), and the job then omits it rather
     /// than asserting a wrong one.
     session_devices: HashMap<String, String>,
@@ -133,7 +134,7 @@ pub struct AtlasIngest {
     train_iters: u64,
 }
 
-impl AtlasIngest {
+impl CaptureIngest {
     /// An ingest that persists datasets under `work_root` (the same root the
     /// reconstructor reads `input_path` from and the artifact server serves), with
     /// live reconstruction disabled (final-bag reconstruct only).
@@ -158,8 +159,7 @@ impl AtlasIngest {
             live_config,
             sessions: HashMap::new(),
             streaming_sessions: HashSet::new(),
-            placement_streams: false,
-            last_session: None,
+            streaming_devices: HashMap::new(),
             session_devices: HashMap::new(),
             accounts: HashMap::new(),
             train_iters: default_train_iters(),
@@ -192,7 +192,7 @@ impl AtlasIngest {
         self.keyframes_seen
     }
 
-    /// Process one received Atlas event WITHOUT touching the store. A keyframe is
+    /// Process one received node event WITHOUT touching the store. A keyframe is
     /// persisted to disk (and the received counter bumped); a `Bagged`
     /// capture-state finalizes the dataset and returns the dataset + reconstruct
     /// job for the caller to submit under its store lock (see
@@ -201,7 +201,7 @@ impl AtlasIngest {
     /// write propagates.
     pub fn step(
         &mut self,
-        event: &AtlasEvent,
+        event: &NodeEvent,
         now_ms: i64,
     ) -> std::io::Result<Option<(Dataset, JobRecord)>> {
         match event.topic.as_str() {
@@ -231,7 +231,7 @@ impl AtlasIngest {
                                 camera = %kf.camera_id,
                                 rejected_total = self.keyframes_rejected,
                                 reason = %reason,
-                                "atlas_keyframe_rejected"
+                                "ingest_keyframe_rejected"
                             );
                             return Ok(None);
                         }
@@ -249,10 +249,10 @@ impl AtlasIngest {
                                 }
                                 self.note_persisted(&kf, now_ms)
                             }
-                            Err(e) => tracing::warn!(error = %e, "atlas_keyframe_persist_failed"),
+                            Err(e) => tracing::warn!(error = %e, "ingest_keyframe_persist_failed"),
                         }
                     }
-                    Err(e) => tracing::debug!(error = %e, "atlas_keyframe_decode_failed"),
+                    Err(e) => tracing::debug!(error = %e, "ingest_keyframe_decode_failed"),
                 }
                 Ok(None)
             }
@@ -273,46 +273,54 @@ impl AtlasIngest {
                 Ok(status) => {
                     self.note_device(&status.session_id, event.device_id.as_deref());
                     self.note_steps(&status);
-                    self.note_session(&status.session_id);
                     self.accounts
                         .entry(status.session_id.clone())
                         .or_default()
                         .last_event_ms = now_ms;
+                    self.note_session(&status.session_id, now_ms);
                     Ok(None)
                 }
                 Err(e) => {
-                    tracing::debug!(error = %e, "atlas_ingest_bad_capture_state");
+                    tracing::debug!(error = %e, "ingest_ingest_bad_capture_state");
                     Ok(None)
                 }
             },
-            PLUGIN_ATLAS_MAP_STATUS_TOPIC => {
-                match MapStatus::from_msgpack(&event.payload) {
-                    Ok(status) => self.note_placement(&status),
-                    Err(e) => tracing::debug!(error = %e, "atlas_ingest_bad_map_status"),
-                }
-                Ok(None)
-            }
             _ => Ok(None),
         }
     }
 
-    /// Track whether the drone's open session streams for live
-    /// reconstruction. A drone that switches away stops new live cycles; the
-    /// session's final bag still reconstructs.
-    fn note_placement(&mut self, status: &MapStatus) {
-        self.placement_streams = status.placement.streams_live();
-        if !self.placement_streams {
-            self.streaming_sessions.clear();
-        } else if let Some(s) = self.last_session.clone() {
-            self.streaming_sessions.insert(s);
+    /// A device streamed a scan at `now_ms`: its open sessions reconstruct
+    /// live. The scan itself feeds the live map.
+    pub fn note_live_scan(&mut self, device_id: Option<&str>, now_ms: i64) {
+        let Some(dev) = device_id.filter(|d| !d.is_empty()) else {
+            return;
+        };
+        self.streaming_devices.insert(dev.to_string(), now_ms);
+        for (session, owner) in &self.session_devices {
+            if owner == dev && self.sessions_open(session) {
+                self.streaming_sessions.insert(session.clone());
+            }
         }
     }
 
-    /// A capture state named `session`: it streams while the placement does.
-    fn note_session(&mut self, session: &str) {
-        self.last_session = Some(session.to_string());
-        if self.placement_streams {
+    /// Whether `session` is still capturing (not yet bagged or forgotten).
+    fn sessions_open(&self, session: &str) -> bool {
+        self.accounts.contains_key(session)
+    }
+
+    /// A capture state named `session` at `now_ms`: it reconstructs live
+    /// while its device streams. A device that stopped streaming takes the
+    /// session off the live path; its final bag still reconstructs.
+    fn note_session(&mut self, session: &str, now_ms: i64) {
+        let streaming = self
+            .session_devices
+            .get(session)
+            .and_then(|dev| self.streaming_devices.get(dev))
+            .is_some_and(|at| now_ms - *at <= STREAM_FRESH_MS);
+        if streaming {
             self.streaming_sessions.insert(session.to_string());
+        } else {
+            self.streaming_sessions.remove(session);
         }
     }
 
@@ -349,7 +357,7 @@ impl AtlasIngest {
                 .get(&session_id)
                 .map(|a| (a.persisted, a.cameras.len() as u32))
                 .unwrap_or((0, 0));
-            tracing::info!(session = %session_id, keyframes, "atlas session idle without a bag; finalizing");
+            tracing::info!(session = %session_id, keyframes, "capture session idle without a bag; finalizing");
             let status = CaptureStatus {
                 session_id: session_id.clone(),
                 state: CaptureState::Bagged,
@@ -398,7 +406,7 @@ impl AtlasIngest {
     }
 
     /// The training length for a session's reconstruct jobs: the capturing
-    /// drone's `atlas.reconstruct_steps` when it sent one, else the node default.
+    /// drone's `capture.reconstruct_steps` when it sent one, else the node default.
     fn session_steps(&self, session_id: &str) -> u64 {
         self.accounts
             .get(session_id)
@@ -424,7 +432,7 @@ impl AtlasIngest {
         if input_path.is_none() {
             tracing::info!(
                 session = %status.session_id,
-                "atlas capture bagged with no keyframes; skipping reconstruct"
+                "capture bagged with no keyframes; skipping reconstruct"
             );
             return Ok(None);
         }
@@ -458,7 +466,7 @@ impl AtlasIngest {
         }
 
         // The job carries its capturing session AND the capturing drone so the
-        // compute→cloud producer can attribute the world model to the drone
+        // compute→cloud producer can attribute the reconstruction to the drone
         // (the cloud job record's subject). Both stay absent when unknown rather than
         // asserting a wrong id.
         let mut params = serde_json::json!({
@@ -514,7 +522,7 @@ pub fn submit_reconstruct_job(
         if !matches!(e, ComputeError::Conflict(_)) {
             return Err(e);
         }
-        tracing::debug!(job = %job.id, "atlas_ingest_duplicate_bagged");
+        tracing::debug!(job = %job.id, "ingest_ingest_duplicate_bagged");
     }
     Ok(job.id.clone())
 }

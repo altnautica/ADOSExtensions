@@ -1,33 +1,33 @@
-# world-engine-release
+# reconstruct-release
 #
-# Fires on a `world-engine-v*` tag push. The World Engine ships its binaries
-# and the Rerun viewer wasm as install-time payloads (manifest
+# Fires on a `reconstruct-v*` tag push. Reconstruct ships its binaries and the
+# Rerun viewer wasm as install-time payloads (manifest
 # `agent.payloads`), not inside the .adosplug, so a node fetches only the files
 # for its own arch and profile.
 #
 #   legs      list the binary legs. The aarch64-macos leg runs only when the
-#             repository variable WORLD_ENGINE_MACOS is "true"; without a macOS
+#             repository variable RECONSTRUCT_MACOS is "true"; without a macOS
 #             runner the release ships the Linux and Windows payloads alone.
 #   binaries  one leg per arch: build the release binaries against the agent
 #             SDK pinned in ADOS_AGENT_REV and hand them to the release job.
 #   release   build and test the GCS module, write each payload's source,
 #             sha256 and size into the staged manifest, pack the small archive
-#             (manifest, GCS module + css, locales, agent/python helpers,
-#             config-schema.json), sign it with the first-party key, then
+#             (manifest, GCS module + css, the tour viewer, locales, the
+#             node's tool pins and training project, config-schema.json), sign it with the first-party key, then
 #             attach the payloads and the signed archive to the GitHub Release
 #             in one step, so a published archive never points at a missing
 #             payload.
 #
 # The asset table (names, archive paths, arch and profile gates) is
-# scripts/world-engine-payloads.tsv; scripts/pack-world-engine-local.sh packs
-# the same way on a Mac for bench testing.
+# scripts/reconstruct-payloads.tsv; scripts/pack-local.sh reconstruct packs
+# the same way locally for bench testing.
 
-name: world-engine-release
+name: reconstruct-release
 
 on:
   push:
     tags:
-      - "world-engine-v*"
+      - "reconstruct-v*"
 
 permissions:
   contents: read
@@ -42,7 +42,7 @@ jobs:
   checks:
     uses: ./.github/workflows/extensions.yml
     with:
-      ext: world-engine
+      ext: reconstruct
 
   legs:
     runs-on: ubuntu-24.04
@@ -51,7 +51,7 @@ jobs:
     steps:
       - id: legs
         env:
-          MACOS: ${{ vars.WORLD_ENGINE_MACOS }}
+          MACOS: ${{ vars.RECONSTRUCT_MACOS }}
         # Static musl binaries run on every supported board regardless of its
         # glibc. The node links rerun and bundled SQLite and the transport
         # links ring, so the musl legs need a C cross-compiler: zig through
@@ -60,19 +60,19 @@ jobs:
         # Runtime is loaded dynamically at start, so it is a host
         # prerequisite, not a payload. The macOS leg is optional (see header).
         # The standalone reconstruction node for a Windows workstation
-        # (`world-engine-node --standalone`); the plugin-host service is
+        # (`reconstruct-node --standalone`); the plugin-host service is
         # unix-only, so the windows leg builds the node alone.
         run: |
           set -euo pipefail
           legs='[
             {"runner":"ubuntu-24.04-arm","arch_os":"aarch64-linux","target":"aarch64-unknown-linux-musl","zig":true,
-             "crates":"world-engine-link world-engine-capture world-engine-node","node_features":""},
+             "crates":"reconstruct-offload reconstruct-node","node_features":""},
             {"runner":"ubuntu-24.04","arch_os":"x86_64-linux","target":"x86_64-unknown-linux-musl","zig":true,
-             "crates":"world-engine-link world-engine-capture world-engine-node","node_features":""},
+             "crates":"reconstruct-offload reconstruct-node","node_features":""},
             {"runner":"macos-14","arch_os":"aarch64-macos","target":"aarch64-apple-darwin","zig":false,
-             "crates":"world-engine-link world-engine-node","node_features":"coreml","optional":true},
+             "crates":"reconstruct-offload reconstruct-node","node_features":"coreml","optional":true},
             {"runner":"windows-2022","arch_os":"x86_64-windows","target":"x86_64-pc-windows-msvc","zig":false,
-             "crates":"world-engine-node","node_features":"","exe":".exe"}
+             "crates":"reconstruct-node","node_features":"","exe":".exe"}
           ]'
           if [ "${MACOS:-}" = "true" ]; then filter='.'; else filter='map(select(.optional != true))'; fi
           matrix="$(jq -c "{include: (${filter})}" <<<"${legs}")"
@@ -123,8 +123,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: world-engine-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: world-engine-release-${{ matrix.target }}-
+          key: reconstruct-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: reconstruct-release-${{ matrix.target }}-
 
       - name: Build release binaries
         env:
@@ -140,7 +140,7 @@ jobs:
           fi
           for crate in ${CRATES}; do
             features=()
-            if [ "${crate}" = "world-engine-node" ] && [ -n "${NODE_FEATURES}" ]; then
+            if [ "${crate}" = "reconstruct-node" ] && [ -n "${NODE_FEATURES}" ]; then
               features=(--features "${NODE_FEATURES}")
             fi
             "${build[@]}" --release --target "${TARGET}" -p "${crate}" ${features[@]+"${features[@]}"}
@@ -175,7 +175,7 @@ jobs:
     permissions:
       contents: write
     env:
-      EXT_DIR: extensions/world-engine
+      EXT_DIR: extensions/reconstruct
     steps:
       - uses: actions/checkout@v4
         with:
@@ -184,7 +184,7 @@ jobs:
       - name: Check the tag matches the manifest version
         run: |
           set -euo pipefail
-          # Tag form: world-engine-v<semver>. The payload URLs name the tag and
+          # Tag form: reconstruct-v<semver>. The payload URLs name the tag and
           # the archive names the manifest version, so the two must agree.
           tag_version="${GITHUB_REF_NAME##*-v}"
           manifest_version="$(grep -E '^version:' "${EXT_DIR}/manifest.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
@@ -192,7 +192,7 @@ jobs:
             echo "ERROR: tag ${GITHUB_REF_NAME} does not match manifest version ${manifest_version}" >&2
             exit 1
           fi
-          archive="${EXT_DIR}/dist/com.altnautica.world-engine-${manifest_version}.adosplug"
+          archive="${EXT_DIR}/dist/com.altnautica.reconstruct-${manifest_version}.adosplug"
           echo "ARCHIVE=${archive}" >> "$GITHUB_ENV"
           echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
 
@@ -216,7 +216,7 @@ jobs:
           pip install cryptography
 
       - name: Build the GCS module
-        run: pnpm build:world-engine
+        run: pnpm build:reconstruct
 
       - name: Collect the binaries
         uses: actions/download-artifact@v4
@@ -240,13 +240,13 @@ jobs:
             /^[[:space:]]*(#|$)/ { next }
             $3 != "-" && index(built, "," $3 ",") == 0 { next }
             { printf "%s\t%s\t%s\t%s\t%s/%s\n", $1, $2, $3, $4, base, $1 }
-          ' scripts/world-engine-payloads.tsv > payloads/payloads.tsv
+          ' scripts/reconstruct-payloads.tsv > payloads/payloads.tsv
           cat payloads/payloads.tsv
 
       - name: Pack archive
         # Covers every arch whose leg ran; refuses to pack when any of its
         # binaries paths lacks a payload row or a listed asset is missing.
-        run: ./scripts/pack-rust.sh world-engine --payload-manifest payloads/payloads.tsv --arch-os "${ARCH_OS}"
+        run: ./scripts/pack-rust.sh reconstruct --payload-manifest payloads/payloads.tsv --arch-os "${ARCH_OS}"
 
       - name: Sign archive
         env:
@@ -311,8 +311,8 @@ jobs:
         with:
           fail_on_unmatched_files: true
           files: |
-            payloads/world-engine-*
+            payloads/reconstruct-*
             payloads/re_viewer_bg.wasm
             ${{ env.SIGNED }}
             ${{ env.SIGNED }}.sha256
-            extensions/world-engine/CHANGELOG.md
+            extensions/reconstruct/CHANGELOG.md

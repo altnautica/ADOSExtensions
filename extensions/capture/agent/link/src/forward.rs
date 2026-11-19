@@ -2,7 +2,7 @@
 //!
 //! The capture service publishes pose-tagged keyframes and the capture state
 //! onto its private bus (`capture.sock`, one length-prefixed framed
-//! [`AtlasEvent`] per broadcast). This loop is their egress: it subscribes to
+//! [`NodeEvent`] per broadcast). This loop is their egress: it subscribes to
 //! the bus and forwards every event over the bearer ladder, direct LAN first,
 //! then the WFB relay for the field, then the plugin's cloud stream.
 //!
@@ -27,11 +27,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use ados_mapping_protocol::atlas::{
-    AtlasForwardStatus, ATLAS_FORWARD_STATUS_VERSION, CAPTURE_KEYFRAME_TOPIC,
+use ados_mapping_protocol::capture::{
+    KeyframeForwardStatus, CAPTURE_KEYFRAME_TOPIC, FORWARD_STATUS_VERSION,
 };
 use ados_mapping_transport::{
-    AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer, WfbRelayBearer,
+    BearerKind, BearerLadder, EventBearer, LanHttpBearer, NodeEvent, WfbRelayBearer,
 };
 use ados_protocol::frame::PLUGIN_MAX_FRAME;
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
@@ -40,7 +40,7 @@ use tokio::sync::watch;
 
 use crate::sleep_or_shutdown;
 use ados_mapping_transport::compute_node;
-use ados_mapping_transport::credentials::{CredentialStore, ATLAS_INGEST_LANE};
+use ados_mapping_transport::credentials::{CredentialStore, CAPTURE_INGEST_LANE};
 use ados_mapping_transport::host::{config_bool, node_info, Host};
 use ados_mapping_transport::sdk::{CloudPublishBearer, SdkAuxLane};
 
@@ -149,9 +149,9 @@ impl ForwardStatus {
     }
 
     /// The facts as the wire struct, stamped `generated_at_ms`.
-    pub fn snapshot(&self, generated_at_ms: i64) -> AtlasForwardStatus {
-        AtlasForwardStatus {
-            version: ATLAS_FORWARD_STATUS_VERSION,
+    pub fn snapshot(&self, generated_at_ms: i64) -> KeyframeForwardStatus {
+        KeyframeForwardStatus {
+            version: FORWARD_STATUS_VERSION,
             compute_node_id: self.compute_node_id.clone(),
             bearer: self.bearer.clone(),
             last_kf_at_ms: self.last_kf_at_ms,
@@ -315,18 +315,20 @@ impl Forwarder {
     /// address. The credential stores are re-read on every rebuild, so one
     /// installed after boot is picked up on the next re-resolve.
     async fn build_ladder(&self, cloud: &CloudPublishBearer) -> (BearerLadder, Option<String>) {
-        let mut bearers: Vec<Box<dyn AtlasBearer>> = Vec::new();
+        let mut bearers: Vec<Box<dyn EventBearer>> = Vec::new();
         let node_id = match compute_node::resolve(
             self.host.as_ref(),
             &self.credentials,
-            &ATLAS_INGEST_LANE,
+            &CAPTURE_INGEST_LANE,
         )
         .await
         {
             Some(node) => {
                 let base = node.base_url();
                 tracing::info!(base = %base, node = ?node.device_id, "capture forwarder resolved compute node");
-                let credential = node.credential(&self.credentials, &ATLAS_INGEST_LANE).ok();
+                let credential = node
+                    .credential(&self.credentials, &CAPTURE_INGEST_LANE)
+                    .ok();
                 bearers.push(Box::new(LanHttpBearer::new(base, credential)));
                 let addr = node.addr();
                 Some(node.device_id.unwrap_or(addr))
@@ -344,7 +346,7 @@ impl Forwarder {
     }
 }
 
-/// Decode one framed [`AtlasEvent`] body, stamp the capturing drone's device id,
+/// Decode one framed [`NodeEvent`] body, stamp the capturing drone's device id,
 /// and send it over the ladder. Never panics, never propagates: a forward
 /// failure is logged and the loop continues.
 ///
@@ -352,7 +354,7 @@ impl Forwarder {
 /// passes through, so the compute node can attribute the reconstruct job to the
 /// drone that captured it. An empty id leaves the event unstamped.
 async fn forward_event(ladder: &BearerLadder, body: &[u8], device_id: &str) -> Forwarded {
-    let mut event = match AtlasEvent::decode(body) {
+    let mut event = match NodeEvent::decode(body) {
         Ok(ev) => ev,
         Err(e) => {
             tracing::warn!(error = %e, "capture forwarder dropped a malformed event");
@@ -397,7 +399,7 @@ mod tests {
     async fn forward_event_carries_a_decoded_event_stamped_with_the_device_id() {
         let (bearer, mut rx) = LoopbackBearer::channel();
         let ladder = BearerLadder::new(vec![Box::new(bearer)]);
-        let ev = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![1, 2, 3]);
+        let ev = NodeEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![1, 2, 3]);
         let body = ev.encode().unwrap();
 
         match forward_event(&ladder, &body, "drone-7").await {
@@ -422,7 +424,7 @@ mod tests {
     async fn an_empty_device_id_leaves_the_event_unstamped() {
         let (bearer, mut rx) = LoopbackBearer::channel();
         let ladder = BearerLadder::new(vec![Box::new(bearer)]);
-        let body = AtlasEvent::new("capture.state", None, vec![1])
+        let body = NodeEvent::new("capture.state", None, vec![1])
             .encode()
             .unwrap();
         forward_event(&ladder, &body, "").await;
@@ -443,7 +445,7 @@ mod tests {
     #[tokio::test]
     async fn forward_event_reports_no_bearer_when_the_ladder_is_empty() {
         let ladder = BearerLadder::new(vec![]);
-        let body = AtlasEvent::new("plugin.world-engine.pose", None, vec![9])
+        let body = NodeEvent::new("capture.state", None, vec![9])
             .encode()
             .unwrap();
         assert!(matches!(

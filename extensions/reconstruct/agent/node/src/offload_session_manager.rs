@@ -104,7 +104,7 @@ pub struct OffloadSessionManager {
     broadcaster: Arc<DetectionBroadcaster>,
     detector: Arc<dyn Detector>,
     /// Whether the node serves offload sessions at all (the
-    /// `perception.serving.enabled` toggle). When false, `start` declines so the
+    /// `reconstruct.serving.enabled` toggle). When false, `start` declines so the
     /// node reconstructs but never runs perception offload for a drone.
     serve_offload: bool,
     /// The live streaming-session registry — the source of truth for every

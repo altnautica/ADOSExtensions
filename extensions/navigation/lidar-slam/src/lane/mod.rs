@@ -19,11 +19,11 @@ use std::time::Duration;
 
 use ados_capture_contract::Rig;
 use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame};
+use ados_mapping_pose::frame_source::{CapturedFrame, FrameFeed};
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::sensor_bus::BusEvent;
 use ados_mapping_pose::{se3, PoseEstimate, PoseProvider};
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     chunk_scan, pack_points, ImuFeedReason, PoseDescriptor, PoseTrackBatch, PoseTrackEntry,
 };
 use ados_protocol::shutdown::Shutdown;
@@ -61,7 +61,7 @@ pub struct LaneDeps {
     /// Whether the configured LiDAR is planar (the FC can be its IMU).
     pub lidar_planar: bool,
     /// The frames VIO tracks on; `None` without VIO.
-    pub frames: Option<AtlasFrameSource>,
+    pub frames: Option<FrameFeed>,
     pub bus_rx: mpsc::Receiver<BusEvent>,
     pub lidar_rx: Option<mpsc::Receiver<LidarScan>>,
     pub out: Publisher,

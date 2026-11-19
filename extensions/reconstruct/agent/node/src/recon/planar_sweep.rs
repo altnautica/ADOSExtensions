@@ -19,7 +19,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 
-use ados_mapping_protocol::atlas::{PolarScan, VioHealth};
+use ados_mapping_protocol::capture::{PolarScan, VioHealth};
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
 

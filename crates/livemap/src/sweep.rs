@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use ados_mapping_protocol::atlas::nav::POINTCLOUD_DELTA_MAX_POINTS;
+use ados_mapping_protocol::capture::nav::POINTCLOUD_DELTA_MAX_POINTS;
 use base64::Engine as _;
 
 /// RAM one voxel costs: key, centroid sum, count, flag, plus hash overhead.

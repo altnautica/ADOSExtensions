@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use ados_mapping_pose::lidar_scan::LidarScan;
-use ados_mapping_protocol::atlas::{unpack_points, AssembledScan, ScanAssembler, ScanChunk};
+use ados_mapping_protocol::capture::{unpack_points, AssembledScan, ScanAssembler, ScanChunk};
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 
@@ -96,7 +96,7 @@ impl ScanRaw {
 mod tests {
     use super::*;
     use crate::lidar_record::scan_to_point_cloud;
-    use ados_mapping_protocol::atlas::{chunk_scan, pack_points};
+    use ados_mapping_protocol::capture::{chunk_scan, pack_points};
 
     fn scan(n: usize) -> LidarScan {
         LidarScan {

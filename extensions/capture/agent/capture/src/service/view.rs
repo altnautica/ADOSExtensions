@@ -1,6 +1,6 @@
 //! The `GET /capture/capture/state` view.
 
-use ados_mapping_protocol::atlas::VioHealth;
+use ados_mapping_protocol::capture::VioHealth;
 use ados_mapping_protocol::capture_ctl::{
     CameraFramesView, CaptureStateView, FramesView, PoseView, StorageView,
 };

@@ -4,7 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use ados_mapping_protocol::atlas::VioHealth;
+use ados_mapping_protocol::capture::VioHealth;
 
 use super::setup::{ensure_env, env_python, SetupError, STAMP_FILE};
 use super::tests::{config, scan, FAKE_MAIN};

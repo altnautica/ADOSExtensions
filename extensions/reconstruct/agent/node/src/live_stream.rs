@@ -1,8 +1,8 @@
 //! The compute node's live map of a streaming drone
-//! (`atlas.compute_placement = stream`): every raw polar scan the drone sends
-//! on `atlas.scan` is painted into a per-device [`LiveMap`] at full
+//! (`navigation.map_placement = stream`): every raw polar scan the drone sends
+//! on `reconstruct.live.scan` is painted into a per-device [`LiveMap`] at full
 //! resolution, and once a second the changed occupancy tiles and new sweep
-//! points go out on that device's world stream (`/ws/atlas/<device_id>`) as
+//! points go out on that device's world stream (`/ws/live/<device_id>`) as
 //! live occupancy and point-cloud payloads (`kind: "live"`), beside the
 //! reconstruction descriptors.
 
@@ -10,8 +10,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use ados_livemap::LiveMap;
-use ados_mapping_protocol::atlas::{
-    AtlasEvent, PolarScan, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+use ados_mapping_protocol::capture::{
+    NodeEvent, PolarScan, RECONSTRUCT_LIVE_OCCUPANCY_TOPIC, RECONSTRUCT_LIVE_POINTCLOUD_TOPIC,
 };
 
 /// The voxel the node's live sweep cloud starts at.
@@ -41,8 +41,8 @@ impl LiveStreams {
         }
     }
 
-    /// Paint one `atlas.scan` event.
-    pub fn on_scan(&mut self, event: &AtlasEvent) {
+    /// Paint one `reconstruct.live.scan` event.
+    pub fn on_scan(&mut self, event: &NodeEvent) {
         match PolarScan::decode(&event.payload) {
             Ok((scan, _)) => {
                 let device = event.device_id.as_deref().unwrap_or(UNATTRIBUTED);
@@ -53,13 +53,13 @@ impl LiveStreams {
             }
             Err(e) => {
                 self.rejected += 1;
-                tracing::debug!(error = %e, "atlas_live_scan_rejected");
+                tracing::debug!(error = %e, "ingest_live_scan_rejected");
             }
         }
     }
 
     /// The live payloads due now, as `(device, event)` for the world stream.
-    pub fn tick(&mut self) -> Vec<(String, AtlasEvent)> {
+    pub fn tick(&mut self) -> Vec<(String, NodeEvent)> {
         let mut out = Vec::new();
         for (device, map) in &mut self.maps {
             let dir = self.root.join(device).join("occupancy");
@@ -68,15 +68,15 @@ impl LiveStreams {
             {
                 Ok(body) => out.push((
                     device.clone(),
-                    AtlasEvent::new(topic, Some(device.clone()), body),
+                    NodeEvent::new(topic, Some(device.clone()), body),
                 )),
-                Err(e) => tracing::warn!(topic, error = %e, "atlas_live_encode_failed"),
+                Err(e) => tracing::warn!(topic, error = %e, "ingest_live_encode_failed"),
             };
             if let Some(o) = occ {
-                push(PLUGIN_ATLAS_OCCUPANCY_TOPIC, o.to_msgpack());
+                push(RECONSTRUCT_LIVE_OCCUPANCY_TOPIC, o.to_msgpack());
             }
             if let Some(c) = cloud {
-                push(PLUGIN_ATLAS_POINTCLOUD_TOPIC, c.to_msgpack());
+                push(RECONSTRUCT_LIVE_POINTCLOUD_TOPIC, c.to_msgpack());
             }
         }
         out
@@ -86,11 +86,11 @@ impl LiveStreams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::{
-        LiveOccupancy, LivePointCloud, MapPayloadKind, VioHealth, ATLAS_SCAN_TOPIC,
+    use ados_mapping_protocol::capture::{
+        LiveOccupancy, LivePointCloud, MapPayloadKind, VioHealth, RECONSTRUCT_LIVE_SCAN_TOPIC,
     };
 
-    fn scan_event(device: Option<&str>) -> AtlasEvent {
+    fn scan_event(device: Option<&str>) -> NodeEvent {
         let n = 720;
         let s = PolarScan {
             t_ns: 1,
@@ -104,7 +104,11 @@ mod tests {
         };
         let mut body = Vec::new();
         s.encode(&mut body);
-        AtlasEvent::new(ATLAS_SCAN_TOPIC, device.map(str::to_string), body)
+        NodeEvent::new(
+            RECONSTRUCT_LIVE_SCAN_TOPIC,
+            device.map(str::to_string),
+            body,
+        )
     }
 
     #[test]
@@ -114,7 +118,11 @@ mod tests {
         for _ in 0..3 {
             live.on_scan(&scan_event(Some("drone-1")));
         }
-        live.on_scan(&AtlasEvent::new(ATLAS_SCAN_TOPIC, None, vec![1, 2]));
+        live.on_scan(&NodeEvent::new(
+            RECONSTRUCT_LIVE_SCAN_TOPIC,
+            None,
+            vec![1, 2],
+        ));
         assert_eq!(live.rejected, 1);
         let out = live.tick();
         assert_eq!(out.len(), 2);
@@ -123,14 +131,14 @@ mod tests {
             .all(|(d, e)| d == "drone-1" && e.device_id.as_deref() == Some("drone-1")));
         let occ = out
             .iter()
-            .find(|(_, e)| e.topic == PLUGIN_ATLAS_OCCUPANCY_TOPIC)
+            .find(|(_, e)| e.topic == RECONSTRUCT_LIVE_OCCUPANCY_TOPIC)
             .unwrap();
         let occ = LiveOccupancy::from_msgpack(&occ.1.payload).unwrap();
         assert_eq!(occ.kind, MapPayloadKind::Live);
         assert!(!occ.tiles.is_empty());
         let cloud = out
             .iter()
-            .find(|(_, e)| e.topic == PLUGIN_ATLAS_POINTCLOUD_TOPIC)
+            .find(|(_, e)| e.topic == RECONSTRUCT_LIVE_POINTCLOUD_TOPIC)
             .unwrap();
         let cloud = LivePointCloud::from_msgpack(&cloud.1.payload).unwrap();
         assert!(cloud.count > 100);

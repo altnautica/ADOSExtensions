@@ -1,14 +1,14 @@
 /**
  * @module capture-client
  * @description Client for a capture device's (Visor or drone) capture surface,
- * served by the extension on the device under `atlas/`:
+ * served by the extension on the device under `capture/`:
  *
- *  - `GET  atlas/capture/state`, `GET atlas/capture/coverage`
- *  - `POST atlas/capture/{start,stop,mark}`, `PUT atlas/capture/exposure`
- *  - `POST atlas/capture/whep?camera=<id>` (SDP offer → answer), `DELETE <location>`
- *  - `GET  atlas/sessions`, `POST atlas/sessions/{id}/{upload,reconstruct}`,
- *    `DELETE atlas/sessions/{id}`
- *  - `GET  atlas/calib`, `GET atlas/calib/{version}`, `PUT atlas/rig`
+ *  - `GET  capture/state`, `GET capture/coverage`
+ *  - `POST capture/{start,stop,mark}`, `PUT capture/exposure`
+ *  - `POST capture/whep?camera=<id>` (SDP offer → answer), `DELETE <location>`
+ *  - `GET  capture/sessions`, `POST capture/sessions/{id}/{upload,reconstruct}`,
+ *    `DELETE capture/sessions/{id}`
+ *  - `GET  capture/calib`, `GET capture/calib/{version}`, `PUT capture/rig`
  *
  * Reads return null on any failure; actions return a discriminated result
  * carrying the agent's error code (`E_STORAGE_FULL`, `E_NOT_UPLOADED`, ...).
@@ -71,11 +71,11 @@ export class CaptureClient {
   }
 
   getState(): Promise<CaptureState | null> {
-    return this.read("atlas/capture/state", coerceCaptureState);
+    return this.read("capture/state", coerceCaptureState);
   }
 
   getCoverage(): Promise<CaptureCoverage | null> {
-    return this.read("atlas/capture/coverage", coerceCoverage);
+    return this.read("capture/coverage", coerceCoverage);
   }
 
   start(req: CaptureStartRequest = {}): Promise<ActionResult<{ sessionId: string | null }>> {
@@ -88,33 +88,33 @@ export class CaptureClient {
         ? { lat_deg: a.latDeg, lon_deg: a.lonDeg, h_ellipsoid_m: a.hEllipsoidM, heading_deg: a.headingDeg }
         : null,
     };
-    return this.act("atlas/capture/start", "POST", body, (e) => ({ sessionId: str(e.session_id) }));
+    return this.act("capture/start", "POST", body, (e) => ({ sessionId: str(e.session_id) }));
   }
 
   stop(): Promise<ActionResult<null>> {
-    return this.act("atlas/capture/stop", "POST", undefined, () => null);
+    return this.act("capture/stop", "POST", undefined, () => null);
   }
 
   mark(room: string, floor: number): Promise<ActionResult<{ segment: number | null }>> {
-    return this.act("atlas/capture/mark", "POST", { room, floor }, (e) => ({ segment: num(e.segment) }));
+    return this.act("capture/mark", "POST", { room, floor }, (e) => ({ segment: num(e.segment) }));
   }
 
   setExposure(patch: ExposurePatch): Promise<ActionResult<ExposureState>> {
     const body = { locked: patch.locked, exposure_us: patch.exposureUs, gain: patch.gain, mode: patch.mode };
-    return this.act("atlas/capture/exposure", "PUT", body, coerceExposure);
+    return this.act("capture/exposure", "PUT", body, coerceExposure);
   }
 
   listSessions(): Promise<CaptureSession[] | null> {
-    return this.read("atlas/sessions", coerceSessions);
+    return this.read("capture/sessions", coerceSessions);
   }
 
   upload(sessionId: string): Promise<ActionResult<null>> {
-    return this.act(`atlas/sessions/${encodeURIComponent(sessionId)}/upload`, "POST", undefined, () => null);
+    return this.act(`capture/sessions/${encodeURIComponent(sessionId)}/upload`, "POST", undefined, () => null);
   }
 
   deleteSession(sessionId: string, force = false): Promise<ActionResult<null>> {
     const q = force ? "?force=true" : "";
-    return this.act(`atlas/sessions/${encodeURIComponent(sessionId)}${q}`, "DELETE", undefined, () => null);
+    return this.act(`capture/sessions/${encodeURIComponent(sessionId)}${q}`, "DELETE", undefined, () => null);
   }
 
   reconstruct(
@@ -122,7 +122,7 @@ export class CaptureClient {
     preset: ReconstructPreset,
   ): Promise<ActionResult<{ node: string | null; jobId: string | null }>> {
     return this.act(
-      `atlas/sessions/${encodeURIComponent(sessionId)}/reconstruct`,
+      `capture/sessions/${encodeURIComponent(sessionId)}/reconstruct`,
       "POST",
       { preset },
       (e) => ({ node: str(e.node), jobId: str(e.job_id) }),
@@ -130,11 +130,11 @@ export class CaptureClient {
   }
 
   getCalib(): Promise<CalibStore | null> {
-    return this.read("atlas/calib", coerceCalibStore);
+    return this.read("capture/calib", coerceCalibStore);
   }
 
   getCalibRig(version: string): Promise<Rig | null> {
-    return this.read(`atlas/calib/${encodeURIComponent(version)}`, (raw) =>
+    return this.read(`capture/calib/${encodeURIComponent(version)}`, (raw) =>
       raw && typeof raw === "object" && Array.isArray((raw as Rig).sensors) ? (raw as Rig) : null,
     );
   }
@@ -142,7 +142,7 @@ export class CaptureClient {
   /** Push a rig document to the device (it validates and stores it as the
    * agent's active rig). */
   putRig(rig: Rig): Promise<ActionResult<{ rigId: string | null; calibVersion: string | null }>> {
-    return this.act("atlas/rig", "PUT", rig, (e) => ({
+    return this.act("capture/rig", "PUT", rig, (e) => ({
       rigId: str(e.rig_id),
       calibVersion: str(e.calib_version),
     }));
@@ -153,7 +153,7 @@ export class CaptureClient {
   async whepOffer(cameraId: string, sdp: string): Promise<{ answer: string; location: string | null } | null> {
     let res: Response;
     try {
-      res = await this.agent.fetch(`atlas/capture/whep?camera=${encodeURIComponent(cameraId)}`, {
+      res = await this.agent.fetch(`capture/whep?camera=${encodeURIComponent(cameraId)}`, {
         method: "POST",
         headers: { "Content-Type": "application/sdp" },
         body: sdp,
@@ -170,7 +170,7 @@ export class CaptureClient {
   async whepClose(location: string): Promise<void> {
     const path = location.replace(/^\/+/, "");
     try {
-      await this.agent.fetch(path.startsWith("atlas/") ? path : `atlas/capture/${path}`, {
+      await this.agent.fetch(path.startsWith("capture/") ? path : `capture/${path}`, {
         method: "DELETE",
         signal: AbortSignal.timeout(4000),
       });

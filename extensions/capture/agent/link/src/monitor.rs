@@ -21,10 +21,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ados_mapping_protocol::atlas::{
-    AtlasEvent, AtlasForwardStatus, CaptureStatus, CAPTURE_STATE_TOPIC,
+use ados_mapping_protocol::capture::{
+    CaptureStatus, KeyframeForwardStatus, NodeEvent, CAPTURE_STATE_TOPIC,
 };
-use ados_mapping_protocol::atlas_state::atlas_state_json;
+use ados_mapping_protocol::capture_state::capture_state_json;
 use ados_mapping_protocol::STATUS_CHANNEL;
 use ados_protocol::frame::PLUGIN_MAX_FRAME;
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
@@ -75,7 +75,7 @@ impl CaptureState {
 /// The capture status in one bus frame, or `None` for any other topic or a
 /// frame that does not decode.
 fn capture_status(body: &[u8]) -> Option<CaptureStatus> {
-    let event = AtlasEvent::decode(body).ok()?;
+    let event = NodeEvent::decode(body).ok()?;
     (event.topic == CAPTURE_STATE_TOPIC)
         .then(|| CaptureStatus::from_msgpack(&event.payload).ok())
         .flatten()
@@ -93,10 +93,10 @@ struct SharedState<'a> {
 /// The `status` channel payload.
 fn status_json(
     capture: Option<&CaptureStatus>,
-    forward: &AtlasForwardStatus,
+    forward: &KeyframeForwardStatus,
     now_ms: i64,
 ) -> serde_json::Value {
-    json!({ "capture": capture.map(|s| atlas_state_json(s, Some(forward), now_ms)) })
+    json!({ "capture": capture.map(|s| capture_state_json(s, Some(forward), now_ms)) })
 }
 
 /// Read the capture bus until `shutdown`, recording the capture state.
@@ -205,14 +205,14 @@ mod tests {
     use super::*;
     use crate::control::tests::capturing_status;
     use crate::forward::ForwardStatus;
-    use ados_mapping_protocol::atlas::CAPTURE_KEYFRAME_TOPIC;
+    use ados_mapping_protocol::capture::CAPTURE_KEYFRAME_TOPIC;
     use ados_mapping_transport::host::to_json;
     use ados_mapping_transport::testing::FakeHost;
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixListener;
 
     fn state_frame() -> Vec<u8> {
-        AtlasEvent::new(
+        NodeEvent::new(
             CAPTURE_STATE_TOPIC,
             None,
             capturing_status().to_msgpack().unwrap(),
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn only_the_capture_state_is_read_off_the_bus() {
         assert_eq!(capture_status(&state_frame()), Some(capturing_status()));
-        let kf = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![1, 2])
+        let kf = NodeEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![1, 2])
             .encode()
             .unwrap();
         assert_eq!(capture_status(&kf), None);

@@ -24,7 +24,7 @@
 //! extension's private bus.
 //!
 //! The wire types ([`KeyframeEnvelope`], [`PoseDescriptor`], [`CaptureStatus`],
-//! …) are the shared `ados_mapping_protocol::atlas` contract; this crate
+//! …) are the shared `ados_mapping_protocol::capture` contract; this crate
 //! consumes them, it does not redefine them. They are re-exported here for one
 //! import surface.
 
@@ -77,7 +77,7 @@ pub use runtime::{default_intrinsics, CaptureRuntimeConfig, ConfigError, PosePri
 pub use service::{run_capture_loop, LoopDeps, Paths};
 
 // Re-export the shared wire contract so callers get one import surface.
-pub use ados_mapping_protocol::atlas::{
+pub use ados_mapping_protocol::capture::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
     KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, Pose, PoseSource, TimeAlignment,
     VioHealth, CAPTURE_STATE_TOPIC,

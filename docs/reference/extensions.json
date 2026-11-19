@@ -2,6 +2,49 @@
   "schema": 1,
   "extensions": [
     {
+      "id": "com.altnautica.capture",
+      "name": "ADOS Capture",
+      "version": "1.0.0",
+      "description": "Record capture sessions on a drone or Visor and hand them to a reconstruction node.",
+      "category": null,
+      "supported_boards": [
+        "*"
+      ],
+      "permissions": [
+        "button.subscribe",
+        "camera.control.write",
+        "capture.storage.write",
+        "cloud.publish",
+        "display.oled.page",
+        "event.publish",
+        "event.subscribe",
+        "mavlink.read",
+        "mcp.expose",
+        "network.outbound",
+        "node.info.read",
+        "plugin.http.com.altnautica.reconstruct",
+        "plugin.navigation.map.read",
+        "radio.aux_stream",
+        "sensor.stream.read",
+        "sensors.rig.write",
+        "telemetry.extend",
+        "telemetry.read",
+        "telemetry.subscribe.status",
+        "ui.slot.cockpit-panel",
+        "ui.slot.map-overlay",
+        "ui.slot.node-agent-page",
+        "ui.slot.node-surface",
+        "video.whep.relay",
+        "vision.frame.read"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions/capture",
+      "published": true
+    },
+    {
       "id": "com.altnautica.follow-me",
       "name": "ADOS Follow-Me",
       "version": "0.5.1",
@@ -103,6 +146,42 @@
       "published": true
     },
     {
+      "id": "com.altnautica.reconstruct",
+      "name": "ADOS Reconstruct",
+      "version": "1.0.0",
+      "description": "Reconstruct captured sessions on a LAN compute node, and offload perception for drones without an accelerator.",
+      "category": null,
+      "supported_boards": [
+        "*"
+      ],
+      "permissions": [
+        "capture.storage.write",
+        "cloud.records",
+        "event.subscribe",
+        "hardware.gpu",
+        "mcp.expose",
+        "network.listen",
+        "network.outbound",
+        "node.info.read",
+        "perception.read",
+        "plugin.navigation.map.read",
+        "telemetry.extend",
+        "telemetry.read",
+        "telemetry.subscribe.status",
+        "ui.slot.node-agent-page",
+        "ui.slot.node-surface",
+        "vision.detection.publish",
+        "vision.frame.read",
+        "vision.offload.advertise"
+      ],
+      "halves": [
+        "agent",
+        "gcs"
+      ],
+      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions/reconstruct",
+      "published": true
+    },
+    {
       "id": "com.altnautica.siyi-pod",
       "name": "ADOS SIYI Optical Pod",
       "version": "0.6.4",
@@ -174,50 +253,6 @@
       ],
       "documentation_url": "https://docs.altnautica.com/drone-agent/extensions-catalog#ados-thermal-camera-flir-lepton-usb-uvc",
       "published": false
-    },
-    {
-      "id": "com.altnautica.world-engine",
-      "name": "ADOS World Engine",
-      "version": "2.2.7",
-      "description": "3D world model from drone flights, reconstructed on a LAN compute node, plus perception offload for drones without an NPU.",
-      "category": null,
-      "supported_boards": [
-        "*"
-      ],
-      "permissions": [
-        "button.subscribe",
-        "camera.control.write",
-        "capture.storage.write",
-        "cloud.publish",
-        "cloud.records",
-        "display.oled.page",
-        "event.publish",
-        "hardware.gpu",
-        "mavlink.read",
-        "mcp.expose",
-        "network.listen",
-        "network.outbound",
-        "node.info.read",
-        "perception.read",
-        "radio.aux_stream",
-        "sensor.stream.read",
-        "sensors.rig.write",
-        "telemetry.extend",
-        "telemetry.read",
-        "telemetry.subscribe.status",
-        "ui.slot.node-agent-page",
-        "ui.slot.node-surface",
-        "video.whep.relay",
-        "vision.detection.publish",
-        "vision.frame.read",
-        "vision.offload.advertise"
-      ],
-      "halves": [
-        "agent",
-        "gcs"
-      ],
-      "documentation_url": "https://docs.altnautica.com/drone-agent/extensions/world-engine",
-      "published": true
     }
   ]
 }

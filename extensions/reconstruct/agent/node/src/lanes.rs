@@ -2,8 +2,8 @@
 //!
 //! Beside the owner's job API the node serves the lanes a drone or a handheld
 //! capture device reaches: the reconstruction artifacts, the capture-session
-//! upload, the offloaded-detection return stream, the Atlas capture-event
-//! ingest and the world-model descriptor stream. Each is mounted here and
+//! upload, the offloaded-detection return stream, the capture-event
+//! ingest and the reconstruction descriptor stream. Each is mounted here and
 //! nowhere else, wrapped in [`crate::auth::require_lane`] for its own
 //! [`NodeLane`], so a lane cannot be mounted without its gate: it serves only
 //! the owner (on `http.sock`, or the standalone bearer) or, over TCP, a node
@@ -16,10 +16,10 @@ use axum::Router;
 
 use crate::auth::{require_lane, ComputeAuth};
 
-/// The world-model capture ingest (`POST /api/atlas/event` and its probe).
-pub(crate) const ATLAS_INGEST: NodeLane = NodeLane::from_static("atlas.ingest");
-/// The world-model descriptor stream (`GET /ws/atlas/<device_id>`).
-pub(crate) const ATLAS_WORLD: NodeLane = NodeLane::from_static("atlas.world");
+/// The reconstruction capture ingest (`POST /api/capture/event` and its probe).
+pub(crate) const CAPTURE_INGEST: NodeLane = NodeLane::from_static("capture.ingest");
+/// The reconstruction descriptor stream (`GET /ws/live/<device_id>`).
+pub(crate) const LIVE_WORLD: NodeLane = NodeLane::from_static("reconstruct.live");
 /// The offloaded-detection return stream (`GET /ws/offload/<session_id>`).
 pub(crate) const OFFLOAD_STREAM: NodeLane = NodeLane::from_static("offload.stream");
 /// Reconstruction artifacts (`GET /artifacts/*`).
@@ -31,8 +31,8 @@ pub(crate) const JOB_SUBMIT: NodeLane = NodeLane::from_static("jobs.submit");
 pub(crate) const SESSION_UPLOAD: NodeLane = NodeLane::from_static("sessions.upload");
 /// Every lane this node serves, in wire order: the default grant for a drone.
 pub(crate) const ALL: [NodeLane; 6] = [
-    ATLAS_INGEST,
-    ATLAS_WORLD,
+    CAPTURE_INGEST,
+    LIVE_WORLD,
     OFFLOAD_STREAM,
     ARTIFACTS,
     JOB_SUBMIT,
@@ -62,28 +62,26 @@ pub fn upload_and_artifact_lanes(
 }
 
 #[cfg(unix)]
-pub use host::{lane_router, AtlasLanes, LaneRoutes};
+pub use host::{lane_router, CaptureLanes, LaneRoutes};
 
 #[cfg(unix)]
 mod host {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use ados_mapping_transport::{
-        atlas_event_router, world_ws_router, AtlasEvent, WorldBroadcaster,
-    };
+    use ados_mapping_transport::{event_router, world_ws_router, NodeEvent, WorldBroadcaster};
     use axum::Router;
     use tokio::sync::mpsc::Sender;
 
-    use super::{gate, ATLAS_INGEST, ATLAS_WORLD, OFFLOAD_STREAM};
+    use super::{gate, CAPTURE_INGEST, LIVE_WORLD, OFFLOAD_STREAM};
     use crate::auth::ComputeAuth;
     use crate::offload_ws::{offload_ws_router, DetectionBroadcaster};
 
-    /// The Atlas lanes.
-    pub struct AtlasLanes {
+    /// The capture lanes.
+    pub struct CaptureLanes {
         /// Where decoded capture events go (the receiver loop drains it).
-        pub events: Sender<AtlasEvent>,
-        /// The world-model descriptor fan-out.
+        pub events: Sender<NodeEvent>,
+        /// The reconstruction descriptor fan-out.
         pub world: Arc<WorldBroadcaster>,
     }
 
@@ -95,8 +93,8 @@ mod host {
         pub uploads: Router,
         /// The offload detection fan-out.
         pub offload: Arc<DetectionBroadcaster>,
-        /// The Atlas ingest and world-model lanes.
-        pub atlas: AtlasLanes,
+        /// The capture ingest and live stream lanes.
+        pub capture: CaptureLanes,
     }
 
     /// Every lane router, each behind the gate for its lane.
@@ -109,13 +107,13 @@ mod host {
             ))
             .merge(gate(
                 &auth,
-                atlas_event_router(routes.atlas.events),
-                ATLAS_INGEST,
+                event_router(routes.capture.events),
+                CAPTURE_INGEST,
             ))
             .merge(gate(
                 &auth,
-                world_ws_router(routes.atlas.world),
-                ATLAS_WORLD,
+                world_ws_router(routes.capture.world),
+                LIVE_WORLD,
             ))
     }
 }
@@ -125,7 +123,7 @@ mod tests {
     use super::*;
     use crate::node_credentials::NodeCredentialStore;
     use crate::offload_ws::DetectionBroadcaster;
-    use ados_mapping_transport::{AtlasEvent, WorldBroadcaster};
+    use ados_mapping_transport::{NodeEvent, WorldBroadcaster};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tokio::sync::mpsc::{channel, Receiver};
@@ -134,7 +132,7 @@ mod tests {
     struct Fixture {
         router: Router,
         auth: Arc<ComputeAuth>,
-        events: Receiver<AtlasEvent>,
+        events: Receiver<NodeEvent>,
         _dir: tempfile::TempDir,
     }
 
@@ -157,7 +155,7 @@ mod tests {
                     Arc::new(|_| Ok(())),
                 ),
                 offload: Arc::new(DetectionBroadcaster::new(8)),
-                atlas: AtlasLanes {
+                capture: CaptureLanes {
                     events: tx,
                     world: Arc::new(WorldBroadcaster::new(8)),
                 },
@@ -188,7 +186,7 @@ mod tests {
     }
 
     fn event_body() -> Vec<u8> {
-        AtlasEvent::new("capture.keyframe", Some("drone-1".into()), vec![1, 2, 3])
+        NodeEvent::new("capture.keyframe", Some("drone-1".into()), vec![1, 2, 3])
             .encode()
             .unwrap()
     }
@@ -205,15 +203,15 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            status(&f.router, "POST", "/api/atlas/event", &[], event_body()).await,
+            status(&f.router, "POST", "/api/capture/event", &[], event_body()).await,
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            status(&f.router, "GET", "/api/atlas/health", &[], vec![]).await,
+            status(&f.router, "GET", "/api/capture/health", &[], vec![]).await,
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(
-            status(&f.router, "GET", "/ws/atlas/drone-1", &[], vec![]).await,
+            status(&f.router, "GET", "/ws/live/drone-1", &[], vec![]).await,
             StatusCode::UNAUTHORIZED
         );
     }
@@ -224,11 +222,11 @@ mod tests {
         let m = f
             .auth
             .credentials
-            .mint("drone-1", &[ATLAS_INGEST], 1)
+            .mint("drone-1", &[CAPTURE_INGEST], 1)
             .unwrap();
         let cred = [("x-ados-node-credential", m.credential.as_str())];
         assert_eq!(
-            status(&f.router, "POST", "/api/atlas/event", &cred, event_body()).await,
+            status(&f.router, "POST", "/api/capture/event", &cred, event_body()).await,
             StatusCode::ACCEPTED
         );
         assert_eq!(f.events.recv().await.unwrap().topic, "capture.keyframe");

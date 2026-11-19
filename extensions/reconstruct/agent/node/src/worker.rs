@@ -5,7 +5,7 @@
 //! run on a blocking thread through [`crate::recon::run_staged`], persisting
 //! every stage as it goes; a live-lane keyframe reconstruction and a one-shot
 //! offload run through [`Scheduler::run_backend`]. The plugin-host service
-//! adds its own handling (streaming offload sessions, world-model fan-out) on
+//! adds its own handling (streaming offload sessions, reconstruction fan-out) on
 //! top of [`run_staged_job`]; the standalone node runs [`worker_loop`].
 
 use std::path::PathBuf;

@@ -1,6 +1,6 @@
 //! A capture session's planar scans in their compact polar form:
 //! `lidar/<sensor>.polar.zst`, a zstd stream of
-//! [`PolarScan`](ados_mapping_protocol::atlas::PolarScan) records, each with
+//! [`PolarScan`](ados_mapping_protocol::capture::PolarScan) records, each with
 //! the sensor's pose in `map_ned` as the drone's live SLAM and the flight
 //! controller's height placed it. A planar LiDAR records here instead of the
 //! Cartesian `/lidar/<id>/points` channel.
@@ -8,7 +8,7 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use ados_mapping_protocol::atlas::PolarScan;
+use ados_mapping_protocol::capture::PolarScan;
 use ados_scan2d::ScanInput;
 
 use super::StageError;
@@ -64,7 +64,7 @@ pub fn origin_flu(scan: &PolarScan) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::VioHealth;
+    use ados_mapping_protocol::capture::VioHealth;
     use std::io::Write;
 
     fn scan() -> PolarScan {

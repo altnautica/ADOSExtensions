@@ -35,7 +35,7 @@ use ados_capture_contract::{
 use ados_protocol::framebus::FrameFormat;
 use parking_lot::Mutex;
 
-use ados_mapping_protocol::atlas::PolarScan;
+use ados_mapping_protocol::capture::PolarScan;
 use convert::{ImageEncoding, ImageMsg};
 use sidecars::{PolarWriter, Sidecars};
 

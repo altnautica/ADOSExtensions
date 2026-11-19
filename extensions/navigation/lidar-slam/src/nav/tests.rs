@@ -1,7 +1,7 @@
 use std::f64::consts::PI;
 
-use ados_mapping_protocol::atlas::nav::OCCUPANCY_OCCUPIED;
-use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseSource, PoseSource, VioHealth};
+use ados_mapping_protocol::capture::nav::OCCUPANCY_OCCUPIED;
+use ados_mapping_protocol::capture::{ComputePlacement, NavPoseSource, PoseSource, VioHealth};
 
 use super::*;
 use ados_mapping_pose::se3;
@@ -777,7 +777,8 @@ fn scans_build_the_live_map_and_the_status_reports_it() {
 /// `/proc/self/status`; a status without `VmRSS` reads null, never 0.
 #[test]
 fn the_status_reports_the_resident_memory_or_null() {
-    let status = "Name:\tworld-engine-ca\nVmPeak:\t  90000 kB\nVmRSS:\t   46080 kB\nThreads:\t9\n";
+    let status = "Name:\tnavigation-lida
+VmPeak:\t  90000 kB\nVmRSS:\t   46080 kB\nThreads:\t9\n";
     assert_eq!(vm_rss_mb(status), Some(45.0));
     assert_eq!(vm_rss_mb("Name:\tx\nThreads:\t1\n"), None);
     assert_eq!(vm_rss_mb("VmRSS:\tnot-a-number kB\n"), None);

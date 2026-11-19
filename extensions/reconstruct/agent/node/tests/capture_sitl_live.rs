@@ -1,25 +1,25 @@
-//! Atlas SITL gate harness, live and multi-camera slices (G4, G5) and the
-//! world model as a planning input; see `atlas_sitl.rs` for the ladder.
+//! Capture SITL harness, live and multi-camera slices (G4, G5) and the
+//! reconstruction as a planning input; see `capture_sitl.rs` for the ladder.
 // These tests drive the unix-socket transport and the issued-credential store.
 #![cfg(unix)]
 
 use ados_capture_contract::Placement;
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CaptureState, CaptureStatus, PoseSource, VioHealth, CAPTURE_KEYFRAME_TOPIC,
-    CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+    CAPTURE_STATE_TOPIC, RECONSTRUCT_LIVE_OCCUPANCY_TOPIC,
 };
 use ados_mapping_protocol::compute::ComputeJobState;
-use ados_mapping_transport::{AtlasEvent, BearerLadder, LoopbackBearer, WorldBroadcaster};
+use ados_mapping_transport::{BearerLadder, LoopbackBearer, NodeEvent, WorldBroadcaster};
 use reconstruct_node::{
-    submit_reconstruct_job, AtlasIngest, LiveReconstructConfig, RerunArchetype, RerunRecording,
+    submit_reconstruct_job, CaptureIngest, LiveReconstructConfig, RerunArchetype, RerunRecording,
 };
 
-#[path = "support/atlas_sitl.rs"]
-mod atlas_support;
+#[path = "support/capture_sitl.rs"]
+mod capture_support;
 
-use atlas_support::{engine, keyframe_env};
+use capture_support::{engine, keyframe_env};
 
-/// G4: a live (in-flight) session keeps the world model fresh by REAL periodic
+/// G4: a live (in-flight) session keeps the reconstruction fresh by REAL periodic
 /// reconstruction. On the cadence the node snapshots the keyframes captured so
 /// far and runs a real reconstruct (the mock backend stands in for Brush with no
 /// GPU), yielding a fresh splat artifact mid-flight; while one cycle runs the
@@ -39,11 +39,11 @@ async fn g4_live_session_periodic_reconstruct() {
         interval_ms: i64::MAX,
         min_keyframes: 2,
     };
-    let mut ingest = AtlasIngest::with_live_config(tmp.path(), cfg);
+    let mut ingest = CaptureIngest::with_live_config(tmp.path(), cfg);
 
     // Three keyframes from one moving camera; a keyframe never bags.
     for kf in 0..3u64 {
-        let ev = AtlasEvent::new(
+        let ev = NodeEvent::new(
             CAPTURE_KEYFRAME_TOPIC,
             None,
             keyframe_env("sitl", "cam-front", kf).to_msgpack().unwrap(),
@@ -69,7 +69,7 @@ async fn g4_live_session_periodic_reconstruct() {
         .join("transforms.json")
         .exists());
 
-    // Submit + run the worker: a fresh, real world-model artifact mid-flight.
+    // Submit + run the worker: a fresh, real reconstruction artifact mid-flight.
     let job_id0 = submit_reconstruct_job(store, &dataset0, &job0).unwrap();
     let outcome = engine.tick(300).unwrap().expect("the live cycle ran");
     assert_eq!(outcome.job_id, job_id0);
@@ -82,7 +82,7 @@ async fn g4_live_session_periodic_reconstruct() {
     // Skip-while-running: more keyframes arrive, but the cadence coalesces while
     // the cycle's guard is held, so no second job piles up on top.
     for kf in 3..6u64 {
-        let ev = AtlasEvent::new(
+        let ev = NodeEvent::new(
             CAPTURE_KEYFRAME_TOPIC,
             None,
             keyframe_env("sitl", "cam-front", kf).to_msgpack().unwrap(),
@@ -160,7 +160,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
     let ladder = BearerLadder::new(vec![Box::new(bearer)]);
     for kf in &keyframes {
         ladder
-            .send(&AtlasEvent::new(
+            .send(&NodeEvent::new(
                 CAPTURE_KEYFRAME_TOPIC,
                 None,
                 kf.to_msgpack().unwrap(),
@@ -184,7 +184,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
         reconstruct_steps: None,
     };
     ladder
-        .send(&AtlasEvent::new(
+        .send(&NodeEvent::new(
             CAPTURE_STATE_TOPIC,
             None,
             status.to_msgpack().unwrap(),
@@ -195,7 +195,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
 
     let store = engine.scheduler().store();
     let tmp = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(tmp.path());
+    let mut ingest = CaptureIngest::new(tmp.path());
     let mut job_id = None;
     while let Some(ev) = rx.recv().await {
         if let Some((dataset, job)) = ingest.step(&ev, 200).unwrap() {
@@ -258,17 +258,17 @@ async fn g5_multi_cam_fuses_into_one_world() {
     );
 }
 
-/// G3, the part that was missing: the world model is CONSUMABLE DATA, not only a
+/// G3, the part that was missing: the reconstruction is CONSUMABLE DATA, not only a
 /// picture. A completed reconstruction's geometry becomes an occupancy/ESDF
 /// descriptor a planner can act on, and it crosses the per-device shared-data
 /// lane to a subscriber that never touched the compute node's filesystem.
 ///
-/// Before this, `plugin.atlas.occupancy` was a constant in the protocol with no
+/// Before this, `reconstruct.occupancy` was a constant in the protocol with no
 /// publisher and no subscriber anywhere in the tree, so a repo-wide search for a
-/// consumer of the world model found a viewer and nothing else.
+/// consumer of the reconstruction found a viewer and nothing else.
 #[tokio::test]
-async fn the_world_model_is_consumable_as_a_planning_input_over_the_shared_data_lane() {
-    use ados_mapping_protocol::atlas::{OccupancyDescriptor, OccupancyField};
+async fn the_reconstruction_is_consumable_as_a_planning_input_over_the_world_stream() {
+    use ados_mapping_protocol::capture::{OccupancyDescriptor, OccupancyField};
     use reconstruct_node::{derive_descriptors, derive_occupancy, Output};
 
     let dir = tempfile::tempdir().unwrap();
@@ -326,8 +326,8 @@ async fn the_world_model_is_consumable_as_a_planning_input_over_the_shared_data_
     assert_eq!(
         broadcaster.publish(
             "drone-1",
-            AtlasEvent::new(
-                PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+            NodeEvent::new(
+                RECONSTRUCT_LIVE_OCCUPANCY_TOPIC,
                 Some("drone-1".into()),
                 occ.to_msgpack().unwrap(),
             ),
@@ -336,7 +336,7 @@ async fn the_world_model_is_consumable_as_a_planning_input_over_the_shared_data_
     );
     let (device, event) = consumer.recv().await.unwrap();
     assert_eq!(device, "drone-1");
-    assert_eq!(event.topic, PLUGIN_ATLAS_OCCUPANCY_TOPIC);
+    assert_eq!(event.topic, RECONSTRUCT_LIVE_OCCUPANCY_TOPIC);
     let received = OccupancyDescriptor::from_msgpack(&event.payload).unwrap();
     assert_eq!(received, occ, "the planning input crosses the lane intact");
     assert_eq!(received.field, OccupancyField::Esdf);

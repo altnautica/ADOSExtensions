@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use ados_mapping_pose::config::{heading_deg, integer, optional_unsigned, typed, ConfigError};
-use ados_mapping_protocol::atlas::{ComputePlacement, PoseSource};
+use ados_mapping_protocol::capture::{ComputePlacement, PoseSource};
 use serde::Deserialize;
 use serde_json::Value;
 

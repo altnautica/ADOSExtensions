@@ -22,7 +22,7 @@
 //! dropped lock never auto-re-acquires. When the lane closes, the link is marked
 //! down and settled to `Lost` before the orchestrator returns.
 //!
-//! The drone-side reconciler in the World Engine link calls this on a live tier
+//! Reconstruct's drone-side reconciler calls this on a live tier
 //! flip (`offload` tier + a reachable node) and supervises it.
 
 use std::sync::Arc;

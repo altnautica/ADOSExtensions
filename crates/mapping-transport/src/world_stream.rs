@@ -1,6 +1,6 @@
-//! The world-model descriptor stream (compute -> GCS / drone).
+//! The reconstruction descriptor stream (compute -> GCS / drone).
 //!
-//! The compute node fans out world-model descriptors — a splat, a point cloud, a
+//! The compute node fans out reconstruction descriptors — a splat, a point cloud, a
 //! mesh, an occupancy / ESDF grid — on a broadcast channel, and a consumer
 //! subscribes over a per-device WebSocket beside the video relay rather than
 //! through the bounded MAVLink queue. Each descriptor is tagged with the drone it
@@ -32,7 +32,7 @@
 //! changed. Identical operator-visible behaviour, no bespoke codec.
 //!
 //! The mechanism below is deliberately agnostic to which descriptor it carries:
-//! it moves framed [`AtlasEvent`]s tagged by device, so adding a topic needs no
+//! it moves framed [`NodeEvent`]s tagged by device, so adding a topic needs no
 //! transport change.
 
 use std::sync::Arc;
@@ -48,21 +48,21 @@ use axum::{
 };
 use tokio::sync::broadcast;
 
-use ados_mapping_protocol::atlas::AtlasEvent;
+use ados_mapping_protocol::capture::NodeEvent;
 use ados_protocol::ws_ticket::WS_TICKET_SUBPROTOCOL;
 
-/// The WebSocket route a world-model consumer connects to, one path per device.
-pub const WORLD_WS_ROUTE: &str = "/ws/atlas/:device_id";
+/// The WebSocket route a reconstruction consumer connects to, one path per device.
+pub const WORLD_WS_ROUTE: &str = "/ws/live/:device_id";
 
 /// The concrete WS path for `device_id` (the client side of [`WORLD_WS_ROUTE`]).
 pub fn world_ws_path(device_id: &str) -> String {
-    format!("/ws/atlas/{device_id}")
+    format!("/ws/live/{device_id}")
 }
 
-/// Fans out world-model descriptors, tagged by device, to every connected
+/// Fans out reconstruction descriptors, tagged by device, to every connected
 /// subscriber.
 pub struct WorldBroadcaster {
-    tx: broadcast::Sender<(String, AtlasEvent)>,
+    tx: broadcast::Sender<(String, NodeEvent)>,
 }
 
 impl WorldBroadcaster {
@@ -78,13 +78,13 @@ impl WorldBroadcaster {
     /// since a subscriber that is lagging past the buffer silently skips it.
     /// 0 means nothing is connected (not an error). Each receiver filters to its
     /// own device.
-    pub fn publish(&self, device_id: &str, event: AtlasEvent) -> usize {
+    pub fn publish(&self, device_id: &str, event: NodeEvent) -> usize {
         self.tx.send((device_id.to_string(), event)).unwrap_or(0)
     }
 
     /// Subscribe to the (device, descriptor) stream (the WS handler does this
     /// per connection, filtering to its own device).
-    pub fn subscribe(&self) -> broadcast::Receiver<(String, AtlasEvent)> {
+    pub fn subscribe(&self) -> broadcast::Receiver<(String, NodeEvent)> {
         self.tx.subscribe()
     }
 
@@ -94,7 +94,7 @@ impl WorldBroadcaster {
     }
 }
 
-/// The axum router the compute node mounts to serve the per-device world-model
+/// The axum router the compute node mounts to serve the per-device reconstruction
 /// descriptor stream. The route carries no auth of its own: the node mounts it
 /// behind its world-stream lane gate.
 pub fn world_ws_router(broadcaster: Arc<WorldBroadcaster>) -> Router {
@@ -118,7 +118,7 @@ async fn world_ws(
 async fn forward_descriptors(
     mut socket: WebSocket,
     device_id: String,
-    mut rx: broadcast::Receiver<(String, AtlasEvent)>,
+    mut rx: broadcast::Receiver<(String, NodeEvent)>,
 ) {
     loop {
         tokio::select! {
@@ -157,13 +157,13 @@ async fn forward_descriptors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ados_mapping_protocol::atlas::{
-        SplatDescriptor, PLUGIN_ATLAS_MESH_TOPIC, PLUGIN_ATLAS_SPLAT_TOPIC,
+    use ados_mapping_protocol::capture::{
+        SplatDescriptor, RECONSTRUCT_MESH_TOPIC, RECONSTRUCT_SPLAT_TOPIC,
     };
     use futures_util::StreamExt;
 
-    fn descriptor(topic: &str) -> AtlasEvent {
-        AtlasEvent::new(topic, None, vec![7, 7, 7])
+    fn descriptor(topic: &str) -> NodeEvent {
+        NodeEvent::new(topic, None, vec![7, 7, 7])
     }
 
     #[tokio::test]
@@ -171,22 +171,16 @@ mod tests {
         let b = WorldBroadcaster::new(16);
         let mut rx = b.subscribe();
         assert_eq!(b.subscriber_count(), 1);
-        assert_eq!(
-            b.publish("drone-1", descriptor(PLUGIN_ATLAS_SPLAT_TOPIC)),
-            1
-        );
+        assert_eq!(b.publish("drone-1", descriptor(RECONSTRUCT_SPLAT_TOPIC)), 1);
         let (dev, got) = rx.recv().await.unwrap();
         assert_eq!(dev, "drone-1");
-        assert_eq!(got.topic, PLUGIN_ATLAS_SPLAT_TOPIC);
+        assert_eq!(got.topic, RECONSTRUCT_SPLAT_TOPIC);
     }
 
     #[tokio::test]
     async fn publish_with_no_subscriber_reaches_zero_not_an_error() {
         let b = WorldBroadcaster::new(16);
-        assert_eq!(
-            b.publish("drone-1", descriptor(PLUGIN_ATLAS_SPLAT_TOPIC)),
-            0
-        );
+        assert_eq!(b.publish("drone-1", descriptor(RECONSTRUCT_SPLAT_TOPIC)), 0);
     }
 
     async fn spawn_world_server(b: Arc<WorldBroadcaster>) -> std::net::SocketAddr {
@@ -223,13 +217,13 @@ mod tests {
         wait_for_subscribers(&broadcaster, 1).await;
 
         // A descriptor for ANOTHER device must not reach this subscriber...
-        broadcaster.publish("drone-2", descriptor(PLUGIN_ATLAS_MESH_TOPIC));
+        broadcaster.publish("drone-2", descriptor(RECONSTRUCT_MESH_TOPIC));
         // ...only the one for drone-1.
-        broadcaster.publish("drone-1", descriptor(PLUGIN_ATLAS_SPLAT_TOPIC));
+        broadcaster.publish("drone-1", descriptor(RECONSTRUCT_SPLAT_TOPIC));
 
         let msg = ws.next().await.unwrap().unwrap();
-        let event = AtlasEvent::decode(&msg.into_data()).unwrap();
-        assert_eq!(event.topic, PLUGIN_ATLAS_SPLAT_TOPIC); // not the drone-2 mesh
+        let event = NodeEvent::decode(&msg.into_data()).unwrap();
+        assert_eq!(event.topic, RECONSTRUCT_SPLAT_TOPIC); // not the drone-2 mesh
         assert_eq!(event.payload, vec![7, 7, 7]);
     }
 
@@ -264,7 +258,7 @@ mod tests {
         wait_for_subscribers(&broadcaster, 1).await;
 
         let splat = SplatDescriptor {
-            session_id: "atlas-drone-1-1000".into(),
+            session_id: "s-drone-1-1000".into(),
             generation: 7,
             placement: ados_capture_contract::Placement::identity(None),
             gaussian_count: 1_250_000,
@@ -276,11 +270,11 @@ mod tests {
         };
         broadcaster.publish(
             "drone-1",
-            AtlasEvent::new(PLUGIN_ATLAS_SPLAT_TOPIC, None, splat.to_msgpack().unwrap()),
+            NodeEvent::new(RECONSTRUCT_SPLAT_TOPIC, None, splat.to_msgpack().unwrap()),
         );
 
         let msg = ws.next().await.unwrap().unwrap();
-        let event = AtlasEvent::decode(&msg.into_data()).unwrap();
+        let event = NodeEvent::decode(&msg.into_data()).unwrap();
         let back = SplatDescriptor::from_msgpack(&event.payload).unwrap();
         assert_eq!(back, splat);
         assert_eq!(

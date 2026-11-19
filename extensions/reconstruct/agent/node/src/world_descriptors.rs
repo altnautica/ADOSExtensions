@@ -1,10 +1,8 @@
-//! Turning a finished reconstruction into shared world-model DATA.
+//! Turning a finished reconstruction into shared reconstruction DATA.
 //!
-//! Without this module Atlas is a private pipeline ending in a viewer: the
-//! compute node writes a `.ply` and a `.rrd`, the GCS renders them, and nothing
-//! else in the system can consume the world the aircraft just mapped. The four
-//! `plugin.atlas.*` shared-data topics existed as constants with no publisher
-//! and no subscriber anywhere in the tree.
+//! Without this module reconstruction is a private pipeline ending in a
+//! viewer: the node writes a `.ply` and a `.rrd`, the GCS renders them, and
+//! nothing else can consume the place the aircraft just mapped.
 //!
 //! This is the publisher. When a reconstruct job completes, its outputs are
 //! mapped to descriptors stamped with the capture session and a monotonically
@@ -18,7 +16,7 @@
 use std::path::{Path, PathBuf};
 
 use ados_capture_contract::Placement;
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     Generation, MeshDescriptor, OccupancyDescriptor, OccupancyField, PointCloudDescriptor,
     SplatDescriptor,
 };
@@ -30,7 +28,7 @@ use crate::Output;
 mod esdf;
 pub use esdf::*;
 
-/// The world-model descriptors derived from one reconstruction generation. Each
+/// The reconstruction descriptors derived from one reconstruction generation. Each
 /// is `None` when the generation produced no artifact of that kind — never a
 /// placeholder, so a consumer cannot mistake an absent mesh for an empty one.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -85,7 +83,7 @@ pub fn derive_descriptors(
             "pointcloud" => {
                 let points = local_ply_points(out, work_root);
                 set.pointcloud = Some(PointCloudDescriptor {
-                    kind: ados_mapping_protocol::atlas::MapPayloadKind::Product,
+                    kind: ados_mapping_protocol::capture::MapPayloadKind::Product,
                     session_id: session_id.to_string(),
                     generation,
                     placement: placement.clone(),
@@ -163,14 +161,14 @@ pub fn derive_occupancy(
             // The grid is still valid in memory and the descriptor still states
             // real geometry, so publish it without a fetch URL rather than
             // dropping the whole planning lane on a disk fault.
-            tracing::warn!(error = %e, path = %abs.display(), "atlas_esdf_write_failed");
+            tracing::warn!(error = %e, path = %abs.display(), "esdf_write_failed");
             None
         }
     };
 
     Ok(Some((
         OccupancyDescriptor {
-            kind: ados_mapping_protocol::atlas::MapPayloadKind::Product,
+            kind: ados_mapping_protocol::capture::MapPayloadKind::Product,
             session_id: session_id.to_string(),
             generation,
             placement: placement.clone(),

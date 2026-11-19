@@ -2,12 +2,12 @@ use super::*;
 use ados_capture_contract::{
     CameraModel, CameraModelModel, GeoAnchor, GeoAnchorDatum, GeoAnchorSource,
 };
-use ados_mapping_protocol::atlas::{
+use ados_mapping_protocol::capture::{
     CameraRole, ImageEncoding, KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseSource,
     VioHealth,
 };
 
-fn real_keyframe_event(session: &str, kf_id: u64) -> AtlasEvent {
+fn real_keyframe_event(session: &str, kf_id: u64) -> NodeEvent {
     let kf = KeyframeEnvelope {
         session_id: session.into(),
         kf_id,
@@ -38,9 +38,9 @@ fn real_keyframe_event(session: &str, kf_id: u64) -> AtlasEvent {
             t: [0.0, 0.0, 0.0],
             cov: None,
         },
-        pose_cov: vec![0.0009; ados_mapping_protocol::atlas::POSE_COV_LEN],
+        pose_cov: vec![0.0009; ados_mapping_protocol::capture::POSE_COV_LEN],
         pose_source: PoseSource::FcEkf,
-        time: ados_mapping_protocol::atlas::TimeAlignment::unmeasured(),
+        time: ados_mapping_protocol::capture::TimeAlignment::unmeasured(),
         anchor: Some(GeoAnchor {
             lat_deg: 12.97,
             lon_deg: 77.59,
@@ -52,27 +52,27 @@ fn real_keyframe_event(session: &str, kf_id: u64) -> AtlasEvent {
         imu_window: Vec::new(),
         flags: KeyframeFlags::default(),
     };
-    AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, kf.to_msgpack().unwrap())
+    NodeEvent::new(CAPTURE_KEYFRAME_TOPIC, None, kf.to_msgpack().unwrap())
 }
 
 /// A keyframe event stamped with a capturing-drone id (the egress shape).
-fn keyframe_event_from(session: &str, kf_id: u64, device: &str) -> AtlasEvent {
+fn keyframe_event_from(session: &str, kf_id: u64, device: &str) -> NodeEvent {
     let mut ev = real_keyframe_event(session, kf_id);
     ev.device_id = Some(device.to_string());
     ev
 }
 
-fn capture_state(session: &str, state: CaptureState, keyframes: u64) -> AtlasEvent {
+fn capture_state(session: &str, state: CaptureState, keyframes: u64) -> NodeEvent {
     capture_state_steps(session, state, keyframes, None)
 }
 
-/// A capture-state event carrying the drone's `atlas.reconstruct_steps`.
+/// A capture-state event carrying the drone's `capture.reconstruct_steps`.
 fn capture_state_steps(
     session: &str,
     state: CaptureState,
     keyframes: u64,
     reconstruct_steps: Option<u64>,
-) -> AtlasEvent {
+) -> NodeEvent {
     let status = CaptureStatus {
         session_id: session.into(),
         state,
@@ -86,7 +86,7 @@ fn capture_state_steps(
         dropped_keyframes: 0,
         reconstruct_steps,
     };
-    AtlasEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap())
+    NodeEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap())
 }
 
 /// A capture-state event stamped with a capturing-drone id (the egress shape).
@@ -95,7 +95,7 @@ fn capture_state_from(
     state: CaptureState,
     keyframes: u64,
     device: &str,
-) -> AtlasEvent {
+) -> NodeEvent {
     let mut ev = capture_state(session, state, keyframes);
     ev.device_id = Some(device.to_string());
     ev
@@ -104,7 +104,7 @@ fn capture_state_from(
 #[test]
 fn each_dataset_carries_its_own_sessions_accounting() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     for kf in 0..3 {
         ingest.step(&real_keyframe_event("sA", kf), 1_000).unwrap();
     }
@@ -120,7 +120,7 @@ fn each_dataset_carries_its_own_sessions_accounting() {
 #[test]
 fn a_session_whose_bag_never_arrives_is_finalized_after_the_idle_window() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     ingest
         .step(&real_keyframe_event("sLost", 0), 1_000)
         .unwrap();
@@ -143,7 +143,7 @@ fn a_session_whose_bag_never_arrives_is_finalized_after_the_idle_window() {
 fn keyframes_persist_then_bagged_yields_a_job_with_input_path() {
     let dir = tempfile::tempdir().unwrap();
     let store = JobStore::open(":memory:").unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
 
     for kf_id in 0..3 {
         assert_eq!(
@@ -192,11 +192,11 @@ fn keyframes_persist_then_bagged_yields_a_job_with_input_path() {
 #[test]
 fn the_capturing_drone_device_id_reaches_the_dataset_and_job() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
 
     // The stamped keyframe + bag events carry the drone id; it lands on both
     // the dataset meta and the job params so the compute→cloud producer can
-    // attribute the world model to the capturing drone.
+    // attribute the reconstruction to the capturing drone.
     ingest
         .step(&keyframe_event_from("sD", 0, "drone-42"), 100)
         .unwrap();
@@ -215,7 +215,7 @@ fn the_capturing_drone_device_id_reaches_the_dataset_and_job() {
 #[test]
 fn an_unstamped_session_omits_the_device_id_never_asserting_a_wrong_one() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     // No event carried a device id (a pre-attribution capture): the job omits
     // device_id rather than writing an empty/wrong one.
     ingest.step(&real_keyframe_event("sN", 0), 100).unwrap();
@@ -230,7 +230,7 @@ fn an_unstamped_session_omits_the_device_id_never_asserting_a_wrong_one() {
 #[test]
 fn the_live_cadence_stamps_the_capturing_drone_on_periodic_jobs() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::with_live_config(dir.path(), live(3, 2));
+    let mut ingest = CaptureIngest::with_live_config(dir.path(), live(3, 2));
     for kf in 0..3 {
         ingest
             .step(&keyframe_event_from("sL", kf, "drone-9"), 100)
@@ -247,7 +247,7 @@ fn the_live_cadence_stamps_the_capturing_drone_on_periodic_jobs() {
 fn a_resent_bagged_submit_is_idempotent_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let store = JobStore::open(":memory:").unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     ingest.step(&real_keyframe_event("s2", 0), 100).unwrap();
 
     let (d1, j1) = ingest
@@ -275,8 +275,8 @@ fn a_resent_bagged_submit_is_idempotent_not_an_error() {
 #[test]
 fn a_malformed_capture_state_is_dropped_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
-    let bad = AtlasEvent::new(CAPTURE_STATE_TOPIC, None, b"not msgpack".to_vec());
+    let mut ingest = CaptureIngest::new(dir.path());
+    let bad = NodeEvent::new(CAPTURE_STATE_TOPIC, None, b"not msgpack".to_vec());
     assert!(ingest.step(&bad, 100).unwrap().is_none());
 }
 
@@ -294,7 +294,7 @@ fn live_disabled_produces_no_periodic_reconstructs() {
     // The default config is disabled (opt-in), so no per-session state is
     // tracked and the cadence never fires — the node reconstructs the bag only.
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     for kf in 0..10 {
         ingest.step(&real_keyframe_event("off", kf), 100).unwrap();
     }
@@ -303,32 +303,24 @@ fn live_disabled_produces_no_periodic_reconstructs() {
 }
 
 #[test]
-fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
-    use ados_mapping_protocol::atlas::{
-        ComputePlacement, MapStatus, PLUGIN_ATLAS_MAP_STATUS_TOPIC,
-    };
+fn a_session_whose_drone_streams_scans_reconstructs_live_without_the_node_override() {
     let dir = tempfile::tempdir().unwrap();
     let cfg = LiveReconstructConfig {
         enabled: false,
         ..live(3, 2)
     };
-    let mut ingest = AtlasIngest::with_live_config(dir.path(), cfg);
-    let status = |placement| {
-        let st = MapStatus {
-            placement,
-            ..MapStatus::default()
-        };
-        AtlasEvent::new(
-            PLUGIN_ATLAS_MAP_STATUS_TOPIC,
-            None,
-            st.to_msgpack().unwrap(),
-        )
-    };
+    let mut ingest = CaptureIngest::with_live_config(dir.path(), cfg);
     assert!(!ingest.live_active());
     ingest
-        .step(&capture_state("stream", CaptureState::Capturing, 0), 40)
+        .step(
+            &capture_state_from("stream", CaptureState::Capturing, 0, "drone-1"),
+            40,
+        )
         .unwrap();
-    ingest.step(&status(ComputePlacement::Stream), 50).unwrap();
+    // Another drone's scans do not put this session on the live path.
+    ingest.note_live_scan(Some("drone-2"), 45);
+    assert!(!ingest.live_active());
+    ingest.note_live_scan(Some("drone-1"), 50);
     assert!(ingest.live_active());
     for kf in 0..3 {
         ingest
@@ -337,9 +329,13 @@ fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
     }
     assert_eq!(ingest.due_reconstructs(200).unwrap().len(), 1);
 
-    // A drone that stops streaming takes its session off the live path.
+    // A drone that stopped streaming takes its session off the live path at
+    // its next capture state.
     ingest
-        .step(&status(ComputePlacement::PostFlight), 300)
+        .step(
+            &capture_state_from("stream", CaptureState::Capturing, 3, "drone-1"),
+            50 + STREAM_FRESH_MS + 1,
+        )
         .unwrap();
     assert!(!ingest.live_active());
 }
@@ -347,7 +343,7 @@ fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
 #[test]
 fn live_enabled_snapshots_a_real_reconstruct_job_on_the_cadence() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::with_live_config(dir.path(), live(3, 2));
+    let mut ingest = CaptureIngest::with_live_config(dir.path(), live(3, 2));
 
     // Below the count trigger: not due.
     ingest.step(&real_keyframe_event("live", 0), 100).unwrap();
@@ -391,7 +387,7 @@ fn live_enabled_snapshots_a_real_reconstruct_job_on_the_cadence() {
 #[test]
 fn live_skips_while_a_cycle_runs_then_resumes_after_it_finishes() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::with_live_config(dir.path(), live(3, 2));
+    let mut ingest = CaptureIngest::with_live_config(dir.path(), live(3, 2));
     for kf in 0..3 {
         ingest.step(&real_keyframe_event("s", kf), 100).unwrap();
     }
@@ -422,7 +418,7 @@ fn live_skips_while_a_cycle_runs_then_resumes_after_it_finishes() {
 #[test]
 fn the_bagged_state_drops_the_live_session() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::with_live_config(dir.path(), live(3, 2));
+    let mut ingest = CaptureIngest::with_live_config(dir.path(), live(3, 2));
     for kf in 0..3 {
         ingest.step(&real_keyframe_event("b", kf), 100).unwrap();
     }
@@ -444,12 +440,12 @@ fn the_bagged_state_drops_the_live_session() {
 #[test]
 fn a_malformed_keyframe_is_counted_but_not_persisted() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     // An undecodable keyframe payload still counts as a received delivery, but
     // nothing is persisted. A bag over a session with zero persisted keyframes
     // has no dataset to reconstruct, so it yields NO job (rather than enqueuing
     // one that would only die at the backend with a missing input directory).
-    let bad = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![0u8; 8]);
+    let bad = NodeEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![0u8; 8]);
     assert!(ingest.step(&bad, 100).unwrap().is_none());
     assert_eq!(ingest.keyframes_seen(), 1);
 
@@ -469,7 +465,7 @@ fn a_bagged_reconstruct_job_carries_the_default_train_iters() {
     // param so the backend trains for a real, configurable number of
     // iterations instead of an implicit backend fallback.
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     ingest.step(&real_keyframe_event("sT", 0), 100).unwrap();
     let (_dataset, job) = ingest
         .step(&capture_state("sT", CaptureState::Bagged, 1), 200)
@@ -480,10 +476,10 @@ fn a_bagged_reconstruct_job_carries_the_default_train_iters() {
 
 #[test]
 fn a_bagged_reconstruct_job_trains_for_the_drones_steps() {
-    // The drone's `atlas.reconstruct_steps` rides its capture status and wins
+    // The drone's `capture.reconstruct_steps` rides its capture status and wins
     // over the node's default for that session's job.
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::new(dir.path());
+    let mut ingest = CaptureIngest::new(dir.path());
     ingest.step(&real_keyframe_event("sD", 0), 100).unwrap();
     let (_dataset, job) = ingest
         .step(
@@ -498,7 +494,7 @@ fn a_bagged_reconstruct_job_trains_for_the_drones_steps() {
 #[test]
 fn steps_learned_while_capturing_reach_the_idle_bag_and_live_cycles() {
     let dir = tempfile::tempdir().unwrap();
-    let mut ingest = AtlasIngest::with_live_config(dir.path(), live(2, 2));
+    let mut ingest = CaptureIngest::with_live_config(dir.path(), live(2, 2));
     ingest
         .step(
             &capture_state_steps("sI", CaptureState::Capturing, 0, Some(12_000)),

@@ -35,7 +35,7 @@ beforeEach(() => {
   useReadinessStore.setState({ snapshots: {} });
 });
 
-describe("atlas-readiness-store", () => {
+describe("readiness-store", () => {
   it("stores and reads readiness per device id", () => {
     const s = useReadinessStore.getState();
     s.setReadiness("dev1", readiness({ sessionId: "a" }), FRESH);

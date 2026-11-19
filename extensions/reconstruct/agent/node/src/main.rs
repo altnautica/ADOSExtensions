@@ -1,4 +1,4 @@
-//! `reconstruct-node`: the World Engine reconstruction node.
+//! `reconstruct-node`: the Reconstruct extension's reconstruction node.
 //!
 //! - Under the plugin host (Linux / macOS), started as
 //!   `reconstruct-node com.altnautica.reconstruct`, it is the extension's
