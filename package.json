@@ -13,7 +13,7 @@
     "test:follow-me": "pnpm --filter ./extensions/follow-me/gcs test",
     "build:siyi-pod": "pnpm --filter ./extensions/siyi-pod/gcs build",
     "test:siyi-pod": "pnpm --filter ./extensions/siyi-pod/gcs test",
-    "build:navigation": "pnpm --filter ./extensions/navigation/gcs build",
+    "build:navigation": "pnpm --filter @altnautica/plugin-sdk build && pnpm --filter ./extensions/navigation/gcs build",
     "test:navigation": "pnpm --filter ./extensions/navigation/gcs test",
     "build:capture": "pnpm --filter @altnautica/plugin-sdk build && pnpm --filter ./extensions/capture/gcs build",
     "test:capture": "pnpm --filter ./extensions/capture/gcs test",
