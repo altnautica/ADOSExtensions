@@ -3,7 +3,7 @@
 All notable changes to the Navigation extension (Vision Navigation before
 1.0.0).
 
-## [1.0.0] (unreleased)
+## [1.0.0] - 2026-11-20
 
 Navigation: optical flow, LiDAR SLAM, VIO and the flight-controller bridge
 in one extension.

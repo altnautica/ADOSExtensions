@@ -2,7 +2,7 @@
 
 All notable changes to the Reconstruct extension.
 
-## [1.0.0] (unreleased)
+## [1.0.0] - 2026-11-20
 
 Reconstruct: the reconstruction node and perception offload, as their own
 extension (`com.altnautica.reconstruct`).

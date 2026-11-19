@@ -2,7 +2,7 @@
 
 All notable changes to the Capture extension.
 
-## [1.0.0] (unreleased)
+## [1.0.0] - 2026-11-20
 
 Capture: session recording, keyframe selection and session upload, as its
 own extension (`com.altnautica.capture`).
