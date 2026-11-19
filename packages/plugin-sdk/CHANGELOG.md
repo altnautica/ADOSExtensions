@@ -2,6 +2,14 @@
 
 All notable changes to `@altnautica/plugin-sdk`.
 
+## 1.6.0
+
+- `ctx.mount` names the contribution a frame was mounted as: `{ slot, panelId }`,
+  read once from the frame URL's fragment (`#slot=<slot>&panel=<id>`) that
+  Mission Control and the Android GCS now pass. One bundle can then serve a
+  cockpit panel and an Agent page and route on `ctx.mount.panelId`. A host
+  that passes no fragment leaves both `null`. `parseMount` is exported.
+
 ## 1.5.4
 
 - `SampleClock` also remembers the key of the shown sample. The shown report

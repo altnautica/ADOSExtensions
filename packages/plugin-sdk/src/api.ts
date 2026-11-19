@@ -245,8 +245,27 @@ export interface PluginRecordsApi {
   remove(collection: string, key: string): Promise<void>;
 }
 
+/**
+ * Which contribution this frame was mounted as. One bundle can serve several
+ * contributions (a cockpit panel and an Agent page, say); the host names the
+ * slot and the contribution's panel id in the frame URL's fragment
+ * (`#slot=<slot>&panel=<id>`). A host that names neither leaves both `null`.
+ */
+export interface PluginMount {
+  slot: string | null;
+  panelId: string | null;
+}
+
+/** Parse a frame URL fragment (`#slot=…&panel=…`, both URL-encoded). */
+export function parseMount(hash: string): PluginMount {
+  const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+  return { slot: params.get("slot") || null, panelId: params.get("panel") || null };
+}
+
 export interface PluginContext {
   client: PluginClient;
+  /** The contribution this frame renders; read once when the context is created. */
+  mount: PluginMount;
   telemetry: {
     subscribe<TArgs = unknown>(
       topic: string,
@@ -355,6 +374,8 @@ export interface CreateContextOptions {
   client?: PluginClient;
   /** Initial locale bundle. Plugins ship their own JSON in /locales. */
   locale?: Record<string, string>;
+  /** The mount identity; defaults to the one in this frame's URL fragment. */
+  mount?: PluginMount;
 }
 
 /**
@@ -409,6 +430,7 @@ export function createPluginContext(
 
   return {
     client,
+    mount: opts.mount ?? parseMount(globalThis.location?.hash ?? ""),
     telemetry: {
       subscribe: (topic, handler) => client.subscribeTelemetry(topic, handler),
     },

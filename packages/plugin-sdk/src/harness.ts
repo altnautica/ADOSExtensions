@@ -4,6 +4,7 @@ import {
   type PerceptionSessionHealth,
   type PerceptionTierInfo,
   type PluginContext,
+  type PluginMount,
   VIDEO_OVERLAY_PROPS_EVENT,
   type VideoOverlayHostProps,
 } from "./api";
@@ -41,6 +42,8 @@ export interface PluginHarnessOptions {
   id?: string;
   version?: string;
   locale?: Record<string, string>;
+  /** The contribution the plugin is mounted as (`ctx.mount`); both null by default. */
+  mountedAs?: PluginMount;
   /** Plugin mount function under test. */
   mount: (ctx: PluginContext) => Promise<void> | void;
   /** Optional unmount counterpart. */
@@ -162,7 +165,11 @@ export function createPluginHarness(
   };
 
   const client = new PluginClient({ transport });
-  const ctx = createPluginContext({ client, locale: opts.locale });
+  const ctx = createPluginContext({
+    client,
+    locale: opts.locale,
+    mount: opts.mountedAs ?? { slot: null, panelId: null },
+  });
 
   function sendResponse(
     request: RpcEnvelope,

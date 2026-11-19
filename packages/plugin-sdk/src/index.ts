@@ -28,6 +28,8 @@ export {
   createPluginContext,
   type CreateContextOptions,
   type PluginContext,
+  type PluginMount,
+  parseMount,
   type NotificationPayload,
   type RecordingMark,
   type MissionUpdate,
