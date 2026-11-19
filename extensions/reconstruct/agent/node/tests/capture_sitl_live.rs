@@ -1,4 +1,4 @@
-//! Capture SITL harness, live and multi-camera slices (G4, G5) and the
+//! Capture SITL harness, live and multi-camera slices and the
 //! reconstruction as a planning input; see `capture_sitl.rs` for the ladder.
 // These tests drive the unix-socket transport and the issued-credential store.
 #![cfg(unix)]
@@ -19,7 +19,7 @@ mod capture_support;
 
 use capture_support::{engine, keyframe_env};
 
-/// G4: a live (in-flight) session keeps the reconstruction fresh by REAL periodic
+/// A live (in-flight) session keeps the reconstruction fresh by REAL periodic
 /// reconstruction. On the cadence the node snapshots the keyframes captured so
 /// far and runs a real reconstruct (the mock backend stands in for Brush with no
 /// GPU), yielding a fresh splat artifact mid-flight; while one cycle runs the
@@ -128,7 +128,7 @@ async fn g4_live_session_periodic_reconstruct() {
     assert!(outcome.outputs.iter().any(|o| o.kind == "splat"));
 }
 
-/// G5: a multi-camera capture fuses into one world — N distinct cameras' frames
+/// A multi-camera capture fuses into one world — N distinct cameras' frames
 /// drain into a single bag dataset whose camera count is N and a single
 /// reconstruct job (not one per camera), and the same frames map onto N distinct
 /// camera subtrees in the recording, each with its intrinsics logged exactly
@@ -258,7 +258,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
     );
 }
 
-/// G3, the part that was missing: the reconstruction is CONSUMABLE DATA, not only a
+/// The part that was missing: the reconstruction is CONSUMABLE DATA, not only a
 /// picture. A completed reconstruction's geometry becomes an occupancy/ESDF
 /// descriptor a planner can act on, and it crosses the per-device shared-data
 /// lane to a subscriber that never touched the compute node's filesystem.

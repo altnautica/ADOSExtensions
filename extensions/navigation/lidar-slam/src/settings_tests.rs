@@ -108,13 +108,13 @@ fn lidar_settings_take_per_driver_blocks() {
         .ends_with("liblivox_lidar_sdk_shared.so"));
     let c = load(json!({
         "lidar_id": "lidar1",
-        "rplidar": {"device": "tcp:192.168.50.1:7700"},
+        "rplidar": {"device": "tcp:192.168.1.50:7700"},
         "livox": {"host_ip": "192.168.1.50", "lidar_ips": ["192.168.1.12"]},
     }))
     .unwrap()
     .lidar;
     assert_eq!(c.lidar_id, "lidar1");
-    assert_eq!(c.rplidar.device, "tcp:192.168.50.1:7700");
+    assert_eq!(c.rplidar.device, "tcp:192.168.1.50:7700");
     assert_eq!(c.rplidar.baud, 460_800);
     assert_eq!(c.livox.host_ip.as_deref(), Some("192.168.1.50"));
     assert_eq!(c.livox.lidar_ips, ["192.168.1.12"]);

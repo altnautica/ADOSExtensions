@@ -1,4 +1,4 @@
-//! Capture SITL harness: the mock-runnable slices of the G0→Gn kill-gate
+//! Capture SITL harness: the mock-runnable slices of the capture acceptance checks
 //! ladder, run in-process end-to-end with no real GPU / camera / RF.
 //!
 //! These prove the BUILT pipeline pieces COMPOSE — a simulated capture's events
@@ -30,7 +30,7 @@ mod capture_support;
 
 use capture_support::{bagged, deliver_for, engine, keyframe, keyframe_env};
 
-/// G0: a simulated single-camera capture flows drone→compute over the LAN bearer,
+/// A simulated single-camera capture flows drone→compute over the LAN bearer,
 /// is ingested into a dataset, reconstructed (mock), and yields a usable splat.
 #[tokio::test]
 async fn g0_single_camera_capture_reconstructs_to_a_splat_end_to_end() {
@@ -76,7 +76,7 @@ async fn g0_single_camera_capture_reconstructs_to_a_splat_end_to_end() {
     assert_eq!(outcome.state, ComputeJobState::Completed);
     assert!(
         outcome.outputs.iter().any(|o| o.kind == "splat"),
-        "G0 yields a usable splat"
+        "the single-camera capture yields a usable splat"
     );
     let outputs = engine.scheduler().store().outputs_for_job(&job_id).unwrap();
     assert!(outputs.iter().any(|o| o.kind == "splat"));
@@ -210,7 +210,7 @@ fn cluster_master_aggregates_a_registered_slave() {
     );
 }
 
-/// G1: the Rerun recording maps a multi-keyframe single-camera capture + the
+/// The Rerun recording maps a multi-keyframe single-camera capture + the
 /// reconstructed splat onto the entity tree the GCS viewer renders — the camera
 /// subtree, the IMU scalars, a once-logged camera intrinsics across the run, and
 /// the verbatim wire discriminators (`Transform3D`, `SplatSlab`).
@@ -280,7 +280,7 @@ async fn g1_rerun_recording_maps_keyframes_for_the_gcs_viewer() {
     assert!(!json.contains("transform3_d"), "no mangled discriminator");
 }
 
-/// G2: a captured bag rides a bearer into the receiver/ingest, drains into one
+/// A captured bag rides a bearer into the receiver/ingest, drains into one
 /// reconstruct job, and — one step past the integrated-loopback gate, which
 /// stops at "queued" — the worker runs it to a delivered splat output.
 #[tokio::test]
@@ -344,7 +344,7 @@ async fn g2_bag_pipeline_reconstructs_to_a_delivered_output() {
     );
 }
 
-/// G3: the shared-data descriptor lane isolates per device — one drone's world
+/// The shared-data descriptor lane isolates per device — one drone's world
 /// model never crosses into another drone's plugin view — and an NPU-less
 /// drone's perception offload runs the (mock) detector and returns a detection.
 #[tokio::test]
