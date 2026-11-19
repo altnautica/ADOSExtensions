@@ -8,7 +8,7 @@ use ados_protocol::framebus::FrameFormat;
 
 use ados_mapping_pose::{health_str, se3, PoseEstimate};
 
-/// Session image encoding (`atlas.capture.image_encoding`).
+/// Session image encoding (`capture.image_encoding`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImageEncoding {

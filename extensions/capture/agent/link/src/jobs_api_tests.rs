@@ -56,7 +56,7 @@ async fn a_reconstruct_is_submitted_to_the_paired_node() {
 
     let up = finished_session(&root, "v-20261019T101500Z-0001");
     std::fs::write(up.join(UPLOADED_MARKER), b"{}").unwrap();
-    let uri = "/atlas/sessions/v-20261019T101500Z-0001/reconstruct";
+    let uri = "/capture/sessions/v-20261019T101500Z-0001/reconstruct";
     let (st, body) = call(app.clone(), "POST", uri, Some(json!({"preset": "tour"}))).await;
     assert_eq!(st, StatusCode::OK, "{body}");
     assert_eq!(body, json!({"ok": true, "node": addr, "job_id": "j-1"}));
@@ -72,7 +72,7 @@ async fn a_reconstruct_is_submitted_to_the_paired_node() {
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/sessions/v-20261019T101500Z-0002/reconstruct",
+        "/capture/sessions/v-20261019T101500Z-0002/reconstruct",
         Some(json!({"preset": "hq"})),
     )
     .await;
@@ -84,7 +84,7 @@ async fn a_reconstruct_is_submitted_to_the_paired_node() {
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/sessions/v-20261019T101500Z-0009/reconstruct",
+        "/capture/sessions/v-20261019T101500Z-0009/reconstruct",
         Some(json!({"preset": "hq"})),
     )
     .await;

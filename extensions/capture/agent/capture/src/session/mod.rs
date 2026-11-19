@@ -118,7 +118,7 @@ impl CaptureSession {
         // selected before this run's frame is fixed.
         self.frame_fixed = false;
         self.anchored = false;
-        tracing::info!(session_id = %self.session_id, cameras = self.enabled_camera_count(), "atlas capture started");
+        tracing::info!(session_id = %self.session_id, cameras = self.enabled_camera_count(), "capture started");
     }
 
     /// The median scene depth from a fresh LiDAR scan (`None` without one):
@@ -134,7 +134,7 @@ impl CaptureSession {
     pub fn pause(&mut self) {
         if self.state == CaptureState::Capturing {
             self.state = CaptureState::Paused;
-            tracing::info!(session_id = %self.session_id, "atlas capture paused");
+            tracing::info!(session_id = %self.session_id, "capture paused");
         }
     }
 
@@ -142,7 +142,7 @@ impl CaptureSession {
     pub fn resume(&mut self) {
         if self.state == CaptureState::Paused {
             self.state = CaptureState::Capturing;
-            tracing::info!(session_id = %self.session_id, "atlas capture resumed");
+            tracing::info!(session_id = %self.session_id, "capture resumed");
         }
     }
 
@@ -152,7 +152,7 @@ impl CaptureSession {
     pub fn finalize(&mut self) {
         if matches!(self.state, CaptureState::Capturing | CaptureState::Paused) {
             self.state = CaptureState::Finalizing;
-            tracing::info!(session_id = %self.session_id, keyframes = self.kf_count, "atlas capture finalizing");
+            tracing::info!(session_id = %self.session_id, keyframes = self.kf_count, "capture finalizing");
         }
     }
 
@@ -161,7 +161,7 @@ impl CaptureSession {
     pub fn mark_bagged(&mut self) {
         if self.state == CaptureState::Finalizing {
             self.state = CaptureState::Bagged;
-            tracing::info!(session_id = %self.session_id, "atlas capture bagged");
+            tracing::info!(session_id = %self.session_id, "capture bagged");
         }
     }
 
@@ -256,7 +256,7 @@ impl CaptureSession {
             pose_tier: self.pose_tier,
             dropped_keyframes: self.dropped_keyframes,
             // Not a session setting: the capture loop stamps the drone's live
-            // `atlas.reconstruct_steps` on the status it publishes.
+            // `capture.reconstruct_steps` on the status it publishes.
             reconstruct_steps: None,
         }
     }

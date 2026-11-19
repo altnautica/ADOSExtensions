@@ -1,11 +1,11 @@
 //! The capture service's lifecycle as a plugin process.
 //!
-//! [`supervise`] polls the `atlas.*` plugin config every [`CONFIG_POLL`].
+//! [`supervise`] polls the `capture.*` plugin config every [`CONFIG_POLL`].
 //! While capture is enabled and the config validates, one [`CaptureRun`] is
-//! alive: the atlas bus and the control socket bound, the sensor-bus ingest,
+//! alive: the private bus and the control socket bound, the sensor-bus ingest,
 //! the HUD page and the capture loop running, posed by the flight
 //! controller's EKF. A changed config stops the run (closing an open
-//! session) and starts a new one, except `atlas.reconstruct_steps`, which
+//! session) and starts a new one, except `capture.reconstruct_steps`, which
 //! reaches the running loop through [`Feeds::reconstruct_steps`]; a disabled
 //! or invalid config leaves nothing bound, so the link reports the service
 //! as not running.
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use ados_mapping_protocol::paths::ipc_dir;
 
-use crate::{BUS_SOCKET, CONTROL_SOCKET, PLUGIN_ID};
+use crate::{BUS_SOCKET, CONTROL_SOCKET, NAV_POSE_TRACK_TOPIC, NAV_SCAN_RAW_TOPIC, PLUGIN_ID};
 use ados_protocol::shutdown::Shutdown;
 use ados_sdk::{ClientError, PluginContext};
 use parking_lot::Mutex;
@@ -30,13 +30,19 @@ use tokio::task::JoinHandle;
 
 use crate::control::serve_control;
 use crate::hud::{button_action, HudAction};
-use crate::publish::AtlasPublisher;
-use crate::runtime::{AtlasRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
+use crate::navigation_track::NavigationTrack;
+use crate::publish::CapturePublisher;
+use crate::runtime::{CaptureRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
+use crate::scan_raw::ScanRaw;
 use crate::service::{run_capture_loop, LoopDeps, Paths};
 use ados_mapping_pose::fc_ekf::FcEkfPose;
 use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
 use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
+
+/// Whole LiDAR scans waiting for the capture loop; a scan past this is
+/// dropped (two seconds of a 10 Hz LiDAR).
+const SCAN_QUEUE: usize = 20;
 
 /// How often the plugin config is re-read.
 pub const CONFIG_POLL: Duration = Duration::from_secs(5);
@@ -71,11 +77,11 @@ impl Sockets {
 
 /// The config a capture run should be running with, or why none should run.
 pub fn capture_config(
-    resolved: Result<AtlasRuntimeConfig, ConfigError>,
-) -> Result<AtlasRuntimeConfig, String> {
-    let config = resolved.map_err(|e| format!("atlas config invalid: {e}"))?;
+    resolved: Result<CaptureRuntimeConfig, ConfigError>,
+) -> Result<CaptureRuntimeConfig, String> {
+    let config = resolved.map_err(|e| format!("capture config invalid: {e}"))?;
     if !config.enabled {
-        return Err("atlas is not enabled".to_string());
+        return Err("capture is not enabled".to_string());
     }
     config
         .capture
@@ -84,10 +90,10 @@ pub fn capture_config(
     Ok(config)
 }
 
-/// Read every `atlas.*` key from the host and resolve them.
+/// Read every `capture.*` key from the host and resolve them.
 pub async fn read_config(
     ctx: &PluginContext,
-) -> Result<Result<AtlasRuntimeConfig, ConfigError>, ClientError> {
+) -> Result<Result<CaptureRuntimeConfig, ConfigError>, ClientError> {
     let mut values = BTreeMap::new();
     for &key in CONFIG_KEYS {
         let raw = ctx.config.get(key, rmpv::Value::Nil).await?;
@@ -103,7 +109,7 @@ pub async fn read_config(
             }
         }
     }
-    Ok(AtlasRuntimeConfig::from_values(&ctx.agent_id, &values))
+    Ok(CaptureRuntimeConfig::from_values(&ctx.agent_id, &values))
 }
 
 /// Where front-panel actions go.
@@ -117,13 +123,17 @@ pub struct Feeds {
     pub fc: FcEkfPose,
     /// Where front-panel actions go: the current run, if any.
     pub hud: HudSlot,
-    /// The live `atlas.reconstruct_steps`, refreshed on every config poll.
+    /// The live `capture.reconstruct_steps`, refreshed on every config poll.
     pub reconstruct_steps: SharedSteps,
+    /// Navigation's pose (`plugin.navigation.pose_track`).
+    pub nav: Arc<NavigationTrack>,
+    /// Navigation's scans for the record (`plugin.navigation.scan_raw`).
+    pub scans: Arc<ScanRaw>,
 }
 
 /// One running capture.
 pub struct CaptureRun {
-    config: AtlasRuntimeConfig,
+    config: CaptureRuntimeConfig,
     cancel: Shutdown,
     tasks: Vec<JoinHandle<()>>,
     capture: JoinHandle<()>,
@@ -133,12 +143,12 @@ pub struct CaptureRun {
 impl CaptureRun {
     pub async fn start(
         ctx: &PluginContext,
-        config: AtlasRuntimeConfig,
+        config: CaptureRuntimeConfig,
         profile: String,
         feeds: &Feeds,
         sockets: &Sockets,
     ) -> anyhow::Result<Self> {
-        let publisher = AtlasPublisher::bind(&sockets.bus.to_string_lossy()).await?;
+        let publisher = CapturePublisher::bind(&sockets.bus.to_string_lossy()).await?;
         let (control_tx, control_rx) = mpsc::channel(32);
         let control = serve_control(&sockets.control.to_string_lossy(), control_tx)
             .await
@@ -160,6 +170,8 @@ impl CaptureRun {
         ];
         let (hud_tx, hud_rx) = mpsc::channel(8);
         *feeds.hud.lock() = Some(hud_tx);
+        let (scan_tx, scan_rx) = mpsc::channel(SCAN_QUEUE);
+        feeds.scans.attach(Some(scan_tx));
         let (view_tx, view_rx) = watch::channel(Default::default());
         tasks.push(tokio::spawn(hud_page(ctx.clone(), view_rx, cancel.clone())));
         let enabled: HashSet<String> = config
@@ -187,6 +199,10 @@ impl CaptureRun {
             ))),
             paths,
             reconstruct_steps: feeds.reconstruct_steps.clone(),
+            navigation: crate::service::NavInputs {
+                track: Some(feeds.nav.clone()),
+                scans: Some((feeds.scans.clone(), scan_rx)),
+            },
         };
         let capture = tokio::spawn(run_capture_loop(deps, cancel.clone()));
         Ok(Self {
@@ -198,7 +214,7 @@ impl CaptureRun {
         })
     }
 
-    pub fn config(&self) -> &AtlasRuntimeConfig {
+    pub fn config(&self) -> &CaptureRuntimeConfig {
         &self.config
     }
 
@@ -210,13 +226,14 @@ impl CaptureRun {
     pub async fn stop(self, feeds: &Feeds) {
         self.cancel.trigger();
         if let Err(e) = self.capture.await {
-            tracing::error!(error = %e, "atlas capture loop ended abnormally");
+            tracing::error!(error = %e, "capture loop ended abnormally");
         }
         for t in self.tasks {
             t.abort();
             let _ = t.await;
         }
         *feeds.hud.lock() = None;
+        feeds.scans.attach(None);
         feeds.router.detach();
         let _ = std::fs::remove_file(&self.control_path);
     }
@@ -258,13 +275,13 @@ async fn hud_page(
 
 /// Make the process-lifetime subscriptions a run needs; each is retried on
 /// the next poll until it succeeds.
-async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 4]) {
+async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 6]) {
     if !done[0] {
         done[0] = ctx
             .vision
             .subscribe_frames(None, feeds.router.callback())
             .await
-            .map_err(|e| tracing::warn!(error = %e, "atlas_frame_subscription_failed"))
+            .map_err(|e| tracing::warn!(error = %e, "capture_frame_subscription_failed"))
             .is_ok();
     }
     if !done[1] {
@@ -272,7 +289,7 @@ async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 4
             .vehicle
             .subscribe(ctx)
             .await
-            .map_err(|e| tracing::warn!(error = %e, "atlas_vehicle_subscription_failed"))
+            .map_err(|e| tracing::warn!(error = %e, "capture_vehicle_subscription_failed"))
             .is_ok();
     }
     if !done[2] {
@@ -290,7 +307,7 @@ async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 4
                 }
             });
             if let Err(e) = ctx.mavlink.subscribe(name, cb).await {
-                tracing::warn!(msg = name, error = %e, "atlas_fc_subscription_failed");
+                tracing::warn!(msg = name, error = %e, "capture_fc_subscription_failed");
                 ok = false;
             }
         }
@@ -310,7 +327,25 @@ async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 4
             .buttons
             .subscribe(cb)
             .await
-            .map_err(|e| tracing::info!(error = %e, "atlas_button_subscription_unavailable"))
+            .map_err(|e| tracing::info!(error = %e, "capture_button_subscription_unavailable"))
+            .is_ok();
+    }
+    // Navigation is optional: without it (or the grant) a session is posed
+    // by the FC EKF and records no LiDAR.
+    if !done[4] {
+        done[4] = ctx
+            .events
+            .subscribe(NAV_POSE_TRACK_TOPIC, feeds.nav.callback())
+            .await
+            .map_err(|e| tracing::info!(error = %e, "capture_navigation_pose_unavailable"))
+            .is_ok();
+    }
+    if !done[5] {
+        done[5] = ctx
+            .events
+            .subscribe(NAV_SCAN_RAW_TOPIC, feeds.scans.callback())
+            .await
+            .map_err(|e| tracing::info!(error = %e, "capture_navigation_scans_unavailable"))
             .is_ok();
     }
 }
@@ -324,6 +359,8 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
         fc: FcEkfPose::new(),
         hud: Arc::new(Mutex::new(None)),
         reconstruct_steps: SharedSteps::default(),
+        nav: NavigationTrack::new(),
+        scans: ScanRaw::new(),
     };
     let profile = match ctx.node.info().await {
         Ok(info) => info.profile,
@@ -332,7 +369,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             "drone".to_string()
         }
     };
-    let mut subscribed = [false; 4];
+    let mut subscribed = [false; 6];
     let mut run: Option<CaptureRun> = None;
     let mut last_idle: Option<String> = None;
     let mut poll = tokio::time::interval(CONFIG_POLL);
@@ -343,7 +380,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             _ = poll.tick() => {}
         }
         if run.as_ref().is_some_and(CaptureRun::is_finished) {
-            tracing::error!("atlas capture loop exited unexpectedly; restarting it");
+            tracing::error!("capture loop exited unexpectedly; restarting it");
             if let Some(r) = run.take() {
                 r.stop(&feeds).await;
             }
@@ -351,7 +388,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
         let resolved = match read_config(&ctx).await {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!(error = %e, "atlas config read failed; keeping current state");
+                tracing::warn!(error = %e, "capture config read failed; keeping current state");
                 continue;
             }
         };
@@ -362,8 +399,8 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
         let idle = desired.as_ref().err().cloned();
         if idle != last_idle {
             match &idle {
-                Some(reason) => tracing::info!(reason = %reason, "atlas capture idle"),
-                None => tracing::info!("atlas capture enabled"),
+                Some(reason) => tracing::info!(reason = %reason, "capture idle"),
+                None => tracing::info!("capture enabled"),
             }
             last_idle = idle;
         }
@@ -375,7 +412,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             continue;
         }
         if let Some(r) = run.take() {
-            tracing::info!("atlas capture stopping for a config change");
+            tracing::info!("capture stopping for a config change");
             r.stop(&feeds).await;
         }
         let Ok(config) = desired else { continue };
@@ -386,7 +423,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
         match CaptureRun::start(&ctx, config, profile.clone(), &feeds, &sockets).await {
             Ok(r) => run = Some(r),
             Err(e) => {
-                tracing::error!(error = %e, "atlas capture failed to start; retrying");
+                tracing::error!(error = %e, "capture failed to start; retrying");
                 feeds.router.detach();
             }
         }
@@ -394,7 +431,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
     if let Some(r) = run.take() {
         r.stop(&feeds).await;
     }
-    tracing::info!("atlas capture service stopped");
+    tracing::info!("capture service stopped");
 }
 
 #[cfg(test)]
@@ -403,8 +440,8 @@ mod tests {
     use crate::config::{CameraConfig, CaptureConfig};
     use ados_mapping_protocol::atlas::CameraRole;
 
-    fn enabled_config() -> AtlasRuntimeConfig {
-        AtlasRuntimeConfig {
+    fn enabled_config() -> CaptureRuntimeConfig {
+        CaptureRuntimeConfig {
             enabled: true,
             capture: CaptureConfig {
                 cameras: vec![CameraConfig {
@@ -422,22 +459,22 @@ mod tests {
     #[test]
     fn only_an_enabled_valid_config_runs() {
         assert!(capture_config(Ok(enabled_config())).is_ok());
-        let disabled = AtlasRuntimeConfig {
+        let disabled = CaptureRuntimeConfig {
             enabled: false,
             ..enabled_config()
         };
         assert!(capture_config(Ok(disabled)).is_err());
-        let no_cameras = AtlasRuntimeConfig {
+        let no_cameras = CaptureRuntimeConfig {
             capture: CaptureConfig::default(),
             ..enabled_config()
         };
         assert!(capture_config(Ok(no_cameras)).is_err());
         let why = capture_config(Err(ConfigError {
-            key: "atlas.cameras",
+            key: "capture.cameras",
             reason: "bad role".into(),
         }))
         .unwrap_err();
-        assert!(why.contains("atlas.cameras"), "{why}");
+        assert!(why.contains("capture.cameras"), "{why}");
     }
 
     #[test]

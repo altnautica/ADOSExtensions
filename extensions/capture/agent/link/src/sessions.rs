@@ -1,4 +1,4 @@
-//! The device's capture sessions on disk, one `GET /atlas/sessions` row each.
+//! The device's capture sessions on disk, one `GET /capture/sessions` row each.
 //!
 //! A session directory under the capture root counts once it holds
 //! `manifest.json` (finished) or `.recording` (recording now); `.uploaded`
@@ -112,7 +112,7 @@ pub fn scan(root: &Path) -> Vec<SessionDir> {
         .collect()
 }
 
-/// One `GET /atlas/sessions` row.
+/// One `GET /capture/sessions` row.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SessionRow {
     pub session_id: String,

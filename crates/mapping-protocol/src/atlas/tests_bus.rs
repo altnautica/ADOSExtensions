@@ -4,8 +4,8 @@ use super::*;
 
 #[test]
 fn topic_names_are_stable() {
-    assert_eq!(ATLAS_CAPTURE_STATE_TOPIC, "atlas.capture.state");
-    assert_eq!(ATLAS_KEYFRAME_TOPIC, "atlas.keyframe");
+    assert_eq!(CAPTURE_STATE_TOPIC, "capture.state");
+    assert_eq!(CAPTURE_KEYFRAME_TOPIC, "capture.keyframe");
     assert_eq!(PLUGIN_ATLAS_POSE_TOPIC, "plugin.world-engine.pose");
     assert_eq!(
         PLUGIN_ATLAS_POINTCLOUD_TOPIC,
@@ -36,14 +36,10 @@ fn atlas_event_round_trips_and_carries_a_struct_payload() {
         dropped_keyframes: 0,
         reconstruct_steps: None,
     };
-    let ev = AtlasEvent::new(
-        ATLAS_CAPTURE_STATE_TOPIC,
-        None,
-        status.to_msgpack().unwrap(),
-    );
+    let ev = AtlasEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap());
     let back = AtlasEvent::decode(&ev.encode().unwrap()).unwrap();
     assert_eq!(back, ev);
-    assert_eq!(back.topic, "atlas.capture.state");
+    assert_eq!(back.topic, "capture.state");
     let inner = CaptureStatus::from_msgpack(&back.payload).unwrap();
     assert_eq!(inner, status);
 }
@@ -52,7 +48,7 @@ fn atlas_event_round_trips_and_carries_a_struct_payload() {
 fn device_id_round_trips_and_is_skipped_when_absent() {
     // Absent (the local publish-bus shape): the key is omitted on the wire and
     // a decode defaults to None.
-    let bare = AtlasEvent::new(ATLAS_KEYFRAME_TOPIC, None, vec![1, 2, 3]);
+    let bare = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![1, 2, 3]);
     let bare_json = serde_json::to_value(&bare).unwrap();
     assert_eq!(
         bare_json["v"], ATLAS_ENVELOPE_VERSION,
@@ -66,7 +62,7 @@ fn device_id_round_trips_and_is_skipped_when_absent() {
 
     // Stamped (the egress shape): the drone id round-trips on the wire so the
     // compute node can attribute the job to the capturing drone.
-    let stamped = AtlasEvent::new(ATLAS_KEYFRAME_TOPIC, Some("drone-42".into()), vec![9]);
+    let stamped = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, Some("drone-42".into()), vec![9]);
     let stamped_json = serde_json::to_value(&stamped).unwrap();
     assert_eq!(stamped_json["v"], ATLAS_ENVELOPE_VERSION);
     assert_eq!(stamped_json["device_id"], "drone-42");
@@ -105,8 +101,8 @@ fn every_shared_data_topic_names_an_enforced_capability() {
     // The internal namespace is not shared plugin data: the raw keyframe
     // lane and the capture-state lane are not offered to plugins here.
     for topic in [
-        ATLAS_KEYFRAME_TOPIC,
-        ATLAS_CAPTURE_STATE_TOPIC,
+        CAPTURE_KEYFRAME_TOPIC,
+        CAPTURE_STATE_TOPIC,
         "plugin.other.thing",
     ] {
         assert_eq!(atlas_topic_subscribe_capability(topic), None);
@@ -171,7 +167,7 @@ fn rejects_any_other_envelope_version() {
     for v in [ATLAS_ENVELOPE_VERSION - 1, ATLAS_ENVELOPE_VERSION + 1] {
         let other = AtlasEvent {
             v,
-            topic: ATLAS_KEYFRAME_TOPIC.into(),
+            topic: CAPTURE_KEYFRAME_TOPIC.into(),
             device_id: None,
             payload: vec![1, 2, 3],
         };

@@ -1,4 +1,4 @@
-//! The capture service's runtime configuration: the `atlas.*` plugin config
+//! The capture service's runtime configuration: the `capture.*` plugin config
 //! keys, the pose-provider choice, and the camera-intrinsics resolution.
 //!
 //! The capture *core* ([`crate::CaptureConfig`]) declares the rig and the
@@ -8,8 +8,8 @@
 //! pinhole from the field of view its frames carry (the agent's camera
 //! roster).
 //!
-//! The plugin host stores the config as flat dotted keys (`atlas.enabled`,
-//! `atlas.selection.max_interval_ms`, ...). [`AtlasRuntimeConfig::from_values`]
+//! The plugin host stores the config as flat dotted keys (`capture.enabled`,
+//! `capture.selection.max_interval_ms`, ...). [`CaptureRuntimeConfig::from_values`]
 //! resolves a map of those keys (absent keys take today's defaults) so the
 //! resolution is pure and testable without a host.
 
@@ -27,7 +27,7 @@ use ados_mapping_protocol::capture_ctl::{ExposureMode, ExposureView};
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 use crate::recorder::convert::ImageEncoding;
 
-/// Segment roll (`atlas.segment`); the contract default is 4 GiB or 10 min.
+/// Segment roll (`capture.segment`); the contract default is 4 GiB or 10 min.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SegmentSettings {
@@ -210,24 +210,39 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_SEGMENT,
     KEY_MEMORY_BUDGET_MB,
     KEY_RECONSTRUCT_STEPS,
+    KEY_POSE_SOURCE,
 ];
 
-pub const KEY_ENABLED: &str = "atlas.enabled";
-pub const KEY_CAPTURE_PROFILE: &str = "atlas.capture_profile";
-pub const KEY_CAMERAS: &str = "atlas.cameras";
-pub const KEY_MIN_TRANSLATION_M: &str = "atlas.selection.min_translation_m";
-pub const KEY_MIN_ROTATION_RAD: &str = "atlas.selection.min_rotation_rad";
-pub const KEY_MAX_INTERVAL_MS: &str = "atlas.selection.max_interval_ms";
-pub const KEY_MAX_KEYFRAMES: &str = "atlas.selection.max_keyframes";
-pub const KEY_INTRINSICS: &str = "atlas.intrinsics";
-pub const KEY_POSE_PRIOR: &str = "atlas.pose_prior";
-pub const KEY_RECORD_ON_START: &str = "atlas.record_on_start";
-pub const KEY_IMAGE_ENCODING: &str = "atlas.image_encoding";
-pub const KEY_MAINS_HZ: &str = "atlas.mains_hz";
-pub const KEY_EXPOSURE: &str = "atlas.exposure";
-pub const KEY_SEGMENT: &str = "atlas.segment";
-pub const KEY_MEMORY_BUDGET_MB: &str = "atlas.memory_budget_mb";
-pub const KEY_RECONSTRUCT_STEPS: &str = "atlas.reconstruct_steps";
+pub const KEY_ENABLED: &str = "capture.enabled";
+pub const KEY_CAPTURE_PROFILE: &str = "capture.capture_profile";
+pub const KEY_CAMERAS: &str = "capture.cameras";
+pub const KEY_MIN_TRANSLATION_M: &str = "capture.selection.min_translation_m";
+pub const KEY_MIN_ROTATION_RAD: &str = "capture.selection.min_rotation_rad";
+pub const KEY_MAX_INTERVAL_MS: &str = "capture.selection.max_interval_ms";
+pub const KEY_MAX_KEYFRAMES: &str = "capture.selection.max_keyframes";
+pub const KEY_INTRINSICS: &str = "capture.intrinsics";
+pub const KEY_POSE_PRIOR: &str = "capture.pose_prior";
+pub const KEY_RECORD_ON_START: &str = "capture.record_on_start";
+pub const KEY_IMAGE_ENCODING: &str = "capture.image_encoding";
+pub const KEY_MAINS_HZ: &str = "capture.mains_hz";
+pub const KEY_EXPOSURE: &str = "capture.exposure";
+pub const KEY_SEGMENT: &str = "capture.segment";
+pub const KEY_MEMORY_BUDGET_MB: &str = "capture.memory_budget_mb";
+pub const KEY_RECONSTRUCT_STEPS: &str = "capture.reconstruct_steps";
+pub const KEY_POSE_SOURCE: &str = "capture.pose_source";
+
+/// Where a session's pose comes from (`capture.pose_source`), chosen when
+/// the session starts and kept until it closes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PoseSourceChoice {
+    /// Navigation's pose when it streamed one in the last 2 s, else the
+    /// flight controller's EKF.
+    #[default]
+    Auto,
+    FcEkf,
+    Navigation,
+}
 
 /// The initial exposure lock: unlocked, walking caps.
 fn default_exposure() -> ExposureView {
@@ -243,7 +258,7 @@ fn default_exposure() -> ExposureView {
 
 /// The capture service's full runtime configuration.
 #[derive(Debug, Clone, PartialEq)]
-pub struct AtlasRuntimeConfig {
+pub struct CaptureRuntimeConfig {
     pub enabled: bool,
     /// The device id (the plugin host's agent id); the session id embeds it.
     pub device_id: String,
@@ -258,18 +273,19 @@ pub struct AtlasRuntimeConfig {
     pub mains_hz: u32,
     pub exposure: ExposureView,
     pub segment: SegmentSettings,
-    /// `atlas.memory_budget_mb` (the keyframe and scan queues); `None`
+    /// `capture.memory_budget_mb` (the keyframe and scan queues); `None`
     /// resolves from the unit's cap.
     pub memory_budget_mb: Option<u64>,
-    /// `atlas.reconstruct_steps`: the splat training length the compute node
+    /// `capture.reconstruct_steps`: the splat training length the compute node
     /// uses for this drone's sessions, carried on every capture status. `None`
     /// (absent or 0) leaves the node's default in charge. Not a capture
     /// setting: a change reaches the running service without a restart (see
-    /// [`AtlasRuntimeConfig::same_run`]).
+    /// [`CaptureRuntimeConfig::same_run`]).
     pub reconstruct_steps: Option<u64>,
+    pub pose_source: PoseSourceChoice,
 }
 
-/// The live `atlas.reconstruct_steps`, shared between the supervisor (which
+/// The live `capture.reconstruct_steps`, shared between the supervisor (which
 /// re-reads it on every config poll) and the running capture loop (which
 /// stamps it on every capture status), so a new detail level reaches the
 /// compute node without restarting a capture in flight.
@@ -289,7 +305,7 @@ impl SharedSteps {
     }
 }
 
-impl Default for AtlasRuntimeConfig {
+impl Default for CaptureRuntimeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
@@ -304,6 +320,7 @@ impl Default for AtlasRuntimeConfig {
             segment: SegmentSettings::default(),
             memory_budget_mb: None,
             reconstruct_steps: None,
+            pose_source: PoseSourceChoice::Auto,
         }
     }
 }
@@ -330,7 +347,7 @@ fn intrinsics(
     Ok(map)
 }
 
-/// `atlas.mains_hz`: 50 or 60.
+/// `capture.mains_hz`: 50 or 60.
 fn mains_hz(values: &BTreeMap<String, Value>) -> Result<u32, ConfigError> {
     match integer(values, KEY_MAINS_HZ, 50)? {
         50 => Ok(50),
@@ -342,8 +359,8 @@ fn mains_hz(values: &BTreeMap<String, Value>) -> Result<u32, ConfigError> {
     }
 }
 
-impl AtlasRuntimeConfig {
-    /// Resolve the config from the plugin's `atlas.*` keys (see
+impl CaptureRuntimeConfig {
+    /// Resolve the config from the plugin's `capture.*` keys (see
     /// [`CONFIG_KEYS`]). An absent or null key takes its default, so an empty
     /// map is the disabled default. A present key that does not parse (an
     /// unknown camera role, a string where a number belongs) is an error naming
@@ -388,6 +405,7 @@ impl AtlasRuntimeConfig {
             segment: typed(values, KEY_SEGMENT, SegmentSettings::default())?,
             memory_budget_mb,
             reconstruct_steps,
+            pose_source: typed(values, KEY_POSE_SOURCE, PoseSourceChoice::Auto)?,
         })
     }
 

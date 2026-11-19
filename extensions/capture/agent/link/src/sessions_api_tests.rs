@@ -14,14 +14,14 @@ async fn sessions_list_with_their_upload_state() {
         dir.path(),
     ));
     // No sessions directory yet: an empty list, not an error.
-    let (st, body) = call(app.clone(), "GET", "/atlas/sessions", None).await;
+    let (st, body) = call(app.clone(), "GET", "/capture/sessions", None).await;
     assert_eq!((st, body), (StatusCode::OK, json!({"sessions": []})));
 
     let root = dir.path().join("sessions");
     let old = finished_session(&root, "visor-1-20261018T090000Z-0001");
     std::fs::write(old.join(UPLOADED_MARKER), b"{}").unwrap();
     finished_session(&root, "visor-1-20261019T101500Z-3fa2");
-    let (st, body) = call(app, "GET", "/atlas/sessions", None).await;
+    let (st, body) = call(app, "GET", "/capture/sessions", None).await;
     assert_eq!(st, StatusCode::OK);
     let rows = body["sessions"].as_array().unwrap();
     assert_eq!(rows.len(), 2);
@@ -51,7 +51,7 @@ async fn the_list_shows_why_auto_upload_is_blocked() {
     finished_session(&root, "visor-1-20261019T101500Z-3fa2");
     let power = crate::power::PowerWatch::default();
     assert!(!api.uploads.auto_gate(&api.control, &power).await);
-    let (st, body) = call(drone_router(api), "GET", "/atlas/sessions", None).await;
+    let (st, body) = call(drone_router(api), "GET", "/capture/sessions", None).await;
     assert_eq!(st, StatusCode::OK);
     let upload = &body["sessions"][0]["upload"];
     assert_eq!(upload["state"], "blocked");
@@ -68,7 +68,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, body) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/a-20261019T101500Z-0001",
+        "/capture/sessions/a-20261019T101500Z-0001",
         None,
     )
     .await;
@@ -78,7 +78,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, body) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/a-20261019T101500Z-0001?force=true",
+        "/capture/sessions/a-20261019T101500Z-0001?force=true",
         None,
     )
     .await;
@@ -90,7 +90,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, _) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/b-20261019T101500Z-0002",
+        "/capture/sessions/b-20261019T101500Z-0002",
         None,
     )
     .await;
@@ -101,7 +101,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, body) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/c-20261019T101500Z-0003?force=true",
+        "/capture/sessions/c-20261019T101500Z-0003?force=true",
         None,
     )
     .await;
@@ -110,7 +110,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/sessions/c-20261019T101500Z-0003/upload",
+        "/capture/sessions/c-20261019T101500Z-0003/upload",
         None,
     )
     .await;
@@ -122,7 +122,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/sessions/d-20261019T101500Z-0004/upload",
+        "/capture/sessions/d-20261019T101500Z-0004/upload",
         None,
     )
     .await;
@@ -130,14 +130,14 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
     let (st, body) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/d-20261019T101500Z-0004?force=true",
+        "/capture/sessions/d-20261019T101500Z-0004?force=true",
         None,
     )
     .await;
     assert_eq!(st, StatusCode::CONFLICT);
     assert_eq!(body["error"], "E_UPLOADING");
 
-    let (st, body) = call(app, "DELETE", "/atlas/sessions/nope", None).await;
+    let (st, body) = call(app, "DELETE", "/capture/sessions/nope", None).await;
     assert_eq!(st, StatusCode::NOT_FOUND);
     assert_eq!(body["error"], "E_UNKNOWN_SESSION");
 }
@@ -149,7 +149,7 @@ async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_wit
     use ados_mapping_protocol::capture_ctl::{CaptureStateView, CtlReply};
 
     let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas-control.sock");
+    let sock = dir.path().join("capture-control.sock");
     let open = "live-20261019T120000Z-0002";
     fake_control_socket(&sock, move |_| {
         CtlReply::ok(CaptureStateView {
@@ -166,7 +166,7 @@ async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_wit
         age_marker(&root.join(id), 600);
     }
 
-    let (_, body) = call(app.clone(), "GET", "/atlas/sessions", None).await;
+    let (_, body) = call(app.clone(), "GET", "/capture/sessions", None).await;
     let rows = body["sessions"].as_array().unwrap();
     let dead = rows
         .iter()
@@ -182,7 +182,7 @@ async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_wit
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/sessions/dead-20261019T100000Z-0001/upload",
+        "/capture/sessions/dead-20261019T100000Z-0001/upload",
         None,
     )
     .await;
@@ -191,7 +191,7 @@ async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_wit
     let (st, body) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/dead-20261019T100000Z-0001",
+        "/capture/sessions/dead-20261019T100000Z-0001",
         None,
     )
     .await;
@@ -200,7 +200,7 @@ async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_wit
     let (st, _) = call(
         app.clone(),
         "DELETE",
-        "/atlas/sessions/dead-20261019T100000Z-0001?force=true",
+        "/capture/sessions/dead-20261019T100000Z-0001?force=true",
         None,
     )
     .await;
@@ -210,7 +210,7 @@ async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_wit
     let (st, body) = call(
         app,
         "DELETE",
-        &format!("/atlas/sessions/{open}?force=true"),
+        &format!("/capture/sessions/{open}?force=true"),
         None,
     )
     .await;

@@ -1,6 +1,6 @@
-//! The ground-station Atlas relay: bridge the radio aux lane onto the LAN.
+//! The ground-station capture relay: bridge the radio aux lane onto the LAN.
 //!
-//! The drone radiates small Atlas events on the aux application stream. The
+//! The drone radiates small capture events on the aux application stream. The
 //! ground station receives them through its own aux subscription
 //! (`radio.aux_stream.subscribe`); this relay decodes each application-stream
 //! payload as a framed [`AtlasEvent`] and re-POSTs it onto the LAN into the
@@ -44,7 +44,7 @@ const RESOLVE_TIMEOUT: Duration = Duration::from_secs(5);
 const RESOLVE_RETRY: Duration = Duration::from_secs(10);
 /// Received payloads buffered between the host callback and the relay loop.
 const RX_QUEUE: usize = 256;
-/// The aux channel the drone-to-ground Atlas stream rides.
+/// The aux channel the drone-to-ground capture stream rides.
 const APP_STREAM: u8 = AuxChannel::AppStream as u8;
 /// The ground-station role that bridges the radio lane onto the LAN.
 const RELAY_ROLE: &str = "relay";
@@ -61,13 +61,13 @@ pub struct RelayStats {
     pub datagrams_seen: u64,
     /// Events decoded and accepted by the compute receiver.
     pub forwarded: u64,
-    /// Payloads that did not decode to an Atlas event (dropped).
+    /// Payloads that did not decode to an capture event (dropped).
     pub malformed: u64,
     /// Events that decoded but whose forward POST failed.
     pub forward_failed: u64,
 }
 
-/// The relay's published live state: the body `GET /atlas-relay/status` serves.
+/// The relay's published live state: the body `GET /capture/relay/status` serves.
 #[derive(Debug, Clone, Serialize)]
 pub struct RelaySnapshot {
     /// True while the relay is running; false on the teardown snapshot.
@@ -138,12 +138,12 @@ async fn forward_payload(bearer: &dyn AtlasBearer, payload: &[u8], stats: &mut R
             Ok(()) => stats.forwarded += 1,
             Err(e) => {
                 stats.forward_failed += 1;
-                tracing::debug!(error = %e, topic = %event.topic, "atlas_relay_forward_failed");
+                tracing::debug!(error = %e, topic = %event.topic, "capture_relay_forward_failed");
             }
         },
         Err(_) => {
             stats.malformed += 1;
-            tracing::debug!(bytes = payload.len(), "atlas_relay_malformed_datagram");
+            tracing::debug!(bytes = payload.len(), "capture_relay_malformed_datagram");
         }
     }
 }
@@ -191,10 +191,10 @@ impl Relay {
                         relay_role = is_relay_role(&info);
                     }
                     let now_enabled = relay_role
-                        && config_bool(self.host.as_ref(), "relay.enabled", false).await;
-                    let url = config_string(self.host.as_ref(), "relay.compute_base_url").await;
+                        && config_bool(self.host.as_ref(), "capture.relay.enabled", false).await;
+                    let url = config_string(self.host.as_ref(), "capture.relay.compute_base_url").await;
                     if now_enabled != enabled || url != configured {
-                        tracing::info!(enabled = now_enabled, compute_url = ?url, "atlas relay config changed");
+                        tracing::info!(enabled = now_enabled, compute_url = ?url, "capture relay config changed");
                         self.stop(run.take());
                         enabled = now_enabled;
                         configured = url;
@@ -221,7 +221,7 @@ impl Relay {
                         // relay started, without a restart.
                         let fresh = self.credential(&r.compute_url, r.node_id.as_deref());
                         if fresh != r.credential {
-                            tracing::info!("atlas_relay_credential_changed");
+                            tracing::info!("capture_relay_credential_changed");
                             r.bearer = LanHttpBearer::new(r.compute_url.clone(), fresh.clone());
                             r.credential = fresh;
                         }
@@ -239,16 +239,16 @@ impl Relay {
     async fn subscribe(&self, tx: mpsc::Sender<Vec<u8>>) -> bool {
         let callback = Arc::new(move |channel: u8, payload: Vec<u8>| {
             if channel == APP_STREAM && tx.try_send(payload).is_err() {
-                tracing::debug!("atlas relay queue full; payload dropped");
+                tracing::debug!("capture relay queue full; payload dropped");
             }
         });
         match self.host.aux_subscribe(callback).await {
             Ok(()) => {
-                tracing::info!("atlas relay subscribed to the aux lane");
+                tracing::info!("capture relay subscribed to the aux lane");
                 true
             }
             Err(e) => {
-                tracing::warn!(error = %e, "atlas relay aux subscribe failed");
+                tracing::warn!(error = %e, "capture relay aux subscribe failed");
                 false
             }
         }
@@ -267,7 +267,7 @@ impl Relay {
                 let Some(node) =
                     compute_node::discover(self.host.as_ref(), &issuers, RESOLVE_TIMEOUT).await
                 else {
-                    tracing::debug!("atlas relay: no compute node on mDNS yet");
+                    tracing::debug!("capture relay: no compute node on mDNS yet");
                     return None;
                 };
                 let url = format!("http://{}:{}", node.host, node.job_api_port);
@@ -275,7 +275,7 @@ impl Relay {
             }
         };
         let credential = self.credential(&compute_url, node_id.as_deref());
-        tracing::info!(compute_url = %compute_url, "starting ground-station Atlas aux-lane relay");
+        tracing::info!(compute_url = %compute_url, "starting ground-station capture aux-lane relay");
         let run = Run {
             bearer: LanHttpBearer::new(compute_url.clone(), credential.clone()),
             compute_url,
@@ -303,7 +303,7 @@ impl Relay {
     fn stop(&self, run: Option<Run>) {
         if let Some(r) = run {
             self.publish(&r, false);
-            tracing::info!(stats = ?r.stats, "atlas_relay_stopped");
+            tracing::info!(stats = ?r.stats, "capture_relay_stopped");
         }
     }
 
@@ -352,7 +352,7 @@ mod tests {
         let (base, mut rx) = spawn_receiver().await;
         let bearer = LanHttpBearer::new(base, None);
         let mut stats = RelayStats::default();
-        let ev = AtlasEvent::new("atlas.occupancy", None, vec![1, 2, 3]);
+        let ev = AtlasEvent::new("capture.occupancy", None, vec![1, 2, 3]);
         forward_payload(&bearer, &ev.encode().unwrap(), &mut stats).await;
         assert_eq!(rx.recv().await.unwrap(), ev);
         assert_eq!(
@@ -397,8 +397,8 @@ mod tests {
         let (base, mut rx) = spawn_receiver().await;
         let host = FakeHost::new();
         *host.node_info.lock() = Some(FakeHost::info("ground-station", None, false, Some("relay")));
-        host.set_config("relay.enabled", serde_json::json!(true));
-        host.set_config("relay.compute_base_url", serde_json::json!(base));
+        host.set_config("capture.relay.enabled", serde_json::json!(true));
+        host.set_config("capture.relay.compute_base_url", serde_json::json!(base));
         let snapshot: SharedSnapshot = Arc::default();
         let relay = relay(&host, &snapshot);
 
@@ -407,7 +407,7 @@ mod tests {
 
         host.wait_for(|h| h.aux_callback.lock().is_some()).await;
         let callback = host.aux_callback.lock().clone().unwrap();
-        let ev = AtlasEvent::new("atlas.pose", None, vec![7]);
+        let ev = AtlasEvent::new("capture.pose", None, vec![7]);
         callback(9, ev.encode().unwrap());
         callback(APP_STREAM, ev.encode().unwrap());
         assert_eq!(rx.recv().await.unwrap(), ev);
@@ -425,9 +425,9 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn only_the_relay_role_runs_the_relay() {
         let host = FakeHost::new();
-        host.set_config("relay.enabled", serde_json::json!(true));
+        host.set_config("capture.relay.enabled", serde_json::json!(true));
         host.set_config(
-            "relay.compute_base_url",
+            "capture.relay.compute_base_url",
             serde_json::json!("http://192.0.2.9:8092"),
         );
         let snapshot: SharedSnapshot = Arc::default();

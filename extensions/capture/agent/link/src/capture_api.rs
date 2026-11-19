@@ -1,17 +1,17 @@
 //! The live capture session over the control socket:
 //!
-//! - `POST /atlas/capture/start` (body optional [`StartArgs`]) →
+//! - `POST /capture/start` (body optional [`StartArgs`]) →
 //!   `{"ok":true,"session_id":".."}`; `409 E_STORAGE_FULL` /
 //!   `E_ALREADY_RECORDING` / `E_CLOCK_NOT_READY`.
-//! - `POST /atlas/capture/{stop,pause,resume}` → the resulting state view
+//! - `POST /capture/{stop,pause,resume}` → the resulting state view
 //!   with `"ok": true`.
-//! - `POST /atlas/capture/mark` `{room, floor}` → `{"ok":true,"segment":n}`.
-//! - `GET /atlas/capture/state`: the [`CaptureStateView`]; while the capture
+//! - `POST /capture/mark` `{room, floor}` → `{"ok":true,"segment":n}`.
+//! - `GET /capture/state`: the [`CaptureStateView`]; while the capture
 //!   service is not running, an idle view with every field present and empty
 //!   (storage free space from the capture-storage sidecar when readable).
-//! - `GET /atlas/capture/coverage`: the [`CoverageView`]; an empty grid
+//! - `GET /capture/coverage`: the [`CoverageView`]; an empty grid
 //!   (`cell_m` 0) while the service is not running.
-//! - `PUT /atlas/capture/exposure` [`ExposureView`] → the exposure the
+//! - `PUT /capture/exposure` [`ExposureView`] → the exposure the
 //!   service reports, verbatim (`applied` says whether it reached the sensor).
 //!
 //! The WHEP and rig routes are in [`crate::device_api`].
@@ -35,14 +35,14 @@ use ados_mapping_transport::reply::{respond, ApiError};
 /// The capture routes.
 pub fn routes() -> Router<DroneApi> {
     Router::new()
-        .route("/atlas/capture/start", post(start))
-        .route("/atlas/capture/stop", post(stop))
-        .route("/atlas/capture/pause", post(pause))
-        .route("/atlas/capture/resume", post(resume))
-        .route("/atlas/capture/mark", post(mark))
-        .route("/atlas/capture/state", get(state))
-        .route("/atlas/capture/coverage", get(coverage))
-        .route("/atlas/capture/exposure", put(exposure))
+        .route("/capture/start", post(start))
+        .route("/capture/stop", post(stop))
+        .route("/capture/pause", post(pause))
+        .route("/capture/resume", post(resume))
+        .route("/capture/mark", post(mark))
+        .route("/capture/state", get(state))
+        .route("/capture/coverage", get(coverage))
+        .route("/capture/exposure", put(exposure))
 }
 
 /// The view while no capture service runs: present, empty fields.

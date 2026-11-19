@@ -15,7 +15,7 @@ use ados_protocol::shutdown::Shutdown;
 use async_trait::async_trait;
 use capture_service::camera_control::{CameraControl, CameraOutcome, REPLY_BUDGET};
 use capture_service::{
-    run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths,
+    run_capture_loop, CapturePublisher, CaptureRuntimeConfig, ControlMsg, LoopDeps, Paths,
 };
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
@@ -52,19 +52,19 @@ fn exposure_of(state: &CtlReply) -> ExposureView {
 async fn a_slow_camera_answers_pending_and_the_state_catches_up() {
     let dir = tempfile::tempdir().unwrap();
     let values: BTreeMap<String, serde_json::Value> = [
-        ("atlas.enabled".to_string(), serde_json::json!(true)),
+        ("capture.enabled".to_string(), serde_json::json!(true)),
         (
-            "atlas.cameras".to_string(),
+            "capture.cameras".to_string(),
             serde_json::json!([{"id": "cam_fl"}, {"id": "cam_fr", "role": "aux"}]),
         ),
     ]
     .into_iter()
     .collect();
-    let cfg = AtlasRuntimeConfig::from_values("sim-visor", &values).unwrap();
+    let cfg = CaptureRuntimeConfig::from_values("sim-visor", &values).unwrap();
     let (_bus_tx, bus_rx) = mpsc::channel(8);
     let (ctl_tx, ctl_rx) = mpsc::channel(8);
     let (_ftx, frx) = mpsc::channel(8);
-    let publisher = AtlasPublisher::bind(&dir.path().join("atlas.sock").to_string_lossy())
+    let publisher = CapturePublisher::bind(&dir.path().join("capture.sock").to_string_lossy())
         .await
         .unwrap();
     let cancel = Shutdown::new();
@@ -92,6 +92,7 @@ async fn a_slow_camera_answers_pending_and_the_state_catches_up() {
             active_marker: None,
         },
         reconstruct_steps: Default::default(),
+        navigation: Default::default(),
     };
     let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));
 

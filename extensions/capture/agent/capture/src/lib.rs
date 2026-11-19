@@ -1,11 +1,10 @@
-//! Atlas world-model capture — the light, on-drone half of the world-model
-//! program.
+//! Capture: the on-device half of reconstruction.
 //!
-//! This crate is the camera side of the split: the drone selects pose-tagged
-//! keyframes from its camera stream(s) and emits the keyframe + pose contract a
-//! separate compute node reconstructs a 3D world model from (gaussian splat /
-//! point cloud / mesh / occupancy). It does no reconstruction and no training —
-//! that is the compute node's job.
+//! The drone (or a Visor) selects pose-tagged keyframes from its camera
+//! stream(s), records sessions, and emits the keyframe + pose contract a
+//! separate compute node reconstructs a 3D model from (gaussian splat /
+//! point cloud / mesh / occupancy). It does no reconstruction and no
+//! training: that is the compute node's job.
 //!
 //! Three pieces:
 //!
@@ -19,9 +18,10 @@
 //!   [`KeyframeEnvelope`] whenever a camera's selector fires.
 //!
 //! The service around them runs as the extension's `capture` plugin process
-//! ([`supervisor`]): it reads the `atlas.*` plugin config, frames from the
-//! vision engine and the vehicle state through the plugin host, and publishes
-//! keyframes, poses and capture state on the extension's private atlas bus.
+//! ([`supervisor`]): it reads the `capture.*` plugin config, frames from the
+//! vision engine, the vehicle state and Navigation's pose and scans through
+//! the plugin host, and publishes keyframes and the capture state on the
+//! extension's private bus.
 //!
 //! The wire types ([`KeyframeEnvelope`], [`PoseDescriptor`], [`CaptureStatus`],
 //! …) are the shared `ados_mapping_protocol::atlas` contract; this crate
@@ -37,6 +37,12 @@ pub const BUS_SOCKET: &str = "capture.sock";
 /// status).
 pub const CONTROL_SOCKET: &str = "capture-control.sock";
 
+/// Every pose estimate Navigation produces, batched (`PoseTrackBatch`).
+pub const NAV_POSE_TRACK_TOPIC: &str = "plugin.navigation.pose_track";
+/// Each LiDAR scan as measured, in parts (`ScanChunk`), while a session
+/// records.
+pub const NAV_SCAN_RAW_TOPIC: &str = "plugin.navigation.scan_raw";
+
 mod config;
 mod selector;
 mod session;
@@ -48,12 +54,14 @@ pub mod control;
 pub mod encode;
 pub mod hud;
 pub mod lidar_record;
+pub mod navigation_track;
 pub mod publish;
 pub mod quality;
 pub mod recorder;
 pub mod recording;
 pub mod rig_source;
 pub mod runtime;
+pub mod scan_raw;
 pub mod service;
 pub mod storage;
 pub mod supervisor;
@@ -64,26 +72,23 @@ pub use session::{CaptureOutput, CaptureSession, FrameInput};
 
 pub use control::{serve_control, ControlMsg};
 pub use encode::encode_keyframe_jpeg;
-pub use publish::AtlasPublisher;
-pub use runtime::{default_intrinsics, AtlasRuntimeConfig, ConfigError, PosePrior, CONFIG_KEYS};
+pub use publish::CapturePublisher;
+pub use runtime::{default_intrinsics, CaptureRuntimeConfig, ConfigError, PosePrior, CONFIG_KEYS};
 pub use service::{run_capture_loop, LoopDeps, Paths};
 
 // Re-export the shared wire contract so callers get one import surface.
 pub use ados_mapping_protocol::atlas::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
-    KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, MeshDescriptor,
-    OccupancyDescriptor, OccupancyField, PointCloudDescriptor, Pose, PoseDescriptor, PoseSource,
-    SplatDescriptor, TimeAlignment, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_MESH_TOPIC,
-    PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC, PLUGIN_ATLAS_POSE_TOPIC,
-    PLUGIN_ATLAS_SPLAT_TOPIC,
+    KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, Pose, PoseSource, TimeAlignment,
+    VioHealth, CAPTURE_STATE_TOPIC,
 };
 
-/// Errors from the Atlas capture core. The frame-by-frame capture path is
+/// Errors from the capture core. The frame-by-frame capture path is
 /// infallible by design (a frame either selects a keyframe or it does not);
 /// the only fallible surface is validating a capture configuration before a
 /// session runs.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum AtlasError {
+pub enum CaptureError {
     /// A capture config has no enabled camera, so it could never produce a
     /// keyframe.
     #[error("capture config has no enabled cameras")]

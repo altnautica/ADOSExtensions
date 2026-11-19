@@ -321,7 +321,7 @@ impl KeyframeEnvelope {
 }
 
 /// Capture-session lifecycle state published on
-/// [`super::ATLAS_CAPTURE_STATE_TOPIC`].
+/// [`super::CAPTURE_STATE_TOPIC`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureState {
@@ -341,7 +341,7 @@ pub enum VioHealth {
     Lost,
 }
 
-/// The descriptor on [`super::ATLAS_CAPTURE_STATE_TOPIC`].
+/// The descriptor on [`super::CAPTURE_STATE_TOPIC`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CaptureStatus {
     pub session_id: String,

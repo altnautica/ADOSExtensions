@@ -246,6 +246,8 @@ impl Engine {
         if let Some(fc) = &self.fc {
             fc.set_anchor(s.anchor.clone());
         }
+        // A session keeps the pose it starts on.
+        self.pose = self.session_pose();
         self.coverage = Coverage::new();
         self.quality.raised = Default::default();
         for c in self.cams.values_mut() {

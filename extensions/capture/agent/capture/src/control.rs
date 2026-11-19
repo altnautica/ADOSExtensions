@@ -1,4 +1,4 @@
-//! The capture control socket (`atlas-control.sock`, protocol v2, see
+//! The capture control socket (`capture-control.sock`, protocol v2, see
 //! [`ados_mapping_protocol::capture_ctl`]).
 //!
 //! Each connection carries one newline-delimited JSON [`CtlRequest`]; it is
@@ -30,20 +30,20 @@ pub async fn serve_control(
     tx: mpsc::Sender<ControlMsg>,
 ) -> io::Result<JoinHandle<()>> {
     let listener = bind_command_socket(socket_path, 0o660)?;
-    tracing::info!(path = %socket_path, "atlas_control_listening");
+    tracing::info!(path = %socket_path, "capture_control_listening");
     Ok(tokio::spawn(async move {
         loop {
             let stream = match listener.accept().await {
                 Ok((s, _)) => s,
                 Err(e) => {
-                    tracing::warn!(error = %e, "atlas_control_accept_failed");
+                    tracing::warn!(error = %e, "capture_control_accept_failed");
                     break;
                 }
             };
             let tx = tx.clone();
             tokio::spawn(async move {
                 if let Err(e) = handle_conn(stream, tx).await {
-                    tracing::debug!(error = %e, "atlas_control_conn_error");
+                    tracing::debug!(error = %e, "capture_control_conn_error");
                 }
             });
         }

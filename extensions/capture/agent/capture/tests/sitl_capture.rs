@@ -21,8 +21,8 @@ use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 use ados_protocol::framebus::{FrameFormat, TIMEBASE_SIM};
 use ados_protocol::shutdown::Shutdown;
 use capture_service::{
-    run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths, PoseSource,
-    VioHealth,
+    run_capture_loop, CapturePublisher, CaptureRuntimeConfig, ControlMsg, LoopDeps, Paths,
+    PoseSource, VioHealth,
 };
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
@@ -160,15 +160,15 @@ async fn a_two_camera_sim_session_records_and_validates() {
     let dir = tempfile::tempdir().unwrap();
     let paths = write_sidecars(dir.path());
     let values: BTreeMap<String, serde_json::Value> = [
-        ("atlas.enabled".to_string(), serde_json::json!(true)),
+        ("capture.enabled".to_string(), serde_json::json!(true)),
         (
-            "atlas.cameras".to_string(),
+            "capture.cameras".to_string(),
             serde_json::json!([{"id": "cam_fl"}, {"id": "cam_fr", "role": "aux"}]),
         ),
     ]
     .into_iter()
     .collect();
-    let cfg = AtlasRuntimeConfig::from_values("sim-visor", &values).unwrap();
+    let cfg = CaptureRuntimeConfig::from_values("sim-visor", &values).unwrap();
     let poses: Vec<PoseEstimate> = (0..30u64)
         .map(|k| PoseEstimate {
             t_ns: HOST0 + SIM0 - 200_000_000 + k * FRAME_NS,
@@ -191,7 +191,7 @@ async fn a_two_camera_sim_session_records_and_validates() {
     let frames: Vec<CapturedFrame> = (0..FRAMES)
         .flat_map(|k| [frame("cam_fl", k), frame("cam_fr", k)])
         .collect();
-    let publisher = AtlasPublisher::bind(&dir.path().join("atlas.sock").to_string_lossy())
+    let publisher = CapturePublisher::bind(&dir.path().join("capture.sock").to_string_lossy())
         .await
         .unwrap();
     let cancel = Shutdown::new();
@@ -219,6 +219,7 @@ async fn a_two_camera_sim_session_records_and_validates() {
         camera: None,
         paths: paths.clone(),
         reconstruct_steps: Default::default(),
+        navigation: Default::default(),
     };
     let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));
     let started = start.await.unwrap();

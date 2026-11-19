@@ -63,13 +63,13 @@ pub async fn call(
 async fn readiness_reports_idle_when_the_service_is_down() {
     let dir = tempfile::tempdir().unwrap();
     let host = FakeHost::new();
-    host.set_config("atlas.enabled", json!(true));
+    host.set_config("capture.enabled", json!(true));
     host.set_config(
-        "atlas.cameras",
+        "capture.cameras",
         json!([{"id": "front", "enabled": true}, {"id": "down", "enabled": false}]),
     );
     let api = test_api(host, &dir.path().join("none.sock"), dir.path());
-    let (st, body) = call(drone_router(api), "GET", "/atlas/readiness", None).await;
+    let (st, body) = call(drone_router(api), "GET", "/capture/readiness", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["enabled"], json!(true));
     assert_eq!(body["profile"], json!("drone"));
@@ -90,25 +90,25 @@ async fn readiness_reports_idle_when_the_service_is_down() {
 #[tokio::test]
 async fn readiness_reads_the_live_session_the_provider_and_the_forwarders_node() {
     let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas-control.sock");
+    let sock = dir.path().join("capture-control.sock");
     let recorded = fake_status_socket(&sock, capturing_status());
     let host = FakeHost::new();
-    host.set_config("atlas.pose_provider", json!("vio"));
+    host.set_config("capture.pose_source", json!("navigation"));
     let api = test_api(host.clone(), &sock, dir.path());
     api.forward.lock().note_node(Some("workstation-01".into()));
-    let (_, body) = call(drone_router(api.clone()), "GET", "/atlas/readiness", None).await;
+    let (_, body) = call(drone_router(api.clone()), "GET", "/capture/readiness", None).await;
     assert_eq!(body["service_running"], json!(true));
     assert_eq!(body["capturing"], json!(true));
     assert_eq!(body["state"], json!("capturing"));
     assert_eq!(body["session_id"], json!("sess-1"));
     assert_eq!(body["keyframes"], json!(4));
-    assert_eq!(body["pose_source"], json!("vio"));
+    assert_eq!(body["pose_source"], json!("navigation"));
     assert_eq!(body["compute_node_id"], json!("workstation-01"));
     assert_eq!(recorded.lock()[0], r#"{"cmd":"status"}"#);
 
-    // An out-of-set provider (a retired tier name) reads as auto.
-    host.set_config("atlas.pose_provider", json!("offload"));
-    let (_, body) = call(drone_router(api), "GET", "/atlas/readiness", None).await;
+    // An out-of-set source (a retired provider name) reads as auto.
+    host.set_config("capture.pose_source", json!("vio"));
+    let (_, body) = call(drone_router(api), "GET", "/capture/readiness", None).await;
     assert_eq!(body["pose_source"], json!("auto"));
 }
 
@@ -116,8 +116,8 @@ async fn readiness_reads_the_live_session_the_provider_and_the_forwarders_node()
 async fn a_config_patch_writes_only_the_provided_keys() {
     let dir = tempfile::tempdir().unwrap();
     let host = FakeHost::new();
-    host.set_config("atlas.capture_profile", json!("orbit"));
-    host.set_config("atlas.reconstruct_steps", json!(7000));
+    host.set_config("capture.capture_profile", json!("orbit"));
+    host.set_config("capture.reconstruct_steps", json!(7000));
     let app = drone_router(test_api(
         host.clone(),
         &dir.path().join("none.sock"),
@@ -126,8 +126,8 @@ async fn a_config_patch_writes_only_the_provided_keys() {
     let (st, body) = call(
         app.clone(),
         "PUT",
-        "/atlas/config",
-        Some(json!({"enabled": true, "cameras": [
+        "/capture/config",
+        Some(json!({"capture.enabled": true, "capture.cameras": [
             {"id": "front", "role": "primary", "enabled": true, "reconstruct": true}
         ]})),
     )
@@ -137,29 +137,29 @@ async fn a_config_patch_writes_only_the_provided_keys() {
     assert_eq!(body["enabled"], json!(true));
     assert_eq!(body["persisted"], json!(true));
     assert_eq!(body["restart"]["status"], json!("ok"));
-    assert_eq!(host.config_value("atlas.enabled"), json!(true));
+    assert_eq!(host.config_value("capture.enabled"), json!(true));
     assert_eq!(
-        host.config_value("atlas.cameras")[0]["role"],
+        host.config_value("capture.cameras")[0]["role"],
         json!("primary")
     );
     // Untouched keys survive.
-    assert_eq!(host.config_value("atlas.capture_profile"), json!("orbit"));
-    assert_eq!(host.config_value("atlas.reconstruct_steps"), json!(7000));
+    assert_eq!(host.config_value("capture.capture_profile"), json!("orbit"));
+    assert_eq!(host.config_value("capture.reconstruct_steps"), json!(7000));
 
-    // A patch without `enabled` reports the stored value.
+    // A patch without `capture.enabled` reports the stored value.
     let (_, body) = call(
         app,
         "PUT",
-        "/atlas/config",
-        Some(json!({"reconstruct_steps": 9000})),
+        "/capture/config",
+        Some(json!({"capture.reconstruct_steps": 9000})),
     )
     .await;
     assert_eq!(body["enabled"], json!(true));
-    assert_eq!(host.config_value("atlas.reconstruct_steps"), json!(9000));
+    assert_eq!(host.config_value("capture.reconstruct_steps"), json!(9000));
 }
 
 #[tokio::test]
-async fn invalid_config_patches_are_refused_before_any_write() {
+async fn invalid_or_foreign_config_patches_are_refused_before_any_write() {
     let dir = tempfile::tempdir().unwrap();
     let host = FakeHost::new();
     let app = drone_router(test_api(
@@ -167,39 +167,39 @@ async fn invalid_config_patches_are_refused_before_any_write() {
         &dir.path().join("none.sock"),
         dir.path(),
     ));
-    for bad in [
-        json!({"reconstruct_steps": 500}),
-        json!({"enabled": true, "capture_profile": "balanced"}),
-        json!({"enabled": true, "cameras": [{"id": "front", "role": "navigation"}]}),
-        json!({"cameras": [{"id": "a", "role": 7}]}),
+    for (bad, says) in [
+        (json!({"capture.reconstruct_steps": 500}), "1000..=200000"),
+        (
+            json!({"capture.enabled": true, "capture.capture_profile": "balanced"}),
+            "orbit",
+        ),
+        (
+            json!({"capture.cameras": [{"id": "front", "role": "navigation"}]}),
+            "camera role",
+        ),
+        (json!({"capture.pose_source": "vio"}), "navigation"),
+        (
+            json!({"capture.enabled": true, "navigation.pose_provider": "lidar"}),
+            "belongs to Navigation",
+        ),
+        (
+            json!({"reconstruct.offload.enabled": "on"}),
+            "belongs to Reconstruct",
+        ),
+        (json!({"enabled": true}), "not a Capture setting"),
     ] {
-        let (st, body) = call(app.clone(), "PUT", "/atlas/config", Some(bad)).await;
+        let (st, body) = call(app.clone(), "PUT", "/capture/config", Some(bad)).await;
         assert_eq!(st, StatusCode::BAD_REQUEST);
-        assert!(body["detail"].is_string());
+        let detail = body["detail"].as_str().unwrap();
+        assert!(detail.contains(says), "{detail}");
     }
     assert!(host.config.lock().is_empty());
-    // A camera with no role is left to the schema (a partial patch).
-    let ok = AtlasConfigBody {
-        enabled: None,
-        capture_profile: None,
-        reconstruct_steps: None,
-        cameras: Some(json!([{"id": "a", "enabled": true}])),
-    };
-    assert!(validate_config_body(&ok).is_ok());
-}
-
-#[tokio::test]
-async fn a_drone_has_no_compute_status() {
-    let dir = tempfile::tempdir().unwrap();
-    let app = drone_router(test_api(
-        FakeHost::new(),
-        &dir.path().join("none.sock"),
-        dir.path(),
-    ));
-    let (st, body) = call(app, "GET", "/compute/status", None).await;
-    assert_eq!(st, StatusCode::NOT_FOUND);
-    assert_eq!(
-        body,
-        json!({"detail": "no compute status (not a compute node, or the compute daemon is not running)"})
-    );
+    // A camera with no role is left to the service's own check.
+    let patch = [(
+        "capture.cameras".to_string(),
+        json!([{"id": "a", "enabled": true}]),
+    )]
+    .into_iter()
+    .collect();
+    assert!(config_writes(&patch).is_ok());
 }

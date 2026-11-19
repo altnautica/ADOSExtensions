@@ -157,7 +157,7 @@ mod tests {
     use tokio::sync::mpsc::{channel, Receiver};
 
     fn keyframe_event() -> AtlasEvent {
-        AtlasEvent::new("atlas.keyframe", None, vec![1, 2, 3, 4])
+        AtlasEvent::new("capture.keyframe", None, vec![1, 2, 3, 4])
     }
 
     async fn spawn_server() -> (std::net::SocketAddr, Receiver<AtlasEvent>) {
@@ -178,7 +178,7 @@ mod tests {
         assert!(bearer.probe().await);
         bearer.send(&keyframe_event()).await.unwrap();
         let got = rx.recv().await.unwrap();
-        assert_eq!(got.topic, "atlas.keyframe");
+        assert_eq!(got.topic, "capture.keyframe");
         assert_eq!(got.payload, vec![1, 2, 3, 4]);
     }
 
@@ -188,7 +188,7 @@ mod tests {
         // default 2 MB limit; the raised limit must accept it on the primary path.
         let (addr, mut rx) = spawn_server().await;
         let bearer = LanHttpBearer::new(format!("http://{addr}"), None);
-        let big = AtlasEvent::new("atlas.keyframe", None, vec![0xAB; 5 * 1024 * 1024]); // 5 MB
+        let big = AtlasEvent::new("capture.keyframe", None, vec![0xAB; 5 * 1024 * 1024]); // 5 MB
         bearer.send(&big).await.unwrap(); // Ok(()) means a 2xx, not a 413
         let got = rx.recv().await.unwrap();
         assert_eq!(got.payload.len(), 5 * 1024 * 1024);

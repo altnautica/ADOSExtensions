@@ -7,7 +7,7 @@
 //! - `<rig_id>/active`: the active `calib_version`, one line.
 //!
 //! The root is `$ADOS_PLUGIN_DATA_DIR/calib` when the plugin host exported a
-//! data directory, else `$HOME/.ados/world-engine/calib` (a development host);
+//! data directory, else `$HOME/.ados/capture/calib` (a development host);
 //! see [`default_root`].
 
 use std::io;
@@ -27,14 +27,14 @@ pub const CALIB_DIR: &str = "calib";
 pub const ACTIVE_FILE: &str = "active";
 
 /// The store root: `$ADOS_PLUGIN_DATA_DIR/calib`, else
-/// `$HOME/.ados/world-engine/calib`; `None` when neither variable is set.
+/// `$HOME/.ados/capture/calib`; `None` when neither variable is set.
 pub fn default_root() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os(DATA_DIR_ENV).filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir).join(CALIB_DIR));
     }
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
-        .map(|h| PathBuf::from(h).join(".ados/world-engine").join(CALIB_DIR))
+        .map(|h| PathBuf::from(h).join(".ados/capture").join(CALIB_DIR))
 }
 
 /// One stored calibration.
@@ -52,7 +52,7 @@ pub struct CalibRecord {
     pub rig: Rig,
 }
 
-/// A record without its rig: one `GET /atlas/calib` version row.
+/// A record without its rig: one `GET /capture/calib` version row.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CalibSummary {
     pub calib_version: String,

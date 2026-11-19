@@ -1,16 +1,16 @@
 //! The recorded sessions on this device:
 //!
-//! - `GET /atlas/sessions` → `{"sessions":[row...]}` (rows per
+//! - `GET /capture/sessions` → `{"sessions":[row...]}` (rows per
 //!   [`crate::sessions`], newest first); `[]` while the capture root is
 //!   unknown. A crashed session (stale `.recording`) is listed with
 //!   `uploaded: false` and `upload` `{state: "failed", error: "not_finished"}`.
 //!   While auto-upload is on but cannot pick a credential for the node, the
 //!   sessions it would take read `{state: "blocked", error: "no_credential"}`
 //!   (or `"ambiguous_credential"`).
-//! - `POST /atlas/sessions/{id}/upload` → `{"ok":true}`: queue it for the
+//! - `POST /capture/sessions/{id}/upload` → `{"ok":true}`: queue it for the
 //!   paired node (`409 E_RECORDING` while it records, `409 E_NOT_FINISHED`
 //!   for a crashed session).
-//! - `DELETE /atlas/sessions/{id}[?force=true]` → `{"ok":true}`: refused with
+//! - `DELETE /capture/sessions/{id}[?force=true]` → `{"ok":true}`: refused with
 //!   `409 E_RECORDING` while it records, `409 E_UPLOADING` while queued or
 //!   uploading, and `409 E_NOT_UPLOADED` before the node committed it unless
 //!   `force=true` (which also removes a crashed session).
@@ -30,9 +30,9 @@ use ados_mapping_transport::reply::{codes, respond, ApiError};
 
 pub fn routes() -> Router<DroneApi> {
     Router::new()
-        .route("/atlas/sessions", get(list))
-        .route("/atlas/sessions/:id", delete(remove))
-        .route("/atlas/sessions/:id/upload", post(upload))
+        .route("/capture/sessions", get(list))
+        .route("/capture/sessions/:id", delete(remove))
+        .route("/capture/sessions/:id/upload", post(upload))
 }
 
 impl DroneApi {

@@ -59,12 +59,12 @@ fn service(req: CtlRequest) -> CtlReply {
 #[tokio::test]
 async fn capture_actions_reach_the_control_socket_with_their_args() {
     let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas-control.sock");
+    let sock = dir.path().join("capture-control.sock");
     let recorded = fake_control_socket(&sock, service);
     let app = drone_router(test_api(FakeHost::new(), &sock, dir.path()));
 
     let start = json!({"site": "Warehouse 3", "floor": 0, "room": "Dock", "operator_anchor": null});
-    let (st, body) = call(app.clone(), "POST", "/atlas/capture/start", Some(start)).await;
+    let (st, body) = call(app.clone(), "POST", "/capture/start", Some(start)).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(
         body,
@@ -75,13 +75,13 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
     assert_eq!(sent["site"], "Warehouse 3");
 
     // No body is a start with no metadata.
-    let (st, _) = call(app.clone(), "POST", "/atlas/capture/start", None).await;
+    let (st, _) = call(app.clone(), "POST", "/capture/start", None).await;
     assert_eq!(st, StatusCode::OK);
 
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/capture/start",
+        "/capture/start",
         Some(json!({"site": "busy"})),
     )
     .await;
@@ -91,7 +91,7 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/capture/mark",
+        "/capture/mark",
         Some(json!({"room": "Kitchen", "floor": 0})),
     )
     .await;
@@ -102,30 +102,24 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
     let (st, body) = call(
         app.clone(),
         "POST",
-        "/atlas/capture/mark",
+        "/capture/mark",
         Some(json!({"floor": 0})),
     )
     .await;
     assert_eq!(st, StatusCode::BAD_REQUEST);
     assert_eq!(body["error"], "E_BAD_REQUEST");
 
-    let (st, body) = call(app.clone(), "POST", "/atlas/capture/stop", None).await;
+    let (st, body) = call(app.clone(), "POST", "/capture/stop", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["ok"], true);
     assert_eq!(body["state"], "recording");
     for verb in ["pause", "resume"] {
-        let (st, _) = call(app.clone(), "POST", &format!("/atlas/capture/{verb}"), None).await;
+        let (st, _) = call(app.clone(), "POST", &format!("/capture/{verb}"), None).await;
         assert_eq!(st, StatusCode::OK);
     }
 
     let exp = json!({"locked": true, "exposure_us": 4000, "gain": 2.0, "mode": "walking"});
-    let (st, body) = call(
-        app.clone(),
-        "PUT",
-        "/atlas/capture/exposure",
-        Some(exp.clone()),
-    )
-    .await;
+    let (st, body) = call(app.clone(), "PUT", "/capture/exposure", Some(exp.clone())).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(
         body,
@@ -140,7 +134,7 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
     let (st, body) = call(
         app,
         "POST",
-        "/atlas/capture/start",
+        "/capture/start",
         Some(json!({"site": "early"})),
     )
     .await;
@@ -151,16 +145,16 @@ async fn capture_actions_reach_the_control_socket_with_their_args() {
 #[tokio::test]
 async fn state_and_coverage_read_the_service() {
     let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("atlas-control.sock");
+    let sock = dir.path().join("capture-control.sock");
     fake_control_socket(&sock, service);
     let app = drone_router(test_api(FakeHost::new(), &sock, dir.path()));
-    let (st, body) = call(app.clone(), "GET", "/atlas/capture/state", None).await;
+    let (st, body) = call(app.clone(), "GET", "/capture/state", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["state"], "recording");
     assert_eq!(body["segment"], 3);
     assert_eq!(body["pose"]["source"], "vio");
     assert_eq!(body["storage"]["free_bytes"], 812_345_678_901u64);
-    let (st, body) = call(app, "GET", "/atlas/capture/coverage", None).await;
+    let (st, body) = call(app, "GET", "/capture/coverage", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["cell_m"], 0.5);
     assert_eq!(body["cells"], json!([[0, 1, 4]]));
@@ -175,7 +169,7 @@ async fn without_the_service_state_is_an_idle_view_and_actions_are_unavailable()
         &dir.path().join("none.sock"),
         dir.path(),
     ));
-    let (st, body) = call(app.clone(), "GET", "/atlas/capture/state", None).await;
+    let (st, body) = call(app.clone(), "GET", "/capture/state", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["state"], "idle");
     assert!(body["session_id"].is_null());
@@ -188,11 +182,11 @@ async fn without_the_service_state_is_an_idle_view_and_actions_are_unavailable()
     assert_eq!(body["exposure"]["locked"], false);
     assert!(body["storage"].is_object());
 
-    let (st, body) = call(app.clone(), "GET", "/atlas/capture/coverage", None).await;
+    let (st, body) = call(app.clone(), "GET", "/capture/coverage", None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(body["cell_m"], 0.0);
 
-    let (st, body) = call(app, "POST", "/atlas/capture/start", None).await;
+    let (st, body) = call(app, "POST", "/capture/start", None).await;
     assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(body["error"], "E_CAPTURE_UNAVAILABLE");
 }

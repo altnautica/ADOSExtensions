@@ -1,10 +1,8 @@
-# World Engine link: the extension's main process on every profile. On a drone
-# it forwards the capture stream over the bearer ladder, republishes the
-# shared world-model topics, publishes the `status` telemetry, runs the
-# perception-offload reconciler, and serves the Atlas control API on the
-# plugin's HTTP socket. On a ground station it relays the radio aux lane onto
-# the LAN. On a workstation / compute node the `node` service serves HTTP and
-# state, and the link stays up as the plugin's main process.
+# Capture link: the extension's main process on every profile. On a drone or
+# Visor it forwards keyframes over the bearer ladder, publishes the shared
+# capture state and the `status` telemetry, uploads sessions, and serves the
+# capture API on the plugin's HTTP socket. On a ground station it relays the
+# radio aux lane onto the LAN.
 [package]
 name = "capture-link"
 version = "1.0.0"
@@ -12,7 +10,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "World Engine link: drone forwarder, offload reconciler, ground-station relay, and the Atlas control API."
+description = "Capture link: keyframe forwarder, session uploader, ground-station relay, and the capture API."
 
 [lib]
 name = "capture_link"

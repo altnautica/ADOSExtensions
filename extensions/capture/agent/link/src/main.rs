@@ -1,4 +1,4 @@
-//! `capture-link`: the World Engine extension's main process. The host runs
+//! `capture-link`: the Capture extension's main process. The host runs
 //! it as `capture-link com.altnautica.capture` with the plugin socket
 //! and token in the environment.
 
@@ -25,7 +25,7 @@ async fn main() -> ExitCode {
     {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            tracing::error!(error = %e, "world engine link exited");
+            tracing::error!(error = %e, "capture link exited");
             ExitCode::FAILURE
         }
     }

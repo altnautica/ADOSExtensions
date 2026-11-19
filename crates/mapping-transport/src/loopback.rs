@@ -71,9 +71,9 @@ mod tests {
     async fn a_sent_event_arrives_on_the_receiver() {
         let (bearer, mut rx) = LoopbackBearer::channel();
         assert!(bearer.is_available().await);
-        bearer.send(&event("atlas.keyframe")).await.unwrap();
+        bearer.send(&event("capture.keyframe")).await.unwrap();
         let got = rx.recv().await.unwrap();
-        assert_eq!(got.topic, "atlas.keyframe");
+        assert_eq!(got.topic, "capture.keyframe");
         assert_eq!(got.payload, vec![1, 2, 3]);
     }
 

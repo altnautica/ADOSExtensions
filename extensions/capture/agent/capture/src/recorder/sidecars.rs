@@ -1,6 +1,6 @@
 //! What the recorder writes beside the session log, through byte-bounded
 //! queues instead of the item channel so their RAM is capped by
-//! `atlas.memory_budget_mb` and a backlog drops the oldest entry, never blocks
+//! `capture.memory_budget_mb` and a backlog drops the oldest entry, never blocks
 //! the capture loop:
 //!
 //! - keyframe previews, `keyframes/<file>` (the keyframe share, 40 %);

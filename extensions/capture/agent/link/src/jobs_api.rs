@@ -1,6 +1,6 @@
 //! Reconstruction on the paired node, over the LAN:
 //!
-//! - `POST /atlas/sessions/{id}/reconstruct` `{"preset": "preview|hq|tour|warehouse"}`
+//! - `POST /capture/sessions/{id}/reconstruct` `{"preset": "preview|hq|tour|warehouse"}`
 //!   → `{"ok":true,"node":"..","job_id":".."}`. The job (`kind: reconstruct`,
 //!   `session_id`, `preset`) is submitted to the node's `POST
 //!   /api/compute/jobs` with this device's `jobs.submit` credential
@@ -23,7 +23,7 @@ use crate::sessions::SessionDir;
 use ados_mapping_transport::reply::{codes, respond, ApiError};
 
 pub fn routes() -> Router<DroneApi> {
-    Router::new().route("/atlas/sessions/:id/reconstruct", post(reconstruct))
+    Router::new().route("/capture/sessions/:id/reconstruct", post(reconstruct))
 }
 
 impl DroneApi {

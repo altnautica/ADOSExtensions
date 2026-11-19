@@ -1,12 +1,12 @@
 //! The device calibration store ([`capture_service::calib`]):
 //!
-//! - `GET /atlas/calib` → `{"rig_id", "active", "versions":[{calib_version,
+//! - `GET /capture/calib` → `{"rig_id", "active", "versions":[{calib_version,
 //!   created_utc, source, report}]}` for the current rig; `rig_id` and
 //!   `active` null, `versions` empty when the store holds nothing.
-//! - `GET /atlas/calib/{version}` → that version's contract rig document;
+//! - `GET /capture/calib/{version}` → that version's contract rig document;
 //!   `404 E_NO_CALIB` when absent.
 //!
-//! The current rig is plugin config `atlas.rig_id` when set, else the only
+//! The current rig is plugin config `capture.rig_id` when set, else the only
 //! rig the store holds.
 
 use axum::extract::{Path, State};
@@ -22,12 +22,12 @@ use ados_mapping_transport::host::config_string;
 use ados_mapping_transport::reply::{codes, respond, ApiError};
 
 /// The plugin config key naming the device's rig.
-pub const RIG_ID_KEY: &str = "atlas.rig_id";
+pub const RIG_ID_KEY: &str = "capture.rig_id";
 
 pub fn routes() -> Router<DroneApi> {
     Router::new()
-        .route("/atlas/calib", get(summary))
-        .route("/atlas/calib/:version", get(version))
+        .route("/capture/calib", get(summary))
+        .route("/capture/calib/:version", get(version))
 }
 
 fn no_calib(detail: impl Into<String>) -> ApiError {
@@ -54,7 +54,7 @@ impl DroneApi {
         Ok((Some(store), rig_id))
     }
 
-    /// `GET /atlas/calib`.
+    /// `GET /capture/calib`.
     pub async fn calib_summary(&self) -> Result<Value, ApiError> {
         let (Some(store), Some(rig_id)) = self.calib().await? else {
             return Ok(json!({ "rig_id": null, "active": null, "versions": [] }));
@@ -64,7 +64,7 @@ impl DroneApi {
         Ok(json!({ "rig_id": rig_id, "active": active, "versions": versions }))
     }
 
-    /// `GET /atlas/calib/{version}`: the rig document.
+    /// `GET /capture/calib/{version}`: the rig document.
     pub async fn calib_rig(&self, version: &str) -> Result<Value, ApiError> {
         let (Some(store), Some(rig_id)) = self.calib().await? else {
             return Err(no_calib("no rig in the calibration store"));
@@ -104,7 +104,7 @@ mod tests {
             &dir.path().join("none.sock"),
             dir.path(),
         ));
-        let (st, body) = call(app.clone(), "GET", "/atlas/calib", None).await;
+        let (st, body) = call(app.clone(), "GET", "/capture/calib", None).await;
         assert_eq!(
             (st, body),
             (
@@ -129,7 +129,7 @@ mod tests {
                 .unwrap();
         }
         store.set_active("visor-01", "v2").unwrap();
-        let (st, body) = call(app.clone(), "GET", "/atlas/calib", None).await;
+        let (st, body) = call(app.clone(), "GET", "/capture/calib", None).await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(body["rig_id"], "visor-01");
         assert_eq!(body["active"], "v2");
@@ -137,17 +137,17 @@ mod tests {
         assert_eq!(body["versions"][1]["report"]["reprojection_rms_px"], 0.3);
         assert!(body["versions"][0].get("rig").is_none());
 
-        let (st, rig) = call(app.clone(), "GET", "/atlas/calib/v1", None).await;
+        let (st, rig) = call(app.clone(), "GET", "/capture/calib/v1", None).await;
         assert_eq!(st, StatusCode::OK);
         assert_eq!(rig["calib_version"], "v1");
         assert_eq!(rig["sensors"][0]["camera"]["model"], "opencv");
-        let (st, body) = call(app.clone(), "GET", "/atlas/calib/v9", None).await;
+        let (st, body) = call(app.clone(), "GET", "/capture/calib/v9", None).await;
         assert_eq!(st, StatusCode::NOT_FOUND);
         assert_eq!(body["error"], "E_NO_CALIB");
 
         // A configured rig id that has no versions.
         host.set_config(RIG_ID_KEY, json!("other-rig"));
-        let (_, body) = call(app, "GET", "/atlas/calib", None).await;
+        let (_, body) = call(app, "GET", "/capture/calib", None).await;
         assert_eq!(
             body,
             json!({"rig_id": "other-rig", "active": null, "versions": []})

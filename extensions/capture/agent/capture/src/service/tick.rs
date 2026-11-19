@@ -5,6 +5,7 @@ use ados_capture_contract::v1::ImuBatch;
 use ados_mapping_protocol::capture_ctl::StartArgs;
 
 use super::{Engine, KEYFRAME_SHARE, SCAN_SHARE, SLOW_TICKS};
+use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::{ClockReading, Level, StorageReading};
 use crate::recorder::{convert, Item};
 use crate::recording::Phase;
@@ -19,6 +20,34 @@ impl Engine {
             .as_ref()
             .filter(|s| s.phase == Phase::Recording)
             .map(|s| &s.recorder)
+    }
+
+    /// One whole LiDAR scan from Navigation: the depth summary for keyframe
+    /// baselines and coverage (rotated into the world when the session's pose
+    /// and the rig's mount are known), and, while recording, the session's
+    /// point cloud.
+    pub(super) fn on_scan(&mut self, scan: ados_mapping_pose::lidar_scan::LidarScan) {
+        let mount = self
+            .rig
+            .as_ref()
+            .and_then(|r| ados_mapping_pose::rig::lidar_sensor(r, &scan.sensor_id))
+            .map(|(s, _)| s.t_body_sensor.0);
+        let r_world_sensor = self.pose.pose_at(scan.t_ns).map(|e| match &mount {
+            Some(m) => {
+                ados_mapping_pose::se3::mat_mul(&e.r, &ados_mapping_pose::se3::from_mat4(m).0)
+            }
+            None => e.r,
+        });
+        self.lidar_depth = Some(LidarDepth::from_scan(&scan, r_world_sensor.as_ref()));
+        if let Some(r) = self.recorder() {
+            let t = self.to_session(scan.t_ns);
+            let cloud = crate::lidar_record::scan_to_point_cloud(&scan, t, &scan.sensor_id);
+            r.submit(Item::Lidar {
+                src: scan.sensor_id,
+                t_ns: t,
+                cloud,
+            });
+        }
     }
 
     pub(super) fn on_bus(&mut self, ev: BusEvent) {
@@ -111,7 +140,11 @@ impl Engine {
             let t = self.to_session(now);
             r.submit(Item::Health {
                 t_ns: t,
-                json: serde_json::json!({"health": view.health, "frames": view.frames}),
+                json: serde_json::json!({
+                    "health": view.health,
+                    "frames": view.frames,
+                    "lidar_scans_incomplete": self.scans.as_ref().map_or(0, |s| s.incomplete(now)),
+                }),
             });
             if let Some(err) = r.stats().error {
                 tracing::error!(error = %err, "recording_failed_closing_session");
@@ -241,7 +274,7 @@ impl Engine {
     }
 
     /// The keyframe session's status, carrying the drone's live
-    /// `atlas.reconstruct_steps` for the compute node.
+    /// `capture.reconstruct_steps` for the compute node.
     pub(super) fn capture_status(&self) -> ados_mapping_protocol::atlas::CaptureStatus {
         let mut status = self.keyframes.status();
         status.reconstruct_steps = self.reconstruct_steps.get();

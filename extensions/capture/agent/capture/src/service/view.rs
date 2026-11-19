@@ -1,4 +1,4 @@
-//! The `GET /atlas/capture/state` view.
+//! The `GET /capture/capture/state` view.
 
 use ados_mapping_protocol::atlas::VioHealth;
 use ados_mapping_protocol::capture_ctl::{

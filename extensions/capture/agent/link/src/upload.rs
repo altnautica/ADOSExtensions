@@ -1,6 +1,6 @@
 //! The session upload manager: a queue of finished sessions, one uploading at
 //! a time to the paired node over the LAN ([`ados_mapping_transport::lan_node`]), with
-//! per-session progress for `GET /atlas/sessions`.
+//! per-session progress for `GET /capture/sessions`.
 //!
 //! `.uploaded` is written into the session directory only after the node
 //! acknowledged the commit (it verified every file against `checksums.b3`);
@@ -8,9 +8,9 @@
 //! `force`. A failed upload resumes from what the node holds on the next try.
 //!
 //! Auto-upload ([`UploadManager::run_auto`]) enqueues every finished,
-//! un-uploaded session when all hold: plugin config `atlas.auto_upload` is
-//! true or `atlas.compute_placement` uploads after flight (`post_flight`,
-//! `hybrid`), a node resolves on the LAN and this device holds a usable
+//! un-uploaded session when all hold: plugin config `capture.auto_upload` is
+//! true or Navigation's map placement ([`crate::placement`]; none known is the
+//! default) uploads after flight (`post_flight`, `hybrid`), a node resolves on the LAN and this device holds a usable
 //! `sessions.upload` credential for it, the capture service is not recording,
 //! and the device is idle or charging ([`crate::power`]). When auto-upload is
 //! on but no credential can be picked ([`CredentialGap`]), the waiting sessions
@@ -31,11 +31,12 @@ use serde_json::json;
 use tokio::sync::{watch, Notify};
 
 use crate::control::{ControlClient, LiveCapture};
+use crate::placement::PlacementWatch;
 use crate::power::PowerWatch;
 use crate::sessions::{scan, LiveSession, SessionDir};
 use crate::sleep_or_shutdown;
 use ados_mapping_transport::credentials::{CredentialGap, CredentialStore, SESSION_UPLOAD_LANE};
-use ados_mapping_transport::host::{config_bool, config_string, Host};
+use ados_mapping_transport::host::{config_bool, Host};
 use ados_mapping_transport::lan_node::resolve_lan;
 use ados_mapping_transport::reply::{codes, ApiError};
 
@@ -43,21 +44,11 @@ use ados_mapping_transport::reply::{codes, ApiError};
 pub type RootFn = Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>;
 
 /// The plugin config key that turns auto-upload on.
-pub const AUTO_UPLOAD_KEY: &str = "atlas.auto_upload";
-/// The plugin config key naming where map products are built.
-pub const COMPUTE_PLACEMENT_KEY: &str = "atlas.compute_placement";
-
-/// Whether a placement (the config string, absent = the default) asks for
-/// the session to upload after the flight. An unparseable value does not.
-pub fn placement_uploads(value: Option<&str>) -> bool {
-    let placement = match value {
-        None => ComputePlacement::default(),
-        Some(v) => match serde_json::from_value(serde_json::Value::from(v)) {
-            Ok(p) => p,
-            Err(_) => return false,
-        },
-    };
-    placement.uploads_after_flight()
+pub const AUTO_UPLOAD_KEY: &str = "capture.auto_upload";
+/// Whether a placement (unknown = the default) asks for the session to
+/// upload after the flight.
+pub fn placement_uploads(placement: Option<ComputePlacement>) -> bool {
+    placement.unwrap_or_default().uploads_after_flight()
 }
 /// How often the auto-upload gate is evaluated. Auto-queued uploads pause
 /// within this of the device becoming busy (armed, recording, discharging).
@@ -139,6 +130,8 @@ struct Inner {
     gate: watch::Sender<bool>,
     /// Why auto-upload cannot run although it is on, as last evaluated.
     blocked: Mutex<Blocked>,
+    /// Where Navigation builds the map products.
+    placement: PlacementWatch,
 }
 
 #[derive(Default)]
@@ -174,8 +167,15 @@ impl UploadManager {
                 wake: Notify::new(),
                 gate: watch::channel(false).0,
                 blocked: Mutex::default(),
+                placement: PlacementWatch::default(),
             }),
         }
+    }
+
+    /// The placement watch the auto-upload gate reads; the link feeds it
+    /// Navigation's map status.
+    pub fn placement(&self) -> PlacementWatch {
+        self.inner.placement.clone()
     }
 
     /// The capture root, if known.
@@ -264,7 +264,7 @@ impl UploadManager {
         self.inner.wake.notify_one();
     }
 
-    /// `POST /atlas/sessions/{id}/upload`: queue a finished session. `live`
+    /// `POST /capture/sessions/{id}/upload`: queue a finished session. `live`
     /// is the capture service's open session, which tells a crashed session
     /// (`409 E_NOT_FINISHED`) from one still recording (`409 E_RECORDING`).
     pub fn request(&self, id: &str, live: &LiveSession) -> Result<(), ApiError> {
@@ -461,11 +461,7 @@ impl UploadManager {
     ) -> (bool, Option<CredentialGap>) {
         let i = &self.inner;
         let wanted = config_bool(i.host.as_ref(), AUTO_UPLOAD_KEY, false).await
-            || placement_uploads(
-                config_string(i.host.as_ref(), COMPUTE_PLACEMENT_KEY)
-                    .await
-                    .as_deref(),
-            );
+            || placement_uploads(i.placement.current(Instant::now()));
         if !wanted || !power.idle_or_charging() {
             return (false, None);
         }

@@ -28,14 +28,15 @@ use thiserror::Error;
 
 // --- Topics ---------------------------------------------------------------
 
-/// Capture-session state (state, keyframe counts, VIO health).
-pub const ATLAS_CAPTURE_STATE_TOPIC: &str = "atlas.capture.state";
+/// Capture-session state (state, keyframe counts, pose health), on the
+/// capture service's private bus to its link.
+pub const CAPTURE_STATE_TOPIC: &str = "capture.state";
 
 /// A selected pose-tagged keyframe ([`KeyframeEnvelope`]) the capture service
 /// emits drone-to-compute. The extension's internal namespace (the keyframe is
 /// the capture artifact, not shared plugin data); a compute node and the
 /// world-model stream lane consume it.
-pub const ATLAS_KEYFRAME_TOPIC: &str = "atlas.keyframe";
+pub const CAPTURE_KEYFRAME_TOPIC: &str = "capture.keyframe";
 
 /// Internal: one raw planar scan with its sensor pose, as a binary
 /// [`PolarScan`] record (not msgpack), sent to the compute node only while the
@@ -214,8 +215,8 @@ pub use nav::{
 };
 pub use polar::{PolarError, PolarScan};
 pub use stream::{
-    chunk_scan, pack_points, unpack_points, PoseTrackBatch, PoseTrackEntry, ScanAssembler,
-    ScanChunk, POINT_STRIDE, SCAN_CHUNK_POINTS,
+    chunk_scan, pack_points, unpack_points, AssembledScan, PoseTrackBatch, PoseTrackEntry,
+    ScanAssembler, ScanChunk, POINT_STRIDE, SCAN_CHUNK_POINTS,
 };
 
 /// The on-wire version stamped on every [`AtlasEvent`] envelope. Every atlas

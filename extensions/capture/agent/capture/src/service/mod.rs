@@ -11,7 +11,7 @@
 //! - measures quality (blur, texture, flicker per frame; coverage per posed
 //!   frame) for the HUD;
 //! - runs the keyframe selector as a consumer of the same stream, publishing
-//!   keyframes on the atlas bus and writing their previews under
+//!   keyframes on the private bus and writing their previews under
 //!   `keyframes/`.
 
 mod control;
@@ -34,15 +34,18 @@ use tokio::task::JoinHandle;
 use crate::camera_control::CameraControl;
 use crate::control::ControlMsg;
 use crate::hud::HudAction;
-use crate::publish::AtlasPublisher;
+use crate::navigation_track::NavigationTrack;
+use crate::publish::CapturePublisher;
 use crate::quality::coverage::Coverage;
 use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::QualityMonitor;
 use crate::recording::ActiveSession;
-use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
+use crate::runtime::{CaptureRuntimeConfig, PoseSourceChoice, SharedSteps};
+use crate::scan_raw::ScanRaw;
 use crate::session::CaptureSession;
 use ados_mapping_pose::fc_ekf::FcEkfPose;
 use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
+use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::pose::PoseProvider;
 use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
@@ -78,7 +81,7 @@ impl Paths {
 
 /// Everything the loop runs with.
 pub struct LoopDeps {
-    pub cfg: AtlasRuntimeConfig,
+    pub cfg: CaptureRuntimeConfig,
     /// The node profile (`drone` or `visor`).
     pub profile: String,
     pub frames: AtlasFrameSource,
@@ -90,7 +93,7 @@ pub struct LoopDeps {
     pub vehicle: VehicleFeed,
     pub sensors: Arc<Mutex<SensorState>>,
     pub bus_rx: mpsc::Receiver<BusEvent>,
-    pub publisher: AtlasPublisher,
+    pub publisher: CapturePublisher,
     pub control_rx: mpsc::Receiver<ControlMsg>,
     pub hud_rx: Option<mpsc::Receiver<HudAction>>,
     /// The HUD task renders the latest state from here.
@@ -99,9 +102,23 @@ pub struct LoopDeps {
     /// `None` where there is none (the lock is then never applied).
     pub camera: Option<Arc<dyn CameraControl>>,
     pub paths: Paths,
-    /// The live `atlas.reconstruct_steps`, stamped on every capture status.
+    /// The live `capture.reconstruct_steps`, stamped on every capture status.
     pub reconstruct_steps: SharedSteps,
+    /// What Navigation streams: its pose and the scans to record.
+    pub navigation: NavInputs,
 }
+
+/// What Navigation streams into a run; empty without Navigation.
+#[derive(Default)]
+pub struct NavInputs {
+    /// Navigation's pose, a session's pose source by `capture.pose_source`.
+    pub track: Option<Arc<NavigationTrack>>,
+    /// Whole scans to record, and the feed that counts incomplete ones.
+    pub scans: Option<(Arc<ScanRaw>, mpsc::Receiver<LidarScan>)>,
+}
+
+/// How recent a Navigation batch must be for `auto` to pose a session on it.
+const AUTO_NAV_FRESH: Duration = Duration::from_secs(2);
 
 /// Per-camera frame accounting.
 #[derive(Debug, Default, Clone)]
@@ -127,14 +144,14 @@ pub(crate) struct ExposureDone {
 
 /// The loop's state.
 pub(crate) struct Engine {
-    cfg: AtlasRuntimeConfig,
+    cfg: CaptureRuntimeConfig,
     profile: String,
     router: Option<Arc<FrameRouter>>,
     pose: Arc<dyn PoseProvider>,
     fc: Option<FcEkfPose>,
     vehicle: VehicleFeed,
     sensors: Arc<Mutex<SensorState>>,
-    publisher: AtlasPublisher,
+    publisher: CapturePublisher,
     view_tx: Option<watch::Sender<CaptureStateView>>,
     paths: Paths,
     keyframes: CaptureSession,
@@ -164,8 +181,31 @@ pub(crate) struct Engine {
     sim_unmapped: u64,
     /// The keyframe and scan queues' budget.
     budget: ados_mapping_pose::budget::Budget,
-    /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
+    /// The live `capture.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
     reconstruct_steps: SharedSteps,
+    /// The pose a session takes without Navigation (the FC EKF).
+    default_pose: Arc<dyn PoseProvider>,
+    /// Navigation's pose, when it streams one.
+    nav_pose: Option<Arc<NavigationTrack>>,
+    /// The scan feed, for its incomplete count.
+    scans: Option<Arc<ScanRaw>>,
+}
+
+impl Engine {
+    /// The pose a session starting now takes, by `capture.pose_source`:
+    /// `navigation` always (when Navigation streams), `fc_ekf` never, `auto`
+    /// when a batch arrived in the last [`AUTO_NAV_FRESH`].
+    fn session_pose(&self) -> Arc<dyn PoseProvider> {
+        match (self.cfg.pose_source, &self.nav_pose) {
+            (PoseSourceChoice::Navigation, Some(nav)) => nav.clone(),
+            (PoseSourceChoice::Auto, Some(nav))
+                if nav.fresh(std::time::Instant::now(), AUTO_NAV_FRESH) =>
+            {
+                nav.clone()
+            }
+            _ => self.default_pose.clone(),
+        }
+    }
 }
 
 /// Run the capture loop until `cancel`. An open session is closed (manifest
@@ -188,7 +228,12 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         camera,
         paths,
         reconstruct_steps,
+        navigation,
     } = deps;
+    let (scans, mut scan_rx) = match navigation.scans {
+        Some((feed, rx)) => (Some(feed), Some(rx)),
+        None => (None, None),
+    };
     if let Some(fc) = &fc {
         fc.set_covariance(cfg.pose_prior.fc_covariance());
     }
@@ -213,7 +258,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
             .as_deref(),
         std::path::Path::new("/"),
     );
-    tracing::info!(budget_mb = budget.total_mb(), "atlas_capture_budget");
+    tracing::info!(budget_mb = budget.total_mb(), "capture_capture_budget");
     let mut engine = Engine {
         keyframes: CaptureSession::new(cfg.capture.clone()),
         exposure: cfg.exposure.clone(),
@@ -226,7 +271,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         cfg,
         profile,
         router,
-        pose,
+        pose: pose.clone(),
         fc,
         vehicle,
         sensors,
@@ -247,7 +292,11 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         sim_unmapped: 0,
         budget,
         reconstruct_steps,
+        default_pose: pose,
+        nav_pose: navigation.track,
+        scans,
     };
+    engine.pose = engine.session_pose();
     // Frames are pulled on their own task so a source read is never
     // cancelled mid-frame by the select below.
     let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(8);
@@ -290,6 +339,9 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
             }
             _ = tick.tick() => engine.on_tick().await,
             Some(ev) = bus_rx.recv() => engine.on_bus(ev),
+            Some(scan) = async { match scan_rx.as_mut() { Some(rx) => rx.recv().await, None => None } } => {
+                engine.on_scan(scan);
+            }
             f = frame_rx.recv() => match f {
                 Some(f) => engine.on_frame(f).await,
                 None => break,
@@ -298,7 +350,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     }
     reader.abort();
     engine.shutdown().await;
-    tracing::info!("atlas capture loop stopped");
+    tracing::info!("capture loop stopped");
 }
 
 #[cfg(test)]

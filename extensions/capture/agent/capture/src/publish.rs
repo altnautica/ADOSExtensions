@@ -1,4 +1,4 @@
-//! The atlas bus: the capture service publishes keyframes and capture state
+//! The private bus: the capture service publishes keyframes and capture state
 //! on a single Unix-socket broadcast, every message wrapped in an
 //! [`AtlasEvent`] tagged with its topic so a subscriber demultiplexes one
 //! connection. Heavy keyframe images (JPEG) ride the same bus; the frame cap is
@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ados_mapping_protocol::atlas::{
-    AtlasEvent, CaptureStatus, KeyframeEnvelope, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+    AtlasEvent, CaptureStatus, KeyframeEnvelope, CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC,
 };
 use ados_protocol::frame::{encode_frame, FrameError, PLUGIN_MAX_FRAME};
 use ados_protocol::ipc::IpcBroadcast;
@@ -16,7 +16,7 @@ use ados_protocol::ipc::IpcBroadcast;
 /// Per-client outbound queue depth. Keyframes are large and arrive at the
 /// selection rate (a few per second at most); 16 frames bounds memory while
 /// giving a transient stall room before the slow subscriber is pruned.
-const ATLAS_QUEUE_DEPTH: usize = 16;
+const BUS_QUEUE_DEPTH: usize = 16;
 
 /// Encode an [`AtlasEvent`] as a complete broadcast frame: a 4-byte big-endian
 /// length prefix followed by the msgpack body.
@@ -26,32 +26,32 @@ pub fn encode_event_frame(topic: &str, payload: Vec<u8>) -> anyhow::Result<Vec<u
     let ev = AtlasEvent::new(topic, None, payload);
     let body = ev
         .encode()
-        .map_err(|e| anyhow::anyhow!("encode atlas event: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("encode capture event: {e}"))?;
     encode_frame(&body, PLUGIN_MAX_FRAME)
-        .map_err(|e: FrameError| anyhow::anyhow!("frame atlas event ({} bytes): {e}", body.len()))
+        .map_err(|e: FrameError| anyhow::anyhow!("frame capture event ({} bytes): {e}", body.len()))
 }
 
-/// Owns the atlas bus socket and publishes typed events onto it. A clone
+/// Owns the private bus socket and publishes typed events onto it. A clone
 /// publishes onto the same bus (one socket, one set of subscribers), so a
 /// run task can publish beside the capture loop; the socket is removed when
 /// the last clone drops.
 #[derive(Clone)]
-pub struct AtlasPublisher {
+pub struct CapturePublisher {
     bus: Arc<IpcBroadcast>,
     /// Keyframes published with no subscriber connected — see
-    /// [`AtlasPublisher::publish_keyframe`].
+    /// [`CapturePublisher::publish_keyframe`].
     undelivered_keyframes: Arc<AtomicU64>,
 }
 
-impl AtlasPublisher {
-    /// Bind the atlas bus at `socket_path`. `keep_last = false`: the bus mixes
+impl CapturePublisher {
+    /// Bind the private bus at `socket_path`. `keep_last = false`: the bus mixes
     /// topics, so replaying only the single most-recent frame to a new
     /// subscriber would be misleading; subscribers receive events from the point
     /// they connect (capture state is re-published on every change).
     pub async fn bind(socket_path: &str) -> anyhow::Result<Self> {
         let (bus, _no_inbound) =
-            IpcBroadcast::bind(socket_path, ATLAS_QUEUE_DEPTH, false, None).await?;
-        tracing::info!(path = %socket_path, "atlas_bus_listening");
+            IpcBroadcast::bind(socket_path, BUS_QUEUE_DEPTH, false, None).await?;
+        tracing::info!(path = %socket_path, "capture_bus_listening");
         Ok(Self {
             bus: Arc::new(bus),
             undelivered_keyframes: Arc::new(AtomicU64::new(0)),
@@ -61,7 +61,7 @@ impl AtlasPublisher {
     async fn publish(&self, topic: &str, payload: Vec<u8>) {
         match encode_event_frame(topic, payload) {
             Ok(frame) => self.bus.broadcast(frame.into()).await,
-            Err(e) => tracing::warn!(topic, error = %e, "atlas_publish_encode_failed"),
+            Err(e) => tracing::warn!(topic, error = %e, "capture_publish_encode_failed"),
         }
     }
 
@@ -78,20 +78,20 @@ impl AtlasPublisher {
         let body = match kf.to_msgpack() {
             Ok(body) => body,
             Err(e) => {
-                tracing::warn!(error = %e, "atlas_keyframe_encode_failed");
+                tracing::warn!(error = %e, "capture_keyframe_encode_failed");
                 return 0;
             }
         };
         let evicted_before = self.bus.dropped_clients();
         let subscribers = self.bus.client_count().await;
-        self.publish(ATLAS_KEYFRAME_TOPIC, body).await;
+        self.publish(CAPTURE_KEYFRAME_TOPIC, body).await;
         let evicted = self.bus.dropped_clients() - evicted_before;
         if evicted > 0 {
             tracing::warn!(
                 session_id = %kf.session_id,
                 kf_id = kf.kf_id,
                 evicted,
-                "atlas_keyframe_subscriber_evicted"
+                "capture_keyframe_subscriber_evicted"
             );
         }
         if subscribers == 0 {
@@ -100,7 +100,7 @@ impl AtlasPublisher {
                 session_id = %kf.session_id,
                 kf_id = kf.kf_id,
                 undelivered = n,
-                "atlas_keyframe_reached_no_subscriber"
+                "capture_keyframe_reached_no_subscriber"
             );
             return 1;
         }
@@ -111,8 +111,8 @@ impl AtlasPublisher {
     /// every change and re-publishes it on a fixed cadence while running.
     pub async fn publish_capture_state(&self, status: &CaptureStatus) {
         match status.to_msgpack() {
-            Ok(body) => self.publish(ATLAS_CAPTURE_STATE_TOPIC, body).await,
-            Err(e) => tracing::warn!(error = %e, "atlas_state_encode_failed"),
+            Ok(body) => self.publish(CAPTURE_STATE_TOPIC, body).await,
+            Err(e) => tracing::warn!(error = %e, "capture_state_encode_failed"),
         }
     }
 }
@@ -141,12 +141,11 @@ mod tests {
     #[test]
     fn event_frame_round_trips_with_topic_and_payload() {
         let status = status();
-        let frame =
-            encode_event_frame(ATLAS_CAPTURE_STATE_TOPIC, status.to_msgpack().unwrap()).unwrap();
+        let frame = encode_event_frame(CAPTURE_STATE_TOPIC, status.to_msgpack().unwrap()).unwrap();
         let len = u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize;
         assert_eq!(len, frame.len() - 4);
         let ev = AtlasEvent::decode(&frame[4..]).unwrap();
-        assert_eq!(ev.topic, ATLAS_CAPTURE_STATE_TOPIC);
+        assert_eq!(ev.topic, CAPTURE_STATE_TOPIC);
         let back = CaptureStatus::from_msgpack(&ev.payload).unwrap();
         assert_eq!(back, status);
     }
@@ -156,8 +155,10 @@ mod tests {
         use tokio::io::AsyncReadExt;
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("atlas.sock");
-        let publisher = AtlasPublisher::bind(path.to_str().unwrap()).await.unwrap();
+        let path = dir.path().join("capture.sock");
+        let publisher = CapturePublisher::bind(path.to_str().unwrap())
+            .await
+            .unwrap();
         let shared = publisher.clone();
         let mut sub = tokio::net::UnixStream::connect(&path).await.unwrap();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -174,7 +175,7 @@ mod tests {
         let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
         sub.read_exact(&mut body).await.unwrap();
         let ev = AtlasEvent::decode(&body).unwrap();
-        assert_eq!(ev.topic, ATLAS_CAPTURE_STATE_TOPIC);
+        assert_eq!(ev.topic, CAPTURE_STATE_TOPIC);
         assert_eq!(CaptureStatus::from_msgpack(&ev.payload).unwrap(), status());
         // The socket lives until the last publisher goes.
         drop(publisher);

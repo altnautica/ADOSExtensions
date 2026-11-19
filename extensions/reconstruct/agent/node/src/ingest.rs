@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 
 use ados_mapping_protocol::atlas::{
     AtlasEvent, CaptureState, CaptureStatus, KeyframeBudget, KeyframeEnvelope, MapStatus,
-    PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+    PoseSource, VioHealth, CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC,
     PLUGIN_ATLAS_MAP_STATUS_TOPIC,
 };
 use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
@@ -205,7 +205,7 @@ impl AtlasIngest {
         now_ms: i64,
     ) -> std::io::Result<Option<(Dataset, JobRecord)>> {
         match event.topic.as_str() {
-            ATLAS_KEYFRAME_TOPIC => {
+            CAPTURE_KEYFRAME_TOPIC => {
                 self.keyframes_seen += 1;
                 match KeyframeEnvelope::from_msgpack(&event.payload) {
                     Ok(kf) => {
@@ -256,7 +256,7 @@ impl AtlasIngest {
                 }
                 Ok(None)
             }
-            ATLAS_CAPTURE_STATE_TOPIC => match CaptureStatus::from_msgpack(&event.payload) {
+            CAPTURE_STATE_TOPIC => match CaptureStatus::from_msgpack(&event.payload) {
                 Ok(status) if status.state == CaptureState::Bagged => {
                     self.note_device(&status.session_id, event.device_id.as_deref());
                     self.note_steps(&status);

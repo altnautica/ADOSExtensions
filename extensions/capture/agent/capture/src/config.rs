@@ -5,7 +5,7 @@
 //! enabled set drives one flow at any count (the fusion layer keys off the
 //! enabled count, it never forks on it).
 
-use crate::AtlasError;
+use crate::CaptureError;
 use ados_mapping_protocol::atlas::CameraRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -19,11 +19,11 @@ fn default_true() -> bool {
 
 /// One camera on the rig. `enabled` gates whether its frames are ingested at
 /// all; `reconstruct` is the per-camera hint to the compute node about whether
-/// this stream feeds the world-model reconstruction (a camera may be captured
+/// this stream feeds the reconstruction (a camera may be captured
 /// for situational video yet excluded from the splat).
 ///
 /// Every field but `id` carries a serde default so a minimal config entry
-/// (`{"id": "front"}` in `atlas.cameras`) deserializes.
+/// (`{"id": "front"}` in `capture.cameras`) deserializes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CameraConfig {
     pub id: String,
@@ -155,14 +155,14 @@ impl CaptureConfig {
     /// Validate the config before a session runs. A capture with no enabled
     /// camera produces nothing, and duplicate camera ids would collapse two
     /// physical streams onto one per-camera selector, so both are rejected.
-    pub fn validate(&self) -> Result<(), AtlasError> {
+    pub fn validate(&self) -> Result<(), CaptureError> {
         if self.enabled_camera_count() == 0 {
-            return Err(AtlasError::NoEnabledCameras);
+            return Err(CaptureError::NoEnabledCameras);
         }
         let mut seen = HashSet::new();
         for cam in &self.cameras {
             if !seen.insert(cam.id.as_str()) {
-                return Err(AtlasError::DuplicateCameraId(cam.id.clone()));
+                return Err(CaptureError::DuplicateCameraId(cam.id.clone()));
             }
         }
         Ok(())
@@ -229,7 +229,7 @@ mod tests {
             cameras: vec![cam("front", false)],
             ..Default::default()
         };
-        assert_eq!(cfg.validate(), Err(AtlasError::NoEnabledCameras));
+        assert_eq!(cfg.validate(), Err(CaptureError::NoEnabledCameras));
     }
 
     #[test]
@@ -240,7 +240,7 @@ mod tests {
         };
         assert_eq!(
             cfg.validate(),
-            Err(AtlasError::DuplicateCameraId("front".into()))
+            Err(CaptureError::DuplicateCameraId("front".into()))
         );
     }
 

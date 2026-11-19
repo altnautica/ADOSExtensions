@@ -1,23 +1,23 @@
-//! The drone-side Atlas forwarder.
+//! The drone-side keyframe forwarder.
 //!
-//! The capture service publishes pose-tagged keyframes, the live pose and the
-//! capture state onto its private bus (`atlas.sock`, one length-prefixed framed
+//! The capture service publishes pose-tagged keyframes and the capture state
+//! onto its private bus (`capture.sock`, one length-prefixed framed
 //! [`AtlasEvent`] per broadcast). This loop is their egress: it subscribes to
 //! the bus and forwards every event over the bearer ladder, direct LAN first,
 //! then the WFB relay for the field, then the plugin's cloud stream.
 //!
-//! The compute node is the pinned `offload.compute_node_addr` when set, else a
+//! The compute node is the pinned `capture.compute_node_addr` when set, else a
 //! compute node's job-API advert found over mDNS, preferring one that issued
-//! this drone a credential (see [`ados_mapping_transport::compute_node`]); its job-API base URL backs the
-//! direct-LAN bearer, which presents the credential that node issued.
-//! When the LAN bearer stops carrying, the loop re-resolves and rebuilds the
-//! ladder; while no LAN bearer is present it periodically re-browses so a node
-//! that boots after the drone is still picked up.
+//! this drone a credential (see [`ados_mapping_transport::compute_node`]); its
+//! job-API base URL backs the direct-LAN bearer, which presents the credential
+//! that node issued. When the LAN bearer stops carrying, the loop re-resolves
+//! and rebuilds the ladder; while no LAN bearer is present it periodically
+//! re-browses so a node that boots after the drone is still picked up.
 //!
-//! Inert while Atlas is disabled or the camera is not ready: it re-reads the
-//! `atlas.enabled` plugin config and the `node.info` camera readiness
-//! on a fixed interval before every bus connection and does no Atlas work while
-//! it is off.
+//! Inert while capture is disabled or the camera is not ready: it re-reads
+//! the `capture.enabled` plugin config and the `node.info` camera readiness
+//! on a fixed interval before every bus connection and does nothing while it
+//! is off.
 //!
 //! The transport facts only this loop knows (the resolved node, the carrying
 //! bearer, the last forwarded keyframe) live in the shared [`ForwardStatus`],
@@ -28,9 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ados_mapping_protocol::atlas::{
-    AtlasForwardStatus, ATLAS_FORWARD_STATUS_VERSION, ATLAS_KEYFRAME_TOPIC,
-    PLUGIN_ATLAS_LIDAR_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
-    PLUGIN_ATLAS_SCAN_TOPIC,
+    AtlasForwardStatus, ATLAS_FORWARD_STATUS_VERSION, CAPTURE_KEYFRAME_TOPIC,
 };
 use ados_mapping_transport::{
     AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer, WfbRelayBearer,
@@ -58,7 +56,7 @@ const LAN_MISS_THRESHOLD: u32 = 5;
 /// the socket on a cold boot.
 pub const CONNECT_RETRIES: u32 = 30;
 pub const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(500);
-/// How often a disabled forwarder re-reads the Atlas gate.
+/// How often a disabled forwarder re-reads the capture gate.
 const GATE_POLL: Duration = Duration::from_secs(5);
 
 /// The forwarder's transport facts, shared with the status writer and the
@@ -76,8 +74,6 @@ enum Forwarded {
     /// The framed body was not a valid event: logged, nothing sent (not a
     /// transport miss, so it never re-resolves the node).
     DecodeError,
-    /// A topic that stays on the drone ([`forwards_to_node`]).
-    Skipped,
 }
 
 /// Epoch milliseconds.
@@ -175,10 +171,10 @@ pub struct Forwarder {
 }
 
 impl Forwarder {
-    /// Run until `shutdown` flips. Inert while Atlas is disabled or the camera
+    /// Run until `shutdown` flips. Inert while capture is disabled or the camera
     /// is not ready (`node.info`).
     pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
-        tracing::info!("atlas forwarder starting");
+        tracing::info!("capture forwarder starting");
         // One cloud rung for the whole run, so its relay-down back-off survives
         // ladder rebuilds.
         let cloud = CloudPublishBearer::new(self.host.clone());
@@ -187,10 +183,10 @@ impl Forwarder {
             if *shutdown.borrow() {
                 break;
             }
-            let atlas_enabled = config_bool(self.host.as_ref(), "atlas.enabled", false).await;
-            // Camera readiness is read only while Atlas is on, so it is `None`
+            let capture_enabled = config_bool(self.host.as_ref(), "capture.enabled", false).await;
+            // Camera readiness is read only while capture is on, so it is `None`
             // (not read) rather than a `false` nobody measured.
-            let camera_ready = if atlas_enabled {
+            let camera_ready = if capture_enabled {
                 Some(
                     node_info(self.host.as_ref())
                         .await
@@ -203,13 +199,13 @@ impl Forwarder {
             if enabled != was_enabled {
                 match camera_ready {
                     Some(camera_ready) => tracing::info!(
-                        atlas_enabled,
+                        capture_enabled,
                         camera_ready,
-                        "atlas forwarder gate changed"
+                        "capture forwarder gate changed"
                     ),
                     None => tracing::info!(
-                        atlas_enabled,
-                        "atlas forwarder gate changed (camera readiness is not read while Atlas is disabled)"
+                        capture_enabled,
+                        "capture forwarder gate changed (camera readiness is not read while capture is disabled)"
                     ),
                 }
                 was_enabled = enabled;
@@ -228,14 +224,14 @@ impl Forwarder {
                 {
                     Ok(s) => s,
                     Err(e) => {
-                        tracing::debug!(error = %e, "atlas bus not reachable; retrying");
+                        tracing::debug!(error = %e, "capture bus not reachable; retrying");
                         if sleep_or_shutdown(&mut shutdown, RECONNECT_DELAY).await {
                             break;
                         }
                         continue;
                     }
                 };
-            tracing::info!(socket = %self.bus_socket.display(), "atlas forwarder subscribed to the bus");
+            tracing::info!(socket = %self.bus_socket.display(), "capture forwarder subscribed to the bus");
 
             let (mut ladder, node_id) = self.build_ladder(&cloud).await;
             let mut have_lan = node_id.is_some();
@@ -281,13 +277,13 @@ impl Forwarder {
                         if lan_lost || want_discover {
                             if lan_lost {
                                 tracing::info!(
-                                    "atlas LAN bearer stopped carrying; re-resolving compute node"
+                                    "capture LAN bearer stopped carrying; re-resolving compute node"
                                 );
                             }
                             let (l, node_id) = self.build_ladder(&cloud).await;
                             let lan = node_id.is_some();
                             if lan && !have_lan {
-                                tracing::info!("atlas forwarder discovered a compute node");
+                                tracing::info!("capture forwarder discovered a compute node");
                             }
                             self.status.lock().note_node(node_id);
                             ladder = l;
@@ -297,11 +293,11 @@ impl Forwarder {
                         }
                     }
                     Ok(None) => {
-                        tracing::debug!("atlas bus closed; reconnecting");
+                        tracing::debug!("capture bus closed; reconnecting");
                         break;
                     }
                     Err(e) => {
-                        tracing::debug!(error = %e, "atlas bus read error; reconnecting");
+                        tracing::debug!(error = %e, "capture bus read error; reconnecting");
                         break;
                     }
                 }
@@ -310,7 +306,7 @@ impl Forwarder {
                 break;
             }
         }
-        tracing::info!("atlas forwarder stopped");
+        tracing::info!("capture forwarder stopped");
     }
 
     /// Resolve the compute node (a pinned address, else mDNS) and build the
@@ -329,14 +325,14 @@ impl Forwarder {
         {
             Some(node) => {
                 let base = node.base_url();
-                tracing::info!(base = %base, node = ?node.device_id, "atlas forwarder resolved compute node");
+                tracing::info!(base = %base, node = ?node.device_id, "capture forwarder resolved compute node");
                 let credential = node.credential(&self.credentials, &ATLAS_INGEST_LANE).ok();
                 bearers.push(Box::new(LanHttpBearer::new(base, credential)));
                 let addr = node.addr();
                 Some(node.device_id.unwrap_or(addr))
             }
             None => {
-                tracing::debug!("atlas forwarder: no compute node yet");
+                tracing::debug!("capture forwarder: no compute node yet");
                 None
             }
         };
@@ -346,22 +342,6 @@ impl Forwarder {
         bearers.push(Box::new(cloud.clone()));
         (BearerLadder::new(bearers), node_id)
     }
-}
-
-/// Whether an event on `topic` goes to the compute node. The drone's live map
-/// lanes (the binned scan, the live occupancy tiles and sweep-cloud deltas)
-/// are for operator surfaces on the plugin bus; a streaming drone sends the
-/// node raw polar scans (`atlas.scan`) instead, and those lanes would crowd
-/// keyframes off a constrained bearer. The LiDAR link status is for the
-/// operator and the agent only.
-pub fn forwards_to_node(topic: &str) -> bool {
-    !matches!(
-        topic,
-        PLUGIN_ATLAS_SCAN_TOPIC
-            | PLUGIN_ATLAS_OCCUPANCY_TOPIC
-            | PLUGIN_ATLAS_POINTCLOUD_TOPIC
-            | PLUGIN_ATLAS_LIDAR_TOPIC
-    )
 }
 
 /// Decode one framed [`AtlasEvent`] body, stamp the capturing drone's device id,
@@ -375,27 +355,24 @@ async fn forward_event(ladder: &BearerLadder, body: &[u8], device_id: &str) -> F
     let mut event = match AtlasEvent::decode(body) {
         Ok(ev) => ev,
         Err(e) => {
-            tracing::warn!(error = %e, "atlas forwarder dropped a malformed event");
+            tracing::warn!(error = %e, "capture forwarder dropped a malformed event");
             return Forwarded::DecodeError;
         }
     };
-    if !forwards_to_node(&event.topic) {
-        return Forwarded::Skipped;
-    }
     if !device_id.is_empty() {
         event.device_id = Some(device_id.to_string());
     }
-    let keyframe = event.topic == ATLAS_KEYFRAME_TOPIC;
+    let keyframe = event.topic == CAPTURE_KEYFRAME_TOPIC;
     match ladder.send(&event).await {
         Ok(kind) => {
-            tracing::debug!(topic = %event.topic, bearer = ?kind, bytes = event.payload.len(), "atlas event forwarded");
+            tracing::debug!(topic = %event.topic, bearer = ?kind, bytes = event.payload.len(), "capture event forwarded");
             Forwarded::Decoded {
                 carried: Some(kind),
                 keyframe,
             }
         }
         Err(e) => {
-            tracing::debug!(topic = %event.topic, error = %e, "atlas event not forwarded (all bearers declined)");
+            tracing::debug!(topic = %event.topic, error = %e, "capture event not forwarded (all bearers declined)");
             Forwarded::Decoded {
                 carried: None,
                 keyframe,
@@ -412,7 +389,7 @@ mod tests {
     fn carried_kind(f: &Forwarded) -> Option<BearerKind> {
         match f {
             Forwarded::Decoded { carried, .. } => *carried,
-            Forwarded::DecodeError | Forwarded::Skipped => None,
+            Forwarded::DecodeError => None,
         }
     }
 
@@ -420,7 +397,7 @@ mod tests {
     async fn forward_event_carries_a_decoded_event_stamped_with_the_device_id() {
         let (bearer, mut rx) = LoopbackBearer::channel();
         let ladder = BearerLadder::new(vec![Box::new(bearer)]);
-        let ev = AtlasEvent::new(ATLAS_KEYFRAME_TOPIC, None, vec![1, 2, 3]);
+        let ev = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![1, 2, 3]);
         let body = ev.encode().unwrap();
 
         match forward_event(&ladder, &body, "drone-7").await {
@@ -445,7 +422,7 @@ mod tests {
     async fn an_empty_device_id_leaves_the_event_unstamped() {
         let (bearer, mut rx) = LoopbackBearer::channel();
         let ladder = BearerLadder::new(vec![Box::new(bearer)]);
-        let body = AtlasEvent::new("atlas.capture.state", None, vec![1])
+        let body = AtlasEvent::new("capture.state", None, vec![1])
             .encode()
             .unwrap();
         forward_event(&ladder, &body, "").await;
@@ -517,26 +494,5 @@ mod tests {
         assert_eq!(bearer_label(BearerKind::DirectLan), "direct-lan");
         assert_eq!(bearer_label(BearerKind::WfbRelay), "wfb-relay");
         assert_eq!(bearer_label(BearerKind::Cloud), "cloud");
-    }
-
-    #[test]
-    fn the_live_map_lanes_stay_on_the_drone() {
-        for topic in [
-            PLUGIN_ATLAS_SCAN_TOPIC,
-            PLUGIN_ATLAS_OCCUPANCY_TOPIC,
-            PLUGIN_ATLAS_POINTCLOUD_TOPIC,
-            "plugin.world-engine.lidar",
-        ] {
-            assert!(!forwards_to_node(topic), "{topic}");
-        }
-        for topic in [
-            ATLAS_KEYFRAME_TOPIC,
-            "atlas.scan",
-            "plugin.world-engine.pose",
-            "plugin.world-engine.map_status",
-            "atlas.capture.state",
-        ] {
-            assert!(forwards_to_node(topic), "{topic}");
-        }
     }
 }

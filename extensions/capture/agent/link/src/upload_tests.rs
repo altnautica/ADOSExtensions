@@ -391,7 +391,8 @@ async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason()
     // nothing is blocked, whatever the store holds.
     std::fs::remove_file(&creds).unwrap();
     host.set_config(AUTO_UPLOAD_KEY, json!(false));
-    host.set_config(COMPUTE_PLACEMENT_KEY, json!("onboard"));
+    m.placement()
+        .set(std::time::Instant::now(), ComputePlacement::Onboard);
     assert!(!m.auto_gate(&control, &power).await);
     assert_eq!(m.view(&dir, 0).state, UploadState::Queued);
 }
@@ -399,9 +400,8 @@ async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason()
 #[test]
 fn post_flight_and_hybrid_placements_upload_after_landing() {
     assert!(placement_uploads(None), "hybrid is the default");
-    assert!(placement_uploads(Some("hybrid")));
-    assert!(placement_uploads(Some("post_flight")));
-    assert!(!placement_uploads(Some("onboard")));
-    assert!(!placement_uploads(Some("stream")));
-    assert!(!placement_uploads(Some("bogus")));
+    assert!(placement_uploads(Some(ComputePlacement::Hybrid)));
+    assert!(placement_uploads(Some(ComputePlacement::PostFlight)));
+    assert!(!placement_uploads(Some(ComputePlacement::Onboard)));
+    assert!(!placement_uploads(Some(ComputePlacement::Stream)));
 }

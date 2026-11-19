@@ -36,7 +36,7 @@ pub const PIN_KEY: &str = "reconstruct.offload.compute_node_addr";
 pub const ENABLED_KEY: &str = "reconstruct.offload.enabled";
 /// The id the vision engine captures the primary camera under, when it is
 /// not the `main` tap.
-pub const CAMERA_KEY: &str = "reconstruct.offload.camera";
+pub const CAMERA_KEY: &str = "reconstruct.offload_camera";
 
 /// How long `on_stop` waits for each task to wind down.
 const STOP_GRACE: Duration = Duration::from_secs(5);

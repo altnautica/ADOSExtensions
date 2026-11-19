@@ -1,16 +1,16 @@
 //! The two routes the agent itself serves, relayed through host methods (the
 //! sandbox cannot reach the agent's own listeners):
 //!
-//! - `POST /atlas/capture/whep?camera=<id>` (body: the SDP offer,
+//! - `POST /capture/whep?camera=<id>` (body: the SDP offer,
 //!   `application/sdp`) → `201` with the SDP answer and a `Location` of
 //!   `whep?location=<opaque>` (relative to this route), through
 //!   `video.whep.offer`. `<id>` is the camera's own id (`[A-Za-z0-9_-]+`); the
 //!   host resolves it to the media leg that serves it (the primary camera to
 //!   `main`) and refuses one that is not a configured, enabled camera (`404
 //!   E_UNKNOWN_CAMERA`).
-//! - `DELETE /atlas/capture/whep?location=<opaque>` → `{"ok":true}`, through
+//! - `DELETE /capture/whep?location=<opaque>` → `{"ok":true}`, through
 //!   `video.whep.close`.
-//! - `PUT /atlas/rig` (a contract rig document): checked locally (`400
+//! - `PUT /capture/rig` (a contract rig document): checked locally (`400
 //!   E_RIG_INVALID`), then relayed through `sensors.rig.write` to core `PUT
 //!   /api/v1/sensors/rig`; the core status and body are returned verbatim.
 //!
@@ -36,8 +36,8 @@ const MAX_SDP: usize = 64 * 1024;
 
 pub fn routes() -> Router<DroneApi> {
     Router::new()
-        .route("/atlas/capture/whep", post(whep_offer).delete(whep_close))
-        .route("/atlas/rig", put(put_rig))
+        .route("/capture/whep", post(whep_offer).delete(whep_close))
+        .route("/capture/rig", put(put_rig))
 }
 
 /// A host-method failure as a route refusal.

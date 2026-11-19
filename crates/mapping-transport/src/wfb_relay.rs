@@ -159,15 +159,15 @@ mod tests {
         let bearer = WfbRelayBearer::new(lane.clone());
 
         bearer
-            .send(&event("atlas.pose", vec![1, 2, 3, 4]))
+            .send(&event("capture.pose", vec![1, 2, 3, 4]))
             .await
             .unwrap();
-        bearer.send(&event("atlas.pose", vec![5])).await.unwrap();
+        bearer.send(&event("capture.pose", vec![5])).await.unwrap();
 
         let sent = lane.sent.lock().await;
         assert_eq!(sent.len(), 2);
         let got = AtlasEvent::decode(&sent[0]).unwrap();
-        assert_eq!(got.topic, "atlas.pose");
+        assert_eq!(got.topic, "capture.pose");
         assert_eq!(got.payload, vec![1, 2, 3, 4]);
         assert_eq!(*lane.opens.lock().await, 1, "the lane is opened once");
         assert!(bearer.is_available().await);
@@ -179,7 +179,7 @@ mod tests {
         let bearer = WfbRelayBearer::with_limit(lane.clone(), 16);
 
         let err = bearer
-            .send(&event("atlas.keyframe", vec![0u8; 4096]))
+            .send(&event("capture.keyframe", vec![0u8; 4096]))
             .await
             .unwrap_err();
         assert!(matches!(err, TransportError::PayloadTooLarge(_)));
@@ -197,7 +197,7 @@ mod tests {
         let bearer = WfbRelayBearer::new(lane.clone());
         assert!(!bearer.is_available().await);
         let err = bearer
-            .send(&event("atlas.pose", vec![1]))
+            .send(&event("capture.pose", vec![1]))
             .await
             .unwrap_err();
         assert!(matches!(err, TransportError::Unavailable));

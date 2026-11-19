@@ -2,28 +2,28 @@
 //! `/api/plugins/<id>/x/<rest>` here as `/<rest>`, already authenticated).
 //!
 //! Drone and Visor:
-//! - `GET /atlas/readiness`: whether this device can build a world model and
-//!   whether it is capturing now: `enabled` / `cameras_configured` /
-//!   `capture_profile` / `pose_source` (the configured `atlas.pose_provider`:
-//!   `auto|fc_ekf|vio|lidar`) / `reconstruct_steps` from the plugin config,
-//!   the live `state` / `capturing` / `session_id` / `service_running` from
-//!   the capture service's control socket, and the `compute_node_id` the
-//!   forwarder is streaming to.
-//! - `PUT /atlas/config`: patch the Atlas plugin config (enable, capture
-//!   profile, reconstruction steps, camera set). Nothing is restarted: the
-//!   capture service re-reads its config every 5 s.
+//! - `GET /capture/readiness`: whether this device can capture and whether it
+//!   is capturing now: `enabled` / `cameras_configured` / `capture_profile` /
+//!   `pose_source` (`capture.pose_source`: `auto|fc_ekf|navigation`) /
+//!   `reconstruct_steps` from the plugin config, the live `state` /
+//!   `capturing` / `session_id` / `service_running` from the capture
+//!   service's control socket, and the `compute_node_id` the forwarder is
+//!   streaming to.
+//! - `PUT /capture/config`: patch Capture's `capture.*` keys (a flat map of
+//!   dotted keys). A key another extension owns is refused naming its owner.
+//!   Nothing is restarted: the capture service re-reads its config every 5 s.
 //! - The capture session ([`crate::capture_api`]), the WHEP preview and rig
 //!   relays ([`crate::device_api`]), recorded sessions and their upload
 //!   ([`crate::sessions_api`]), reconstruction on the paired node
 //!   ([`crate::jobs_api`]) and the calibration store ([`crate::calib_api`]).
-//! - `GET /compute/status`: a drone has no compute heartbeat, so always the
-//!   not-a-compute-node 404.
-//! - `POST /node-credential`: see [`ados_mapping_transport::credentials`].
+//! - `POST /capture/node-credential`: see
+//!   [`ados_mapping_transport::credentials`].
 //!
 //! Ground station:
-//! - `GET /atlas-relay/status`: the relay's live counters.
-//! - `POST /node-credential`.
+//! - `GET /capture/relay/status`: the relay's live counters.
+//! - `POST /capture/node-credential`.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -34,7 +34,6 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, put};
 use axum::{Json, Router};
 use rmpv::Value as Mpv;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::control::{ControlClient, LiveCapture};
@@ -51,8 +50,41 @@ const VALID_CAPTURE_PROFILES: [&str; 4] = ["orbit", "lawnmower", "freeform", "in
 const VALID_CAMERA_ROLES: [&str; 7] = ["primary", "aux", "down", "left", "right", "back", "up"];
 /// The default reconstruction detail level (training steps).
 const DEFAULT_RECONSTRUCT_STEPS: u64 = 30_000;
-/// The pose providers `atlas.pose_provider` selects between.
-const POSE_PROVIDERS: [&str; 4] = ["auto", "fc_ekf", "vio", "lidar"];
+/// The pose sources `capture.pose_source` selects between.
+const POSE_SOURCES: [&str; 3] = ["auto", "fc_ekf", "navigation"];
+
+/// Every key `PUT /capture/config` writes (the leaves of an object-valued key
+/// such as `capture.selection` are written whole under it).
+pub const CAPTURE_KEYS: [&str; 22] = [
+    "capture.enabled",
+    "capture.capture_profile",
+    "capture.reconstruct_steps",
+    "capture.cameras",
+    "capture.pose_prior",
+    "capture.selection.min_translation_m",
+    "capture.selection.min_rotation_rad",
+    "capture.selection.max_interval_ms",
+    "capture.selection.max_keyframes",
+    "capture.intrinsics",
+    "capture.record_on_start",
+    "capture.image_encoding",
+    "capture.mains_hz",
+    "capture.exposure",
+    "capture.segment",
+    "capture.auto_upload",
+    "capture.rig_id",
+    "capture.pose_source",
+    "capture.memory_budget_mb",
+    "capture.compute_node_addr",
+    "capture.relay.enabled",
+    "capture.relay.compute_base_url",
+];
+
+/// The extension a key outside Capture's set belongs to, by namespace.
+const OWNERS: [(&str, &str); 2] = [
+    ("navigation.", "Navigation"),
+    ("reconstruct.", "Reconstruct"),
+];
 
 /// An error body: `{"detail": message}`.
 pub fn detail(status: StatusCode, message: impl Into<String>) -> Response {
@@ -79,35 +111,27 @@ pub struct DroneApi {
 pub fn drone_router(api: DroneApi) -> Router {
     let credentials = api.credentials.clone();
     Router::new()
-        .route("/atlas/readiness", get(get_readiness))
-        .route("/atlas/config", put(put_config))
-        .route("/compute/status", get(get_compute_status))
+        .route("/capture/readiness", get(get_readiness))
+        .route("/capture/config", put(put_config))
         .merge(capture_api::routes())
         .merge(sessions_api::routes())
         .merge(jobs_api::routes())
         .merge(calib_api::routes())
         .merge(device_api::routes())
         .with_state(api)
-        .merge(credentials::router("/node-credential", credentials))
+        .merge(credentials::router("/capture/node-credential", credentials))
 }
 
 /// The ground-station router.
 pub fn ground_router(snapshot: SharedSnapshot, credentials: CredentialStore) -> Router {
     Router::new()
-        .route("/atlas-relay/status", get(get_relay_status))
+        .route("/capture/relay/status", get(get_relay_status))
         .with_state(snapshot)
-        .merge(credentials::router("/node-credential", credentials))
+        .merge(credentials::router("/capture/node-credential", credentials))
 }
 
 async fn get_relay_status(State(snapshot): State<SharedSnapshot>) -> Response {
     Json(status_body(snapshot.lock().as_ref())).into_response()
-}
-
-async fn get_compute_status() -> Response {
-    detail(
-        StatusCode::NOT_FOUND,
-        "no compute status (not a compute node, or the compute daemon is not running)",
-    )
 }
 
 /// The stable wire string for a capture state.
@@ -123,27 +147,27 @@ fn capture_state_str(state: CaptureState) -> &'static str {
 
 async fn get_readiness(State(api): State<DroneApi>) -> Response {
     let host = api.host.as_ref();
-    let enabled = config_json(host, "atlas.enabled")
+    let enabled = config_json(host, "capture.enabled")
         .await
         .as_bool()
         .unwrap_or(false);
-    let capture_profile = config_json(host, "atlas.capture_profile")
+    let capture_profile = config_json(host, "capture.capture_profile")
         .await
         .as_str()
         .unwrap_or("freeform")
         .to_string();
-    let reconstruct_steps = config_json(host, "atlas.reconstruct_steps")
+    let reconstruct_steps = config_json(host, "capture.reconstruct_steps")
         .await
         .as_u64()
         .filter(|n| *n > 0)
         .unwrap_or(DEFAULT_RECONSTRUCT_STEPS);
-    let pose_provider = config_json(host, "atlas.pose_provider")
+    let pose_source = config_json(host, "capture.pose_source")
         .await
         .as_str()
-        .filter(|p| POSE_PROVIDERS.contains(p))
+        .filter(|p| POSE_SOURCES.contains(p))
         .unwrap_or("auto")
         .to_string();
-    let cameras_configured = config_json(host, "atlas.cameras")
+    let cameras_configured = config_json(host, "capture.cameras")
         .await
         .as_array()
         .map(|cams| {
@@ -198,7 +222,7 @@ async fn get_readiness(State(api): State<DroneApi>) -> Response {
         "capture_profile": capture_profile,
         "reconstruct_steps": reconstruct_steps,
         "cameras_configured": cameras_configured,
-        "pose_source": pose_provider,
+        "pose_source": pose_source,
         "service_running": service_running,
         "capturing": capturing,
         "state": state,
@@ -211,102 +235,97 @@ async fn get_readiness(State(api): State<DroneApi>) -> Response {
     .into_response()
 }
 
-/// The `PUT /atlas/config` body. Every field is optional (patch semantics):
-/// only the provided keys are written.
-#[derive(Debug, Deserialize)]
-struct AtlasConfigBody {
-    enabled: Option<bool>,
-    /// `orbit` / `lawnmower` / `freeform` / `inspection`.
-    capture_profile: Option<String>,
-    /// Default reconstruction detail level, in training steps. The GCS reads it
-    /// at reconstruct-submit time, and the capture service carries it on every
-    /// capture status so the compute node's own reconstruct jobs use it too.
-    reconstruct_steps: Option<u32>,
-    /// The camera set, each `{id, role, enabled, reconstruct}`, written verbatim.
-    cameras: Option<Value>,
+/// Why `key` with `value` cannot be written, or `None` when it can. A key
+/// another extension owns names that owner.
+fn refusal(key: &str, value: &Value) -> Option<String> {
+    if !CAPTURE_KEYS.contains(&key) {
+        return Some(match OWNERS.iter().find(|(ns, _)| key.starts_with(ns)) {
+            Some((_, owner)) => format!("`{key}` belongs to {owner}; set it on that extension"),
+            None => format!("`{key}` is not a Capture setting"),
+        });
+    }
+    let one_of = |set: &[&str]| {
+        value
+            .as_str()
+            .filter(|s| set.contains(s))
+            .map(|_| ())
+            .ok_or_else(|| format!("`{key}` is one of {}, got {value}", set.join(" / ")))
+    };
+    let checked = match key {
+        "capture.enabled" | "capture.record_on_start" | "capture.auto_upload" => value
+            .as_bool()
+            .map(|_| ())
+            .ok_or_else(|| format!("`{key}` is true or false, got {value}")),
+        "capture.capture_profile" => one_of(&VALID_CAPTURE_PROFILES),
+        "capture.pose_source" => one_of(&POSE_SOURCES),
+        "capture.reconstruct_steps" => value
+            .as_u64()
+            .filter(|n| (1000..=200_000).contains(n))
+            .map(|_| ())
+            .ok_or_else(|| format!("`{key}` is 1000..=200000, got {value}")),
+        "capture.cameras" => cameras_ok(value),
+        _ => Ok(()),
+    };
+    checked.err()
 }
 
-/// Validate the patch before any write: an out-of-set profile or camera role
-/// would fail the capture service's config parse, so it is caught here. `Err`
-/// carries the 400 detail.
-fn validate_config_body(body: &AtlasConfigBody) -> Result<(), String> {
-    if let Some(profile) = body.capture_profile.as_deref() {
-        if !profile.is_empty() && !VALID_CAPTURE_PROFILES.contains(&profile) {
-            return Err(format!(
-                "invalid capture_profile `{profile}` (expected one of {})",
-                VALID_CAPTURE_PROFILES.join(" / ")
-            ));
-        }
-    }
-    if let Some(steps) = body.reconstruct_steps {
-        if !(1000..=200_000).contains(&steps) {
-            return Err(format!(
-                "invalid reconstruct_steps `{steps}` (expected 1000..=200000)"
-            ));
-        }
-    }
-    if let Some(cameras) = body.cameras.as_ref().and_then(Value::as_array) {
-        for cam in cameras {
-            if let Some(role) = cam.get("role") {
-                let ok = role
-                    .as_str()
-                    .is_some_and(|r| VALID_CAMERA_ROLES.contains(&r));
-                if !ok {
-                    return Err(format!(
-                        "invalid camera role {role} (expected one of {})",
-                        VALID_CAMERA_ROLES.join(" / ")
-                    ));
-                }
+/// A camera set is an array whose roles the capture service accepts.
+fn cameras_ok(value: &Value) -> Result<(), String> {
+    let cams = value
+        .as_array()
+        .ok_or_else(|| format!("`capture.cameras` is an array, got {value}"))?;
+    for cam in cams {
+        if let Some(role) = cam.get("role") {
+            if !role
+                .as_str()
+                .is_some_and(|r| VALID_CAMERA_ROLES.contains(&r))
+            {
+                return Err(format!(
+                    "invalid camera role {role} (expected one of {})",
+                    VALID_CAMERA_ROLES.join(" / ")
+                ));
             }
         }
     }
     Ok(())
 }
 
-/// The config writes a patch makes, in order.
-fn config_writes(body: &AtlasConfigBody) -> Result<Vec<(&'static str, Mpv)>, String> {
-    let mut writes = Vec::new();
-    if let Some(enabled) = body.enabled {
-        writes.push(("atlas.enabled", Mpv::Boolean(enabled)));
-    }
-    if let Some(profile) = body.capture_profile.as_deref().filter(|s| !s.is_empty()) {
-        writes.push(("atlas.capture_profile", Mpv::from(profile)));
-    }
-    if let Some(steps) = body.reconstruct_steps {
-        writes.push(("atlas.reconstruct_steps", Mpv::from(steps)));
-    }
-    if let Some(cameras) = &body.cameras {
+/// The config writes a patch makes, every key checked before any is
+/// written. `Err` carries the 400 detail.
+pub fn config_writes(patch: &BTreeMap<String, Value>) -> Result<Vec<(String, Mpv)>, String> {
+    let mut writes = Vec::with_capacity(patch.len());
+    for (key, value) in patch {
+        if let Some(why) = refusal(key, value) {
+            return Err(why);
+        }
         writes.push((
-            "atlas.cameras",
-            rmpv::ext::to_value(cameras).map_err(|e| e.to_string())?,
+            key.clone(),
+            rmpv::ext::to_value(value).map_err(|e| e.to_string())?,
         ));
     }
     Ok(writes)
 }
 
-async fn put_config(State(api): State<DroneApi>, Json(body): Json<AtlasConfigBody>) -> Response {
-    if let Err(msg) = validate_config_body(&body) {
-        return detail(StatusCode::BAD_REQUEST, msg);
-    }
-    let writes = match config_writes(&body) {
+async fn put_config(
+    State(api): State<DroneApi>,
+    Json(patch): Json<BTreeMap<String, Value>>,
+) -> Response {
+    let writes = match config_writes(&patch) {
         Ok(w) => w,
-        Err(msg) => return detail(StatusCode::INTERNAL_SERVER_ERROR, msg),
+        Err(msg) => return detail(StatusCode::BAD_REQUEST, msg),
     };
     for (key, value) in writes {
-        if let Err(e) = api.host.config_set(key, value).await {
+        if let Err(e) = api.host.config_set(&key, value).await {
             return detail(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("could not write {key}: {e}"),
             );
         }
     }
-    let enabled = match body.enabled {
-        Some(e) => e,
-        None => config_json(api.host.as_ref(), "atlas.enabled")
-            .await
-            .as_bool()
-            .unwrap_or(false),
-    };
+    let enabled = config_json(api.host.as_ref(), "capture.enabled")
+        .await
+        .as_bool()
+        .unwrap_or(false);
     Json(json!({
         "status": "ok",
         "enabled": enabled,

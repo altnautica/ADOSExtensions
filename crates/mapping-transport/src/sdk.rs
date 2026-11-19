@@ -24,15 +24,9 @@ use tokio::time::Instant;
 
 use crate::host::{reply_error, reply_field, reply_ok, Host};
 
-/// The aux channel the drone-to-ground Atlas stream rides.
+/// The aux channel the drone-to-ground capture stream rides.
 const APP_STREAM: u8 = AuxChannel::AppStream as u8;
 
-/// The shared-topic namespace stripped from an event topic to name its cloud
-/// stream (`plugin.world-engine.pose` rides `atlas.pose`).
-const SHARED_TOPIC_PREFIX: &str = "plugin.world-engine.";
-/// The internal-topic namespace stripped the same way (`atlas.keyframe` rides
-/// `atlas.keyframe`).
-const INTERNAL_TOPIC_PREFIX: &str = "atlas.";
 /// The longest cloud stream name the host accepts.
 const MAX_STREAM_LEN: usize = 64;
 
@@ -90,23 +84,16 @@ impl AuxLane for SdkAuxLane {
     }
 }
 
-/// The cloud stream an Atlas event topic rides: `atlas.<leaf>`, where the leaf
-/// is the topic without its `plugin.world-engine.` or `atlas.` namespace (dots
-/// kept). `None` for a topic that yields no leaf or no valid stream name.
+/// The cloud stream an event topic rides: the topic itself (every topic is
+/// already namespaced by its extension, `capture.keyframe`). `None` for a
+/// name the host would refuse.
 pub fn cloud_stream(topic: &str) -> Option<String> {
-    let leaf = topic
-        .strip_prefix(SHARED_TOPIC_PREFIX)
-        .or_else(|| topic.strip_prefix(INTERNAL_TOPIC_PREFIX))
-        .unwrap_or(topic);
-    if leaf.is_empty() {
-        return None;
-    }
-    let stream = format!("{INTERNAL_TOPIC_PREFIX}{leaf}");
-    let valid = stream.len() <= MAX_STREAM_LEN
-        && stream
+    let valid = !topic.is_empty()
+        && topic.len() <= MAX_STREAM_LEN
+        && topic
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b));
-    valid.then_some(stream)
+    valid.then(|| topic.to_string())
 }
 
 /// The last rung of the bearer ladder: the whole framed [`AtlasEvent`] published
@@ -258,40 +245,30 @@ mod tests {
     }
 
     #[test]
-    fn cloud_streams_drop_the_namespace_and_keep_the_dots() {
+    fn a_topic_rides_the_cloud_stream_of_its_own_name_when_the_host_takes_it() {
         assert_eq!(
-            cloud_stream("plugin.world-engine.pose").as_deref(),
-            Some("atlas.pose")
+            cloud_stream("capture.keyframe").as_deref(),
+            Some("capture.keyframe")
         );
         assert_eq!(
-            cloud_stream("atlas.keyframe").as_deref(),
-            Some("atlas.keyframe")
+            cloud_stream("capture.state").as_deref(),
+            Some("capture.state")
         );
-        assert_eq!(
-            cloud_stream("atlas.pose.offload").as_deref(),
-            Some("atlas.pose.offload")
-        );
-        assert_eq!(
-            cloud_stream("atlas.capture.state").as_deref(),
-            Some("atlas.capture.state")
-        );
-        // A bare namespace has no leaf; a name the host would refuse is not built.
-        assert_eq!(cloud_stream("atlas."), None);
-        assert_eq!(cloud_stream("plugin.world-engine."), None);
-        assert_eq!(cloud_stream("atlas.Bad/Topic"), None);
-        assert_eq!(cloud_stream(&format!("atlas.{}", "x".repeat(64))), None);
+        assert_eq!(cloud_stream(""), None);
+        assert_eq!(cloud_stream("capture.Bad/Topic"), None);
+        assert_eq!(cloud_stream(&format!("capture.{}", "x".repeat(64))), None);
     }
 
     #[tokio::test]
-    async fn a_descriptor_publishes_the_whole_envelope_on_its_stream() {
+    async fn an_event_publishes_the_whole_envelope_on_its_stream() {
         let host = FakeHost::new();
         let bearer = CloudPublishBearer::new(host.clone());
-        let ev = event("plugin.world-engine.occupancy", vec![1, 2, 3]);
+        let ev = event("capture.keyframe", vec![1, 2, 3]);
         bearer.send(&ev).await.unwrap();
 
         let pubs = host.cloud.lock();
         assert_eq!(pubs.len(), 1);
-        assert_eq!(pubs[0].0, "atlas.occupancy");
+        assert_eq!(pubs[0].0, "capture.keyframe");
         assert_eq!(AtlasEvent::decode(&pubs[0].1).unwrap(), ev);
     }
 
@@ -300,7 +277,7 @@ mod tests {
         let host = FakeHost::new();
         let bearer = CloudPublishBearer::new(host.clone());
         let err = bearer
-            .send(&event("atlas.keyframe", vec![0u8; MAX_PAYLOAD]))
+            .send(&event("capture.keyframe", vec![0u8; MAX_PAYLOAD]))
             .await
             .unwrap_err();
         assert!(matches!(err, TransportError::PayloadTooLarge(n) if n > MAX_PAYLOAD));
@@ -316,13 +293,13 @@ mod tests {
         assert!(bearer.is_available().await);
 
         let err = bearer
-            .send(&event("atlas.pose", vec![1]))
+            .send(&event("capture.pose", vec![1]))
             .await
             .unwrap_err();
         assert!(matches!(err, TransportError::Unavailable));
         // Down: the ladder skips the rung, and a send does not reach the host.
         assert!(!bearer.is_available().await);
-        assert!(bearer.send(&event("atlas.pose", vec![2])).await.is_err());
+        assert!(bearer.send(&event("capture.pose", vec![2])).await.is_err());
         assert_eq!(host.cloud.lock().len(), 1);
 
         // After the back-off the rung is offered again; the relay is back up, so
@@ -330,7 +307,7 @@ mod tests {
         tokio::time::advance(CLOUD_RETRY_AFTER).await;
         *host.cloud_reply.lock() = FakeHost::ok();
         assert!(bearer.is_available().await);
-        bearer.send(&event("atlas.pose", vec![3])).await.unwrap();
+        bearer.send(&event("capture.pose", vec![3])).await.unwrap();
         assert!(bearer.is_available().await);
         assert_eq!(host.cloud.lock().len(), 2);
     }

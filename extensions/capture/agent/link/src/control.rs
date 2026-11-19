@@ -1,7 +1,7 @@
 //! The capture service's control-socket client (protocol v2,
 //! [`ados_mapping_protocol::capture_ctl`]).
 //!
-//! The capture service binds `atlas-control.sock` in the extension's private
+//! The capture service binds `capture-control.sock` in the extension's private
 //! socket directory. One connection per exchange: one newline-delimited JSON
 //! [`CtlRequest`] in, one newline-delimited JSON [`CtlReply`] out. A refusal
 //! (`ok: false`) surfaces as [`ControlError::Refused`] with its code.
@@ -29,13 +29,13 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 #[derive(Debug, Error)]
 pub enum ControlError {
     /// The control socket could not be reached or the I/O failed.
-    #[error("atlas control socket io failed: {0}")]
+    #[error("capture control socket io failed: {0}")]
     Io(#[from] std::io::Error),
     /// The reply line was not a control reply (or its result did not decode).
-    #[error("atlas control reply parse failed: {0}")]
+    #[error("capture control reply parse failed: {0}")]
     Parse(String),
     /// The request did not complete within the bounded timeout.
-    #[error("atlas control request timed out")]
+    #[error("capture control request timed out")]
     Timeout,
     /// The service refused the request.
     #[error("{code}: {detail}")]
@@ -60,7 +60,7 @@ impl ControlError {
 pub enum LiveCapture {
     /// The service answered with its status.
     Running(CaptureStatus),
-    /// Nothing is listening: the service is not running (Atlas disabled, or no
+    /// Nothing is listening: the service is not running (capture disabled, or no
     /// cameras), so there is no session.
     NotRunning,
     /// The service is there but did not answer usefully (a timeout, a broken
@@ -255,7 +255,7 @@ pub mod tests {
     #[tokio::test]
     async fn a_request_carries_its_cmd_and_reads_the_result() {
         let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("atlas-control.sock");
+        let socket = dir.path().join("capture-control.sock");
         let recorded = fake_status_socket(&socket, capturing_status());
         let client = ControlClient::new(socket);
         let status = client.status().await.unwrap();
@@ -266,7 +266,7 @@ pub mod tests {
     #[tokio::test]
     async fn a_refusal_carries_its_code() {
         let dir = tempfile::tempdir().unwrap();
-        let socket = dir.path().join("atlas-control.sock");
+        let socket = dir.path().join("capture-control.sock");
         fake_control_socket(&socket, |_| CtlReply::err("E_STORAGE_FULL", "full"));
         let err = ControlClient::new(socket)
             .request(&CtlRequest::Stop)

@@ -188,7 +188,7 @@ mod tests {
     }
 
     fn event_body() -> Vec<u8> {
-        AtlasEvent::new("atlas.keyframe", Some("drone-1".into()), vec![1, 2, 3])
+        AtlasEvent::new("capture.keyframe", Some("drone-1".into()), vec![1, 2, 3])
             .encode()
             .unwrap()
     }
@@ -231,7 +231,7 @@ mod tests {
             status(&f.router, "POST", "/api/atlas/event", &cred, event_body()).await,
             StatusCode::ACCEPTED
         );
-        assert_eq!(f.events.recv().await.unwrap().topic, "atlas.keyframe");
+        assert_eq!(f.events.recv().await.unwrap().topic, "capture.keyframe");
         // Not issued for artifacts.
         assert_eq!(
             status(

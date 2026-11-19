@@ -1,7 +1,8 @@
-# World Engine capture service (drone): reads engine frames and the flight
-# controller pose through the plugin host, selects pose-tagged keyframes, and
-# publishes the keyframe + pose + capture-state streams on the extension's
-# private atlas bus for the link to forward.
+# Capture service (drone, Visor): reads engine frames, the flight controller
+# pose and Navigation's pose and scans through the plugin host, records
+# sessions, selects pose-tagged keyframes, and publishes the keyframe and
+# capture-state streams on the extension's private bus for the link to
+# forward.
 [package]
 name = "capture-service"
 version = "1.0.0"
@@ -9,7 +10,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "World Engine capture: pose-tagged keyframe selection on the drone, one camera up to an all-sides rig."
+description = "Capture service: session recording and pose-tagged keyframe selection, one camera up to an all-sides rig."
 
 [lib]
 name = "capture_service"
@@ -26,8 +27,8 @@ ados-mapping-protocol = { workspace = true }
 ados-mapping-pose = { workspace = true }
 ados-capture-contract = { workspace = true }
 ados-sdk = { workspace = true }
-# The vision framebus value types and the Unix-socket framing the atlas bus,
-# control socket and offload-pose reader speak.
+# The vision framebus value types and the Unix-socket framing the private
+# bus and the control socket speak.
 ados-protocol = { workspace = true }
 # The sensor bus client (seam J) and the capture storage admission rule.
 ados-sensorbus = { workspace = true }

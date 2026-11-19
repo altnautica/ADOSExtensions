@@ -155,53 +155,90 @@ pub fn chunk_scan(sensor_id: &str, t_ns: u64, seq: u64, packed: &[u8]) -> Vec<Sc
         .collect()
 }
 
-/// Reassembles parts into whole scans. Parts of one scan arrive in order on
-/// one publisher; a part out of sequence drops the scan it would have
-/// completed rather than join two scans.
-#[derive(Debug, Default)]
+/// One whole scan out of a [`ScanAssembler`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AssembledScan {
+    pub sensor_id: String,
+    pub t_ns: u64,
+    pub seq: u64,
+    /// Packed points ([`POINT_STRIDE`] bytes each), parts in index order.
+    pub points: Vec<u8>,
+}
+
+/// A scan with some parts in.
+#[derive(Debug)]
+struct Partial {
+    t_ns: u64,
+    first_seen_ns: u64,
+    parts: Vec<Option<Vec<u8>>>,
+    have: usize,
+}
+
+/// Reassembles parts into whole scans, keyed by `(sensor_id, seq)`, in any
+/// arrival order. A scan whose parts do not all arrive within the assembler's
+/// window of its first part is dropped and counted ([`Self::incomplete`]).
+#[derive(Debug)]
 pub struct ScanAssembler {
-    current: Option<(String, u64, u16, u16, u64, Vec<u8>)>,
-    dropped: u64,
+    window_ns: u64,
+    open: std::collections::HashMap<(String, u64), Partial>,
+    incomplete: u64,
 }
 
 impl ScanAssembler {
-    /// Feed one part; returns `(sensor_id, t_ns, seq, packed points)` when it
-    /// completes a scan.
-    pub fn push(&mut self, c: ScanChunk) -> Option<(String, u64, u64, Vec<u8>)> {
-        if c.part == 0 {
-            if self.current.take().is_some() {
-                self.dropped += 1;
-            }
-            self.current = Some((c.sensor_id, c.seq, 1, c.parts, c.t_ns, c.points));
-        } else {
-            match self.current.as_mut() {
-                Some((sensor, seq, next, parts, _, buf))
-                    if *sensor == c.sensor_id
-                        && *seq == c.seq
-                        && *next == c.part
-                        && *parts == c.parts =>
-                {
-                    buf.extend_from_slice(&c.points);
-                    *next += 1;
-                }
-                _ => {
-                    if self.current.take().is_some() {
-                        self.dropped += 1;
-                    }
-                    return None;
-                }
-            }
+    /// An assembler that gives a scan `window_ns` from its first part.
+    pub fn new(window_ns: u64) -> Self {
+        Self {
+            window_ns,
+            open: Default::default(),
+            incomplete: 0,
         }
-        let (_, _, next, parts, _, _) = self.current.as_ref()?;
-        if next < parts {
-            return None;
-        }
-        let (sensor, seq, _, _, t_ns, buf) = self.current.take()?;
-        Some((sensor, t_ns, seq, buf))
     }
 
-    /// Scans dropped because a part was missing or out of order.
-    pub fn dropped(&self) -> u64 {
-        self.dropped
+    /// Feed one part received at `now_ns`; returns the scan it completes.
+    /// Expired scans are dropped first. A part whose count disagrees with
+    /// the scan's, or that is out of range or repeated, is ignored.
+    pub fn push(&mut self, c: ScanChunk, now_ns: u64) -> Option<AssembledScan> {
+        self.expire(now_ns);
+        let parts = usize::from(c.parts);
+        let part = usize::from(c.part);
+        if part >= parts {
+            return None;
+        }
+        let key = (c.sensor_id, c.seq);
+        let p = self.open.entry(key.clone()).or_insert_with(|| Partial {
+            t_ns: c.t_ns,
+            first_seen_ns: now_ns,
+            parts: vec![None; parts],
+            have: 0,
+        });
+        if p.parts.len() != parts || p.parts[part].is_some() {
+            return None;
+        }
+        p.parts[part] = Some(c.points);
+        p.have += 1;
+        if p.have < parts {
+            return None;
+        }
+        let p = self.open.remove(&key)?;
+        Some(AssembledScan {
+            sensor_id: key.0,
+            t_ns: p.t_ns,
+            seq: key.1,
+            points: p.parts.into_iter().flatten().flatten().collect(),
+        })
+    }
+
+    /// Drop every scan whose window has passed at `now_ns`.
+    pub fn expire(&mut self, now_ns: u64) {
+        let window = self.window_ns;
+        let before = self.open.len();
+        self.open
+            .retain(|_, p| now_ns.saturating_sub(p.first_seen_ns) <= window);
+        self.incomplete += (before - self.open.len()) as u64;
+    }
+
+    /// Scans dropped because a part did not arrive in time.
+    pub fn incomplete(&self) -> u64 {
+        self.incomplete
     }
 }

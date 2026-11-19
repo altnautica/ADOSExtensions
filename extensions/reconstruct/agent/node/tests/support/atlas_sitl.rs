@@ -10,7 +10,7 @@ use ados_capture_contract::{
 use ados_mapping_protocol::atlas::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeEnvelope, KeyframeFlags,
     KeyframeImage, KeyframeTier, Pose, PoseSource, TimeAlignment, VioHealth,
-    ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC, POSE_COV_LEN,
+    CAPTURE_KEYFRAME_TOPIC, CAPTURE_STATE_TOPIC, POSE_COV_LEN,
 };
 use ados_mapping_transport::AtlasEvent;
 use reconstruct_node::{Cluster, Engine, JobStore, MockDetector, MockReconstructor, Scheduler};
@@ -30,7 +30,7 @@ pub fn engine() -> Engine {
 /// persist nothing, and an empty bag enqueues no job.
 pub fn keyframe(i: usize) -> AtlasEvent {
     AtlasEvent::new(
-        ATLAS_KEYFRAME_TOPIC,
+        CAPTURE_KEYFRAME_TOPIC,
         None,
         keyframe_env("g0", "front", i as u64).to_msgpack().unwrap(),
     )
@@ -50,11 +50,7 @@ pub fn bagged(keyframes: u64) -> AtlasEvent {
         dropped_keyframes: 0,
         reconstruct_steps: None,
     };
-    AtlasEvent::new(
-        ATLAS_CAPTURE_STATE_TOPIC,
-        None,
-        status.to_msgpack().unwrap(),
-    )
+    AtlasEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap())
 }
 
 /// A full keyframe envelope for `session_id` / `camera_id`, with an IMU sample so

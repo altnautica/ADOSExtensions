@@ -52,7 +52,7 @@ fn real_keyframe_event(session: &str, kf_id: u64) -> AtlasEvent {
         imu_window: Vec::new(),
         flags: KeyframeFlags::default(),
     };
-    AtlasEvent::new(ATLAS_KEYFRAME_TOPIC, None, kf.to_msgpack().unwrap())
+    AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, kf.to_msgpack().unwrap())
 }
 
 /// A keyframe event stamped with a capturing-drone id (the egress shape).
@@ -86,11 +86,7 @@ fn capture_state_steps(
         dropped_keyframes: 0,
         reconstruct_steps,
     };
-    AtlasEvent::new(
-        ATLAS_CAPTURE_STATE_TOPIC,
-        None,
-        status.to_msgpack().unwrap(),
-    )
+    AtlasEvent::new(CAPTURE_STATE_TOPIC, None, status.to_msgpack().unwrap())
 }
 
 /// A capture-state event stamped with a capturing-drone id (the egress shape).
@@ -280,7 +276,7 @@ fn a_resent_bagged_submit_is_idempotent_not_an_error() {
 fn a_malformed_capture_state_is_dropped_not_an_error() {
     let dir = tempfile::tempdir().unwrap();
     let mut ingest = AtlasIngest::new(dir.path());
-    let bad = AtlasEvent::new(ATLAS_CAPTURE_STATE_TOPIC, None, b"not msgpack".to_vec());
+    let bad = AtlasEvent::new(CAPTURE_STATE_TOPIC, None, b"not msgpack".to_vec());
     assert!(ingest.step(&bad, 100).unwrap().is_none());
 }
 
@@ -453,7 +449,7 @@ fn a_malformed_keyframe_is_counted_but_not_persisted() {
     // nothing is persisted. A bag over a session with zero persisted keyframes
     // has no dataset to reconstruct, so it yields NO job (rather than enqueuing
     // one that would only die at the backend with a missing input directory).
-    let bad = AtlasEvent::new(ATLAS_KEYFRAME_TOPIC, None, vec![0u8; 8]);
+    let bad = AtlasEvent::new(CAPTURE_KEYFRAME_TOPIC, None, vec![0u8; 8]);
     assert!(ingest.step(&bad, 100).unwrap().is_none());
     assert_eq!(ingest.keyframes_seen(), 1);
 

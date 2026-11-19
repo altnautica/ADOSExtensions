@@ -1,18 +1,16 @@
-//! World Engine link: the extension's main process on every profile.
+//! Capture link: the Capture extension's main process on every profile.
 //!
 //! The host runs it as `capture-link com.altnautica.capture` and the
 //! mode follows the node profile the host exports (`ADOS_NODE_PROFILE`):
 //!
-//! - **drone / visor**: the Atlas forwarder ([`forward`]), the shared-topic
-//!   republish and the `status` telemetry ([`monitor`]), the
-//!   perception-offload reconciler ([`offload`]), the session uploader
-//!   ([`upload`]), the device HTTP API ([`api`]) and the MCP tools
+//! - **drone / visor**: the keyframe forwarder ([`forward`]), the shared
+//!   capture state and the `status` telemetry ([`monitor`]), the session
+//!   uploader ([`upload`]), the device HTTP API ([`api`]) and the MCP tools
 //!   ([`tools`]).
 //! - **ground-station**: the radio aux-lane relay ([`relay`]) and the ground
 //!   HTTP API.
-//! - **workstation / compute**: the `node` service owns the HTTP socket and the
-//!   `status` telemetry, so the link binds and publishes nothing and only waits
-//!   for shutdown.
+//! - any other profile: nothing to run; the link binds and publishes nothing
+//!   and only waits for shutdown.
 
 pub mod api;
 pub mod calib_api;
@@ -22,6 +20,7 @@ pub mod device_api;
 pub mod forward;
 pub mod jobs_api;
 pub mod monitor;
+pub mod placement;
 pub mod power;
 pub mod relay;
 pub mod sessions;
@@ -121,7 +120,7 @@ fn serve_http(
         std::fs::create_dir_all(parent)?;
     }
     let listener = ados_sdk::http::bind(&path)?;
-    tracing::info!(socket = %path.display(), "serving the World Engine API");
+    tracing::info!(socket = %path.display(), "serving the Capture API");
     Ok(tokio::spawn(serve_unix(
         listener,
         router,
@@ -177,6 +176,11 @@ impl LinkPlugin {
                 async move { power.subscribe(host.as_ref()).await },
             ));
         }
+        self.tasks.push(tokio::spawn(placement::subscribe(
+            host.clone(),
+            uploads.placement(),
+            shutdown.clone(),
+        )));
         self.tasks
             .push(tokio::spawn(uploads.clone().run(shutdown.clone())));
         self.tasks.push(tokio::spawn(uploads.clone().run_auto(
@@ -196,13 +200,16 @@ impl LinkPlugin {
             .run(shutdown.clone()),
         ));
         self.tasks.push(tokio::spawn(monitor::run_bus_monitor(
-            host.clone(),
             bus_socket,
             capture.clone(),
             shutdown.clone(),
         )));
-        self.tasks.push(tokio::spawn(monitor::run_status_writer(
-            host, capture, forward, shutdown,
+        self.tasks.push(tokio::spawn(monitor::run_state_writer(
+            host,
+            capture,
+            forward,
+            Some(uploads),
+            shutdown,
         )));
         Ok(())
     }
@@ -243,15 +250,15 @@ impl Plugin for LinkPlugin {
         self.stop = Some(stop);
         match Mode::from_profile(&ados_sdk::node_profile()) {
             Mode::Drone => {
-                tracing::info!("world engine link: drone mode");
+                tracing::info!("capture link: drone mode");
                 self.start_drone(ctx, shutdown)?;
             }
             Mode::GroundStation => {
-                tracing::info!("world engine link: ground-station mode");
+                tracing::info!("capture link: ground-station mode");
                 self.start_ground(ctx, shutdown)?;
             }
             Mode::Passive(profile) => {
-                tracing::info!(profile = %profile, "world engine link: the node service serves this profile; waiting for shutdown");
+                tracing::info!(profile = %profile, "capture link: the node service serves this profile; waiting for shutdown");
             }
         }
         Ok(())

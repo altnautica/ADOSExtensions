@@ -61,7 +61,7 @@ mod tests {
     use crate::LoopbackBearer;
 
     fn event() -> AtlasEvent {
-        AtlasEvent::new("atlas.keyframe", None, vec![9])
+        AtlasEvent::new("capture.keyframe", None, vec![9])
     }
 
     #[tokio::test]

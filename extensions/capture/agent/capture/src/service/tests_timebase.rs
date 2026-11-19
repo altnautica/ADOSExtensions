@@ -18,8 +18,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use super::{run_capture_loop, LoopDeps, Paths};
 use crate::control::ControlMsg;
-use crate::publish::AtlasPublisher;
-use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
+use crate::publish::CapturePublisher;
+use crate::runtime::{CaptureRuntimeConfig, SharedSteps};
 use ados_mapping_pose::clock::mono_ns;
 use ados_mapping_pose::fc_ekf::FcEkfPose;
 use ados_mapping_pose::frame_source::{AtlasFrameSource, SyntheticFrameSource};
@@ -75,7 +75,7 @@ async fn a_hub_session_records_on_its_own_timebase() {
     let steps = SharedSteps::default();
     steps.set(Some(9000));
     let deps = LoopDeps {
-        cfg: AtlasRuntimeConfig::from_values("bench", &BTreeMap::new()).unwrap(),
+        cfg: CaptureRuntimeConfig::from_values("bench", &BTreeMap::new()).unwrap(),
         profile: "visor".into(),
         frames: AtlasFrameSource::Synthetic(SyntheticFrameSource::new(Vec::new())),
         router: None,
@@ -84,7 +84,7 @@ async fn a_hub_session_records_on_its_own_timebase() {
         vehicle: VehicleFeed::new(),
         sensors: sensors.clone(),
         bus_rx,
-        publisher: AtlasPublisher::bind(&dir.path().join("atlas.sock").to_string_lossy())
+        publisher: CapturePublisher::bind(&dir.path().join("capture.sock").to_string_lossy())
             .await
             .unwrap(),
         control_rx: ctl_rx,
@@ -93,6 +93,7 @@ async fn a_hub_session_records_on_its_own_timebase() {
         camera: None,
         paths,
         reconstruct_steps: steps.clone(),
+        navigation: Default::default(),
     };
     let task = tokio::spawn(run_capture_loop(deps, cancel.clone()));
     // The drone's training length rides the status, and a new value from the

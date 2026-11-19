@@ -1,7 +1,7 @@
 //! A byte-bounded queue between the capture loop and the recorder's writer
 //! thread that drops its OLDEST entry when a new one would pass the cap, so
 //! the producer never blocks and RAM never exceeds its share of
-//! `atlas.memory_budget_mb`. Used for keyframe JPEGs and polar scan records.
+//! `capture.memory_budget_mb`. Used for keyframe JPEGs and polar scan records.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};

@@ -5,8 +5,8 @@
 
 use ados_capture_contract::Placement;
 use ados_mapping_protocol::atlas::{
-    CaptureState, CaptureStatus, PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC,
-    ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+    CaptureState, CaptureStatus, PoseSource, VioHealth, CAPTURE_KEYFRAME_TOPIC,
+    CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
 };
 use ados_mapping_protocol::compute::ComputeJobState;
 use ados_mapping_transport::{AtlasEvent, BearerLadder, LoopbackBearer, WorldBroadcaster};
@@ -44,7 +44,7 @@ async fn g4_live_session_periodic_reconstruct() {
     // Three keyframes from one moving camera; a keyframe never bags.
     for kf in 0..3u64 {
         let ev = AtlasEvent::new(
-            ATLAS_KEYFRAME_TOPIC,
+            CAPTURE_KEYFRAME_TOPIC,
             None,
             keyframe_env("sitl", "cam-front", kf).to_msgpack().unwrap(),
         );
@@ -83,7 +83,7 @@ async fn g4_live_session_periodic_reconstruct() {
     // the cycle's guard is held, so no second job piles up on top.
     for kf in 3..6u64 {
         let ev = AtlasEvent::new(
-            ATLAS_KEYFRAME_TOPIC,
+            CAPTURE_KEYFRAME_TOPIC,
             None,
             keyframe_env("sitl", "cam-front", kf).to_msgpack().unwrap(),
         );
@@ -161,7 +161,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
     for kf in &keyframes {
         ladder
             .send(&AtlasEvent::new(
-                ATLAS_KEYFRAME_TOPIC,
+                CAPTURE_KEYFRAME_TOPIC,
                 None,
                 kf.to_msgpack().unwrap(),
             ))
@@ -185,7 +185,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
     };
     ladder
         .send(&AtlasEvent::new(
-            ATLAS_CAPTURE_STATE_TOPIC,
+            CAPTURE_STATE_TOPIC,
             None,
             status.to_msgpack().unwrap(),
         ))

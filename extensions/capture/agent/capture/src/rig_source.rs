@@ -23,7 +23,7 @@ use ados_mapping_pose::frame_source::CameraGeometry;
 use ados_mapping_protocol::atlas::CameraRole;
 
 use crate::config::CameraConfig;
-use crate::runtime::AtlasRuntimeConfig;
+use crate::runtime::CaptureRuntimeConfig;
 
 const I4: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -94,7 +94,7 @@ pub fn t_body_cam(yaw_deg: f64, pitch_deg: f64) -> [f64; 16] {
 /// A camera of the capture config as a rig sensor: the configured or derived
 /// intrinsics at the seen frame size, pointed as the roster's pitch (else the
 /// camera's role) says.
-fn camera_sensor(cfg: &AtlasRuntimeConfig, cam: &CameraConfig, seen: SeenCamera) -> RigSensor {
+fn camera_sensor(cfg: &CaptureRuntimeConfig, cam: &CameraConfig, seen: SeenCamera) -> RigSensor {
     let model: CameraModel =
         cfg.intrinsics_for(&cam.id, seen.width, seen.height, seen.geometry.hfov_deg);
     let (yaw, role_pitch) = role_mount(cam.role);
@@ -116,7 +116,7 @@ fn camera_sensor(cfg: &AtlasRuntimeConfig, cam: &CameraConfig, seen: SeenCamera)
 /// size and geometry seen so far (cameras not yet seen are left out: their
 /// model needs a size); `imus` are the sensor-bus IMU stream ids.
 pub fn derive_rig(
-    cfg: &AtlasRuntimeConfig,
+    cfg: &CaptureRuntimeConfig,
     seen: impl Fn(&str) -> Option<SeenCamera>,
     imus: &[String],
 ) -> Rig {
@@ -153,7 +153,7 @@ pub fn derive_rig(
 /// camera ids. The stored sensors are kept as they are.
 pub fn complete_rig(
     mut rig: Rig,
-    cfg: &AtlasRuntimeConfig,
+    cfg: &CaptureRuntimeConfig,
     seen: impl Fn(&str) -> Option<SeenCamera>,
 ) -> (Rig, Vec<String>) {
     let mut added = Vec::new();
@@ -228,12 +228,12 @@ mod tests {
     #[test]
     fn a_derived_rig_holds_seen_cameras_and_bus_imus() {
         let values: BTreeMap<String, serde_json::Value> = [(
-            "atlas.cameras".to_string(),
+            "capture.cameras".to_string(),
             serde_json::json!([{"id": "front"}, {"id": "down", "role": "down"}]),
         )]
         .into_iter()
         .collect();
-        let cfg = AtlasRuntimeConfig::from_values("drone 1", &values).unwrap();
+        let cfg = CaptureRuntimeConfig::from_values("drone 1", &values).unwrap();
         let rig = derive_rig(
             &cfg,
             |id| (id == "front").then_some(seen(640, 480, None, None)),
@@ -258,12 +258,12 @@ mod tests {
     #[test]
     fn derived_cameras_point_as_the_roster_or_their_role_says() {
         let values: BTreeMap<String, serde_json::Value> = [(
-            "atlas.cameras".to_string(),
+            "capture.cameras".to_string(),
             serde_json::json!([{"id": "main"}, {"id": "belly", "role": "down"}]),
         )]
         .into_iter()
         .collect();
-        let cfg = AtlasRuntimeConfig::from_values("x500", &values).unwrap();
+        let cfg = CaptureRuntimeConfig::from_values("x500", &values).unwrap();
         let rig = derive_rig(
             &cfg,
             |id| match id {
@@ -341,14 +341,14 @@ mod tests {
         }))
         .unwrap();
         let values: BTreeMap<String, serde_json::Value> = [(
-            "atlas.cameras".to_string(),
+            "capture.cameras".to_string(),
             serde_json::json!([
                 {"id": "main"}, {"id": "belly", "role": "down"}, {"id": "aux", "role": "aux"}
             ]),
         )]
         .into_iter()
         .collect();
-        let cfg = AtlasRuntimeConfig::from_values("drone 1", &values).unwrap();
+        let cfg = CaptureRuntimeConfig::from_values("drone 1", &values).unwrap();
         let hd = seen(1280, 720, Some(87.0), None);
         // `aux` has delivered no frame yet: no size, no model, left out.
         let (rig, added) = complete_rig(stored.clone(), &cfg, |id| (id != "aux").then_some(hd));

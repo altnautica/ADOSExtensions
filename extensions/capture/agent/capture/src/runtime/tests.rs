@@ -12,7 +12,7 @@ fn values(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
 #[test]
 fn reconstruct_steps_resolve_and_never_restart_a_run() {
     let load =
-        |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_RECONSTRUCT_STEPS, v)]));
+        |v: Value| CaptureRuntimeConfig::from_values("", &values(&[(KEY_RECONSTRUCT_STEPS, v)]));
     assert_eq!(load(json!(7000)).unwrap().reconstruct_steps, Some(7000));
     // An editor may store an integral float.
     assert_eq!(load(json!(15000.0)).unwrap().reconstruct_steps, Some(15000));
@@ -39,7 +39,7 @@ fn reconstruct_steps_resolve_and_never_restart_a_run() {
 
 #[test]
 fn no_keys_is_the_disabled_default() {
-    let c = AtlasRuntimeConfig::from_values("drone-42", &BTreeMap::new()).unwrap();
+    let c = CaptureRuntimeConfig::from_values("drone-42", &BTreeMap::new()).unwrap();
     assert!(!c.enabled);
     assert_eq!(c.device_id, "drone-42");
     assert!(!c.record_on_start);
@@ -50,7 +50,7 @@ fn no_keys_is_the_disabled_default() {
     // A null value (the host's "unset") is the same as an absent key.
     let nulls = values(&[(KEY_ENABLED, Value::Null), (KEY_CAMERAS, Value::Null)]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("drone-42", &nulls).unwrap(),
+        CaptureRuntimeConfig::from_values("drone-42", &nulls).unwrap(),
         c
     );
 }
@@ -61,14 +61,14 @@ fn configured_exposure_is_quantised_and_capped() {
         KEY_EXPOSURE,
         json!({"locked": true, "exposure_us": 9000, "mode": "slow"}),
     )]);
-    let c = AtlasRuntimeConfig::from_values("d", &v).unwrap();
+    let c = CaptureRuntimeConfig::from_values("d", &v).unwrap();
     assert_eq!(c.exposure.exposure_us, Some(10_000));
     assert!(c.exposure.locked && !c.exposure.applied);
     let v = values(&[(
         KEY_EXPOSURE,
         json!({"locked": false, "exposure_us": 9000, "mode": "walking"}),
     )]);
-    let c = AtlasRuntimeConfig::from_values("d", &v).unwrap();
+    let c = CaptureRuntimeConfig::from_values("d", &v).unwrap();
     assert!(c.exposure.exposure_us.unwrap() <= 4_000);
 }
 
@@ -99,7 +99,7 @@ fn full_key_set_loads() {
         ),
         (KEY_POSE_PRIOR, json!({"position_sigma_m": 0.05})),
     ]);
-    let c = AtlasRuntimeConfig::from_values("", &v).unwrap();
+    let c = CaptureRuntimeConfig::from_values("", &v).unwrap();
     assert!(c.enabled);
     assert!(c.record_on_start);
     assert_eq!(c.image_encoding, ImageEncoding::Jpeg);
@@ -132,7 +132,7 @@ fn full_key_set_loads() {
 #[test]
 fn a_minimal_camera_entry_fills_its_defaults() {
     let v = values(&[(KEY_CAMERAS, json!([{"id": "front"}]))]);
-    let c = AtlasRuntimeConfig::from_values("", &v).unwrap();
+    let c = CaptureRuntimeConfig::from_values("", &v).unwrap();
     assert_eq!(c.capture.cameras[0].role, CameraRole::Primary);
     assert!(c.capture.cameras[0].enabled);
     assert!(c.capture.cameras[0].reconstruct);
@@ -146,21 +146,21 @@ fn an_unparseable_key_is_an_error_naming_it() {
         (KEY_CAMERAS, json!([{"id": "front", "role": "sideways"}])),
     ]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &bad_role)
+        CaptureRuntimeConfig::from_values("", &bad_role)
             .unwrap_err()
             .key,
         KEY_CAMERAS
     );
     let bad_encoding = values(&[(KEY_IMAGE_ENCODING, json!("telepathic"))]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &bad_encoding)
+        CaptureRuntimeConfig::from_values("", &bad_encoding)
             .unwrap_err()
             .key,
         KEY_IMAGE_ENCODING
     );
     let bad_mains = values(&[(KEY_MAINS_HZ, json!(55))]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &bad_mains)
+        CaptureRuntimeConfig::from_values("", &bad_mains)
             .unwrap_err()
             .key,
         KEY_MAINS_HZ
@@ -168,12 +168,14 @@ fn an_unparseable_key_is_an_error_naming_it() {
     // A fractional or negative count is not silently truncated.
     let frac = values(&[(KEY_MAX_INTERVAL_MS, json!(1500.5))]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &frac).unwrap_err().key,
+        CaptureRuntimeConfig::from_values("", &frac)
+            .unwrap_err()
+            .key,
         KEY_MAX_INTERVAL_MS
     );
     let neg = values(&[(KEY_MAX_KEYFRAMES, json!(-1))]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &neg).unwrap_err().key,
+        CaptureRuntimeConfig::from_values("", &neg).unwrap_err().key,
         KEY_MAX_KEYFRAMES
     );
 }
@@ -209,14 +211,14 @@ fn an_override_with_the_wrong_coefficient_count_is_refused() {
         json!({"front": {"model": "opencv", "fx": 900.0, "fy": 900.0, "cx": 640.0,
                          "cy": 360.0, "dist": [0.1, 0.0, 0.0, 0.0]}}),
     )]);
-    let err = AtlasRuntimeConfig::from_values("", &v).unwrap_err();
+    let err = CaptureRuntimeConfig::from_values("", &v).unwrap_err();
     assert_eq!(err.key, KEY_INTRINSICS);
     let ok = values(&[(
         KEY_INTRINSICS,
         json!({"front": {"model": "kb4", "fx": 700.0, "fy": 700.0, "cx": 640.0,
                          "cy": 360.0, "dist": [0.01, 0.0, 0.0, 0.0]}}),
     )]);
-    let c = AtlasRuntimeConfig::from_values("", &ok).unwrap();
+    let c = CaptureRuntimeConfig::from_values("", &ok).unwrap();
     let m = c.intrinsics_for("front", 1280, 720, None);
     assert_eq!(m.model, CameraModelModel::Kb4);
     assert_eq!(m.dist.len(), 4);
@@ -230,7 +232,7 @@ fn the_pre_contract_override_shape_fails_loudly() {
                          "distortion_model": "radtan",
                          "distortion_params": [0.1, -0.2, 0.001, 0.002]}}),
     )]);
-    let err = AtlasRuntimeConfig::from_values("", &old).unwrap_err();
+    let err = CaptureRuntimeConfig::from_values("", &old).unwrap_err();
     assert_eq!(err.key, KEY_INTRINSICS);
     assert!(err.reason.contains("distortion_model"), "{}", err.reason);
     assert!(
@@ -242,14 +244,14 @@ fn the_pre_contract_override_shape_fails_loudly() {
 
 #[test]
 fn the_memory_budget_is_optional_and_never_negative() {
-    let d = AtlasRuntimeConfig::from_values("", &BTreeMap::new()).unwrap();
+    let d = CaptureRuntimeConfig::from_values("", &BTreeMap::new()).unwrap();
     assert_eq!(d.memory_budget_mb, None);
-    let c = AtlasRuntimeConfig::from_values("", &values(&[(KEY_MEMORY_BUDGET_MB, json!(600))]))
+    let c = CaptureRuntimeConfig::from_values("", &values(&[(KEY_MEMORY_BUDGET_MB, json!(600))]))
         .unwrap();
     assert_eq!(c.memory_budget_mb, Some(600));
     let neg = values(&[(KEY_MEMORY_BUDGET_MB, json!(-5))]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &neg).unwrap_err().key,
+        CaptureRuntimeConfig::from_values("", &neg).unwrap_err().key,
         KEY_MEMORY_BUDGET_MB
     );
 }

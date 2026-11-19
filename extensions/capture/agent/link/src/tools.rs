@@ -122,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn tools_run_the_route_operations() {
         let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("atlas-control.sock");
+        let sock = dir.path().join("capture-control.sock");
         let recorded = fake_control_socket(&sock, |req| match req {
             CtlRequest::Start(_) => CtlReply::ok(json!({"session_id": "s-20261019T101500Z-0001"})),
             CtlRequest::Mark(_) => CtlReply::ok(json!({"segment": 2})),
@@ -173,7 +173,7 @@ mod tests {
     async fn slow_operations_answer_inside_the_deadline() {
         let dir = tempfile::tempdir().unwrap();
         // A capture service that takes requests and never answers.
-        let sock = dir.path().join("atlas-control.sock");
+        let sock = dir.path().join("capture-control.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
         tokio::spawn(async move {
             let mut held = Vec::new();
