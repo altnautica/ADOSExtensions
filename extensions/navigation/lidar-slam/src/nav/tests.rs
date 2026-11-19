@@ -1,14 +1,13 @@
 use std::f64::consts::PI;
 
 use ados_mapping_protocol::atlas::nav::OCCUPANCY_OCCUPIED;
-use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseMode, PoseSource, VioHealth};
+use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseSource, PoseSource, VioHealth};
 
 use super::*;
 use ados_mapping_pose::se3;
 
-fn settings(nav_pose: NavPoseMode, placement: ComputePlacement) -> NavSettings {
+fn settings(placement: ComputePlacement) -> NavSettings {
     NavSettings {
-        nav_pose,
         placement,
         budget: Budget::from_mb(64),
         pose_interval_ms: 33,
@@ -54,7 +53,7 @@ fn mount() -> [f64; 16] {
 #[test]
 fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
     // The FC heading equals the SLAM heading here, so map_ned = map_frd.
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let mut nav = NavMap::new(settings(ComputePlacement::Hybrid));
     let pd = nav
         .on_pose(
             &at(estimate(1.0, 2.0, PI / 2.0), 1_000),
@@ -62,7 +61,6 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
             Some(-PI / 2.0),
             1_000,
             0,
-            false,
         )
         .expect("always publishes with no session");
     assert_eq!(pd.pose.t[0], 1.0);
@@ -79,8 +77,7 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
             Some(10.0),
             None,
             1_020,
-            0,
-            false
+            0
         )
         .is_none());
     let up = nav
@@ -90,7 +87,6 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
             None,
             1_034,
             0,
-            false,
         )
         .unwrap();
     assert_eq!(up.pose.t[2], -2.5, "climbing 2.5 m is FRD z -2.5");
@@ -100,13 +96,19 @@ fn the_pose_is_published_in_map_ned_at_the_configured_interval() {
 /// an estimator that reports none publishes none.
 #[test]
 fn the_pose_carries_the_estimators_horizontal_sigma() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let mut nav = NavMap::new(settings(ComputePlacement::Hybrid));
     let mut e = at(estimate(0.0, 0.0, 0.0), 0);
     e.sigma_xy_m = Some(0.65);
-    let pd = nav.on_pose(&e, Some(0.0), Some(0.0), 0, 0, false).unwrap();
+    let pd = nav.on_pose(&e, Some(0.0), Some(0.0), 0, 0).unwrap();
     assert_eq!(pd.sigma_xy_m, Some(0.65));
     let pd = nav
-        .on_pose(&at(estimate(0.0, 0.0, 0.0), 1_000), Some(0.0), Some(0.0), 1_000, 0, false)
+        .on_pose(
+            &at(estimate(0.0, 0.0, 0.0), 1_000),
+            Some(0.0),
+            Some(0.0),
+            1_000,
+            0,
+        )
         .unwrap();
     assert_eq!(pd.sigma_xy_m, None);
 }
@@ -115,14 +117,24 @@ fn the_pose_carries_the_estimators_horizontal_sigma() {
 /// north afresh from the FC heading, once per restart.
 #[test]
 fn a_restarted_map_latches_its_north_afresh_once() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let mut nav = NavMap::new(settings(ComputePlacement::Hybrid));
     let pose = |nav: &mut NavMap, x: f64, heading: f64, t_ms: i64| {
-        nav.on_pose(&at(estimate(x, 0.0, 0.0), t_ms), Some(0.0), Some(heading), t_ms, 0, false);
+        nav.on_pose(
+            &at(estimate(x, 0.0, 0.0), t_ms),
+            Some(0.0),
+            Some(heading),
+            t_ms,
+            0,
+        );
     };
     pose(&mut nav, 0.0, 0.0, 0);
     pose(&mut nav, 5.0, 0.0, 100);
     pose(&mut nav, 5.0, 1.0, 200);
-    assert_eq!(nav.map_yaw(), Some(0.0), "fixed once the vehicle left the spot");
+    assert_eq!(
+        nav.map_yaw(),
+        Some(0.0),
+        "fixed once the vehicle left the spot"
+    );
     nav.restart_heading_at(7);
     assert_eq!(nav.map_yaw(), None, "no north until the next pose");
     pose(&mut nav, 5.0, 1.0, 300);
@@ -144,7 +156,11 @@ fn fc_through_an_outage(moving: bool) -> (FcEkfPose, impl Fn(u32) -> f64) {
     let yaw = |ms: u32| (30.0 + 90.0 * ms.saturating_sub(1_000) as f64 / 1e3).to_radians();
     let fc = FcEkfPose::new();
     for ms in (0..=1_700u32).step_by(20) {
-        let reset = if ms >= 1_100 { FC_YAW_RESET_DEG.to_radians() } else { 0.0 };
+        let reset = if ms >= 1_100 {
+            FC_YAW_RESET_DEG.to_radians()
+        } else {
+            0.0
+        };
         let h = (yaw(ms) + reset) / 2.0;
         // The rate steps at 1 s: its mean there keeps the integral exact.
         let rate = match ms {
@@ -153,10 +169,16 @@ fn fc_through_an_outage(moving: bool) -> (FcEkfPose, impl Fn(u32) -> f64) {
             _ => 90.0,
         };
         let q = [h.cos() as f32, 0.0, 0.0, h.sin() as f32];
-        fc.on_frame(&att_turning(ms, q, (rate as f32).to_radians()), ms as u64 * 1_000_000);
+        fc.on_frame(
+            &att_turning(ms, q, (rate as f32).to_radians()),
+            ms as u64 * 1_000_000,
+        );
         if moving {
             let k = (ms.clamp(100, 1_500) - 100) as f32 / 1_400.0;
-            fc.on_frame(&pos(ms, [20.0 + 3.0 * k, -7.0 + 4.0 * k, -2.0]), ms as u64 * 1_000_000);
+            fc.on_frame(
+                &pos(ms, [20.0 + 3.0 * k, -7.0 + 4.0 * k, -2.0]),
+                ms as u64 * 1_000_000,
+            );
         }
     }
     (fc, yaw)
@@ -188,15 +210,18 @@ fn turned(v: [f64; 2], deg: f64) -> [f64; 2] {
 fn a_map_restarted_in_flight_is_placed_from_the_fc_over_the_outage() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let pose = |nav: &mut NavMap, e: &PoseEstimate| {
         let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0).expect("due")
     };
     pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
     let before = pose(&mut nav, &at(estimate(10.0, 0.0, 0.0), 100)).pose.t;
-    assert!((before[0]).abs() < 1e-9 && (before[1] - 10.0).abs() < 1e-9, "{before:?}");
+    assert!(
+        (before[0]).abs() < 1e-9 && (before[1] - 10.0).abs() < 1e-9,
+        "{before:?}"
+    );
     let mut stalled = at(estimate(25.0, 5.0, 1.4), 150);
     stalled.health = VioHealth::Degraded;
     stalled.heading_ok = false;
@@ -213,10 +238,16 @@ fn a_map_restarted_in_flight_is_placed_from_the_fc_over_the_outage() {
     // restart pose's own time, not by its yaw reset.
     let want_yaw = PI / 2.0 + fc_yaw(1_200) - fc_yaw(100);
     let off = wrap_pi(yaw0 - want_yaw).to_degrees();
-    assert!(off.abs() < 0.1, "north {off:+.2}° off the map's own carried over");
+    assert!(
+        off.abs() < 0.1,
+        "north {off:+.2}° off the map's own carried over"
+    );
     assert_eq!(nav.north(), Some(MapNorth::Declared));
     let near = |got: [f64; 3], want: [f64; 2]| {
-        assert!((got[0] - want[0]).abs() < 1e-2 && (got[1] - want[1]).abs() < 1e-2, "at {got:?}, not {want:?}");
+        assert!(
+            (got[0] - want[0]).abs() < 1e-2 && (got[1] - want[1]).abs() < 1e-2,
+            "at {got:?}, not {want:?}"
+        );
     };
     let fc_off = 90.0 - (30.0 + FC_YAW_RESET_DEG);
     let at_f = |f: f64| {
@@ -233,13 +264,23 @@ fn a_map_restarted_in_flight_is_placed_from_the_fc_over_the_outage() {
     near(pose(&mut nav, &warm).pose.t, want);
     let good = at(estimate(11.5, 0.0, 0.0), 1_600);
     nav.on_matcher_pose(&good, false, Some(0.0), Some(&fc));
-    near(pose(&mut nav, &good).pose.t, [want[0] + yaw0.cos(), want[1] + yaw0.sin()]);
+    near(
+        pose(&mut nav, &good).pose.t,
+        [want[0] + yaw0.cos(), want[1] + yaw0.sin()],
+    );
     // Lost again later: the map is not placed again.
     let mut later = at(estimate(12.5, 0.0, 0.0), 1_700);
     later.health = VioHealth::Lost;
     nav.on_matcher_pose(&later, false, Some(0.0), Some(&fc));
-    near(pose(&mut nav, &later).pose.t, [want[0] + 2.0 * yaw0.cos(), want[1] + 2.0 * yaw0.sin()]);
-    assert_eq!(nav.map_yaw(), Some(yaw0), "fixed: the north does not follow the FC");
+    near(
+        pose(&mut nav, &later).pose.t,
+        [want[0] + 2.0 * yaw0.cos(), want[1] + 2.0 * yaw0.sin()],
+    );
+    assert_eq!(
+        nav.map_yaw(),
+        Some(yaw0),
+        "fixed: the north does not follow the FC"
+    );
 }
 
 /// The FC in a featureless corridor, as [`FcEkfPose`] receives it at 50 Hz
@@ -250,10 +291,17 @@ fn fc_down_a_corridor() -> FcEkfPose {
     let fc = FcEkfPose::new();
     for ms in (0..=40_000u32).step_by(20) {
         let turn = 90.0 * (ms.clamp(39_000, 39_500) - 39_000) as f64 / 1e3;
-        let rate = if (39_000..39_500).contains(&ms) { 90.0f32 } else { 0.0 };
+        let rate = if (39_000..39_500).contains(&ms) {
+            90.0f32
+        } else {
+            0.0
+        };
         let h = (30.0 + turn).to_radians() / 2.0;
         let q = [h.cos() as f32, 0.0, 0.0, h.sin() as f32];
-        fc.on_frame(&att_turning(ms, q, rate.to_radians()), ms as u64 * 1_000_000);
+        fc.on_frame(
+            &att_turning(ms, q, rate.to_radians()),
+            ms as u64 * 1_000_000,
+        );
     }
     fc
 }
@@ -268,11 +316,11 @@ fn fc_down_a_corridor() -> FcEkfPose {
 fn a_map_restarted_long_after_its_last_good_pose_keeps_the_north() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let pose = |nav: &mut NavMap, e: &PoseEstimate| {
         let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0).expect("due")
     };
     for s in 0..=38u32 {
         let mut e = at(estimate(s as f64, 0.0, 0.0), s as i64 * 1_000);
@@ -288,13 +336,20 @@ fn a_map_restarted_long_after_its_last_good_pose_keeps_the_north() {
     nav.on_matcher_pose(&lost, true, Some(0.0), Some(&fc));
     let want = PI / 2.0 + 45f64.to_radians();
     let off = wrap_pi(nav.map_yaw().expect("a north") - want).to_degrees();
-    assert!(off.abs() < 0.1, "north {off:+.2}° off the map's own carried over");
+    assert!(
+        off.abs() < 0.1,
+        "north {off:+.2}° off the map's own carried over"
+    );
     let mut next = at(estimate(40.5, 0.0, 0.0), 40_100);
     next.health = VioHealth::Degraded;
     let pd = pose(&mut nav, &next);
     assert_eq!(pd.health, VioHealth::Degraded);
     let heading = frd_yaw(&pd.pose.r);
-    assert!(wrap_pi(heading - want).abs() < 0.1f64.to_radians(), "heading {:.2}°", heading.to_degrees());
+    assert!(
+        wrap_pi(heading - want).abs() < 0.1f64.to_radians(),
+        "heading {:.2}°",
+        heading.to_degrees()
+    );
 }
 
 /// While the FC's attitude history reaches back to the last good pose, a
@@ -304,11 +359,11 @@ fn a_map_restarted_long_after_its_last_good_pose_keeps_the_north() {
 fn a_map_restarted_within_the_fc_history_is_placed_from_the_last_good_pose() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let pose = |nav: &mut NavMap, e: &PoseEstimate| {
         let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0).expect("due")
     };
     pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
     pose(&mut nav, &at(estimate(10.0, 0.0, 0.0), 100));
@@ -321,7 +376,10 @@ fn a_map_restarted_within_the_fc_history_is_placed_from_the_last_good_pose() {
     nav.on_matcher_pose(&lost, true, Some(0.0), Some(&fc));
     let want = PI / 2.0 + fc_yaw(1_500) - fc_yaw(100);
     let off = wrap_pi(nav.map_yaw().expect("a north") - want).to_degrees();
-    assert!(off.abs() < 0.1, "north {off:+.2}° off the last good pose's carried over");
+    assert!(
+        off.abs() < 0.1,
+        "north {off:+.2}° off the last good pose's carried over"
+    );
 }
 
 /// Without the FC's turn since the trusted pose the restarted map's north
@@ -330,11 +388,11 @@ fn a_map_restarted_within_the_fc_history_is_placed_from_the_last_good_pose() {
 fn a_map_restarted_without_the_fc_turn_stays_lost() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let pose = |nav: &mut NavMap, e: &PoseEstimate| {
         let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0).expect("due")
     };
     pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
     let mut lost = at(estimate(1.0, 0.0, 0.0), 1_000);
@@ -344,13 +402,23 @@ fn a_map_restarted_without_the_fc_turn_stays_lost() {
     for (t_ms, health) in [(1_100, VioHealth::Degraded), (1_200, VioHealth::Good)] {
         let mut e = at(estimate(1.5, 0.0, 0.0), t_ms);
         e.health = health;
-        assert_eq!(pose(&mut nav, &e).health, VioHealth::Lost, "{health:?} at {t_ms} ms");
+        assert_eq!(
+            pose(&mut nav, &e).health,
+            VioHealth::Lost,
+            "{health:?} at {t_ms} ms"
+        );
     }
     // The GNSS fit takes none of its poses.
     for k in 0..50 {
-        nav.on_gnss_ref(&at(estimate(2.0 + k as f64, 0.0, 0.0), 1_300 + k * 100), [k as f64, 0.0]);
+        nav.on_gnss_ref(
+            &at(estimate(2.0 + k as f64, 0.0, 0.0), 1_300 + k * 100),
+            [k as f64, 0.0],
+        );
     }
-    assert!(nav.align.fit().is_none(), "a blind map's poses fed the GNSS fit");
+    assert!(
+        nav.align.fit().is_none(),
+        "a blind map's poses fed the GNSS fit"
+    );
     assert!(nav.north_unknown());
 }
 
@@ -360,11 +428,11 @@ fn a_map_restarted_without_the_fc_turn_stays_lost() {
 fn a_map_restarted_without_the_fc_position_keeps_the_pose() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let pose = |nav: &mut NavMap, e: &PoseEstimate| {
         let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0, false).expect("due")
+        nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0).expect("due")
     };
     pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), 0));
     let before = pose(&mut nav, &at(estimate(10.0, 0.0, 0.0), 100)).pose.t;
@@ -405,12 +473,21 @@ fn restart_at_rest(nav: &mut NavMap, fc: &FcEkfPose, heading: f64) -> PoseDescri
     let mut seen = 0;
     let mut tick = |nav: &mut NavMap, e: &PoseEstimate, restarts: u32| {
         nav.restart_heading_at(400_000_000);
-        nav.on_matcher_poses(std::slice::from_ref(e), restarts, &mut seen, Some(0.0), Some(fc));
+        nav.on_matcher_poses(
+            std::slice::from_ref(e),
+            restarts,
+            &mut seen,
+            Some(0.0),
+            Some(fc),
+        );
         let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(heading), t_ms, 0, false)
+        nav.on_pose(e, Some(0.0), Some(heading), t_ms, 0)
     };
     for k in 0..45 {
-        let mut e = at(estimate(-0.0005 * k as f64, 0.0001 * k as f64, 0.0), 410 + k * 100);
+        let mut e = at(
+            estimate(-0.0005 * k as f64, 0.0001 * k as f64, 0.0),
+            410 + k * 100,
+        );
         e.health = VioHealth::Lost;
         tick(nav, &e, 0);
     }
@@ -433,16 +510,22 @@ fn restart_at_rest(nav: &mut NavMap, fc: &FcEkfPose, heading: f64) -> PoseDescri
 fn a_map_restarted_on_the_ground_before_a_trusted_pose_latches_its_north_afresh() {
     let heading = 17.2f64.to_radians();
     let fc = fc_at_rest(heading);
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let pd = restart_at_rest(&mut nav, &fc, heading);
     assert!(!nav.north_unknown(), "blind on the ground");
     assert_eq!(pd.health, VioHealth::Good);
     assert_eq!(pd.north, Some(MapNorth::FcHeading));
     assert!(wrap_pi(frd_yaw(&pd.pose.r) - heading).abs() < 1e-9);
     for k in 0..50 {
-        nav.on_gnss_ref(&at(estimate(k as f64, 0.0, 0.0), 6_100 + k * 100), [k as f64, 0.0]);
+        nav.on_gnss_ref(
+            &at(estimate(k as f64, 0.0, 0.0), 6_100 + k * 100),
+            [k as f64, 0.0],
+        );
     }
-    assert!(nav.align.fit().is_some(), "the GNSS fit took none of its poses");
+    assert!(
+        nav.align.fit().is_some(),
+        "the GNSS fit took none of its poses"
+    );
 }
 
 /// The same with a declared take-off heading: latched afresh, as at the
@@ -452,7 +535,7 @@ fn a_declared_map_restarted_on_the_ground_before_a_trusted_pose_latches_it_afres
     let fc = fc_at_rest(0.3);
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let pd = restart_at_rest(&mut nav, &fc, 0.3);
     assert!(!nav.north_unknown(), "blind on the ground");
@@ -467,19 +550,28 @@ fn a_declared_map_restarted_on_the_ground_before_a_trusted_pose_latches_it_afres
 #[test]
 fn a_map_restarted_off_the_spot_before_a_trusted_pose_latches_the_fc_heading_then() {
     let fc = fc_at_rest(0.3);
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let mut lost = at(estimate(0.0, 0.0, 0.0), 100);
     lost.health = VioHealth::Lost;
-    nav.on_pose(&lost, Some(0.0), Some(0.3), 100, 0, false);
+    nav.on_pose(&lost, Some(0.0), Some(0.3), 100, 0);
     lost.t_ns = 200_000_000;
-    nav.on_pose(&lost, Some(ON_SPOT_M + 0.1), Some(0.3), 200, 0, false);
+    nav.on_pose(&lost, Some(ON_SPOT_M + 0.1), Some(0.3), 200, 0);
     lost.t_ns = 1_000_000_000;
     nav.on_matcher_pose(&lost, true, Some(ON_SPOT_M + 0.1), Some(&fc));
     assert!(!nav.north_unknown());
     let pd = nav
-        .on_pose(&at(estimate(0.0, 0.0, 0.0), 1_100), Some(3.0), Some(0.8), 1_100, 0, false)
+        .on_pose(
+            &at(estimate(0.0, 0.0, 0.0), 1_100),
+            Some(3.0),
+            Some(0.8),
+            1_100,
+            0,
+        )
         .expect("published");
-    assert_eq!((pd.health, pd.north), (VioHealth::Good, Some(MapNorth::FcHeading)));
+    assert_eq!(
+        (pd.health, pd.north),
+        (VioHealth::Good, Some(MapNorth::FcHeading))
+    );
     assert!(wrap_pi(frd_yaw(&pd.pose.r) - 0.8).abs() < 1e-9);
 }
 
@@ -493,14 +585,14 @@ fn a_declared_map_restarted_off_the_take_off_spot_latches_the_fc_heading_then() 
     let fc = fc_at_rest(0.3);
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     let mut lost = at(estimate(0.0, 0.0, 0.0), 100);
     lost.health = VioHealth::Lost;
-    nav.on_pose(&lost, Some(0.0), Some(0.3), 100, 0, false);
+    nav.on_pose(&lost, Some(0.0), Some(0.3), 100, 0);
     assert_eq!(nav.north(), Some(MapNorth::Declared));
     lost.t_ns = 200_000_000;
-    nav.on_pose(&lost, Some(ON_SPOT_M + 0.1), Some(0.3), 200, 0, false);
+    nav.on_pose(&lost, Some(ON_SPOT_M + 0.1), Some(0.3), 200, 0);
     for t_ms in [1_000u64, 2_000] {
         lost.t_ns = t_ms * 1_000_000;
         nav.on_matcher_pose(&lost, true, Some(ON_SPOT_M + 0.1), Some(&fc));
@@ -509,10 +601,13 @@ fn a_declared_map_restarted_off_the_take_off_spot_latches_the_fc_heading_then() 
         let mut warm = at(estimate(0.0, 0.0, 0.0), t_ms as i64 + 100);
         warm.health = VioHealth::Lost;
         let pd = nav
-            .on_pose(&warm, Some(3.0), Some(0.8), t_ms as i64 + 100, 0, false)
+            .on_pose(&warm, Some(3.0), Some(0.8), t_ms as i64 + 100, 0)
             .expect("published");
         assert_eq!(pd.north, Some(MapNorth::FcHeading), "restart at {t_ms} ms");
-        assert!(wrap_pi(frd_yaw(&pd.pose.r) - 0.8).abs() < 1e-9, "restart at {t_ms} ms");
+        assert!(
+            wrap_pi(frd_yaw(&pd.pose.r) - 0.8).abs() < 1e-9,
+            "restart at {t_ms} ms"
+        );
     }
 }
 
@@ -520,16 +615,25 @@ fn a_declared_map_restarted_off_the_take_off_spot_latches_the_fc_heading_then() 
 /// to lose: the first heading after it latches one, as at the first pose.
 #[test]
 fn a_map_restarted_before_its_first_north_latches_one() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let mut lost = at(estimate(0.0, 0.0, 0.0), 100);
     lost.health = VioHealth::Lost;
-    assert!(nav.on_pose(&lost, Some(0.0), None, 100, 0, false).is_none());
+    assert!(nav.on_pose(&lost, Some(0.0), None, 100, 0).is_none());
     nav.on_matcher_pose(&at(estimate(0.0, 0.0, 0.0), 900), true, Some(0.0), None);
     assert!(!nav.north_unknown());
     let pd = nav
-        .on_pose(&at(estimate(0.0, 0.0, 0.0), 1_000), Some(0.0), Some(0.3), 1_000, 0, false)
+        .on_pose(
+            &at(estimate(0.0, 0.0, 0.0), 1_000),
+            Some(0.0),
+            Some(0.3),
+            1_000,
+            0,
+        )
         .expect("published once the FC heading is known");
-    assert_eq!((pd.health, pd.north), (VioHealth::Good, Some(MapNorth::FcHeading)));
+    assert_eq!(
+        (pd.health, pd.north),
+        (VioHealth::Good, Some(MapNorth::FcHeading))
+    );
 }
 
 /// The descriptor carries the time the pose describes, not the time it is
@@ -537,11 +641,11 @@ fn a_map_restarted_before_its_first_north_latches_one() {
 /// is stamped 150 ms back.
 #[test]
 fn the_pose_is_stamped_with_its_measurement_time() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let mut nav = NavMap::new(settings(ComputePlacement::Hybrid));
     let mut e = estimate(0.0, 0.0, 0.0);
     e.t_ns = 4_000_000_000;
     let pd = nav
-        .on_pose(&e, Some(0.0), Some(0.0), 1_000_000, 4_150_000_000, false)
+        .on_pose(&e, Some(0.0), Some(0.0), 1_000_000, 4_150_000_000)
         .unwrap();
     assert_eq!(pd.ts_ms, 999_850);
 }
@@ -560,7 +664,7 @@ fn at(mut e: PoseEstimate, t_ms: i64) -> PoseEstimate {
 fn a_10_hz_provider_publishes_every_pose_at_a_100_ms_interval() {
     let mut nav = NavMap::new(NavSettings {
         pose_interval_ms: 100,
-        ..settings(NavPoseMode::Always, ComputePlacement::Hybrid)
+        ..settings(ComputePlacement::Hybrid)
     });
     let jitter_ms = [0, 3, -3, 2, -2, 1, -1, 3, -3, 0];
     let poll_step_ms = [95, 105, 99, 101, 97, 103, 100, 96, 104, 98];
@@ -574,7 +678,7 @@ fn a_10_hz_provider_publishes_every_pose_at_a_100_ms_interval() {
         now_ms += poll_step_ms[k as usize % 10];
         let now_mono_ns = e.t_ns + 120_000_000;
         if nav
-            .on_pose(&e, Some(0.0), Some(0.0), now_ms, now_mono_ns, false)
+            .on_pose(&e, Some(0.0), Some(0.0), now_ms, now_mono_ns)
             .is_some()
         {
             published += 1;
@@ -589,21 +693,14 @@ fn a_10_hz_provider_publishes_every_pose_at_a_100_ms_interval() {
 fn a_30_hz_provider_is_thinned_to_the_interval() {
     let mut nav = NavMap::new(NavSettings {
         pose_interval_ms: 100,
-        ..settings(NavPoseMode::Always, ComputePlacement::Hybrid)
+        ..settings(ComputePlacement::Hybrid)
     });
     let mut published = Vec::new();
     for k in 0..90 {
         let mut e = estimate(0.0, 0.0, 0.0);
         e.t_ns = 1_000_000_000 + k * 1_000_000_000 / 30;
         if nav
-            .on_pose(
-                &e,
-                Some(0.0),
-                Some(0.0),
-                1_000 + k as i64 * 33,
-                e.t_ns,
-                false,
-            )
+            .on_pose(&e, Some(0.0), Some(0.0), 1_000 + k as i64 * 33, e.t_ns)
             .is_some()
         {
             published.push(e.t_ns);
@@ -626,7 +723,7 @@ fn a_30_hz_provider_is_thinned_to_the_interval() {
 fn a_measurement_time_that_goes_backwards_publishes() {
     let mut nav = NavMap::new(NavSettings {
         pose_interval_ms: 100,
-        ..settings(NavPoseMode::Always, ComputePlacement::Hybrid)
+        ..settings(ComputePlacement::Hybrid)
     });
     let mut pose = |t_ms| {
         nav.on_pose(
@@ -635,7 +732,6 @@ fn a_measurement_time_that_goes_backwards_publishes() {
             Some(0.0),
             0,
             0,
-            false,
         )
     };
     assert!(pose(5_000).is_some());
@@ -646,39 +742,18 @@ fn a_measurement_time_that_goes_backwards_publishes() {
 }
 
 #[test]
-fn capture_mode_publishes_only_with_a_session_open() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Capture, ComputePlacement::Hybrid));
-    assert!(nav
-        .on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, 0, false)
-        .is_none());
-    assert!(nav
-        .on_scan(
-            &ring(),
-            &mount(),
-            Some(&estimate(0.0, 0.0, 0.0)),
-            None,
-            false
-        )
-        .scan
-        .is_none());
-    assert!(nav
-        .on_pose(&estimate(0.0, 0.0, 0.0), None, None, 100, 0, true)
-        .is_some());
-}
-
-#[test]
 fn scans_build_the_live_map_and_the_status_reports_it() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let e = estimate(0.0, 0.0, 0.0);
-    nav.on_pose(&e, Some(0.0), Some(0.0), 0, 0, false);
+    nav.on_pose(&e, Some(0.0), Some(0.0), 0, 0);
     for _ in 0..4 {
-        let out = nav.on_scan(&ring(), &mount(), Some(&e), Some(0.0), false);
+        let out = nav.on_scan(&ring(), &mount(), Some(&e), Some(0.0));
         let scan = out.scan.expect("the binned scan");
         assert!(scan.ranges_m.iter().all(|r| (r - 3.02).abs() < 0.01));
         assert_eq!(out.polar.expect("a polar record").range_mm[0], 3020);
     }
     assert_eq!(nav.map.grid.value_at(3.02, 0.01), OCCUPANCY_OCCUPIED);
-    let tick = nav.tick(&TickInputs::default(), false);
+    let tick = nav.tick(&TickInputs::default());
     let occ = tick.occupancy.expect("changed tiles");
     assert!(!occ.tiles.is_empty());
     let cloud = tick.pointcloud.expect("a sweep delta");
@@ -691,14 +766,14 @@ fn scans_build_the_live_map_and_the_status_reports_it() {
     assert_eq!(st.memory_budget_mb, 64.0);
     assert_eq!(st.sweep_points, cloud.count as u64);
 
-    let again = nav.tick(&TickInputs::default(), false);
+    let again = nav.tick(&TickInputs::default());
     assert!(
         again.occupancy.is_none() && again.pointcloud.is_none(),
         "nothing new"
     );
 }
 
-/// `memory_used_mb` is the capture process's resident memory, read from
+/// `memory_used_mb` is the navigation process's resident memory, read from
 /// `/proc/self/status`; a status without `VmRSS` reads null, never 0.
 #[test]
 fn the_status_reports_the_resident_memory_or_null() {
@@ -709,89 +784,83 @@ fn the_status_reports_the_resident_memory_or_null() {
     let own = read_vm_rss_mb().expect("this test process has a VmRSS");
     assert!(own > 0.0, "{own}");
 
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let inputs = TickInputs {
         rss_mb: Some(45.0),
         ..TickInputs::default()
     };
-    assert_eq!(nav.tick(&inputs, false).status.memory_used_mb, Some(45.0));
+    assert_eq!(nav.tick(&inputs).status.memory_used_mb, Some(45.0));
 }
 
 #[test]
 fn a_lost_pose_never_paints_the_map() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Hybrid));
+    let mut nav = NavMap::new(settings(ComputePlacement::Hybrid));
     let mut e = estimate(0.0, 0.0, 0.0);
     e.health = VioHealth::Lost;
-    nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, 0, false);
-    let out = nav.on_scan(&ring(), &mount(), Some(&e), None, false);
+    nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, 0);
+    let out = nav.on_scan(&ring(), &mount(), Some(&e), None);
     assert_eq!(out.polar.unwrap().health, VioHealth::Lost);
     assert_eq!(nav.map.grid.tile_count(), 0);
     assert!(nav.map.sweep.is_empty());
 }
 
 #[test]
-fn streaming_keeps_the_coarse_cloud_and_waits_for_the_link() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Stream));
+fn streaming_keeps_the_coarse_cloud() {
+    let mut nav = NavMap::new(settings(ComputePlacement::Stream));
     assert!(nav.streams());
-    nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, 0, false);
-    nav.on_scan(
-        &ring(),
-        &mount(),
-        Some(&estimate(0.0, 0.0, 0.0)),
-        None,
-        false,
-    );
-    let st = nav.tick(&TickInputs::default(), false).status;
+    nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.0), 0, 0);
+    nav.on_scan(&ring(), &mount(), Some(&estimate(0.0, 0.0, 0.0)), None);
+    let st = nav.tick(&TickInputs::default()).status;
+    assert_eq!(st.placement, ComputePlacement::Stream);
+    assert_eq!(st.voxel_m, 0.20, "the drone keeps the coarse cloud");
+}
+
+#[test]
+fn the_status_names_the_running_provider_or_none() {
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
+    assert_eq!(nav.tick(&TickInputs::default()).status.pose_provider, None);
+    let inputs = TickInputs {
+        pose_provider: Some(PoseSource::Vio),
+        ..TickInputs::default()
+    };
     assert_eq!(
-        st.stream.state,
-        ados_mapping_protocol::atlas::StreamPhase::Connecting
-    );
-    assert_eq!(
-        nav.map.sweep.voxel_m(),
-        0.20,
-        "the drone keeps the coarse cloud"
+        nav.tick(&inputs).status.pose_provider,
+        Some(NavPoseSource::Vio)
     );
 }
 
 #[test]
-fn a_closing_session_gets_the_cloud_and_the_tiles() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+fn the_whole_sweep_cloud_is_served_as_packed_triples() {
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let e = estimate(0.0, 0.0, 0.0);
-    nav.on_pose(&e, None, Some(0.0), 0, 0, false);
-    nav.on_scan(&ring(), &mount(), Some(&e), None, false);
-    nav.save(dir.path());
-    let cloud = std::fs::metadata(dir.path().join(SESSION_MAP_DIR).join(SWEEP_FILE)).unwrap();
-    assert_eq!(cloud.len() % 12, 0);
-    assert!(cloud.len() > 0);
-    assert!(dir
-        .path()
-        .join(SESSION_MAP_DIR)
-        .join(TILES_DIR)
-        .join("0_0.png")
-        .exists());
+    nav.on_pose(&e, None, Some(0.0), 0, 0);
+    nav.on_scan(&ring(), &mount(), Some(&e), None);
+    let (bytes, voxel_m) = nav.sweep_points();
+    assert_eq!(voxel_m, 0.05);
+    assert_eq!(bytes.len(), nav.map.sweep.len() * 12);
+    assert!(!bytes.is_empty());
 }
 
 #[test]
 fn nothing_is_placed_before_the_fc_heading_is_known() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let e = estimate(1.0, 0.0, 0.0);
-    assert!(nav.on_pose(&e, None, None, 0, 0, false).is_none());
+    assert!(nav.on_pose(&e, None, None, 0, 0).is_none());
     assert!(!nav.heading_known());
-    let out = nav.on_scan(&ring(), &mount(), Some(&e), None, false);
+    let out = nav.on_scan(&ring(), &mount(), Some(&e), None);
     assert!(out.scan.is_some(), "the body-frame scan needs no north");
     assert!(out.polar.is_none(), "no map record without north");
     assert_eq!(nav.map.grid.tile_count(), 0);
-    assert!(nav.tick(&TickInputs::default(), false).occupancy.is_none());
+    assert!(nav.tick(&TickInputs::default()).occupancy.is_none());
 }
 
 #[test]
 fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     // The SLAM world's x is the body's forward at the first scan; the FC's
     // compass says the body faced east (heading +90°).
     let pd = nav
-        .on_pose(&estimate(0.0, 0.0, 0.0), None, Some(PI / 2.0), 0, 0, false)
+        .on_pose(&estimate(0.0, 0.0, 0.0), None, Some(PI / 2.0), 0, 0)
         .unwrap();
     assert!(nav.heading_known());
     assert!(
@@ -806,7 +875,6 @@ fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
             Some(0.3),
             1_000,
             0,
-            false,
         )
         .unwrap();
     assert!(
@@ -815,13 +883,7 @@ fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
         pd.pose.t
     );
     // A later heading reading does not move the latched north.
-    let out = nav.on_scan(
-        &ring(),
-        &mount(),
-        Some(&estimate(1.0, 0.0, 0.0)),
-        None,
-        false,
-    );
+    let out = nav.on_scan(&ring(), &mount(), Some(&estimate(1.0, 0.0, 0.0)), None);
     let polar = out.polar.unwrap();
     assert!(
         polar.t[0].abs() < 1e-5 && (polar.t[1] - 1.0).abs() < 1e-5,
@@ -843,7 +905,7 @@ fn the_map_is_rotated_to_north_by_the_fc_heading_at_the_first_pose() {
 /// external navigation (variance failsafe, then Land).
 #[test]
 fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let truth = 180f64.to_radians();
     let decl = 12.8f64.to_radians();
     // On the ground, the SLAM body still at its first pose (small jitter), the
@@ -857,7 +919,6 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
             Some(heading),
             k * 100,
             0,
-            false,
         )
         .unwrap();
     }
@@ -873,7 +934,6 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
         Some(truth),
         2_100,
         0,
-        false,
     )
     .unwrap();
     let pd = nav
@@ -883,7 +943,6 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
             Some(truth + 0.1),
             2_200,
             0,
-            false,
         )
         .unwrap();
     assert!((nav.map_yaw().unwrap() - truth).abs() < 1e-9);
@@ -900,7 +959,6 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
         Some(truth - 0.2),
         2_300,
         0,
-        false,
     )
     .unwrap();
     assert!((nav.map_yaw().unwrap() - truth).abs() < 1e-9);
@@ -908,31 +966,17 @@ fn the_north_follows_the_fc_heading_on_the_spot_and_is_fixed_at_take_off() {
 
 #[test]
 fn moving_off_the_spot_on_the_ground_fixes_the_north_too() {
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
-    nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.5), 0, 0, false)
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
+    nav.on_pose(&estimate(0.0, 0.0, 0.0), None, Some(0.5), 0, 0)
         .unwrap();
-    nav.on_pose(
-        &at(estimate(0.3, 0.0, 0.0), 100),
-        None,
-        Some(0.6),
-        100,
-        0,
-        false,
-    )
-    .unwrap();
+    nav.on_pose(&at(estimate(0.3, 0.0, 0.0), 100), None, Some(0.6), 100, 0)
+        .unwrap();
     assert!(
         (nav.map_yaw().unwrap() - 0.6).abs() < 1e-12,
         "0.3 m is still on the spot"
     );
-    nav.on_pose(
-        &at(estimate(0.3, 0.45, 0.0), 200),
-        None,
-        Some(0.7),
-        200,
-        0,
-        false,
-    )
-    .unwrap();
+    nav.on_pose(&at(estimate(0.3, 0.45, 0.0), 200), None, Some(0.7), 200, 0)
+        .unwrap();
     assert!(
         (nav.map_yaw().unwrap() - 0.6).abs() < 1e-12,
         "0.54 m away: fixed"
@@ -963,14 +1007,13 @@ fn a_declared_north_is_latched_once_and_never_follows_the_fc_heading() {
                 Some(fc_yaw),
                 k * 100,
                 0,
-                false,
             );
             let r = pd.as_ref().unwrap().pose.r;
             fc_yaw = frd_yaw(&r) + drift_per_pose;
         }
         (nav, pd.unwrap())
     };
-    let (followed, pd) = walk(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let (followed, pd) = walk(settings(ComputePlacement::Onboard));
     assert!(
         wrap_pi(followed.map_yaw().unwrap() - truth).abs() > 1.0,
         "the loop walks"
@@ -979,7 +1022,7 @@ fn a_declared_north_is_latched_once_and_never_follows_the_fc_heading() {
 
     let declared = NavSettings {
         takeoff_heading_rad: Some(truth),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     };
     let (latched, pd) = walk(declared);
     assert!(
@@ -994,12 +1037,12 @@ fn a_declared_north_is_latched_once_and_never_follows_the_fc_heading() {
 fn a_declared_north_needs_no_fc_heading_and_places_the_first_pose() {
     let mut nav = NavMap::new(NavSettings {
         takeoff_heading_rad: Some(PI / 2.0),
-        ..settings(NavPoseMode::Always, ComputePlacement::Onboard)
+        ..settings(ComputePlacement::Onboard)
     });
     // The SLAM body is turned 0.2 rad at the first pose: the declared heading
     // is the body's, so the SLAM x axis points 0.2 rad left of it.
     let pd = nav
-        .on_pose(&estimate(0.0, 0.0, -0.2), None, None, 0, 0, false)
+        .on_pose(&estimate(0.0, 0.0, -0.2), None, None, 0, 0)
         .expect("published without any FC heading");
     assert!(wrap_pi(frd_yaw(&pd.pose.r) - PI / 2.0).abs() < 1e-9);
     assert!(wrap_pi(nav.map_yaw().unwrap() - (PI / 2.0 - 0.2)).abs() < 1e-9);
@@ -1011,7 +1054,6 @@ fn a_declared_north_needs_no_fc_heading_and_places_the_first_pose() {
             Some(0.0),
             1_000,
             0,
-            false,
         )
         .unwrap();
     let yaw = PI / 2.0 - 0.2;
@@ -1067,7 +1109,7 @@ fn a_3_degree_compass_error_stays_under_a_metre_137_m_past_gnss_loss() {
         let frd = ados_mapping_pose::align::rot2(-h0, path[k]);
         estimate(frd[0], -frd[1], -(yaws[k] - h0))
     };
-    let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
     let mut published = Vec::with_capacity(path.len());
     for k in 0..path.len() {
         let e = at(slam(k), k as i64 * 100);
@@ -1079,7 +1121,7 @@ fn a_3_degree_compass_error_stays_under_a_metre_137_m_past_gnss_loss() {
             nav.on_gnss_lost();
         }
         let pd = nav
-            .on_pose(&e, None, Some(h0 + compass_err), k as i64 * 100, 0, false)
+            .on_pose(&e, None, Some(h0 + compass_err), k as i64 * 100, 0)
             .expect("published every 100 ms");
         published.push([pd.pose.t[0], pd.pose.t[1]]);
     }

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use super::ticks::companion_state_from_i64;
 use super::DEGRADED_GRACE_NS;
-use crate::config::{Topology, NavigationConfig};
+use crate::config::{NavigationConfig, Topology};
 use crate::estimator::{EstimatorOutput, EstimatorState};
 use crate::health::{CompanionState, HealthSnapshot};
 use crate::pre_arm::{PreArmGate, PreArmInputs};

@@ -13,13 +13,13 @@ use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 
-use base64::Engine as _;
-use image::codecs::png::PngEncoder;
-use image::{ExtendedColorType, ImageEncoder};
 use ados_mapping_protocol::atlas::nav::{
     OCCUPANCY_FREE, OCCUPANCY_OCCUPIED, OCCUPANCY_TILE_CELLS, OCCUPANCY_UNKNOWN,
 };
 use ados_mapping_protocol::atlas::OccupancyTile;
+use base64::Engine as _;
+use image::codecs::png::PngEncoder;
+use image::{ExtendedColorType, ImageEncoder};
 
 /// Cell edge, metres.
 pub const RES_M: f32 = 0.05;
@@ -197,13 +197,6 @@ impl OccupancyGrid {
             n += 1;
         }
         n
-    }
-
-    /// Write every tile in RAM to `dir` (a session closing).
-    pub fn save_all(&self, dir: &Path) {
-        for (k, t) in &self.tiles {
-            write_tile(dir, *k, t);
-        }
     }
 }
 

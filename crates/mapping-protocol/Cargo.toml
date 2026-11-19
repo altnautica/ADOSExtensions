@@ -22,6 +22,8 @@ ados-capture-contract = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
+# A packed LiDAR scan part crosses as msgpack bin, not an array of integers.
+serde_bytes = "0.11"
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

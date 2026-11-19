@@ -138,7 +138,10 @@ fn a_turn_running_on_past_an_imu_gap_is_unchecked_while_off() {
         let e = err_deg(pose_at, t, &p);
         if t > 2.0 && e.abs() > 2.0 {
             off += 1;
-            assert!(!p.heading_ok, "t {t:.1}: heading err {e:.2} deg reported checked");
+            assert!(
+                !p.heading_ok,
+                "t {t:.1}: heading err {e:.2} deg reported checked"
+            );
         }
     }
     assert!(off > 10, "the gap lost no turn ({off} scans off)");
@@ -169,5 +172,9 @@ fn a_gap_in_the_imu_leaves_the_next_scan_unchecked() {
     }
     // Three scans from the first after the gap agree, and the third
     // re-confirms.
-    assert_eq!(flagged, vec![21, 22, 23], "only the scans across the gap and its re-confirm");
+    assert_eq!(
+        flagged,
+        vec![21, 22, 23],
+        "only the scans across the gap and its re-confirm"
+    );
 }

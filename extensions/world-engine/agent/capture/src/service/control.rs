@@ -2,20 +2,20 @@
 //! exposure, and the state/coverage reads.
 
 use ados_capture_contract::{SessionHealth, Timebase};
-use serde_json::json;
-use tokio::sync::oneshot;
 use ados_mapping_protocol::atlas::CaptureState;
 use ados_mapping_protocol::capture_ctl::{codes, CtlReply, CtlRequest, ExposureView, StartArgs};
+use serde_json::json;
+use tokio::sync::oneshot;
 
 use super::{Engine, ExposureDone};
 use crate::camera_control::{apply_within, PENDING, REPLY_BUDGET};
-use ados_mapping_pose::clock::ClockSidecar;
 use crate::control::ControlMsg;
 use crate::hud::HudAction;
 use crate::quality::coverage::Coverage;
 use crate::quality::flicker::settle_exposure;
 use crate::recording::{ActiveSession, Phase, StartEnv};
 use crate::session::CaptureSession;
+use ados_mapping_pose::clock::ClockSidecar;
 
 /// Finalize and bag the keyframe session so the compute node's reconstruct
 /// trigger (which fires on `Bagged`) sees it end. Returns whether it moved.
@@ -182,7 +182,7 @@ impl Engine {
                     geometry: c.geometry,
                 })
         };
-        let rig = match crate::rig_source::load_rig(&self.paths.rig) {
+        let rig = match ados_mapping_pose::rig::load_rig(&self.paths.rig) {
             // A stored rig gains any enabled camera it lacks: the session
             // records every enabled camera, and only rig cameras reconstruct.
             Some(stored) => {
@@ -217,10 +217,14 @@ impl Engine {
                 ));
             }
             let map = s.clock.for_session();
-            let utc = map
-                .utc_at(now)
-                .or_else(|| (timebase == Timebase::HostMonotonic).then(ados_mapping_pose::clock::realtime_ns));
-            (ados_mapping_pose::clock::session_time(timebase, &map, now), utc, map)
+            let utc = map.utc_at(now).or_else(|| {
+                (timebase == Timebase::HostMonotonic).then(ados_mapping_pose::clock::realtime_ns)
+            });
+            (
+                ados_mapping_pose::clock::session_time(timebase, &map, now),
+                utc,
+                map,
+            )
         };
         let env = StartEnv {
             device_id: &self.cfg.device_id,
@@ -301,7 +305,6 @@ impl Engine {
             frames_dropped_pct: dropped_pct,
         };
         stop_and_bag(&mut self.keyframes);
-        self.save_map_into(s.recorder.dir());
         if s.recorder.sidecars().keyframes.dropped() > 0 {
             tracing::warn!(
                 keyframes_dropped = s.recorder.sidecars().keyframes.dropped(),

@@ -107,10 +107,14 @@ pub struct AtlasIngest {
     /// Per-session live state, keyed by session id. Empty when live reconstruction
     /// is disabled (the sessions are never tracked, so the path is byte-unchanged).
     sessions: HashMap<String, SessionLive>,
-    /// Sessions whose drone streams for live reconstruction
-    /// (`atlas.compute_placement = stream`), learned from the drone's
-    /// `map_status`. Reconstructed live even when `live_config.enabled` is off.
+    /// Sessions whose drone streams for live reconstruction: the drone's
+    /// navigation map status says `stream` and its capture state names the
+    /// session. Reconstructed live even when `live_config.enabled` is off.
     streaming_sessions: HashSet<String>,
+    /// Whether the drone's latest map status places the map on a node live.
+    placement_streams: bool,
+    /// The session the drone's latest capture state names.
+    last_session: Option<String>,
     /// The capturing drone's device id, keyed by session id, learned from each
     /// event's `device_id` (the drone-side forwarder stamps it on egress). Stamped
     /// into the dataset + reconstruct job so the compute→cloud producer can
@@ -154,6 +158,8 @@ impl AtlasIngest {
             live_config,
             sessions: HashMap::new(),
             streaming_sessions: HashSet::new(),
+            placement_streams: false,
+            last_session: None,
             session_devices: HashMap::new(),
             accounts: HashMap::new(),
             train_iters: default_train_iters(),
@@ -267,6 +273,7 @@ impl AtlasIngest {
                 Ok(status) => {
                     self.note_device(&status.session_id, event.device_id.as_deref());
                     self.note_steps(&status);
+                    self.note_session(&status.session_id);
                     self.accounts
                         .entry(status.session_id.clone())
                         .or_default()
@@ -293,13 +300,19 @@ impl AtlasIngest {
     /// reconstruction. A drone that switches away stops new live cycles; the
     /// session's final bag still reconstructs.
     fn note_placement(&mut self, status: &MapStatus) {
-        let Some(session) = &status.session_id else {
-            return;
-        };
-        if status.placement.streams_live() {
-            self.streaming_sessions.insert(session.clone());
-        } else {
-            self.streaming_sessions.remove(session);
+        self.placement_streams = status.placement.streams_live();
+        if !self.placement_streams {
+            self.streaming_sessions.clear();
+        } else if let Some(s) = self.last_session.clone() {
+            self.streaming_sessions.insert(s);
+        }
+    }
+
+    /// A capture state named `session`: it streams while the placement does.
+    fn note_session(&mut self, session: &str) {
+        self.last_session = Some(session.to_string());
+        if self.placement_streams {
+            self.streaming_sessions.insert(session.to_string());
         }
     }
 

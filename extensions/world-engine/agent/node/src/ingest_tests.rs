@@ -319,7 +319,6 @@ fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
     let mut ingest = AtlasIngest::with_live_config(dir.path(), cfg);
     let status = |placement| {
         let st = MapStatus {
-            session_id: Some("stream".into()),
             placement,
             ..MapStatus::default()
         };
@@ -330,6 +329,9 @@ fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
         )
     };
     assert!(!ingest.live_active());
+    ingest
+        .step(&capture_state("stream", CaptureState::Capturing, 0), 40)
+        .unwrap();
     ingest.step(&status(ComputePlacement::Stream), 50).unwrap();
     assert!(ingest.live_active());
     for kf in 0..3 {

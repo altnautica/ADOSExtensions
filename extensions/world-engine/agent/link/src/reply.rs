@@ -1,12 +1,12 @@
 //! Error replies of the capture-device routes and tools:
 //! `{"error": CODE, "detail": ".."}` with a status from the code.
 
+use ados_mapping_protocol::capture_ctl;
+use ados_mapping_transport::ClientError as NodeClientError;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
-use ados_mapping_protocol::capture_ctl;
-use ados_mapping_transport::ClientError as NodeClientError;
 
 use crate::control::ControlError;
 

@@ -12,20 +12,20 @@ use ados_capture_contract::foxglove::RawImage;
 use ados_capture_contract::v1::{ClockSample, ImuBatch, ImuSample, TriggerRecord};
 use ados_capture_contract::{SessionReader, Timebase};
 use ados_config::capture_storage::{CaptureState, CaptureStorageSidecar, CaptureUsage};
+use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, EngineFrameSource};
+use ados_mapping_pose::replay::ReplayPose;
+use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
+use ados_mapping_pose::vehicle::VehicleFeed;
+use ados_mapping_pose::{diagonal_cov, se3, PoseEstimate};
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 use ados_protocol::framebus::{FrameFormat, TIMEBASE_SIM};
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
-use ados_mapping_pose::replay::ReplayPose;
-use ados_mapping_pose::{diagonal_cov, se3, PoseEstimate};
-use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
-use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, EngineFrameSource};
-use ados_mapping_pose::vehicle::VehicleFeed;
 use world_engine_capture::{
-    run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths,
-    PoseSource, VioHealth,
+    run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths, PoseSource,
+    VioHealth,
 };
-use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 
 /// Host monotonic ns at simulation time 0.
 const HOST0: u64 = 50_000_000_000;
@@ -212,14 +212,12 @@ async fn a_two_camera_sim_session_records_and_validates() {
         vehicle: VehicleFeed::new(),
         sensors,
         bus_rx,
-        lidar_rx: None,
         publisher,
         control_rx: ctl_rx,
         hud_rx: None,
         view_tx: None,
         camera: None,
         paths: paths.clone(),
-        nav: Default::default(),
         reconstruct_steps: Default::default(),
     };
     let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));

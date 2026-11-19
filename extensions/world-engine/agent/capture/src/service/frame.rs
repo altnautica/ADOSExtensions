@@ -1,19 +1,19 @@
 //! Per-frame work: rates, pose feed, quality, coverage, recording, keyframes.
 
 use ados_capture_contract::{RigSensorKind, Timebase};
-use ados_protocol::framebus::TIMEBASE_SIM;
 use ados_mapping_protocol::atlas::{
     ImageEncoding as KfEncoding, KeyframeImage, Pose, TimeAlignment,
 };
+use ados_protocol::framebus::TIMEBASE_SIM;
 
 use super::Engine;
-use ados_mapping_pose::clock::ClockMap;
-use ados_mapping_pose::frame_source::CapturedFrame;
-use ados_mapping_pose::{se3, PoseEstimate};
 use crate::quality;
 use crate::recorder::Item;
 use crate::recording::Phase;
 use crate::session::FrameInput;
+use ados_mapping_pose::clock::ClockMap;
+use ados_mapping_pose::frame_source::CapturedFrame;
+use ados_mapping_pose::{se3, PoseEstimate};
 
 /// IMU history attached to a keyframe when its camera has no earlier one.
 const KF_IMU_WINDOW_NS: u64 = 200_000_000;

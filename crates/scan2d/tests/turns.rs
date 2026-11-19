@@ -41,14 +41,23 @@ fn recorded(text: &str) -> Recording {
     let mut fc_atts: Vec<(u64, Rotation3<f64>)> = Vec::new();
     let mut gyro = Vec::new();
     let mut scans = Vec::new();
-    for l in text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+    for l in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
         let mut f = l.split_whitespace();
         let kind = f.next().expect("a line kind");
         let v: Vec<i64> = f.map(|x| x.parse().expect("an integer")).collect();
         let t_ns = v[0] as u64 * 1_000;
         match kind {
-            "a" => atts.push((t_ns, Rotation3::from_euler_angles(urad(v[1]), urad(v[2]), urad(v[3])))),
-            "f" => fc_atts.push((t_ns, Rotation3::from_euler_angles(urad(v[1]), urad(v[2]), urad(v[3])))),
+            "a" => atts.push((
+                t_ns,
+                Rotation3::from_euler_angles(urad(v[1]), urad(v[2]), urad(v[3])),
+            )),
+            "f" => fc_atts.push((
+                t_ns,
+                Rotation3::from_euler_angles(urad(v[1]), urad(v[2]), urad(v[3])),
+            )),
             "g" => gyro.push(ImuSample {
                 t_ns,
                 gyro: [urad(v[1]), urad(v[2]), urad(v[3])],
@@ -75,12 +84,19 @@ fn recorded(text: &str) -> Recording {
             other => panic!("unknown line kind `{other}`"),
         }
     }
-    let imu = if gyro.is_empty() { from_attitudes(&atts) } else { gyro };
+    let imu = if gyro.is_empty() {
+        from_attitudes(&atts)
+    } else {
+        gyro
+    };
     let heading_src = if fc_atts.is_empty() { &atts } else { &fc_atts };
     Recording {
         imu,
         fc_attitude_imu: from_attitudes(&fc_atts),
-        fc_headings: heading_src.iter().map(|(t, r)| (*t, r.euler_angles().2)).collect(),
+        fc_headings: heading_src
+            .iter()
+            .map(|(t, r)| (*t, r.euler_angles().2))
+            .collect(),
         fc_attitudes: fc_atts,
         scans,
     }
@@ -131,7 +147,9 @@ fn heading_errors(rec: &Recording, imu: &[ImuSample]) -> Vec<f64> {
 }
 
 fn worst_deg(errs: &[f64]) -> f64 {
-    errs.iter().map(|e| e.abs().to_degrees()).fold(0.0, f64::max)
+    errs.iter()
+        .map(|e| e.abs().to_degrees())
+        .fold(0.0, f64::max)
 }
 
 fn mean_deg(errs: &[f64]) -> f64 {
@@ -168,7 +186,10 @@ fn forest_trail_bends_keep_the_heading() {
     assert_eq!(rec.scans.len(), 250);
     let errs = heading_errors(&rec, &rec.imu);
     let last = errs.last().unwrap().to_degrees();
-    eprintln!("forest: worst {:.3} deg, last {last:+.3} deg", worst_deg(&errs));
+    eprintln!(
+        "forest: worst {:.3} deg, last {last:+.3} deg",
+        worst_deg(&errs)
+    );
     assert!(worst_deg(&errs) < 0.3, "worst {:.3} deg", worst_deg(&errs));
     assert!(last.abs() < 0.2, "last {last:+.3} deg");
 }
@@ -182,7 +203,10 @@ fn room_take_off_yaw_slew_is_tracked() {
     assert_eq!(rec.scans.len(), 80);
     let errs = heading_errors(&rec, &rec.imu);
     let last = errs.last().unwrap().to_degrees();
-    eprintln!("room: worst {:.3} deg, last {last:+.3} deg", worst_deg(&errs));
+    eprintln!(
+        "room: worst {:.3} deg, last {last:+.3} deg",
+        worst_deg(&errs)
+    );
     assert!(worst_deg(&errs) < 1.5, "worst {:.3} deg", worst_deg(&errs));
     assert!(last.abs() < 1.0, "last {last:+.3} deg");
 }
@@ -196,7 +220,10 @@ fn aisle_waypoint_turns_are_tracked() {
     assert_eq!(rec.scans.len(), 80);
     let errs = heading_errors(&rec, &rec.imu);
     let last = errs.last().unwrap().to_degrees();
-    eprintln!("aisle: worst {:.3} deg, last {last:+.3} deg", worst_deg(&errs));
+    eprintln!(
+        "aisle: worst {:.3} deg, last {last:+.3} deg",
+        worst_deg(&errs)
+    );
     assert!(worst_deg(&errs) < 2.5, "worst {:.3} deg", worst_deg(&errs));
     assert!(last.abs() < 1.0, "last {last:+.3} deg");
 }
@@ -213,7 +240,10 @@ fn aisle_yaw_wobble_holds_the_heading_on_the_gyro() {
     assert_eq!(rec.scans.len(), 100);
     let errs = heading_errors(&rec, &rec.imu);
     let last = errs.last().unwrap().to_degrees();
-    eprintln!("wobble, gyro: worst {:.3} deg, last {last:+.3} deg", worst_deg(&errs));
+    eprintln!(
+        "wobble, gyro: worst {:.3} deg, last {last:+.3} deg",
+        worst_deg(&errs)
+    );
     assert!(worst_deg(&errs) < 0.5, "worst {:.3} deg", worst_deg(&errs));
     assert!(last.abs() < 0.3, "last {last:+.3} deg");
 
@@ -230,14 +260,20 @@ fn aisle_yaw_wobble_holds_the_heading_on_the_gyro() {
         .collect();
     let errs = heading_errors(&rec, &biased);
     let last = errs.last().unwrap().to_degrees();
-    eprintln!("wobble, biased gyro: worst {:.3} deg, last {last:+.3} deg", worst_deg(&errs));
+    eprintln!(
+        "wobble, biased gyro: worst {:.3} deg, last {last:+.3} deg",
+        worst_deg(&errs)
+    );
     assert!(worst_deg(&errs) < 0.5, "worst {:.3} deg", worst_deg(&errs));
     assert!(last.abs() < 0.3, "last {last:+.3} deg");
 
     let fc = heading_errors(&rec, &rec.fc_attitude_imu);
     let fc_last = fc.last().unwrap().to_degrees();
     eprintln!("wobble, FC attitude: last {fc_last:+.3} deg");
-    assert!(fc_last.abs() > 5.0, "the FC attitude's yaw error reaches the match: {fc_last:+.3} deg");
+    assert!(
+        fc_last.abs() > 5.0,
+        "the FC attitude's yaw error reaches the match: {fc_last:+.3} deg"
+    );
 }
 
 /// 70 s of a forest trail on the flight controller's own IMU, whose gyro
@@ -276,7 +312,11 @@ fn warehouse_return_leg_holds_the_heading() {
     let rec = recorded(include_str!("data/warehouse_return_leg.txt"));
     assert_eq!(rec.scans.len(), 750);
     // The return aisle: after the second turn, 41 s in.
-    let leg = rec.scans.iter().position(|(s, _)| s.t_ns >= 41_000_000_000).unwrap();
+    let leg = rec
+        .scans
+        .iter()
+        .position(|(s, _)| s.t_ns >= 41_000_000_000)
+        .unwrap();
 
     let errs = heading_errors(&rec, &with_fc_gravity(&rec));
     let (mean, worst) = (mean_deg(&errs[leg..]), worst_deg(&errs[leg..]));
@@ -287,7 +327,10 @@ fn warehouse_return_leg_holds_the_heading() {
     let raw = heading_errors(&rec, &rec.imu);
     let raw_mean = mean_deg(&raw[leg..]);
     eprintln!("warehouse return leg, accelerometer: mean {raw_mean:+.3} deg");
-    assert!(raw_mean.abs() > 1.0, "the accelerometer's lean reaches the heading: {raw_mean:+.3} deg");
+    assert!(
+        raw_mean.abs() > 1.0,
+        "the accelerometer's lean reaches the heading: {raw_mean:+.3} deg"
+    );
 }
 
 /// Replay with the IMU samples inside `hole` (host ns, open) dropped,
@@ -301,7 +344,10 @@ fn replay_holed(
     fc_position: Option<&dyn Fn(u64) -> [f64; 2]>,
 ) -> Vec<(PoseOut, usize)> {
     let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
-    let mut it = imu.iter().filter(|s| !(hole.0 < s.t_ns && s.t_ns < hole.1)).peekable();
+    let mut it = imu
+        .iter()
+        .filter(|s| !(hole.0 < s.t_ns && s.t_ns < hole.1))
+        .peekable();
     let mut fed = 0;
     rec.scans
         .iter()
@@ -355,7 +401,9 @@ fn holed_replay(rec: &Recording, imu: &[ImuSample], hole_ns: Option<(u64, u64)>)
     let hole = hole_ns.map_or((0, 0), |(h, len)| (t0 + h, t0 + h + len));
     let reference = replay_holed(rec, imu, (0, 0), None);
     let ref_at = |t: u64| {
-        let k = reference.partition_point(|(o, _)| o.t_ns <= t).clamp(1, reference.len() - 1);
+        let k = reference
+            .partition_point(|(o, _)| o.t_ns <= t)
+            .clamp(1, reference.len() - 1);
         let (a, b) = (&reference[k - 1].0, &reference[k].0);
         let f = ((t as f64 - a.t_ns as f64) / (b.t_ns - a.t_ns) as f64).clamp(0.0, 1.0);
         [a.x + f * (b.x - a.x), a.y + f * (b.y - a.y)]
@@ -378,12 +426,16 @@ fn holed_replay(rec: &Recording, imu: &[ImuSample], hole_ns: Option<(u64, u64)>)
         worst_deg: 0.0,
         restarts: 0,
         restart_s: None,
-        left_s: rec.scans.last().map_or(0.0, |(s, _)| s.t_ns.saturating_sub(hole.1) as f64 * 1e-9),
+        left_s: rec
+            .scans
+            .last()
+            .map_or(0.0, |(s, _)| s.t_ns.saturating_sub(hole.1) as f64 * 1e-9),
     };
     for ((out, inserted), (scan, yaw)) in holed.iter().zip(&rec.scans) {
         if out.map_restarted {
             r.restarts += 1;
-            r.restart_s.get_or_insert(out.t_ns.saturating_sub(hole.1) as f64 * 1e-9);
+            r.restart_s
+                .get_or_insert(out.t_ns.saturating_sub(hole.1) as f64 * 1e-9);
             rot = (*yaw - ty0 + y0) - out.yaw;
         }
         if scan.t_ns > hole.1 && !out.heading_unconfirmed && *inserted >= 10 {
@@ -419,9 +471,27 @@ fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
         ("room 2 s", &room, &room.imu, 2 * s, 300 * ms),
         ("warehouse 22 s", &warehouse, &wh_imu, 22 * s, 300 * ms),
         ("warehouse 30 s", &warehouse, &wh_imu, 30 * s, 300 * ms),
-        ("warehouse 22 s, 1.5 s hole", &warehouse, &wh_imu, 22 * s, 1_500 * ms),
-        ("warehouse 30 s, 1.5 s hole", &warehouse, &wh_imu, 30 * s, 1_500 * ms),
-        ("warehouse 30 s, 5 s hole", &warehouse, &wh_imu, 30 * s, 5_000 * ms),
+        (
+            "warehouse 22 s, 1.5 s hole",
+            &warehouse,
+            &wh_imu,
+            22 * s,
+            1_500 * ms,
+        ),
+        (
+            "warehouse 30 s, 1.5 s hole",
+            &warehouse,
+            &wh_imu,
+            30 * s,
+            1_500 * ms,
+        ),
+        (
+            "warehouse 30 s, 5 s hole",
+            &warehouse,
+            &wh_imu,
+            30 * s,
+            5_000 * ms,
+        ),
     ];
     for (name, rec, imu, at, len) in cases {
         let r = holed_replay(rec, imu, Some((at, len)));
@@ -430,9 +500,14 @@ fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
             r.usable_s, r.worst_deg, r.restarts
         );
         match r.usable_s {
-            Some(usable) => assert!(usable <= HOLE_USABLE_S, "{name}: usable only after {usable:.1} s"),
+            Some(usable) => assert!(
+                usable <= HOLE_USABLE_S,
+                "{name}: usable only after {usable:.1} s"
+            ),
             None => {
-                let at = r.restart_s.unwrap_or_else(|| panic!("{name}: lost for the rest of the recording"));
+                let at = r
+                    .restart_s
+                    .unwrap_or_else(|| panic!("{name}: lost for the rest of the recording"));
                 assert!(
                     at <= HOLE_USABLE_S - WARM_UP_S && r.left_s < at + WARM_UP_S,
                     "{name}: started over {at:.1} s after the hole, {:.1} s before the end",
@@ -440,10 +515,22 @@ fn a_short_imu_hole_in_a_turn_is_usable_again_within_seconds() {
                 );
             }
         }
-        assert!(r.worst_deg <= 2.0, "{name}: {:.2} deg off while usable", r.worst_deg);
+        assert!(
+            r.worst_deg <= 2.0,
+            "{name}: {:.2} deg off while usable",
+            r.worst_deg
+        );
     }
-    for (name, rec, imu) in [("aisle", &aisle, &aisle.imu), ("room", &room, &room.imu), ("warehouse", &warehouse, &wh_imu)] {
-        assert_eq!(holed_replay(rec, imu, None).restarts, 0, "{name}: restarted with no hole");
+    for (name, rec, imu) in [
+        ("aisle", &aisle, &aisle.imu),
+        ("room", &room, &room.imu),
+        ("warehouse", &warehouse, &wh_imu),
+    ] {
+        assert_eq!(
+            holed_replay(rec, imu, None).restarts,
+            0,
+            "{name}: restarted with no hole"
+        );
     }
 }
 

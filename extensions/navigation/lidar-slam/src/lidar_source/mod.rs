@@ -29,13 +29,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ados_capture_contract::LidarModel;
+use ados_mapping_protocol::atlas::{LidarHealth, LidarStatus};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use ados_mapping_protocol::atlas::{LidarHealth, LidarStatus};
 
-use ados_mapping_pose::lidar_scan::LidarScan;
 use crate::settings::LidarSettings;
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 pub use livox::{scan_from_livox, LivoxSource, LivoxSourceConfig, SdkNetConfig, SDK_CONFIG_FILE};
 pub use rplidar::{scan_from_rplidar, RplidarSource};
@@ -56,7 +56,7 @@ pub enum LidarSourceError {
     #[error("no live driver for LiDAR model `{0}`")]
     UnsupportedModel(String),
     /// The selected driver's device setting is empty: no live driver wanted.
-    #[error("`atlas.lidar.{0}` is not set")]
+    #[error("`navigation.lidar.{0}` is not set")]
     NotConfigured(&'static str),
     #[error("LiDAR model rate {0} Hz is not a positive scan rate")]
     InvalidRate(f64),

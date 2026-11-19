@@ -10,10 +10,10 @@ use ados_capture_contract::{
 };
 use ados_mapping_protocol::capture_ctl::{codes, CtlReply, OperatorAnchor, StartArgs};
 
-use ados_mapping_pose::clock::ClockMap;
 use crate::recorder::convert::ImageEncoding;
 use crate::recorder::{Recorder, RecorderConfig};
 use crate::storage;
+use ados_mapping_pose::clock::ClockMap;
 
 /// Recording or paused (a closed session is no session).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -20,11 +20,11 @@
 //! live target. The bridge never extrapolates a stale box and never auto-
 //! re-acquires a dropped lock.
 
+use ados_mapping_protocol::offload::OffloadDetectionBatch;
 use ados_offload::{OffloadMode, OffloadSession, SessionStatus};
 use ados_protocol::framebus::{
     self, BoundingBox, Detection as BusDetection, DetectionBatch, VISION_DETECTION_VERSION,
 };
-use ados_mapping_protocol::offload::OffloadDetectionBatch;
 
 /// The offloaded camera's geometry as the agent's camera roster declares it
 /// (`cameras[].fov_deg`, `cameras[].mount_pitch_deg` in the roster's sign),

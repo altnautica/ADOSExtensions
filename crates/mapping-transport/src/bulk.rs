@@ -25,11 +25,11 @@ use std::future::Future;
 use std::io::SeekFrom;
 use std::path::Path;
 
+use ados_mapping_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 use reqwest::header::{HeaderMap, CONTENT_RANGE};
 use reqwest::{Client, RequestBuilder, StatusCode};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use ados_mapping_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
 use crate::bulk_plan::{BulkConfig, BulkError, Committed, PlanFile, SessionPlan, MAX_CHUNK_BYTES};
 use crate::client::{node_http, PinnedHost};

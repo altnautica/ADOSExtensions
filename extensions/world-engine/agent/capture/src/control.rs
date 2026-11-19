@@ -8,12 +8,12 @@
 
 use std::io;
 
+use ados_mapping_protocol::capture_ctl::{codes, CtlReply, CtlRequest};
 use ados_protocol::ipc::bind_command_socket;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use ados_mapping_protocol::capture_ctl::{codes, CtlReply, CtlRequest};
 
 /// A request for the capture loop and where its reply goes.
 pub struct ControlMsg {

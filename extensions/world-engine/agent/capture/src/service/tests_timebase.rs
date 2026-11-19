@@ -11,18 +11,18 @@ use std::time::Duration;
 use ados_capture_contract::v1::{ClockSample, ImuBatch, ImuSample};
 use ados_capture_contract::{topics, SessionReader, Timebase};
 use ados_config::capture_storage::CaptureState;
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
-use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 
 use super::{run_capture_loop, LoopDeps, Paths};
-use ados_mapping_pose::clock::mono_ns;
 use crate::control::ControlMsg;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, SyntheticFrameSource};
-use ados_mapping_pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
+use ados_mapping_pose::clock::mono_ns;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::frame_source::{AtlasFrameSource, SyntheticFrameSource};
 use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
 
@@ -84,7 +84,6 @@ async fn a_hub_session_records_on_its_own_timebase() {
         vehicle: VehicleFeed::new(),
         sensors: sensors.clone(),
         bus_rx,
-        lidar_rx: None,
         publisher: AtlasPublisher::bind(&dir.path().join("atlas.sock").to_string_lossy())
             .await
             .unwrap(),
@@ -93,7 +92,6 @@ async fn a_hub_session_records_on_its_own_timebase() {
         view_tx: None,
         camera: None,
         paths,
-        nav: Default::default(),
         reconstruct_steps: steps.clone(),
     };
     let task = tokio::spawn(run_capture_loop(deps, cancel.clone()));

@@ -39,7 +39,6 @@ pub mod control;
 pub mod encode;
 pub mod hud;
 pub mod lidar_record;
-pub mod providers;
 pub mod publish;
 pub mod quality;
 pub mod recorder;
@@ -58,7 +57,7 @@ pub use control::{serve_control, ControlMsg};
 pub use encode::encode_keyframe_jpeg;
 pub use publish::AtlasPublisher;
 pub use runtime::{default_intrinsics, AtlasRuntimeConfig, ConfigError, PosePrior, CONFIG_KEYS};
-pub use service::{run_capture_loop, LoopDeps, NavDeps, Paths};
+pub use service::{run_capture_loop, LoopDeps, Paths};
 
 // Re-export the shared wire contract so callers get one import surface.
 pub use ados_mapping_protocol::atlas::{

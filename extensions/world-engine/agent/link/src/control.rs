@@ -9,12 +9,12 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use ados_mapping_protocol::atlas::CaptureStatus;
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, CONTROL_REQUEST_TIMEOUT_MS};
 use serde_json::Value;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use ados_mapping_protocol::atlas::CaptureStatus;
-use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, CONTROL_REQUEST_TIMEOUT_MS};
 
 /// A bounded per-request timeout so a wedged capture service cannot hang the
 /// route's connection; a local reply is near-instant and an exposure apply
@@ -139,11 +139,11 @@ impl ControlClient {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
     use parking_lot::Mutex;
     use std::path::Path;
     use std::sync::Arc;
     use tokio::net::UnixListener;
-    use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
 
     pub fn capturing_status() -> CaptureStatus {
         CaptureStatus {

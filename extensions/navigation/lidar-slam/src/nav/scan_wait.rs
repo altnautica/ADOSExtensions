@@ -112,7 +112,10 @@ mod tests {
             move |t| interpolate(&tr, t)
         };
         let newest = |tr: &std::collections::VecDeque<PoseEstimate>| tr.back().map(|e| e.t_ns);
-        assert!(interpolate(&track, 1_100 * MS).is_none(), "the old behaviour: refused");
+        assert!(
+            interpolate(&track, 1_100 * MS).is_none(),
+            "the old behaviour: refused"
+        );
         assert!(wait.next(1_200 * MS, newest(&track), at(&track)).is_none());
         assert_eq!(wait.len(), 1);
         track.push_back(estimate(1_100 * MS, 0.8));
@@ -128,7 +131,9 @@ mod tests {
     fn a_scan_whose_pose_never_comes_is_placed_without_one_after_the_wait() {
         let mut wait = ScanWait::default();
         wait.push(scan(1_000 * MS));
-        assert!(wait.next(1_000 * MS + SCAN_POSE_WAIT_NS - 1, None, |_| None).is_none());
+        assert!(wait
+            .next(1_000 * MS + SCAN_POSE_WAIT_NS - 1, None, |_| None)
+            .is_none());
         let (s, pose) = wait
             .next(1_000 * MS + SCAN_POSE_WAIT_NS, None, |_| None)
             .unwrap();

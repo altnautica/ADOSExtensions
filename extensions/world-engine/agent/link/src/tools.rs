@@ -25,10 +25,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use ados_mapping_protocol::capture_ctl::{CtlRequest, MarkArgs, StartArgs};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use ados_mapping_protocol::capture_ctl::{CtlRequest, MarkArgs, StartArgs};
 
 use crate::api::DroneApi;
 use crate::host::to_json;
@@ -203,8 +203,8 @@ mod tests {
     use crate::api::tests::test_api;
     use crate::control::tests::fake_control_socket;
     use crate::testing::FakeHost;
-    use serde_json::json;
     use ados_mapping_protocol::capture_ctl::CtlReply;
+    use serde_json::json;
 
     #[tokio::test]
     async fn tools_run_the_route_operations() {

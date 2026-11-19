@@ -24,11 +24,11 @@
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
+use ados_mapping_protocol::offload::{Detection, FrameRef, OffloadDetectionBatch};
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
-use ados_mapping_protocol::offload::{Detection, FrameRef, OffloadDetectionBatch};
 
 use crate::offload::Detector;
 use crate::session_registry::SessionProgress;

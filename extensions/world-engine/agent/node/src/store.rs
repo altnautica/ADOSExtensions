@@ -2,9 +2,9 @@
 //! outputs. Mirrors the durable single-writer pattern the logging daemon uses.
 //! Open `:memory:` for tests and a file path on a node.
 
+use ados_mapping_protocol::compute::{Dataset, JobRecord, Output};
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
-use ados_mapping_protocol::compute::{Dataset, JobRecord, Output};
 
 use crate::{ComputeError, ComputeJobState};
 

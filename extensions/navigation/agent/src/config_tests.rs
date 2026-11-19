@@ -101,7 +101,9 @@ fn schema_defaults_equal_rust_default() {
 fn flow_quality_min_is_clamped() {
     let high = map(&[("flow_quality_min", Value::from(900i64))]);
     assert_eq!(
-        NavigationConfig::from_value(&high).unwrap().flow_quality_min,
+        NavigationConfig::from_value(&high)
+            .unwrap()
+            .flow_quality_min,
         255
     );
     let low = map(&[("flow_quality_min", Value::from(-4i64))]);
@@ -169,6 +171,24 @@ fn disengaged_effective_mode_is_off() {
     assert!(!cfg.active);
     assert_eq!(cfg.mode, Mode::OpticalFlow);
     assert_eq!(cfg.effective_mode(), Mode::Off);
+}
+
+#[test]
+fn a_visor_runs_no_flow_and_no_fc_bridge_whatever_the_config_says() {
+    let v = map(&[
+        ("mode", Value::from("optical_flow")),
+        ("active", Value::from(true)),
+    ]);
+    let cfg = NavigationConfig::from_value(&v).unwrap();
+    assert_eq!(
+        cfg.clone().for_profile(Some("drone")).effective_mode(),
+        Mode::OpticalFlow
+    );
+    assert_eq!(
+        cfg.clone().for_profile(None).effective_mode(),
+        Mode::OpticalFlow
+    );
+    assert_eq!(cfg.for_profile(Some("visor")).effective_mode(), Mode::Off);
 }
 
 #[test]

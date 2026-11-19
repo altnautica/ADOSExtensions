@@ -11,8 +11,8 @@
 
 use std::sync::Arc;
 
-use axum::Router;
 use ados_mapping_protocol::node_credential::NodeLane;
+use axum::Router;
 
 use crate::auth::{require_lane, ComputeAuth};
 
@@ -69,11 +69,11 @@ mod host {
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use axum::Router;
-    use tokio::sync::mpsc::Sender;
     use ados_mapping_transport::{
         atlas_event_router, world_ws_router, AtlasEvent, WorldBroadcaster,
     };
+    use axum::Router;
+    use tokio::sync::mpsc::Sender;
 
     use super::{gate, ATLAS_INGEST, ATLAS_WORLD, OFFLOAD_STREAM};
     use crate::auth::ComputeAuth;
@@ -125,11 +125,11 @@ mod tests {
     use super::*;
     use crate::node_credentials::NodeCredentialStore;
     use crate::offload_ws::DetectionBroadcaster;
+    use ados_mapping_transport::{AtlasEvent, WorldBroadcaster};
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use tokio::sync::mpsc::{channel, Receiver};
     use tower::ServiceExt;
-    use ados_mapping_transport::{AtlasEvent, WorldBroadcaster};
 
     struct Fixture {
         router: Router,

@@ -8,8 +8,8 @@ use std::f64::consts::PI;
 use nalgebra::{Matrix2, Rotation2, Vector2};
 
 use crate::attitude::{Attitude, ImuSample, VelocitySample};
-use crate::config::Scan2dConfig;
 use crate::backend::PYRAMID_DEPTH;
+use crate::config::Scan2dConfig;
 use crate::grid::Pyramid;
 use crate::matcher::{
     branch_and_bound, constraint_information, correlative, degeneracy, keep_constrained, refine,
@@ -193,7 +193,9 @@ impl Suspect {
             _ => (xy - self.at).norm(),
         };
         t >= self.since_ns + RESTART_MAX_NS
-            || self.gated_ns.is_some_and(|g| t >= g + RESTART_AFTER_GATE_NS)
+            || self
+                .gated_ns
+                .is_some_and(|g| t >= g + RESTART_AFTER_GATE_NS)
             || self.empty >= RESTART_EMPTY_SCANS
             || moved > RESTART_MOVED_M
     }
@@ -473,7 +475,8 @@ impl LocalSlam {
         if self.fc_positions.back().is_some_and(|&(t, _)| t >= t_ns) {
             return;
         }
-        self.fc_positions.push_back((t_ns, Vector2::new(ne_m[0], ne_m[1])));
+        self.fc_positions
+            .push_back((t_ns, Vector2::new(ne_m[0], ne_m[1])));
         while self
             .fc_positions
             .front()
@@ -532,9 +535,8 @@ impl LocalSlam {
             .then(|| {
                 let (ta, ha) = self.fc_heading_near(start_ns)?;
                 let (tb, hb) = self.fc_heading_near(end_ns)?;
-                (tb > ta).then(|| {
-                    wrap((hb - ha) - (self.att.heading_at(tb) - self.att.heading_at(ta)))
-                })
+                (tb > ta)
+                    .then(|| wrap((hb - ha) - (self.att.heading_at(tb) - self.att.heading_at(ta))))
             })
             .flatten();
         let fc_from = self.fc_position_near(start_ns);
@@ -578,8 +580,7 @@ impl LocalSlam {
             return None;
         };
         s.misses = 0;
-        if s
-            .offsets
+        if s.offsets
             .first()
             .is_some_and(|&o| wrap(off - o).abs() > HEADING_CONFIRM_RAD)
         {
@@ -628,7 +629,10 @@ impl LocalSlam {
             // Searched HINT_EDGE_RAD past the accepted window, so a best
             // heading in that margin (the turn lies at or beyond it) is
             // told from one inside.
-            let (lo, hi) = (p.th + h - HINT_HALF_RAD - HINT_EDGE_RAD, p.th + h + HINT_HALF_RAD + HINT_EDGE_RAD);
+            let (lo, hi) = (
+                p.th + h - HINT_HALF_RAD - HINT_EDGE_RAD,
+                p.th + h + HINT_HALF_RAD + HINT_EDGE_RAD,
+            );
             let (g, score) = search(lo, hi, HINT_MIN_SCORE)?;
             if wrap(g.th - (p.th + h)).abs() > HINT_HALF_RAD {
                 return None;
@@ -636,27 +640,37 @@ impl LocalSlam {
             // The window is wider than CONFIRM_RIVAL_RAD: a heading in it
             // clear of the best that scores near it is a rival.
             let rival_floor = score - CONFIRM_SCORE_MARGIN;
-            let rival = [(lo, g.th - CONFIRM_RIVAL_RAD), (g.th + CONFIRM_RIVAL_RAD, hi)]
-                .into_iter()
-                .filter(|(a, b)| b > a)
-                .any(|(a, b)| search(a, b, rival_floor).is_some());
+            let rival = [
+                (lo, g.th - CONFIRM_RIVAL_RAD),
+                (g.th + CONFIRM_RIVAL_RAD, hi),
+            ]
+            .into_iter()
+            .filter(|(a, b)| b > a)
+            .any(|(a, b)| search(a, b, rival_floor).is_some());
             return (!rival).then_some((g, wrap(g.th - p.th)));
         }
-        let half = (unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE + CONFIRM_MARGIN_RAD)
-            .min(PI);
+        let half =
+            (unmeasured_ns as f64 * 1e-9 * MAX_UNMEASURED_YAW_RATE + CONFIRM_MARGIN_RAD).min(PI);
         let (g, score) = search(p.th - half, p.th + half, self.cfg.loop_min_score)?;
         // Any heading clear of the best that scores near it makes the room
         // ambiguous under the turn.
         let rival_floor = score - CONFIRM_SCORE_MARGIN;
         let d = g.th - p.th;
         let rival = if half >= PI {
-            search(g.th + CONFIRM_RIVAL_RAD, g.th + 2.0 * PI - CONFIRM_RIVAL_RAD, rival_floor)
-                .is_some()
+            search(
+                g.th + CONFIRM_RIVAL_RAD,
+                g.th + 2.0 * PI - CONFIRM_RIVAL_RAD,
+                rival_floor,
+            )
+            .is_some()
         } else {
-            [(-half, d - CONFIRM_RIVAL_RAD), (d + CONFIRM_RIVAL_RAD, half)]
-                .into_iter()
-                .filter(|(lo, hi)| hi > lo)
-                .any(|(lo, hi)| search(p.th + lo, p.th + hi, rival_floor).is_some())
+            [
+                (-half, d - CONFIRM_RIVAL_RAD),
+                (d + CONFIRM_RIVAL_RAD, half),
+            ]
+            .into_iter()
+            .filter(|(lo, hi)| hi > lo)
+            .any(|(lo, hi)| search(p.th + lo, p.th + hi, rival_floor).is_some())
         };
         (!rival).then_some((g, wrap(d)))
     }
@@ -738,7 +752,10 @@ impl LocalSlam {
     fn skip_climbing(&mut self, t: u64, speed_mps: f64, has_measured: bool) -> bool {
         let vertical = |h: &HeightSample| h.up_rate_mps.abs() >= speed_mps;
         let Some(h) = self.height.filter(|h| self.climbing(t) && vertical(h)) else {
-            if self.climb.is_some_and(|c| t.saturating_sub(c.last_ns) > CLIMB_END_NS) {
+            if self
+                .climb
+                .is_some_and(|c| t.saturating_sub(c.last_ns) > CLIMB_END_NS)
+            {
                 self.climb = None;
             }
             return false;
@@ -879,7 +896,9 @@ impl LocalSlam {
         };
         // Riding the prior: it carried the pose `speed × dt` since the last
         // scan without a match to check it.
-        let dt_s = self.last.map_or(0.0, |(t1, _, _)| t.saturating_sub(t1) as f64 * 1e-9);
+        let dt_s = self
+            .last
+            .map_or(0.0, |(t1, _, _)| t.saturating_sub(t1) as f64 * 1e-9);
         let riding_sigma =
             (self.sigma_xy_m + SIGMA_GROWTH_PER_M * prior_vel.norm() * dt_s).min(SIGMA_MAX_M);
         let has_measured = self
@@ -1069,7 +1088,11 @@ impl LocalSlam {
         let off = wrap(th - heading);
         self.gyro_offsets.push_back((t, off, yaw_rate.abs()));
         let horizon = t.saturating_sub(HEADING_WINDOW_NS);
-        while self.gyro_offsets.front().is_some_and(|&(t0, _, _)| t0 < horizon) {
+        while self
+            .gyro_offsets
+            .front()
+            .is_some_and(|&(t0, _, _)| t0 < horizon)
+        {
             self.gyro_offsets.pop_front();
         }
         let (mut lo, mut hi, mut rate) = (0.0f64, 0.0f64, 0.0f64);

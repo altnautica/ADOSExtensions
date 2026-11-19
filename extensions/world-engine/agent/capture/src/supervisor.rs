@@ -3,18 +3,12 @@
 //! [`supervise`] polls the `atlas.*` plugin config every [`CONFIG_POLL`].
 //! While capture is enabled and the config validates, one [`CaptureRun`] is
 //! alive: the atlas bus and the control socket bound, the sensor-bus ingest,
-//! the pose provider, the HUD page and the capture loop running. A changed
-//! config stops the run (closing an open session) and starts a new one,
-//! except `atlas.reconstruct_steps`, which reaches the running loop through
-//! [`Feeds::reconstruct_steps`]; a disabled or invalid config leaves nothing
-//! bound, so the link reports the service as not running. The pose provider
-//! and LiDAR source are chosen
-//! from the rig document when a run starts, so a run that is not recording
-//! is restarted when `rig.json` changes (a rig pushed after the service
-//! started would otherwise never get its stereo VIO). The rig's LiDAR runs on
-//! its own task for the length of the run ([`LidarRunner`]): a device absent
-//! at start is retried there, its scans reach the loop on one channel, and
-//! its link status goes on the atlas bus at 1 Hz.
+//! the HUD page and the capture loop running, posed by the flight
+//! controller's EKF. A changed config stops the run (closing an open
+//! session) and starts a new one, except `atlas.reconstruct_steps`, which
+//! reaches the running loop through [`Feeds::reconstruct_steps`]; a disabled
+//! or invalid config leaves nothing bound, so the link reports the service
+//! as not running.
 //!
 //! Subscriptions that cannot be withdrawn (frames, vehicle state, the FC
 //! EKF messages, front-panel buttons) are made once and routed to whichever
@@ -25,44 +19,36 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_protocol::paths::{ipc_dir, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
 use ados_protocol::shutdown::Shutdown;
 use ados_sdk::{ClientError, PluginContext};
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use ados_mapping_protocol::atlas::LidarStatus;
-use ados_mapping_protocol::paths::{ipc_dir, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
 
 use crate::control::serve_control;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
 use crate::hud::{button_action, HudAction};
-use navigation_lidar_slam::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
-use ados_mapping_pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
-use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
 use crate::service::{run_capture_loop, LoopDeps, Paths};
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
+use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
 
 /// How often the plugin config is re-read.
 pub const CONFIG_POLL: Duration = Duration::from_secs(5);
 
-/// The FC messages the EKF pose and the navigation map read. `ATTITUDE` is
-/// there because the drone stream table carries it and not the quaternion
-/// outside a capture session ([`ados_mapping_pose::mavlink_msg`]); `GPS_RAW_INT` says when
-/// the EKF's position is GNSS-referenced ([`ados_mapping_pose::align`]); `RAW_IMU`
-/// is the gyro the planar matcher's `fc` IMU integrates ([`navigation_lidar_slam::nav::fc_imu`]);
-/// `OPTICAL_FLOW` over the downward `DISTANCE_SENSOR` range is the ground
-/// velocity it follows along a corridor ([`ados_mapping_pose::fc_flow`]).
-const FC_MESSAGES: [&str; 8] = [
+/// The FC messages the EKF pose reads. `ATTITUDE` is there because the drone
+/// stream table carries it and not the quaternion outside a capture session
+/// ([`ados_mapping_pose::mavlink_msg`]); `GPS_RAW_INT` says when the EKF's
+/// position is GNSS-referenced.
+const FC_MESSAGES: [&str; 5] = [
     "ATTITUDE",
     "ATTITUDE_QUATERNION",
     "LOCAL_POSITION_NED",
     "GPS_GLOBAL_ORIGIN",
     "GPS_RAW_INT",
-    "RAW_IMU",
-    "OPTICAL_FLOW",
-    "DISTANCE_SENSOR",
 ];
 
 /// The sockets a capture run binds, in the extension's private IPC directory.
@@ -136,8 +122,6 @@ pub struct Feeds {
 /// One running capture.
 pub struct CaptureRun {
     config: AtlasRuntimeConfig,
-    /// The `rig.json` bytes the pose provider was chosen from (`None`: absent).
-    rig_doc: Option<Vec<u8>>,
     cancel: Shutdown,
     tasks: Vec<JoinHandle<()>>,
     capture: JoinHandle<()>,
@@ -161,27 +145,6 @@ impl CaptureRun {
             })?;
         let cancel = Shutdown::new();
         let paths = Paths::from_env();
-        let work_dir = ctx
-            .data_dir
-            .clone()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("capture");
-        let rig_doc = std::fs::read(&paths.rig).ok();
-        let rig = crate::rig_source::load_rig(&paths.rig);
-        let chosen =
-            crate::providers::pose_provider(&config, &profile, rig.as_ref(), &feeds.fc, &work_dir);
-        let lidar = crate::providers::lidar_runner(&config, rig.as_ref(), &work_dir);
-        let lidar_sensor = rig
-            .as_ref()
-            .and_then(|r| crate::rig_source::lidar_sensor(r, &config.lidar.lidar_id));
-        let nav = crate::service::NavDeps {
-            fc_feed: Some(feeds.fc.clone()),
-            lidar_mount: lidar_sensor.map(|(s, _)| s.t_body_sensor.0),
-            lidar_planar: lidar_sensor.is_some_and(|(_, m)| {
-                m.pattern == ados_capture_contract::LidarModelPattern::Planar
-            }),
-            scratch_dir: Some(work_dir.join("map").join(navigation_lidar_slam::nav::TILES_DIR)),
-        };
         let sensors = Arc::new(Mutex::new(SensorState::default()));
         let (bus_tx, bus_rx) = mpsc::channel(1024);
         let mut tasks = vec![
@@ -193,11 +156,6 @@ impl CaptureRun {
                 cancel.clone(),
             )),
         ];
-        let lidar_rx = lidar.map(|runner| {
-            let (scan_tx, scan_rx) = mpsc::channel(SCAN_CHANNEL_DEPTH);
-            tasks.push(tokio::spawn(lidar_task(runner, scan_tx, publisher.clone())));
-            scan_rx
-        });
         let (hud_tx, hud_rx) = mpsc::channel(8);
         *feeds.hud.lock() = Some(hud_tx);
         let (view_tx, view_rx) = watch::channel(Default::default());
@@ -213,12 +171,11 @@ impl CaptureRun {
             profile,
             frames,
             router: Some(feeds.router.clone()),
-            pose: chosen.pose,
-            fc: chosen.fc,
+            pose: Arc::new(feeds.fc.clone()),
+            fc: Some(feeds.fc.clone()),
             vehicle: feeds.vehicle.clone(),
             sensors,
             bus_rx,
-            lidar_rx,
             publisher,
             control_rx,
             hud_rx: Some(hud_rx),
@@ -227,13 +184,11 @@ impl CaptureRun {
                 ctx.clone(),
             ))),
             paths,
-            nav,
             reconstruct_steps: feeds.reconstruct_steps.clone(),
         };
         let capture = tokio::spawn(run_capture_loop(deps, cancel.clone()));
         Ok(Self {
             config,
-            rig_doc,
             cancel,
             tasks,
             capture,
@@ -247,18 +202,6 @@ impl CaptureRun {
 
     pub fn is_finished(&self) -> bool {
         self.capture.is_finished()
-    }
-
-    /// The rig document changed since the run started and no session is
-    /// recording (the capture-active marker is absent), so the run should be
-    /// restarted to pick its pose provider from the new rig.
-    pub fn rig_stale(&self, paths: &Paths) -> bool {
-        let recording = paths.active_marker.as_ref().is_some_and(|m| m.exists());
-        rig_restart_due(
-            self.rig_doc.as_deref(),
-            std::fs::read(&paths.rig).ok().as_deref(),
-            recording,
-        )
     }
 
     /// Stop: the loop closes an open session, then everything is torn down.
@@ -275,29 +218,6 @@ impl CaptureRun {
         feeds.router.detach();
         let _ = std::fs::remove_file(&self.control_path);
     }
-}
-
-/// Whether a run started with rig document `started` should restart now that
-/// the document reads `now`: only when it changed and nothing is recording.
-pub fn rig_restart_due(started: Option<&[u8]>, now: Option<&[u8]>, recording: bool) -> bool {
-    !recording && started != now
-}
-
-/// The run's LiDAR: the driver with its start retry, and its link status
-/// published as it is produced. Ends when the run aborts it.
-async fn lidar_task(
-    runner: LidarRunner,
-    scans: mpsc::Sender<ados_mapping_pose::lidar_scan::LidarScan>,
-    publisher: AtlasPublisher,
-) {
-    let (status_tx, mut status_rx) = watch::channel(LidarStatus::default());
-    let publish = async {
-        while status_rx.changed().await.is_ok() {
-            let status = status_rx.borrow_and_update().clone();
-            publisher.publish_lidar_status(&status).await;
-        }
-    };
-    tokio::join!(runner.run(scans, status_tx), publish);
 }
 
 /// Keep the display's plugin page in step with the capture state (about 1 Hz,
@@ -450,13 +370,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             .zip(desired.as_ref().ok())
             .is_some_and(|(r, d)| r.config().same_run(d))
         {
-            if !run
-                .as_ref()
-                .is_some_and(|r| r.rig_stale(&Paths::from_env()))
-            {
-                continue;
-            }
-            tracing::info!("atlas capture restarting for a changed rig document");
+            continue;
         }
         if let Some(r) = run.take() {
             tracing::info!("atlas capture stopping for a config change");
@@ -522,22 +436,6 @@ mod tests {
         }))
         .unwrap_err();
         assert!(why.contains("atlas.cameras"), "{why}");
-    }
-
-    #[test]
-    fn a_changed_rig_restarts_only_an_idle_run() {
-        let (a, b): (&[u8], &[u8]) = (b"{\"rig_id\":\"a\"}", b"{\"rig_id\":\"b\"}");
-        assert!(!rig_restart_due(Some(a), Some(a), false), "unchanged");
-        assert!(
-            rig_restart_due(None, Some(a), false),
-            "rig pushed after start"
-        );
-        assert!(rig_restart_due(Some(a), Some(b), false), "rig replaced");
-        assert!(rig_restart_due(Some(a), None, false), "rig removed");
-        assert!(
-            !rig_restart_due(None, Some(a), true),
-            "never under a recording session"
-        );
     }
 
     #[test]

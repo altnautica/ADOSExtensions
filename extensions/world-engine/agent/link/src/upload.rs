@@ -21,14 +21,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use ados_mapping_protocol::atlas::{CaptureState, ComputePlacement};
+use ados_mapping_transport::{BulkClient, BulkConfig, SessionPlan};
 use axum::http::StatusCode;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use world_engine_capture::storage::UPLOADED_MARKER;
-use ados_mapping_protocol::atlas::{CaptureState, ComputePlacement};
-use ados_mapping_transport::{BulkClient, BulkConfig, SessionPlan};
 
 use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{CredentialGap, CredentialStore, SESSION_UPLOAD_LANE};

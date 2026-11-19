@@ -6,14 +6,14 @@
 //! [`OffloadDetectionBatch`], and hands it to a channel the return bridge drains.
 //! Local-first: the node is reached at its LAN address.
 
+use ados_mapping_protocol::node_credential::NODE_CREDENTIAL_HEADER;
+use ados_mapping_protocol::offload::OffloadDetectionBatch;
 use anyhow::{anyhow, Result};
 use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
-use ados_mapping_protocol::node_credential::NODE_CREDENTIAL_HEADER;
-use ados_mapping_protocol::offload::OffloadDetectionBatch;
 
 /// Connect to a node's detection return stream at `ws_url` (e.g.
 /// `ws://compute.local:8092/ws/offload/<session>`), presenting the node-issued

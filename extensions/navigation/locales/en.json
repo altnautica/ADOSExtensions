@@ -218,6 +218,39 @@
       "unknown": "Unknown"
     }
   },
+  "noFlightController": "No flight controller on this node: the pose feeds capture and the live map only.",
+  "lidarSlam": {
+    "poseTitle": "Pose provider",
+    "provider": "Provider",
+    "providers": {
+      "lidar_planar": "LiDAR",
+      "vio": "VIO",
+      "fc_ekf": "Flight controller EKF",
+      "replay": "Replay",
+      "none": "None (no LiDAR or VIO rig)"
+    },
+    "lidarTitle": "LiDAR",
+    "noLidar": "The rig declares no LiDAR.",
+    "link": "Link",
+    "connected": "Connected",
+    "disconnected": "Not connected",
+    "rate": "Scan rate",
+    "returns": "Returns in the last scan",
+    "device": "Device",
+    "mapTitle": "Live map",
+    "memory": "Memory",
+    "memoryOf": "{used} of {budget} MB",
+    "placement": "Heavy map built",
+    "placements": {
+      "onboard": "On board",
+      "stream": "On a node, live",
+      "post_flight": "After landing",
+      "hybrid": "On board and after landing"
+    },
+    "area": "Mapped area",
+    "areaM2": "{v} m²",
+    "mapTab": "The live map is on this node's Map tab."
+  },
   "params": {
     "unsupported": "Vision navigation parameters are shown for ArduPilot, PX4 and iNav. Detected firmware: {firmware}.",
     "ardupilot": {

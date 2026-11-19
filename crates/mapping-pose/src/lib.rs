@@ -14,10 +14,15 @@
 //! - [`se3`]: rotations, quaternions and the yaw helpers;
 //! - [`frame_source`], [`lidar_scan`], [`sensor_bus`], [`vehicle`], [`clock`]:
 //!   the frame, scan, sensor-bus, vehicle-state and host-clock inputs;
-//! - [`replay`]: a fixed estimate list, for tests and SITL.
+//! - [`replay`]: a fixed estimate list, for tests and SITL;
+//! - [`rig`]: the stored rig document and what navigation and capture ask of it;
+//! - [`config`], [`budget`]: plugin-config resolution and a process's memory
+//!   budget.
 
 pub mod align;
+pub mod budget;
 pub mod clock;
+pub mod config;
 pub mod fc_ekf;
 pub mod fc_flow;
 pub mod frame_source;
@@ -27,6 +32,7 @@ pub mod lidar_scan;
 pub mod mavlink_msg;
 pub mod pose;
 pub mod replay;
+pub mod rig;
 pub mod se3;
 pub mod sensor_bus;
 pub mod vehicle;

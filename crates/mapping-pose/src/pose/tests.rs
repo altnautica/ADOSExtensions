@@ -1,5 +1,5 @@
-use crate::replay::ReplayPose;
 use super::*;
+use crate::replay::ReplayPose;
 
 fn rz(a: f64) -> [f64; 9] {
     let (s, c) = a.sin_cos();

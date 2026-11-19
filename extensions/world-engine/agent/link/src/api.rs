@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use ados_mapping_protocol::atlas::CaptureState;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -35,7 +36,6 @@ use axum::{Json, Router};
 use rmpv::Value as Mpv;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use ados_mapping_protocol::atlas::CaptureState;
 
 use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{self, CredentialStore};

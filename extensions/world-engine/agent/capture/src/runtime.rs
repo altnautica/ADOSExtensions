@@ -16,20 +16,16 @@
 use std::collections::{BTreeMap, HashMap};
 
 use ados_capture_contract::{CameraModel, CameraModelModel};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
-use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseMode, POSE_COV_LEN};
+pub use ados_mapping_pose::config::ConfigError;
+use ados_mapping_pose::config::{integer, optional_unsigned, typed, unsigned};
+use ados_mapping_protocol::atlas::POSE_COV_LEN;
 use ados_mapping_protocol::capture_ctl::{ExposureMode, ExposureView};
 
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 use crate::recorder::convert::ImageEncoding;
-
-pub use navigation_lidar_slam::settings::{
-    resolve_pose_provider, LidarSettings, LivoxSettings, PoseProviderConfig, RplidarSettings,
-    VioSettings,
-};
 
 /// Segment roll (`atlas.segment`); the contract default is 4 GiB or 10 min.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -195,20 +191,11 @@ impl PosePrior {
     }
 }
 
-/// The default interval (ms) between published pose descriptors — the ~10 Hz
-/// the contract documents. Publishing per accepted frame per camera instead
-/// multiplied pose traffic by the camera count and raised eviction pressure on
-/// the same 16-deep bus that carries multi-MB keyframes.
-fn default_pose_publish_interval_ms() -> i64 {
-    100
-}
-
 /// Every plugin config key the capture service reads. Each is read with a nil
 /// default, and an absent (nil) key resolves to the default below.
 pub const CONFIG_KEYS: &[&str] = &[
     KEY_ENABLED,
     KEY_CAPTURE_PROFILE,
-    KEY_POSE_PROVIDER,
     KEY_CAMERAS,
     KEY_MIN_TRANSLATION_M,
     KEY_MIN_ROTATION_RAD,
@@ -216,24 +203,17 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_MAX_KEYFRAMES,
     KEY_INTRINSICS,
     KEY_POSE_PRIOR,
-    KEY_POSE_PUBLISH_INTERVAL_MS,
     KEY_RECORD_ON_START,
     KEY_IMAGE_ENCODING,
     KEY_MAINS_HZ,
     KEY_EXPOSURE,
-    KEY_VIO,
-    KEY_LIDAR,
     KEY_SEGMENT,
-    KEY_NAV_POSE,
-    KEY_COMPUTE_PLACEMENT,
     KEY_MEMORY_BUDGET_MB,
     KEY_RECONSTRUCT_STEPS,
-    KEY_TAKEOFF_HEADING_DEG,
 ];
 
 pub const KEY_ENABLED: &str = "atlas.enabled";
 pub const KEY_CAPTURE_PROFILE: &str = "atlas.capture_profile";
-pub const KEY_POSE_PROVIDER: &str = "atlas.pose_provider";
 pub const KEY_CAMERAS: &str = "atlas.cameras";
 pub const KEY_MIN_TRANSLATION_M: &str = "atlas.selection.min_translation_m";
 pub const KEY_MIN_ROTATION_RAD: &str = "atlas.selection.min_rotation_rad";
@@ -241,19 +221,13 @@ pub const KEY_MAX_INTERVAL_MS: &str = "atlas.selection.max_interval_ms";
 pub const KEY_MAX_KEYFRAMES: &str = "atlas.selection.max_keyframes";
 pub const KEY_INTRINSICS: &str = "atlas.intrinsics";
 pub const KEY_POSE_PRIOR: &str = "atlas.pose_prior";
-pub const KEY_POSE_PUBLISH_INTERVAL_MS: &str = "atlas.pose_publish_interval_ms";
 pub const KEY_RECORD_ON_START: &str = "atlas.record_on_start";
 pub const KEY_IMAGE_ENCODING: &str = "atlas.image_encoding";
 pub const KEY_MAINS_HZ: &str = "atlas.mains_hz";
 pub const KEY_EXPOSURE: &str = "atlas.exposure";
-pub const KEY_VIO: &str = "atlas.vio";
-pub const KEY_LIDAR: &str = "atlas.lidar";
 pub const KEY_SEGMENT: &str = "atlas.segment";
-pub const KEY_NAV_POSE: &str = "atlas.nav_pose";
-pub const KEY_COMPUTE_PLACEMENT: &str = "atlas.compute_placement";
 pub const KEY_MEMORY_BUDGET_MB: &str = "atlas.memory_budget_mb";
 pub const KEY_RECONSTRUCT_STEPS: &str = "atlas.reconstruct_steps";
-pub const KEY_TAKEOFF_HEADING_DEG: &str = "atlas.takeoff_heading_deg";
 
 /// The initial exposure lock: unlocked, walking caps.
 fn default_exposure() -> ExposureView {
@@ -274,27 +248,18 @@ pub struct AtlasRuntimeConfig {
     /// The device id (the plugin host's agent id); the session id embeds it.
     pub device_id: String,
     pub capture: CaptureConfig,
-    pub pose_provider: PoseProviderConfig,
     pub intrinsics: HashMap<String, IntrinsicsOverride>,
     /// The uncertainty stated on every FC EKF pose (see [`PosePrior`]).
     pub pose_prior: PosePrior,
-    /// Minimum interval between published pose descriptors, in milliseconds.
-    pub pose_publish_interval_ms: i64,
     /// Start a session as soon as the service runs (a drone mapping flight).
     pub record_on_start: bool,
     pub image_encoding: ImageEncoding,
     /// Mains frequency the exposure rule avoids flicker for (50 or 60).
     pub mains_hz: u32,
     pub exposure: ExposureView,
-    pub vio: VioSettings,
-    pub lidar: LidarSettings,
     pub segment: SegmentSettings,
-    /// When the navigation lanes publish (`atlas.nav_pose`); absent, `always`
-    /// when a planar LiDAR device is set, else `capture`.
-    pub nav_pose: NavPoseMode,
-    /// Where the heavy map products are built (`atlas.compute_placement`).
-    pub placement: ComputePlacement,
-    /// `atlas.memory_budget_mb`; `None` resolves from the unit's cap.
+    /// `atlas.memory_budget_mb` (the keyframe and scan queues); `None`
+    /// resolves from the unit's cap.
     pub memory_budget_mb: Option<u64>,
     /// `atlas.reconstruct_steps`: the splat training length the compute node
     /// uses for this drone's sessions, carried on every capture status. `None`
@@ -302,11 +267,6 @@ pub struct AtlasRuntimeConfig {
     /// setting: a change reaches the running service without a restart (see
     /// [`AtlasRuntimeConfig::same_run`]).
     pub reconstruct_steps: Option<u64>,
-    /// `atlas.takeoff_heading_deg`: the heading the vehicle faces at its
-    /// first pose, degrees clockwise from true north. When set, the map's
-    /// north is latched from it once and never taken from the flight
-    /// controller ([`navigation_lidar_slam::nav`]).
-    pub takeoff_heading_deg: Option<f64>,
 }
 
 /// The live `atlas.reconstruct_steps`, shared between the supervisor (which
@@ -329,84 +289,23 @@ impl SharedSteps {
     }
 }
 
-/// `atlas.nav_pose` when the key is absent: `always` with a planar LiDAR
-/// device configured (the pose feeds the flight controller), else `capture`.
-pub fn default_nav_pose(lidar: &LidarSettings) -> NavPoseMode {
-    if lidar.rplidar.device.is_empty() {
-        NavPoseMode::Capture
-    } else {
-        NavPoseMode::Always
-    }
-}
-
 impl Default for AtlasRuntimeConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             device_id: String::new(),
             capture: CaptureConfig::default(),
-            pose_provider: PoseProviderConfig::Auto,
             intrinsics: HashMap::new(),
             pose_prior: PosePrior::default(),
-            pose_publish_interval_ms: default_pose_publish_interval_ms(),
             record_on_start: false,
             image_encoding: ImageEncoding::Raw,
             mains_hz: 50,
             exposure: default_exposure(),
-            vio: VioSettings::default(),
-            lidar: LidarSettings::default(),
             segment: SegmentSettings::default(),
-            nav_pose: default_nav_pose(&LidarSettings::default()),
-            placement: ComputePlacement::default(),
             memory_budget_mb: None,
             reconstruct_steps: None,
-            takeoff_heading_deg: None,
         }
     }
-}
-
-/// A config key whose value does not parse. Carries the key and the reason so
-/// the operator sees exactly why capture stays off.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("invalid `{key}`: {reason}")]
-pub struct ConfigError {
-    pub key: &'static str,
-    pub reason: String,
-}
-
-/// The value at `key`, or `None` when the key is absent or null.
-fn present<'a>(values: &'a BTreeMap<String, Value>, key: &str) -> Option<&'a Value> {
-    values.get(key).filter(|v| !v.is_null())
-}
-
-/// Deserialize the value at `key` into `T`, or `default` when absent.
-fn typed<T: DeserializeOwned>(
-    values: &BTreeMap<String, Value>,
-    key: &'static str,
-    default: T,
-) -> Result<T, ConfigError> {
-    match present(values, key) {
-        None => Ok(default),
-        Some(v) => serde_json::from_value(v.clone()).map_err(|e| ConfigError {
-            key,
-            reason: e.to_string(),
-        }),
-    }
-}
-
-/// `atlas.takeoff_heading_deg`: a finite angle within ±360°, or `None`
-/// when absent or null.
-fn takeoff_heading_deg(values: &BTreeMap<String, Value>) -> Result<Option<f64>, ConfigError> {
-    let Some(deg) = typed::<Option<f64>>(values, KEY_TAKEOFF_HEADING_DEG, None)? else {
-        return Ok(None);
-    };
-    if !deg.is_finite() || deg.abs() > 360.0 {
-        return Err(ConfigError {
-            key: KEY_TAKEOFF_HEADING_DEG,
-            reason: format!("expected degrees from -360 to 360, got {deg}"),
-        });
-    }
-    Ok(Some(deg))
 }
 
 /// The per-camera intrinsics overrides, refusing one whose `dist` length does
@@ -429,41 +328,6 @@ fn intrinsics(
         }
     }
     Ok(map)
-}
-
-/// An integer at `key`, accepting an integral float (a JSON editor may store
-/// `2000` as `2000.0`), or `default` when absent.
-fn integer(
-    values: &BTreeMap<String, Value>,
-    key: &'static str,
-    default: i64,
-) -> Result<i64, ConfigError> {
-    let Some(v) = present(values, key) else {
-        return Ok(default);
-    };
-    v.as_i64()
-        .or_else(|| {
-            v.as_f64()
-                .filter(|f| f.fract() == 0.0 && f.abs() < i64::MAX as f64)
-                .map(|f| f as i64)
-        })
-        .ok_or_else(|| ConfigError {
-            key,
-            reason: format!("expected an integer, got {v}"),
-        })
-}
-
-/// A non-negative integer at `key`, or `default` when absent.
-fn unsigned(
-    values: &BTreeMap<String, Value>,
-    key: &'static str,
-    default: u64,
-) -> Result<u64, ConfigError> {
-    let n = integer(values, key, default as i64)?;
-    u64::try_from(n).map_err(|_| ConfigError {
-        key,
-        reason: format!("expected a non-negative integer, got {n}"),
-    })
 }
 
 /// `atlas.mains_hz`: 50 or 60.
@@ -504,11 +368,7 @@ impl AtlasRuntimeConfig {
             typed(values, KEY_EXPOSURE, default_exposure())?,
             mains_hz,
         );
-        let lidar: LidarSettings = typed(values, KEY_LIDAR, LidarSettings::default())?;
-        let memory_budget_mb = match present(values, KEY_MEMORY_BUDGET_MB) {
-            None => None,
-            Some(_) => Some(unsigned(values, KEY_MEMORY_BUDGET_MB, 0)?),
-        };
+        let memory_budget_mb = optional_unsigned(values, KEY_MEMORY_BUDGET_MB)?;
         let reconstruct_steps =
             Some(unsigned(values, KEY_RECONSTRUCT_STEPS, 0)?).filter(|n| *n > 0);
         Ok(Self {
@@ -519,26 +379,15 @@ impl AtlasRuntimeConfig {
                 profile: typed(values, KEY_CAPTURE_PROFILE, CaptureProfile::default())?,
                 selection,
             },
-            pose_provider: typed(values, KEY_POSE_PROVIDER, PoseProviderConfig::Auto)?,
             intrinsics: intrinsics(values)?,
             pose_prior: typed(values, KEY_POSE_PRIOR, PosePrior::default())?,
-            pose_publish_interval_ms: integer(
-                values,
-                KEY_POSE_PUBLISH_INTERVAL_MS,
-                default_pose_publish_interval_ms(),
-            )?,
             record_on_start: typed(values, KEY_RECORD_ON_START, false)?,
             image_encoding: typed(values, KEY_IMAGE_ENCODING, ImageEncoding::Raw)?,
             mains_hz,
             exposure,
-            vio: typed(values, KEY_VIO, VioSettings::default())?,
-            nav_pose: typed(values, KEY_NAV_POSE, default_nav_pose(&lidar))?,
-            lidar,
             segment: typed(values, KEY_SEGMENT, SegmentSettings::default())?,
-            placement: typed(values, KEY_COMPUTE_PLACEMENT, ComputePlacement::default())?,
             memory_budget_mb,
             reconstruct_steps,
-            takeoff_heading_deg: takeoff_heading_deg(values)?,
         })
     }
 

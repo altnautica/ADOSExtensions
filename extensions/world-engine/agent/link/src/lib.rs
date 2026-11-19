@@ -41,12 +41,12 @@ pub mod upload;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_protocol::paths::{self, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
+use ados_mapping_transport::{serve_unix, BulkConfig};
 use ados_sdk::{ClientError, Plugin, PluginContext};
 use parking_lot::Mutex;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use ados_mapping_protocol::paths::{self, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
-use ados_mapping_transport::{serve_unix, BulkConfig};
 
 use crate::api::DroneApi;
 use crate::control::ControlClient;
@@ -204,10 +204,6 @@ impl LinkPlugin {
             host.clone(),
             bus_socket,
             capture.clone(),
-            monitor::MapFacts {
-                forward: forward.clone(),
-                uploads: Some(uploads.clone()),
-            },
             shutdown.clone(),
         )));
         self.tasks.push(tokio::spawn(monitor::run_status_writer(

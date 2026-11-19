@@ -63,10 +63,7 @@ fn fc() -> FcNavSnapshot {
 #[test]
 fn map_ned_payload_passes_through() {
     let args = Value::Map(vec![
-        (
-            Value::from("topic"),
-            Value::from("plugin.navigation.pose"),
-        ),
+        (Value::from("topic"), Value::from("plugin.navigation.pose")),
         (
             Value::from("payload"),
             payload("map_ned", "good", yaw_matrix(0.5), [1.0, 2.0, 0.0]),
@@ -113,10 +110,19 @@ fn the_fc_imu_feed_reason_is_read_when_present() {
         parse_pose_payload(&Value::Map(m)).unwrap().imu_feed
     };
     assert_eq!(with_feed(Some("stalled")), Some(ImuFeed::Stalled));
-    assert_eq!(with_feed(Some("attitude_stand_in")), Some(ImuFeed::AttitudeStandIn));
+    assert_eq!(
+        with_feed(Some("attitude_stand_in")),
+        Some(ImuFeed::AttitudeStandIn)
+    );
     assert_eq!(with_feed(Some("starved")), Some(ImuFeed::Starved));
-    assert_eq!(with_feed(Some("heading_unconfirmed")), Some(ImuFeed::HeadingUnconfirmed));
-    assert_eq!(with_feed(Some("north_unknown")), Some(ImuFeed::NorthUnknown));
+    assert_eq!(
+        with_feed(Some("heading_unconfirmed")),
+        Some(ImuFeed::HeadingUnconfirmed)
+    );
+    assert_eq!(
+        with_feed(Some("north_unknown")),
+        Some(ImuFeed::NorthUnknown)
+    );
     assert_eq!(
         ImuFeed::NorthUnknown.describe(),
         "heading unconfirmed after a map restart: the flight controller's turn since the last \
@@ -156,7 +162,10 @@ fn a_pose_sigma_above_the_health_floor_widens_the_covariance_and_lowers_quality(
     assert!((sxy - 1.5).abs() < 1e-6 && q == 30);
     assert_eq!(noise_for(ExtnavHealth::Lost, Some(0.1)).2, -1);
     // Below the health's own floor the floor stands.
-    assert_eq!(noise_for(ExtnavHealth::Degraded, Some(0.05)), (0.30, 0.10, 50));
+    assert_eq!(
+        noise_for(ExtnavHealth::Degraded, Some(0.05)),
+        (0.30, 0.10, 50)
+    );
 }
 
 #[test]

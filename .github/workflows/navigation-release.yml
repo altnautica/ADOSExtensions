@@ -1,13 +1,25 @@
 # navigation-release
 #
-# Fires on a `navigation-v*` tag push: runs the extensions.yml gate for
-# navigation (manifest schema + lint, GCS tests, cargo test), builds the GCS bundle,
-# cross-compiles the Rust agent binary against the pinned agent SDK revision,
-# then packs, signs, and attaches the .adosplug archive to the GitHub Release.
+# Fires on a `navigation-v*` tag push. Navigation ships its binaries and the
+# native helpers of its lidar-slam service as install-time payloads (manifest
+# `agent.payloads`), not inside the .adosplug, so a node fetches only the files
+# for its own arch and profile.
 #
-# The extension ships no third-party binaries, so there is no vendor-build
-# matrix and nothing to stage into the archive beyond the agent binary and the
-# GCS bundle.
+#   legs      list the binary legs (aarch64-linux, x86_64-linux).
+#   binaries  one leg per arch: build `navigation` and `navigation-lidar-slam`
+#             against the agent SDK pinned in ADOS_AGENT_REV, the pinned uv,
+#             and on the x86_64-linux leg basalt-ados and the Livox SDK2
+#             library; hand them to the release job.
+#   release   build and test the GCS bundle, write each payload's source,
+#             sha256 and size into the staged manifest, pack the small archive
+#             (manifest, GCS bundle, locales, config-schema.json, the
+#             lidar-slam uv project), sign it with the first-party key, then
+#             attach the payloads and the signed archive to the GitHub Release
+#             in one step, so a published archive never points at a missing
+#             payload.
+#
+# The asset table (names, archive paths, arch and profile gates) is
+# scripts/navigation-payloads.tsv.
 
 name: navigation-release
 
@@ -16,48 +28,181 @@ on:
     tags:
       - "navigation-v*"
 
+permissions:
+  contents: read
+
+env:
+  # The agent SDK crates are workspace path deps on a sibling ADOSDroneAgent
+  # checkout, pinned by the committed ADOS_AGENT_REV so re-running a tag builds
+  # against the same SDK commit.
+  ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
+
 jobs:
   checks:
     uses: ./.github/workflows/extensions.yml
     with:
       ext: navigation
 
-  build-and-release:
-    needs: checks
-    # Native arm64 so the agent binary cross-compiles to the static
-    # aarch64-unknown-linux-musl target with musl-tools (one binary runs on
-    # every supported board regardless of glibc).
-    runs-on: ubuntu-24.04-arm
+  legs:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.legs.outputs.matrix }}
+    steps:
+      - id: legs
+        # Static musl binaries run on every supported board regardless of its
+        # glibc; the musl legs cross-compile C through zig (cargo-zigbuild),
+        # as in rust-check.yml. basalt-ados and the Livox SDK2 library build
+        # on the x86_64-linux leg only (native).
+        run: |
+          set -euo pipefail
+          legs='[
+            {"runner":"ubuntu-24.04-arm","arch_os":"aarch64-linux","target":"aarch64-unknown-linux-musl",
+             "uv_triple":"aarch64-unknown-linux-musl"},
+            {"runner":"ubuntu-24.04","arch_os":"x86_64-linux","target":"x86_64-unknown-linux-musl",
+             "uv_triple":"x86_64-unknown-linux-musl","native":true}
+          ]'
+          matrix="$(jq -c '{include: .}' <<<"${legs}")"
+          echo "${matrix}"
+          echo "matrix=${matrix}" >> "$GITHUB_OUTPUT"
+
+  binaries:
+    needs: [checks, legs]
+    name: Binaries (${{ matrix.arch_os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.legs.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the agent SDK at the pinned revision
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
+          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
+          git -C "${dest}" checkout "$(cat ADOS_AGENT_REV)"
+          echo "agent SDK pinned at ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: navigation-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: navigation-release-${{ matrix.target }}-
+
+      - name: Build release binaries
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          for crate in navigation navigation-lidar-slam; do
+            cargo zigbuild --release --target "${TARGET}" -p "${crate}"
+          done
+
+      - name: Stage payloads
+        env:
+          TARGET: ${{ matrix.target }}
+          ARCH_OS: ${{ matrix.arch_os }}
+        run: |
+          set -euo pipefail
+          mkdir -p payloads
+          for crate in navigation navigation-lidar-slam; do
+            cp "target/${TARGET}/release/${crate}" "payloads/${crate}-${ARCH_OS}"
+            ls -l "payloads/${crate}-${ARCH_OS}"
+            file "payloads/${crate}-${ARCH_OS}"
+          done
+
+      - name: Build the native lidar-slam helpers
+        if: matrix.native
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git curl zip unzip tar pkg-config ninja-build
+          git submodule update --init extensions/navigation/lidar-slam/basalt/upstream
+          L=extensions/navigation/lidar-slam
+          out="${RUNNER_TEMP}/native"
+          "$L/basalt/build.sh" --arch x86_64 --jobs 4 --out "$out"
+          "$L/livox/build-sdk2.sh" --arch x86_64 --jobs 4 --out "$out"
+          cp "$out/bin/x86_64-linux/basalt-ados" payloads/navigation-basalt-ados-x86_64-linux
+          {
+            cat "$L/basalt/LICENSE"
+            printf '\n\n==== Basalt (upstream) ====\n\n'; cat "$L/basalt/upstream/LICENSE"
+            for f in "$L"/basalt/build/x86_64/vcpkg_installed/*/share/*/copyright; do
+              printf '\n\n==== %s ====\n\n' "$(basename "$(dirname "$f")")"; cat "$f"
+            done
+          } > payloads/navigation-basalt-ados-LICENSES-x86_64-linux
+          cp "$out/lib/x86_64-linux/liblivox_lidar_sdk_shared.so" payloads/navigation-livox-sdk2-x86_64-linux.so
+          cp "$out/lib/x86_64-linux/LICENSE-livox-sdk2.txt" payloads/navigation-livox-sdk2-LICENSE-x86_64-linux
+          file payloads/navigation-basalt-ados-x86_64-linux payloads/navigation-livox-sdk2-x86_64-linux.so
+
+      - name: Stage uv (pinned, checksum-verified)
+        env:
+          UV_TRIPLE: ${{ matrix.uv_triple }}
+          ARCH_OS: ${{ matrix.arch_os }}
+        run: |
+          set -euo pipefail
+          v=0.13.1
+          case "$UV_TRIPLE" in
+            x86_64-unknown-linux-musl)  sum=6c86040a8f045ab9adc9e3ec4cdafa03fd00e9a988ed2bf28971c7fc2d0debd0 ;;
+            aarch64-unknown-linux-musl) sum=345a8308e4d1835cdfaadf692836fd3137a6d45864773f05ad7bf59442b1ba16 ;;
+          esac
+          tgz="uv-${UV_TRIPLE}.tar.gz"
+          curl -fsSLo "${RUNNER_TEMP}/${tgz}" "https://github.com/astral-sh/uv/releases/download/${v}/${tgz}"
+          echo "${sum}  ${RUNNER_TEMP}/${tgz}" | sha256sum -c -
+          tar -xzf "${RUNNER_TEMP}/${tgz}" -C "${RUNNER_TEMP}"
+          cp "${RUNNER_TEMP}/uv-${UV_TRIPLE}/uv" "payloads/navigation-uv-${ARCH_OS}"
+          curl -fsSLo "payloads/navigation-uv-LICENSE-${ARCH_OS}" "https://raw.githubusercontent.com/astral-sh/uv/${v}/LICENSE-MIT"
+
+      - name: Hand the binaries to the release job
+        uses: actions/upload-artifact@v4
+        with:
+          name: payload-${{ matrix.arch_os }}
+          path: payloads/
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: [legs, binaries]
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     env:
-      # The agent SDK crates (ados-sdk / ados-protocol) are consumed via the
-      # workspace path dep `{ path = "../ADOSDroneAgent/crates/..." }`, so the
-      # sibling repo is cloned before the crate builds. The revision comes from
-      # the committed ADOS_AGENT_REV file, so re-running this tag builds against
-      # the same SDK commit.
-      ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
+      EXT_DIR: extensions/navigation
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Parse tag
-        id: route
-        run: |
-          echo "ext=navigation" >> "$GITHUB_OUTPUT"
-
       - name: Check the tag matches the manifest version
         run: |
           set -euo pipefail
-          # Tag form: <ext>-v<semver>. The archive names the manifest version,
-          # so a tag that disagrees would publish a mis-versioned release.
+          # Tag form: navigation-v<semver>. The payload URLs name the tag and
+          # the archive names the manifest version, so the two must agree.
           tag_version="${GITHUB_REF_NAME##*-v}"
-          manifest_version="$(grep -E '^version:' "extensions/navigation/manifest.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
+          manifest_version="$(grep -E '^version:' "${EXT_DIR}/manifest.yaml" | head -n1 | sed -E 's/^version:[[:space:]]*"?([^"]*)"?/\1/')"
           if [ "${tag_version}" != "${manifest_version}" ]; then
             echo "ERROR: tag ${GITHUB_REF_NAME} does not match manifest version ${manifest_version}" >&2
             exit 1
           fi
+          archive="${EXT_DIR}/dist/com.altnautica.navigation-${manifest_version}.adosplug"
+          echo "ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -78,34 +223,35 @@ jobs:
           pnpm install --frozen-lockfile
           pip install cryptography
 
-      - name: Build workspace SDK
-        run: pnpm --filter @altnautica/plugin-sdk build
+      - name: Build the GCS bundle
+        run: pnpm build:navigation
 
-      - name: Build GCS bundle
-        run: pnpm --filter "./extensions/${{ steps.route.outputs.ext }}/gcs" build
-
-      - name: Check out the agent SDK at the pinned revision
-        run: |
-          set -e
-          rev="$(cat ADOS_AGENT_REV)"
-          dest="${GITHUB_WORKSPACE}/../ADOSDroneAgent"
-          git clone --filter=blob:none "${ADOS_AGENT_REPO}" "${dest}"
-          git -C "${dest}" checkout "${rev}"
-          echo "agent SDK pinned at ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
-
-      - name: Install Rust toolchain (musl target)
-        uses: dtolnay/rust-toolchain@stable
+      - name: Collect the binaries
+        uses: actions/download-artifact@v4
         with:
-          targets: aarch64-unknown-linux-musl
+          pattern: payload-*
+          path: payloads
+          merge-multiple: true
 
-      - name: Install musl cross tools
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Write the payload list
+        env:
+          LEGS: ${{ needs.legs.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          built="$(jq -r '[.include[].arch_os] | join(",")' <<<"${LEGS}")"
+          echo "ARCH_OS=${built}" >> "$GITHUB_ENV"
+          awk -v base="${base}" -v built=",${built}," '
+            /^[[:space:]]*(#|$)/ { next }
+            $3 != "-" && index(built, "," $3 ",") == 0 { next }
+            { printf "%s\t%s\t%s\t%s\t%s/%s\n", $1, $2, $3, $4, base, $1 }
+          ' scripts/navigation-payloads.tsv > payloads/payloads.tsv
+          cat payloads/payloads.tsv
 
       - name: Pack archive
-        # pack-rust.sh cross-compiles the agent binary (bin/navigation) via
-        # scripts/build-rust.sh, stages it + the GCS bundle, and refuses to pack
-        # a half-archive missing the agent.entrypoint.
-        run: ./scripts/pack-rust.sh "${{ steps.route.outputs.ext }}" aarch64-unknown-linux-musl
+        # Refuses to pack when a binaries path lacks a payload row or a listed
+        # asset is missing.
+        run: ./scripts/pack-rust.sh navigation --payload-manifest payloads/payloads.tsv --arch-os "${ARCH_OS}"
 
       - name: Sign archive
         env:
@@ -114,10 +260,7 @@ jobs:
           ADOS_SIGNING_KEY: ${{ secrets.ALTNAUTICA_PLUGIN_KEY_A }}
           ADOS_SIGNING_KEY_INLINE: "1"
           ADOS_SIGNING_KEY_ID: altnautica-2026-A
-        run: |
-          archive="extensions/${{ steps.route.outputs.ext }}/dist/$(ls extensions/${{ steps.route.outputs.ext }}/dist | grep -E '\.adosplug$' | grep -v '\.signed\.' | head -n1)"
-          ./scripts/sign.sh "${archive}"
-          echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
+        run: ./scripts/sign.sh "${ARCHIVE}"
 
       - name: Verify the signature against the committed public key
         run: |
@@ -125,8 +268,7 @@ jobs:
           # Recompute the canonical payload hash from the signed archive (sha256
           # over the sorted "<path>\n<sha256-hex>\n" of every entry except
           # SIGNATURE, the agent's archive rule) and verify SIGNATURE line 2
-          # against keys/<signer>.pub.pem. A wrong key id, a mismatched private
-          # key or a tampered entry fails here instead of at install.
+          # against keys/<signer>.pub.pem.
           python3 - "${SIGNED}" <<'PY'
           import base64
           import hashlib
@@ -171,7 +313,9 @@ jobs:
       - name: Upload to GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          fail_on_unmatched_files: true
           files: |
-            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug
-            extensions/${{ steps.route.outputs.ext }}/dist/*.signed.adosplug.sha256
-            extensions/${{ steps.route.outputs.ext }}/CHANGELOG.md
+            payloads/navigation-*
+            ${{ env.SIGNED }}
+            ${{ env.SIGNED }}.sha256
+            extensions/navigation/CHANGELOG.md

@@ -53,14 +53,33 @@ fn floor_hits_are_dropped_when_the_height_is_known() {
     let cfg = Scan2dConfig::for_sensor(0.05, 12.0, &[]);
     let scan = pitched_scan(3.0);
     assert!(scan.points.len() > 100, "the pitched scan sees the floor");
-    let blind = Scan2d::from_cloud(&scan, &cfg, &Motion { pitch: PITCH, ..Default::default() });
-    assert_eq!(blind.points.len(), scan.points.len(), "no height: kept as today");
+    let blind = Scan2d::from_cloud(
+        &scan,
+        &cfg,
+        &Motion {
+            pitch: PITCH,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        blind.points.len(),
+        scan.points.len(),
+        "no height: kept as today"
+    );
     let seen = Scan2d::from_cloud(
         &scan,
         &cfg,
-        &Motion { pitch: PITCH, agl_m: Some(3.0), ..Default::default() },
+        &Motion {
+            pitch: PITCH,
+            agl_m: Some(3.0),
+            ..Default::default()
+        },
     );
-    assert!(seen.points.is_empty(), "{} floor points kept", seen.points.len());
+    assert!(
+        seen.points.is_empty(),
+        "{} floor points kept",
+        seen.points.len()
+    );
 }
 
 /// On the ground, or with a height datum a little below the floor, the
@@ -71,10 +90,18 @@ fn a_level_scan_on_the_ground_keeps_every_point() {
     let mut scan = ScanInput::default();
     for k in 0..360 {
         let phi = (k as f64).to_radians();
-        scan.points.push([(4.0 * phi.cos()) as f32, (4.0 * phi.sin()) as f32, 0.0]);
+        scan.points
+            .push([(4.0 * phi.cos()) as f32, (4.0 * phi.sin()) as f32, 0.0]);
     }
     for h in [-0.3, 0.0, 0.2] {
-        let out = Scan2d::from_cloud(&scan, &cfg, &Motion { agl_m: Some(h), ..Default::default() });
+        let out = Scan2d::from_cloud(
+            &scan,
+            &cfg,
+            &Motion {
+                agl_m: Some(h),
+                ..Default::default()
+            },
+        );
         assert_eq!(out.points.len(), scan.points.len(), "height {h}");
     }
 }
@@ -85,9 +112,21 @@ fn ceiling_hits_are_dropped_when_the_ceiling_is_configured() {
     // The sensor 1.5 m up under a 4 m ceiling.
     let scan = ceiling_scan(2.5);
     assert!(scan.points.len() > 100, "the pitched scan sees the ceiling");
-    let m = Motion { pitch: PITCH, agl_m: Some(1.5), ..Default::default() };
-    assert_eq!(Scan2d::from_cloud(&scan, &cfg, &m).points.len(), scan.points.len(), "no ceiling: kept");
+    let m = Motion {
+        pitch: PITCH,
+        agl_m: Some(1.5),
+        ..Default::default()
+    };
+    assert_eq!(
+        Scan2d::from_cloud(&scan, &cfg, &m).points.len(),
+        scan.points.len(),
+        "no ceiling: kept"
+    );
     cfg.ceiling_m = Some(4.0);
     let out = Scan2d::from_cloud(&scan, &cfg, &m);
-    assert!(out.points.is_empty(), "{} ceiling points kept", out.points.len());
+    assert!(
+        out.points.is_empty(),
+        "{} ceiling points kept",
+        out.points.len()
+    );
 }

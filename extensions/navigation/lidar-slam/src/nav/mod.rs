@@ -1,18 +1,17 @@
-//! The live navigation and mapping lanes, independent of capture sessions:
-//! while the pose provider runs (`atlas.nav_pose = always`, or only with a
-//! session open for `capture`) the capture service publishes
+//! The live navigation and mapping lanes: while a pose provider runs,
+//! `navigation-lidar-slam` publishes
 //!
-//! - `plugin.world-engine.pose` in the north-aligned `map_ned`, one every
-//!   `atlas.pose_publish_interval_ms` of the poses' own measurement time
+//! - `plugin.navigation.pose` in the north-aligned `map_ned`, one every
+//!   `navigation.pose_publish_interval_ms` of the poses' own measurement time
 //!   (no faster than the provider estimates; see [`NavMap::on_pose`]);
-//! - `plugin.world-engine.scan`, each LiDAR scan binned in the body frame;
-//! - `plugin.world-engine.occupancy` live tiles and
-//!   `plugin.world-engine.pointcloud` sweep-cloud deltas, 1 Hz;
-//! - `plugin.world-engine.map_status`, 1 Hz.
+//! - `plugin.navigation.scan`, each LiDAR scan binned in the body frame;
+//! - `plugin.navigation.occupancy` live tiles, 1 Hz, and serves the live
+//!   sweep cloud on `GET /navigation/sweep`;
+//! - `plugin.navigation.map_status`, 1 Hz.
 //!
 //! Navigation SLAM and the live occupancy are built on board in every
-//! placement; the placement sets the live sweep-cloud resolution and whether
-//! the node reconstructs in flight or after landing.
+//! placement; the placement (`navigation.map_placement`) sets the live
+//! sweep-cloud resolution and whether a node builds the heavy map in flight.
 //!
 //! `map_ned` starts as the SLAM world rotated to north, origin at the first
 //! scan. Its north ([`MapNorth`]) comes from one of two places:
@@ -36,7 +35,6 @@
 //! ([`align`]), frozen when GNSS goes, so a switch to external navigation
 //! finds the two frames in agreement.
 
-pub mod budget;
 pub mod fc_imu;
 pub mod frames;
 pub mod scan_wait;
@@ -46,21 +44,20 @@ mod restart_replay;
 #[cfg(test)]
 mod tests;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ados_livemap::LiveMap;
 use ados_mapping_protocol::atlas::{
-    ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapStatus, NavFrame, NavPoseMode,
-    NavPoseSource, PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, StreamPhase,
-    StreamProgress, VioHealth,
+    ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapStatus, NavFrame, NavPoseSource,
+    PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, VioHealth,
 };
 
-use ados_mapping_pose::lidar_scan::LidarScan;
-use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::{se3, PoseEstimate};
 use ados_mapping_pose::align::MapAlign;
+use ados_mapping_pose::budget::Budget;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::se3::{frd_yaw, wrap_pi};
-use budget::Budget;
+use ados_mapping_pose::{se3, PoseEstimate};
 
 /// A fitted yaw is logged again once it has moved this far, radians.
 const YAW_LOG_STEP_RAD: f64 = 0.25 * std::f64::consts::PI / 180.0;
@@ -69,30 +66,31 @@ const YAW_LOG_STEP_RAD: f64 = 0.25 * std::f64::consts::PI / 180.0;
 /// map's north follows the FC heading until it leaves.
 pub const ON_SPOT_M: f64 = 0.5;
 
-/// The session subdirectory the live map is saved under.
-pub const SESSION_MAP_DIR: &str = "map";
-/// The sweep cloud's file in [`SESSION_MAP_DIR`]: little-endian `f32` xyz.
-pub const SWEEP_FILE: &str = "sweep_cloud.f32";
-/// Occupancy tiles' directory in [`SESSION_MAP_DIR`].
+/// The scratch subdirectory evicted occupancy tiles go to.
 pub const TILES_DIR: &str = "occupancy";
 
-/// The resolved `atlas.nav_pose`, `atlas.compute_placement` and budget.
+/// The sweep cloud's share of the memory budget, percent.
+pub const SWEEP_SHARE: u64 = 60;
+/// The occupancy tiles' share of the memory budget, percent.
+pub const OCCUPANCY_SHARE: u64 = 40;
+
+/// The resolved `navigation.map_placement`, budget, pose interval and
+/// take-off heading.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NavSettings {
-    pub nav_pose: NavPoseMode,
     pub placement: ComputePlacement,
     pub budget: Budget,
-    /// `atlas.pose_publish_interval_ms`.
+    /// `navigation.pose_publish_interval_ms`.
     pub pose_interval_ms: i64,
-    /// `atlas.takeoff_heading_deg` in radians: the declared north (see the
-    /// module docs); `None` follows the FC heading.
+    /// `navigation.takeoff_heading_deg` in radians: the declared north (see
+    /// the module docs); `None` follows the FC heading.
     pub takeoff_heading_rad: Option<f64>,
 }
 
 /// What one scan produced.
 #[derive(Debug, Default)]
 pub struct ScanOut {
-    /// The binned body-frame scan, when the lanes are on.
+    /// The binned body-frame scan.
     pub scan: Option<ScanDescriptor>,
     /// The polar record with its sensor pose, when a pose was known.
     pub polar: Option<PolarScan>,
@@ -109,14 +107,13 @@ pub struct TickOut {
 /// Facts the tick reports that the map does not own.
 #[derive(Debug, Default, Clone)]
 pub struct TickInputs {
-    pub session_id: Option<String>,
-    /// Where evicted occupancy tiles go (the open session's map dir, else a
-    /// scratch dir).
+    /// Where evicted occupancy tiles go.
     pub evict_dir: Option<PathBuf>,
-    /// The capture process's resident memory (`VmRSS`), MiB; `None` when
-    /// `/proc` could not be read.
+    /// This process's resident memory (`VmRSS`), MiB; `None` when `/proc`
+    /// could not be read.
     pub rss_mb: Option<f32>,
-    pub keyframes_dropped: u64,
+    /// The pose provider running, if any.
+    pub pose_provider: Option<PoseSource>,
 }
 
 /// `VmRSS` of a `/proc/<pid>/status` text, MiB; `None` without that line.
@@ -133,7 +130,8 @@ pub fn read_vm_rss_mb() -> Option<f32> {
     vm_rss_mb(&std::fs::read_to_string("/proc/self/status").ok()?)
 }
 
-fn nav_source(s: PoseSource) -> NavPoseSource {
+/// The navigation pose source a provider reports as.
+pub fn nav_source(s: PoseSource) -> NavPoseSource {
     match s {
         PoseSource::Lidar => NavPoseSource::LidarPlanar,
         PoseSource::FcEkf => NavPoseSource::FcEkf,
@@ -142,7 +140,7 @@ fn nav_source(s: PoseSource) -> NavPoseSource {
     }
 }
 
-/// The live map state the capture loop owns.
+/// The live map state the lane owns.
 pub struct NavMap {
     settings: NavSettings,
     map: LiveMap,
@@ -223,13 +221,20 @@ fn rz(yaw: f64) -> [f64; 9] {
 fn from_spot(spot: [f64; 3], t_frd: [f64; 3]) -> (f64, f64, bool) {
     let horizontal = (t_frd[0] - spot[0]).hypot(t_frd[1] - spot[1]);
     let climb = spot[2] - t_frd[2];
-    (horizontal, climb, horizontal <= ON_SPOT_M && climb <= ON_SPOT_M)
+    (
+        horizontal,
+        climb,
+        horizontal <= ON_SPOT_M && climb <= ON_SPOT_M,
+    )
 }
 
 impl NavMap {
     pub fn new(settings: NavSettings) -> Self {
         Self {
-            map: LiveMap::new(settings.placement.live_voxel_m(), settings.budget.sweep()),
+            map: LiveMap::new(
+                settings.placement.live_voxel_m(),
+                settings.budget.share(SWEEP_SHARE),
+            ),
             settings,
             last_pub: None,
             fc_up0: None,
@@ -545,11 +550,6 @@ impl NavMap {
         }
     }
 
-    /// Whether the lanes publish now.
-    pub fn active(&self, session_open: bool) -> bool {
-        self.settings.nav_pose == NavPoseMode::Always || session_open
-    }
-
     /// Whether the compute node reconstructs this flight live.
     pub fn streams(&self) -> bool {
         self.settings.placement.streams_live()
@@ -599,7 +599,11 @@ impl NavMap {
                 return;
             }
         }
-        if let Some(declared) = self.settings.takeoff_heading_rad.filter(|_| !self.left_takeoff) {
+        if let Some(declared) = self
+            .settings
+            .takeoff_heading_rad
+            .filter(|_| !self.left_takeoff)
+        {
             if self.yaw0.is_none() {
                 let yaw0 = wrap_pi(declared - frd_yaw(r_frd));
                 self.yaw0 = Some(yaw0);
@@ -647,7 +651,6 @@ impl NavMap {
         fc_heading: Option<f64>,
         now_ms: i64,
         now_mono_ns: u64,
-        session_open: bool,
     ) -> Option<PoseDescriptor> {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
         self.follow_heading(&r_frd, t_frd, fc_heading);
@@ -668,9 +671,6 @@ impl NavMap {
         if health != VioHealth::Lost {
             self.seating = false;
         }
-        if !self.active(session_open) {
-            return None;
-        }
         if !self.pose_due(e.t_ns) {
             return None;
         }
@@ -678,12 +678,13 @@ impl NavMap {
             pose: Pose { r, t, cov: None },
             anchor: None,
             ts_ms: now_ms - (now_mono_ns.saturating_sub(e.t_ns) / 1_000_000) as i64,
+            t_ns: e.t_ns,
             health,
             frame: NavFrame::MapNed,
             source: nav_source(e.source),
             north: self.north(),
             sigma_xy_m: e.sigma_xy_m,
-            // Set by the capture loop, which knows the FC IMU feed.
+            // Set by the lane, which knows the FC IMU feed.
             imu_feed: None,
         })
     }
@@ -719,24 +720,21 @@ impl NavMap {
         t_body_sensor: &[f64; 16],
         world: Option<&PoseEstimate>,
         fc_up: Option<f64>,
-        session_open: bool,
     ) -> ScanOut {
         ScanOut {
-            scan: self.body_scan(scan, t_body_sensor, &[], session_open),
-            polar: self.place_scan(scan, t_body_sensor, world, fc_up, session_open),
+            scan: Some(self.body_scan(scan, t_body_sensor, &[])),
+            polar: self.place_scan(scan, t_body_sensor, world, fc_up),
         }
     }
 
-    /// The binned body-frame scan when the lanes are on; it needs no pose.
+    /// The binned body-frame scan; it needs no pose.
     pub fn body_scan(
         &self,
         scan: &LidarScan,
         t_body_sensor: &[f64; 16],
         blocked_azimuth_deg: &[[f64; 2]],
-        session_open: bool,
-    ) -> Option<ScanDescriptor> {
-        self.active(session_open)
-            .then(|| frames::body_scan(scan, t_body_sensor, blocked_azimuth_deg))
+    ) -> ScanDescriptor {
+        frames::body_scan(scan, t_body_sensor, blocked_azimuth_deg)
     }
 
     /// Place one LiDAR scan. `world` is the provider's body pose at the scan
@@ -748,7 +746,6 @@ impl NavMap {
         t_body_sensor: &[f64; 16],
         world: Option<&PoseEstimate>,
         fc_up: Option<f64>,
-        session_open: bool,
     ) -> Option<PolarScan> {
         let e = world?;
         let (r_bs, t_bs) = se3::from_mat4(t_body_sensor);
@@ -768,60 +765,36 @@ impl NavMap {
             e.health
         };
         let polar = frames::polar_scan(scan, scan.t_ns, &r_map, t_map, health);
-        if self.active(session_open) {
-            self.map.insert(&polar);
-        }
+        self.map.insert(&polar);
         Some(polar)
     }
 
     /// The 1 Hz tick: changed occupancy tiles, the sweep delta, evictions and
     /// the map status.
-    pub fn tick(&mut self, inputs: &TickInputs, session_open: bool) -> TickOut {
-        let active = self.active(session_open);
+    pub fn tick(&mut self, inputs: &TickInputs) -> TickOut {
         let (occupancy, pointcloud) = self.map.tick(
-            self.settings.budget.occupancy(),
+            self.settings.budget.share(OCCUPANCY_SHARE),
             inputs.evict_dir.as_deref(),
         );
-        let (occupancy, pointcloud) = if active {
-            (occupancy, pointcloud)
-        } else {
-            (None, None)
-        };
-        // The link, which sees the bearer, fills in the state and rate.
-        let stream = if self.streams() {
-            StreamProgress {
-                state: StreamPhase::Connecting,
-                bytes_per_s: 0,
-            }
-        } else {
-            StreamProgress::default()
-        };
         TickOut {
             occupancy,
             pointcloud,
             status: MapStatus {
-                session_id: inputs.session_id.clone(),
                 placement: self.settings.placement,
                 memory_used_mb: inputs.rss_mb,
                 memory_budget_mb: self.settings.budget.total_mb(),
                 voxel_m: self.map.sweep.voxel_m(),
-                keyframes_dropped: inputs.keyframes_dropped,
                 sweep_points: self.map.sweep.len() as u64,
                 area_m2: self.map.grid.area_m2(),
-                nav_pose: self.settings.nav_pose,
-                stream,
-                ..MapStatus::default()
+                pose_provider: inputs.pose_provider.map(nav_source),
+                imu_feed: None,
             },
         }
     }
 
-    /// Save the live map into a closing session: the sweep cloud and every
-    /// occupancy tile still in RAM (evicted ones are already there).
-    pub fn save(&self, session_dir: &Path) {
-        let dir = session_dir.join(SESSION_MAP_DIR);
-        if let Err(e) = self.map.sweep.save(&dir.join(SWEEP_FILE)) {
-            tracing::warn!(error = %e, "sweep_cloud_save_failed");
-        }
-        self.map.grid.save_all(&dir.join(TILES_DIR));
+    /// Every sweep-cloud centroid as little-endian `f32` `x, y, z`
+    /// (`map_ned`), and the voxel edge they were merged at.
+    pub fn sweep_points(&self) -> (Vec<u8>, f32) {
+        (self.map.sweep.points_le(), self.map.sweep.voxel_m())
     }
 }

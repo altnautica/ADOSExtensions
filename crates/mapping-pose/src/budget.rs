@@ -1,9 +1,11 @@
-//! `atlas.memory_budget_mb`: the RAM the live map stores may hold, and how it
-//! splits. Unset, it is 80 % of the capture unit's memory cap (the manifest's
-//! per-profile cap the host applies): `ADOS_PLUGIN_MEMORY_MAX_BYTES`, which
-//! the host exports into the unit, else the cgroup's `memory.max` (a cgroup
-//! namespace can hide it), so a 4 GB drone and a workstation get budgets that
-//! fit them without a per-board setting.
+//! A process's memory budget: the RAM its in-memory stores may hold (the
+//! capture service's keyframe and scan queues, navigation's live sweep cloud
+//! and occupancy tiles). Unset, it is 80 % of the unit's memory cap (the
+//! manifest's per-profile cap the host applies): `ADOS_PLUGIN_MEMORY_MAX_BYTES`,
+//! which the host exports into the unit, else the cgroup's `memory.max` (a
+//! cgroup namespace can hide it), so a 4 GB drone and a workstation get
+//! budgets that fit them without a per-board setting. Each process splits its
+//! budget into its own shares ([`Budget::share`]).
 
 use std::path::Path;
 
@@ -14,7 +16,7 @@ pub const FALLBACK_BUDGET_MB: u64 = 512;
 /// The configured floor.
 pub const MIN_BUDGET_MB: u64 = 16;
 
-/// The resolved budget and its shares, bytes.
+/// The resolved budget, bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub total: u64,
@@ -27,24 +29,9 @@ impl Budget {
         }
     }
 
-    /// The keyframe queue (JPEG held in RAM until written): 40 %.
-    pub fn keyframes(&self) -> usize {
-        (self.total * 40 / 100) as usize
-    }
-
-    /// The scan ring (polar records waiting for the writer): 10 %.
-    pub fn scans(&self) -> usize {
-        (self.total * 10 / 100) as usize
-    }
-
-    /// The live sweep-cloud voxel hash: 30 %.
-    pub fn sweep(&self) -> usize {
-        (self.total * 30 / 100) as usize
-    }
-
-    /// The live occupancy tiles: 20 %.
-    pub fn occupancy(&self) -> usize {
-        (self.total * 20 / 100) as usize
+    /// `percent` of the budget, bytes.
+    pub fn share(&self, percent: u64) -> usize {
+        (self.total * percent / 100) as usize
     }
 
     pub fn total_mb(&self) -> f32 {
@@ -99,11 +86,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_shares_add_to_the_whole() {
+    fn a_share_is_its_percent_of_the_whole() {
         let b = Budget::from_mb(100);
-        let sum = b.keyframes() + b.scans() + b.sweep() + b.occupancy();
-        assert_eq!(sum as u64, b.total);
-        assert_eq!(b.keyframes() as u64, 40 * MIB);
+        assert_eq!(b.share(60) + b.share(40), b.total as usize);
+        assert_eq!(b.share(40) as u64, 40 * MIB);
+        assert_eq!(Budget::from_mb(1).total, MIN_BUDGET_MB * MIB);
     }
 
     #[test]

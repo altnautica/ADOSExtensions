@@ -372,7 +372,10 @@ mod tests {
         assert!((vertical - 4.0).abs() > 1.0, "vertical {vertical}");
         assert!((a.heading() - 4.0).abs() < 0.01, "heading {}", a.heading());
         let mid = a.heading_at(19_502_500_000);
-        assert!((mid - 0.2 * 19.5025).abs() < 0.01, "heading at 19.5 s {mid}");
+        assert!(
+            (mid - 0.2 * 19.5025).abs() < 0.01,
+            "heading at 19.5 s {mid}"
+        );
     }
 
     /// An attitude held still at `roll`, `pitch` for one second.
@@ -401,23 +404,40 @@ mod tests {
         let (roll, pitch) = (0.05f64, 0.35f64);
         let ground = Vector3::new(5.0, 1.0, 0.0);
         let body = UnitQuaternion::from_euler_angles(roll, pitch, 0.0).inverse() * ground;
-        assert!((body.x - 5.0).abs() > 0.2, "the body axis reads short: {}", body.x);
-        let a = still(roll, pitch, [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
+        assert!(
+            (body.x - 5.0).abs() > 0.2,
+            "the body axis reads short: {}",
+            body.x
+        );
+        let a = still(
+            roll,
+            pitch,
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        );
         let v = a.level_velocity([body.x, body.y]).expect("levelled");
-        assert!((v[0] - 5.0).abs() < 0.01 && (v[1] - 1.0).abs() < 0.01, "{v:?}");
+        assert!(
+            (v[0] - 5.0).abs() < 0.01 && (v[1] - 1.0).abs() < 0.01,
+            "{v:?}"
+        );
 
         // IMU x along the LiDAR's y: R_lidar_imu = Rz(90°).
         let rz = [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
         let a = still(roll, pitch, rz);
         let imu = Matrix3::from_row_slice(&rz.concat()).transpose() * body;
         let v = a.level_velocity([imu.x, imu.y]).expect("levelled");
-        assert!((v[0] - 5.0).abs() < 0.01 && (v[1] - 1.0).abs() < 0.01, "{v:?}");
+        assert!(
+            (v[0] - 5.0).abs() < 0.01 && (v[1] - 1.0).abs() < 0.01,
+            "{v:?}"
+        );
     }
 
     #[test]
     fn ground_velocity_needs_an_attitude_and_a_moderate_tilt() {
         let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
-        assert_eq!(Attitude::new(2.0, 0.005, id).level_velocity([1.0, 0.0]), None);
+        assert_eq!(
+            Attitude::new(2.0, 0.005, id).level_velocity([1.0, 0.0]),
+            None
+        );
         assert_eq!(still(1.2, 0.0, id).level_velocity([1.0, 0.0]), None);
         assert!(still(0.8, 0.0, id).level_velocity([1.0, 0.0]).is_some());
     }
@@ -449,7 +469,11 @@ mod tests {
             a.learn_bias(-(a.heading() - before), 0.1);
         }
         let learnt = a.gyro_bias_z();
-        assert!((learnt - bias).abs() < 0.01 * bias, "bias {}", learnt.to_degrees());
+        assert!(
+            (learnt - bias).abs() < 0.01 * bias,
+            "bias {}",
+            learnt.to_degrees()
+        );
         let before = a.heading();
         feed(&mut a, &mut t);
         assert!((a.heading() - before).abs() < 1e-5, "still turning");
@@ -463,7 +487,11 @@ mod tests {
         let mut a = Attitude::new(2.0, 0.005, id);
         a.learn_bias(0.5, 0.1);
         let step = MAX_GYRO_BIAS_RAD_S * 0.1 / BIAS_TAU_S;
-        assert!((a.gyro_bias_z() + step).abs() < 1e-12, "{}", a.gyro_bias_z());
+        assert!(
+            (a.gyro_bias_z() + step).abs() < 1e-12,
+            "{}",
+            a.gyro_bias_z()
+        );
         for _ in 0..100_000 {
             a.learn_bias(-0.5, 0.1);
         }

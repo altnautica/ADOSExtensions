@@ -4,19 +4,19 @@
 //! One session runs one flow regardless of camera count. Each enabled camera
 //! gets its own [`KeyframeSelector`]; a frame counts toward the ingest rate
 //! and, when its camera's selector fires, yields a full keyframe. The live
-//! shared pose stream is not the session's: the navigation publisher
-//! (`navigation_lidar_slam::nav`) owns it, so the pose keeps flowing with no session open.
+//! shared pose stream is not the session's: the Navigation extension
+//! publishes it, so the pose keeps flowing with no session open.
 
 use crate::config::CaptureConfig;
 use crate::selector::KeyframeSelector;
 use ados_capture_contract::v1::ImuSample;
 use ados_capture_contract::{CameraModel, GeoAnchor};
-use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
 use ados_mapping_protocol::atlas::{
     CaptureState, CaptureStatus, KeyframeEnvelope, KeyframeFlags, KeyframeImage, KeyframeTier,
     Pose, PoseSource, TimeAlignment, VioHealth,
 };
+use std::collections::{HashMap, VecDeque};
+use std::time::{Duration, Instant};
 
 /// How many recent accepted frames the ingest rate is measured over.
 const INGEST_WINDOW: usize = 64;

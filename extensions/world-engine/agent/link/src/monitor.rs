@@ -12,10 +12,6 @@
 //!   change and at least every [`STATUS_REFRESH`]. The atlas half is null once no
 //!   capture-state event arrived for [`CAPTURE_STATE_STALE`].
 //!
-//! - Map status: the capture service cannot see the bearer or the upload, so
-//!   the link fills `map_status.stream.state` from the forwarder's bearer and
-//!   `map_status.upload` from the session's upload job before republishing.
-//!
 //! It runs on its own bus connection so a slow LAN forward never delays the
 //! pose republish or the status.
 
@@ -23,6 +19,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_protocol::atlas::{
+    AtlasEvent, AtlasForwardStatus, CaptureStatus, ATLAS_CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_TOPICS,
+};
+use ados_mapping_protocol::atlas_state::atlas_state_json;
+use ados_mapping_protocol::STATUS_CHANNEL;
 use ados_protocol::frame::PLUGIN_MAX_FRAME;
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
 use parking_lot::Mutex;
@@ -30,17 +31,10 @@ use rmpv::Value;
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
-use ados_mapping_protocol::atlas::{
-    AtlasEvent, AtlasForwardStatus, CaptureStatus, MapStatus, StreamPhase, UploadPhase,
-    UploadProgress, ATLAS_CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_MAP_STATUS_TOPIC, PLUGIN_ATLAS_TOPICS,
-};
-use ados_mapping_protocol::atlas_state::atlas_state_json;
-use ados_mapping_protocol::STATUS_CHANNEL;
 
 use crate::forward::{now_ms, SharedForward, CONNECT_RETRIES, CONNECT_RETRY_DELAY};
 use crate::host::Host;
 use crate::sleep_or_shutdown;
-use crate::upload::{UploadManager, UploadState, UploadView};
 
 /// A capture state older than this is no longer reported.
 pub const CAPTURE_STATE_STALE: Duration = Duration::from_secs(10);
@@ -112,66 +106,14 @@ fn status_json(
     })
 }
 
-/// The transport facts the link adds to a map status.
-#[derive(Clone)]
-pub struct MapFacts {
-    pub forward: SharedForward,
-    pub uploads: Option<UploadManager>,
-}
-
-fn upload_progress(v: &UploadView) -> UploadProgress {
-    UploadProgress {
-        state: match v.state {
-            UploadState::Idle => UploadPhase::Idle,
-            UploadState::Queued | UploadState::Blocked => UploadPhase::Queued,
-            UploadState::Uploading => UploadPhase::Uploading,
-            UploadState::Committed => UploadPhase::Done,
-            UploadState::Failed => UploadPhase::Failed,
-        },
-        bytes_done: v.bytes_sent,
-        bytes_total: v.bytes_total,
-    }
-}
-
-/// `payload` (a map status) with the stream state from the forwarder's
-/// bearer, the rate it carried (`bytes_per_s`, when measured) and the upload
-/// from the session's job. A payload that does not decode passes unchanged.
-fn patch_map_status(
-    payload: Value,
-    fwd: &AtlasForwardStatus,
-    bytes_per_s: Option<u64>,
-    upload: impl FnOnce(&str) -> Option<UploadView>,
-) -> Value {
-    let Ok(mut st) = rmpv::ext::from_value::<MapStatus>(payload.clone()) else {
-        return payload;
-    };
-    if st.placement.streams_live() {
-        st.stream.state = match fwd.bearer.as_deref() {
-            Some("direct-lan") => StreamPhase::Live,
-            Some(_) => StreamPhase::Degraded,
-            None => StreamPhase::Connecting,
-        };
-        if let Some(rate) = bytes_per_s {
-            st.stream.bytes_per_s = rate;
-        }
-    }
-    if let Some(v) = st.session_id.as_deref().and_then(upload) {
-        st.upload = upload_progress(&v);
-    }
-    rmpv::ext::to_value(&st).unwrap_or(payload)
-}
-
 /// Subscribe to the capture bus until `shutdown`, republishing shared topics and
 /// recording the capture state.
 pub async fn run_bus_monitor(
     host: Arc<dyn Host>,
     bus_socket: PathBuf,
     capture: Arc<CaptureState>,
-    facts: MapFacts,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    // The forwarder's byte count at the previous map status, for the rate.
-    let mut last_bytes: Option<(u64, Instant)> = None;
     loop {
         if *shutdown.borrow() {
             return;
@@ -198,22 +140,6 @@ pub async fn run_bus_monitor(
             match read {
                 Ok(Some(body)) => match bus_event(&body) {
                     Some(BusEvent::Shared(topic, payload)) => {
-                        let payload = if topic == PLUGIN_ATLAS_MAP_STATUS_TOPIC {
-                            let (fwd, bytes) = {
-                                let f = facts.forward.lock();
-                                (f.snapshot(0), f.bytes_carried())
-                            };
-                            let rate = last_bytes.map(|(b, at)| {
-                                let dt = at.elapsed().as_secs_f64().max(1e-3);
-                                (bytes.saturating_sub(b) as f64 / dt) as u64
-                            });
-                            last_bytes = Some((bytes, Instant::now()));
-                            patch_map_status(payload, &fwd, rate, |id| {
-                                facts.uploads.as_ref().and_then(|u| u.job_view(id))
-                            })
-                        } else {
-                            payload
-                        };
                         if let Err(e) = host.event_publish(&topic, payload).await {
                             tracing::debug!(topic, error = %e, "shared topic republish failed");
                         }
@@ -285,9 +211,9 @@ mod tests {
     use crate::control::tests::capturing_status;
     use crate::forward::ForwardStatus;
     use crate::testing::FakeHost;
+    use ados_mapping_protocol::atlas::{ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_POSE_TOPIC};
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixListener;
-    use ados_mapping_protocol::atlas::{ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_POSE_TOPIC};
 
     fn frame(topic: &str, payload: &Value) -> Vec<u8> {
         let mut inner = Vec::new();
@@ -352,10 +278,6 @@ mod tests {
             host.clone(),
             sock,
             capture.clone(),
-            MapFacts {
-                forward: Arc::new(Mutex::new(ForwardStatus::default())),
-                uploads: None,
-            },
             shutdown.clone(),
         ));
         tokio::spawn(run_status_writer(
@@ -396,42 +318,5 @@ mod tests {
             .lock()
             .iter()
             .all(|(c, _)| c == STATUS_CHANNEL));
-    }
-
-    #[test]
-    fn the_link_fills_the_stream_state_and_the_upload_into_a_map_status() {
-        use ados_mapping_protocol::atlas::ComputePlacement;
-        let status = MapStatus {
-            session_id: Some("sess-1".into()),
-            placement: ComputePlacement::Stream,
-            ..MapStatus::default()
-        };
-        let payload = rmpv::ext::to_value(&status).unwrap();
-        let mut fwd = ForwardStatus::default().snapshot(0);
-        fwd.bearer = Some("direct-lan".into());
-        let view = UploadView {
-            state: UploadState::Uploading,
-            bytes_sent: 10,
-            bytes_total: 40,
-            node: None,
-            error: None,
-        };
-        let out = patch_map_status(payload, &fwd, Some(5_000), |id| {
-            assert_eq!(id, "sess-1");
-            Some(view.clone())
-        });
-        let st: MapStatus = rmpv::ext::from_value(out).unwrap();
-        assert_eq!(st.stream.state, StreamPhase::Live);
-        assert_eq!(st.stream.bytes_per_s, 5_000);
-        assert_eq!(st.upload.state, UploadPhase::Uploading);
-        assert_eq!((st.upload.bytes_done, st.upload.bytes_total), (10, 40));
-
-        fwd.bearer = Some("wfb-relay".into());
-        let out = patch_map_status(rmpv::ext::to_value(&status).unwrap(), &fwd, None, |_| None);
-        let st: MapStatus = rmpv::ext::from_value(out).unwrap();
-        assert_eq!(st.stream.state, StreamPhase::Degraded);
-
-        let odd = Value::from("not a status");
-        assert_eq!(patch_map_status(odd.clone(), &fwd, None, |_| None), odd);
     }
 }

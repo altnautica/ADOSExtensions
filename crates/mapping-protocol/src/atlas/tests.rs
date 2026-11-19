@@ -268,6 +268,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         pose: sample_pose(),
         anchor: Some(sample_anchor()),
         ts_ms: 5,
+        t_ns: 5_000_000,
         health: VioHealth::Degraded,
         frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,

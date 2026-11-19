@@ -30,12 +30,12 @@ use std::net::{IpAddr, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ados_sdk::OffloadAdvertisement;
-use tokio::sync::{watch, Notify};
-use tokio::task::JoinHandle;
 use ados_mapping_transport::{
     run_offload_orchestrator, CameraGeometry, DetectionTee, NodeEndpoint, OrchestratorConfig,
 };
+use ados_sdk::OffloadAdvertisement;
+use tokio::sync::{watch, Notify};
+use tokio::task::JoinHandle;
 
 use crate::compute_node;
 use crate::credentials::{CredentialStore, OFFLOAD_STREAM_LANE};

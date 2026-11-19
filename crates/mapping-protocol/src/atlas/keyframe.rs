@@ -392,6 +392,9 @@ pub struct PoseDescriptor {
     /// Unix milliseconds of the instant the pose describes (a LiDAR pose:
     /// its scan's first return), not the time it was published.
     pub ts_ms: i64,
+    /// Host monotonic ns of the instant the pose describes (the clock a
+    /// subscriber on the same host pairs it with its own samples on).
+    pub t_ns: u64,
     pub health: VioHealth,
     pub frame: super::nav::NavFrame,
     pub source: super::nav::NavPoseSource,

@@ -48,8 +48,8 @@ use axum::{
 };
 use tokio::sync::broadcast;
 
-use ados_protocol::ws_ticket::WS_TICKET_SUBPROTOCOL;
 use ados_mapping_protocol::atlas::AtlasEvent;
+use ados_protocol::ws_ticket::WS_TICKET_SUBPROTOCOL;
 
 /// The WebSocket route a world-model consumer connects to, one path per device.
 pub const WORLD_WS_ROUTE: &str = "/ws/atlas/:device_id";
@@ -157,10 +157,10 @@ async fn forward_descriptors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
     use ados_mapping_protocol::atlas::{
         SplatDescriptor, PLUGIN_ATLAS_MESH_TOPIC, PLUGIN_ATLAS_SPLAT_TOPIC,
     };
+    use futures_util::StreamExt;
 
     fn descriptor(topic: &str) -> AtlasEvent {
         AtlasEvent::new(topic, None, vec![7, 7, 7])

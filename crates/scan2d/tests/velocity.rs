@@ -84,7 +84,11 @@ fn bare_corridor_follows_the_measured_velocity() {
         with.len()
     );
     assert!(degenerate > with.len() / 2, "{degenerate} degenerate scans");
-    assert!((end.x - walked).abs() < 0.2, "ended at {:.3} m of {walked:.3}", end.x);
+    assert!(
+        (end.x - walked).abs() < 0.2,
+        "ended at {:.3} m of {walked:.3}",
+        end.x
+    );
     assert!(across < 0.05, "{across} m across the corridor");
 }
 
@@ -103,7 +107,10 @@ fn recorded(text: &str) -> Recording {
         vel: Vec::new(),
         scans: Vec::new(),
     };
-    for l in text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+    for l in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
         let mut f = l.split_whitespace();
         let kind = f.next().expect("a line kind");
         let v: Vec<i64> = f.map(|x| x.parse().expect("an integer")).collect();
@@ -134,7 +141,11 @@ fn recorded(text: &str) -> Recording {
                     points,
                     t_offset_ns,
                 };
-                rec.scans.push((scan, [v[1] as f64 * 1e-3, v[2] as f64 * 1e-3], v[3] as f64 * 1e-6));
+                rec.scans.push((
+                    scan,
+                    [v[1] as f64 * 1e-3, v[2] as f64 * 1e-3],
+                    v[3] as f64 * 1e-6,
+                ));
             }
             other => panic!("unknown line kind `{other}`"),
         }

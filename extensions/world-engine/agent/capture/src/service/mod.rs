@@ -1,9 +1,9 @@
 //! The capture loop: the single owner of the open session.
 //!
 //! It selects over operator control (socket and front-panel buttons), camera
-//! frames, sensor-bus events, LiDAR scans and a 10 Hz tick, and for each:
+//! frames, sensor-bus events and a 10 Hz tick, and for each:
 //!
-//! - feeds the pose provider (frames, IMU, LiDAR);
+//! - feeds the pose provider (frames, IMU);
 //! - while recording, converts to the session timebase and hands the
 //!   recorder every frame (trigger-joined), IMU batch, trigger, GNSS byte
 //!   stream and fix, LiDAR scan, clock sample, pose estimate and a 1 Hz
@@ -16,7 +16,6 @@
 
 mod control;
 mod frame;
-mod nav_lane;
 mod tick;
 mod view;
 
@@ -26,39 +25,36 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ados_capture_contract::{Manifest, Rig, Timebase};
+use ados_mapping_protocol::capture_ctl::{CaptureStateView, CtlReply, ExposureView};
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use ados_mapping_protocol::capture_ctl::{CaptureStateView, CtlReply, ExposureView};
 
 use crate::camera_control::CameraControl;
 use crate::control::ControlMsg;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
 use crate::hud::HudAction;
-use ados_mapping_pose::lidar_scan::LidarScan;
-use navigation_lidar_slam::nav::{NavMap, NavSettings};
-use ados_mapping_pose::fc_ekf::FcEkfPose;
-use ados_mapping_pose::pose::PoseProvider;
 use crate::publish::AtlasPublisher;
 use crate::quality::coverage::Coverage;
 use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::QualityMonitor;
 use crate::recording::ActiveSession;
 use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
-use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use crate::session::CaptureSession;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
+use ados_mapping_pose::pose::PoseProvider;
+use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use ados_mapping_pose::vehicle::VehicleFeed;
 
 /// The loop's tick: pose drain and state refresh.
 pub const TICK: Duration = Duration::from_millis(100);
-/// The pose lane's poll, independent of `atlas.pose_publish_interval_ms`
-/// (which only thins the poses, on their own measurement time): a pose
-/// waits at most one poll for publication, and the flight controller fuses
-/// it that much older.
-pub const NAV_POLL: Duration = Duration::from_millis(10);
 /// Ticks between health records, HUD pages and capture-state publishes.
 const SLOW_TICKS: u32 = 10;
+/// The keyframe queue's share of the memory budget, percent.
+pub const KEYFRAME_SHARE: u64 = 80;
+/// The LiDAR scan queue's share of the memory budget, percent.
+pub const SCAN_SHARE: u64 = 20;
 
 /// Where the loop reads and writes outside its own state.
 #[derive(Debug, Clone)]
@@ -74,7 +70,7 @@ impl Paths {
         Self {
             storage_sidecar: crate::storage::sidecar_path(),
             clock_sidecar: ados_mapping_pose::clock::clock_sidecar_path(),
-            rig: crate::rig_source::rig_path(),
+            rig: ados_mapping_pose::rig::rig_path(),
             active_marker: Some(crate::storage::active_marker()),
         }
     }
@@ -94,7 +90,6 @@ pub struct LoopDeps {
     pub vehicle: VehicleFeed,
     pub sensors: Arc<Mutex<SensorState>>,
     pub bus_rx: mpsc::Receiver<BusEvent>,
-    pub lidar_rx: Option<mpsc::Receiver<LidarScan>>,
     pub publisher: AtlasPublisher,
     pub control_rx: mpsc::Receiver<ControlMsg>,
     pub hud_rx: Option<mpsc::Receiver<HudAction>>,
@@ -104,23 +99,8 @@ pub struct LoopDeps {
     /// `None` where there is none (the lock is then never applied).
     pub camera: Option<Arc<dyn CameraControl>>,
     pub paths: Paths,
-    pub nav: NavDeps,
     /// The live `atlas.reconstruct_steps`, stamped on every capture status.
     pub reconstruct_steps: SharedSteps,
-}
-
-/// What the navigation lanes need beyond the capture loop's own inputs.
-#[derive(Clone, Default)]
-pub struct NavDeps {
-    /// The flight controller's EKF feed, always (the map's z is its height).
-    pub fc_feed: Option<FcEkfPose>,
-    /// The LiDAR mount, body-from-sensor (FLU); identity when unknown.
-    pub lidar_mount: Option<[f64; 16]>,
-    /// Whether the configured LiDAR is planar: its session record is the
-    /// compact polar stream instead of the Cartesian cloud.
-    pub lidar_planar: bool,
-    /// Where evicted occupancy tiles go with no session open.
-    pub scratch_dir: Option<PathBuf>,
 }
 
 /// Per-camera frame accounting.
@@ -182,24 +162,8 @@ pub(crate) struct Engine {
     /// Sim-stamped frames whose exposure could not be mapped to the host
     /// clock (the bus clock is not on `sim`); they keep their arrival stamp.
     sim_unmapped: u64,
-    /// The live navigation and mapping lanes.
-    nav: NavMap,
-    nav_deps: NavDeps,
-    /// LiDAR scans waiting for their pose before they are placed.
-    scan_wait: navigation_lidar_slam::nav::scan_wait::ScanWait,
-    /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
-    /// "fc"`, before `RAW_IMU` arrives).
-    fc_imu_prev: Option<(u64, [f64; 9])>,
-    /// What the FC feed has handed the pose provider ([`nav_lane`]'s sink).
-    fc_nav: Arc<navigation_lidar_slam::nav::fc_imu::FeedState>,
-    /// Why the FC IMU feed last left the planar pose degraded, `None` while
-    /// it measures the heading ([`navigation_lidar_slam::nav::fc_imu::FeedState::degraded`]).
-    imu_feed_degraded: Option<ados_mapping_protocol::atlas::ImuFeedReason>,
-    /// The planar matcher's in-flight map restarts the navigation map has
-    /// re-anchored ([`ados_mapping_pose::pose::PoseQuality::map_restarts`]).
-    nav_map_restarts: u32,
-    /// The scan coverage since the last `nav_imu_feed`.
-    nav_feed: nav_lane::NavFeedStats,
+    /// The keyframe and scan queues' budget.
+    budget: ados_mapping_pose::budget::Budget,
     /// The live `atlas.reconstruct_steps` (see [`LoopDeps::reconstruct_steps`]).
     reconstruct_steps: SharedSteps,
 }
@@ -217,14 +181,12 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         vehicle,
         sensors,
         mut bus_rx,
-        mut lidar_rx,
         publisher,
         mut control_rx,
         mut hud_rx,
         view_tx,
         camera,
         paths,
-        nav: nav_deps,
         reconstruct_steps,
     } = deps;
     if let Some(fc) = &fc {
@@ -242,27 +204,16 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         }
     }
     let (exposure_tx, mut exposure_rx) = mpsc::unbounded_channel();
-    let bus_timebase = ados_mapping_pose::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
-    let budget = navigation_lidar_slam::nav::budget::resolve(
+    let bus_timebase =
+        ados_mapping_pose::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
+    let budget = ados_mapping_pose::budget::resolve(
         cfg.memory_budget_mb,
-        std::env::var(navigation_lidar_slam::nav::budget::MEMORY_MAX_ENV)
+        std::env::var(ados_mapping_pose::budget::MEMORY_MAX_ENV)
             .ok()
             .as_deref(),
         std::path::Path::new("/"),
     );
-    let nav = NavMap::new(NavSettings {
-        nav_pose: cfg.nav_pose,
-        placement: cfg.placement,
-        budget,
-        pose_interval_ms: cfg.pose_publish_interval_ms,
-        takeoff_heading_rad: cfg.takeoff_heading_deg.map(f64::to_radians),
-    });
-    tracing::info!(
-        nav_pose = ?cfg.nav_pose,
-        placement = ?cfg.placement,
-        budget_mb = budget.total_mb(),
-        "atlas_nav_lanes"
-    );
+    tracing::info!(budget_mb = budget.total_mb(), "atlas_capture_budget");
     let mut engine = Engine {
         keyframes: CaptureSession::new(cfg.capture.clone()),
         exposure: cfg.exposure.clone(),
@@ -294,17 +245,9 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         slow: 0,
         bus_timebase,
         sim_unmapped: 0,
-        nav,
-        nav_deps,
-        scan_wait: Default::default(),
-        fc_imu_prev: None,
-        fc_nav: Default::default(),
-        imu_feed_degraded: None,
-        nav_map_restarts: 0,
-        nav_feed: Default::default(),
+        budget,
         reconstruct_steps,
     };
-    engine.attach_fc_nav();
     // Frames are pulled on their own task so a source read is never
     // cancelled mid-frame by the select below.
     let (frame_tx, mut frame_rx) = mpsc::channel::<CapturedFrame>(8);
@@ -330,9 +273,6 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     });
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // The pose lane drains the provider as soon as an estimate lands.
-    let mut nav_tick = tokio::time::interval(NAV_POLL);
-    nav_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     engine.publish_status().await;
     // A configured lock is applied once per run; unlocked leaves the cameras
     // on their own auto exposure.
@@ -349,11 +289,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
                 engine.on_hud(action).await;
             }
             _ = tick.tick() => engine.on_tick().await,
-            _ = nav_tick.tick() => engine.on_nav_tick().await,
             Some(ev) = bus_rx.recv() => engine.on_bus(ev),
-            Some(scan) = async { match lidar_rx.as_mut() { Some(rx) => rx.recv().await, None => None } } => {
-                engine.on_lidar(scan).await;
-            }
             f = frame_rx.recv() => match f {
                 Some(f) => engine.on_frame(f).await,
                 None => break,
@@ -369,8 +305,6 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
 mod tests;
 #[cfg(test)]
 mod tests_timebase;
-#[cfg(test)]
-mod tests_imu_feed;
 
 /// A session being finished on a blocking thread; its id stays reported in
 /// the state view until the finish completes.

@@ -3,6 +3,18 @@ import { useEffect, useState } from "react";
 import { agentTimestampOf, HostError, SampleClock, type PluginContext } from "@altnautica/plugin-sdk";
 
 import {
+  EMPTY_LIDAR_STATUS,
+  EMPTY_MAP_STATUS,
+  LIDAR_TOPIC,
+  MAP_STATUS_TOPIC,
+  normalizeLidarStatus,
+  normalizeMapStatus,
+  type LidarStatus,
+  type MapStatus,
+  type RawLidarStatus,
+  type RawMapStatus,
+} from "./lidarSlam";
+import {
   EMPTY_NAV_STATE,
   ENGAGE_TOPIC,
   NAV_STATE_TOPIC,
@@ -86,6 +98,7 @@ export function useNavigationTelemetry(ctx: PluginContext): TelemetryFeed {
             degradedReasons: next.degradedReasons,
             fcParams: next.fcParams,
             poseAgeMs: next.poseAgeMs,
+            noFlightController: next.noFlightController,
           },
         }));
       })
@@ -152,4 +165,14 @@ export function useNavState(ctx: PluginContext): EventFeed<NavState> {
  */
 export function useEngage(ctx: PluginContext): EventFeed<boolean | null> {
   return useEventFeed<RawEngage, boolean | null>(ctx, ENGAGE_TOPIC, null, normalizeEngage);
+}
+
+/** Subscribe to the lidar-slam service's map status (1 Hz). */
+export function useMapStatus(ctx: PluginContext): EventFeed<MapStatus> {
+  return useEventFeed<RawMapStatus, MapStatus>(ctx, MAP_STATUS_TOPIC, EMPTY_MAP_STATUS, normalizeMapStatus);
+}
+
+/** Subscribe to the configured LiDAR's link status (1 Hz while declared). */
+export function useLidarStatus(ctx: PluginContext): EventFeed<LidarStatus> {
+  return useEventFeed<RawLidarStatus, LidarStatus>(ctx, LIDAR_TOPIC, EMPTY_LIDAR_STATUS, normalizeLidarStatus);
 }

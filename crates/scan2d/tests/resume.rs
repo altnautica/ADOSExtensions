@@ -96,10 +96,18 @@ fn run(
             }
             let t_ns = (imu_t * 1e9).round() as u64;
             if let Some(bias_deg) = fc_heading {
-                let bias = if imu_t >= resume { bias_deg.to_radians() } else { 0.0 };
+                let bias = if imu_t >= resume {
+                    bias_deg.to_radians()
+                } else {
+                    0.0
+                };
                 slam.feed_fc_heading(t_ns, 1.0 + yaw(imu_t) + bias);
             }
-            let wz = if stand_in || !(t0..t1).contains(&imu_t) { 0.0 } else { rate };
+            let wz = if stand_in || !(t0..t1).contains(&imu_t) {
+                0.0
+            } else {
+                rate
+            };
             slam.feed_imu(&ImuSample {
                 t_ns,
                 gyro: [0.0, 0.0, wz],
@@ -134,10 +142,18 @@ fn run(
 }
 
 fn assert_recovers(r: &Run, what: &str) {
-    assert!(r.checked_off.is_empty(), "{what}: reported checked off the drone at {:?}", r.checked_off);
+    assert!(
+        r.checked_off.is_empty(),
+        "{what}: reported checked off the drone at {:?}",
+        r.checked_off
+    );
     assert_eq!(r.restart, None, "{what}: started the map over");
     assert!(r.first_ok.is_some(), "{what}: never re-confirmed");
-    assert!(r.final_err.abs() < 1.5, "{what}: ends {:.2} deg off", r.final_err);
+    assert!(
+        r.final_err.abs() < 1.5,
+        "{what}: ends {:.2} deg off",
+        r.final_err
+    );
 }
 
 #[test]
@@ -177,8 +193,15 @@ fn a_turn_the_flight_controller_misreports_is_not_confirmed_on_the_window_edge()
     for bias in [11.0, -11.0, 14.0, -14.0] {
         let r = run(&w, 90.0, 90.0, Feed::Dropped, 2.3, 2.8, Some(bias));
         let what = format!("FC turn {bias:+} deg off");
-        assert!(r.checked_off.is_empty(), "{what}: confirmed off the drone at {:?}", r.checked_off);
-        assert_eq!(r.first_ok, None, "{what}: confirmed before the map started over");
+        assert!(
+            r.checked_off.is_empty(),
+            "{what}: confirmed off the drone at {:?}",
+            r.checked_off
+        );
+        assert_eq!(
+            r.first_ok, None,
+            "{what}: confirmed before the map started over"
+        );
         assert!(r.restart.is_some(), "{what}: never started the map over");
     }
     for bias in [7.0, -7.0, 9.0, -9.0] {
@@ -195,7 +218,11 @@ fn a_yaw_through_a_delivery_stall_recovers_exactly() {
     for (deg, rate) in [(30.0, 15.0), (90.0, 45.0)] {
         let r = run(&w, deg, rate, Feed::Burst, 1.0, 5.0, None);
         assert_recovers(&r, &format!("burst {deg} deg"));
-        assert_eq!(r.first_ok, Some(5.0), "burst {deg} deg: the burst measured the turn");
+        assert_eq!(
+            r.first_ok,
+            Some(5.0),
+            "burst {deg} deg: the burst measured the turn"
+        );
     }
 }
 
@@ -211,9 +238,20 @@ fn a_stand_in_without_yaw_rate_starts_a_new_map() {
         let r = run(&w, deg, rate, Feed::StandIn, 0.0, 6.0, None);
         let what = format!("stand-in {deg} deg");
         assert_eq!(r.first_ok, Some(6.0), "{what}: the new map tracks at once");
-        let off: Vec<_> = r.checked_off.iter().filter(|(_, e)| (e + deg).abs() > 1.5).collect();
-        assert!(off.is_empty(), "{what}: the new map moved against the old at {off:?}");
-        assert!((r.final_err + deg).abs() < 1.5, "{what}: ends {:.2} deg off", r.final_err);
+        let off: Vec<_> = r
+            .checked_off
+            .iter()
+            .filter(|(_, e)| (e + deg).abs() > 1.5)
+            .collect();
+        assert!(
+            off.is_empty(),
+            "{what}: the new map moved against the old at {off:?}"
+        );
+        assert!(
+            (r.final_err + deg).abs() < 1.5,
+            "{what}: ends {:.2} deg off",
+            r.final_err
+        );
     }
 }
 
@@ -223,11 +261,26 @@ fn a_stand_in_without_yaw_rate_starts_a_new_map() {
 /// pass the map starts over, and the new one tracks steadily from there.
 #[test]
 fn an_ambiguous_room_starts_the_map_over() {
-    let r = run(&rect(1.0, 0.0, 7.0, 6.0), 0.0, 15.0, Feed::Dropped, 1.0, 5.0, None);
-    assert_eq!(r.first_ok, None, "re-confirmed a heading the room leaves ambiguous");
+    let r = run(
+        &rect(1.0, 0.0, 7.0, 6.0),
+        0.0,
+        15.0,
+        Feed::Dropped,
+        1.0,
+        5.0,
+        None,
+    );
+    assert_eq!(
+        r.first_ok, None,
+        "re-confirmed a heading the room leaves ambiguous"
+    );
     let (at, _) = r.restart.expect("the map starts over");
     assert!(at <= 7.6, "started over only at {at:.1} s");
-    assert!(r.restart_drift.is_empty(), "the new map moved at {:?}", r.restart_drift);
+    assert!(
+        r.restart_drift.is_empty(),
+        "the new map moved at {:?}",
+        r.restart_drift
+    );
 }
 
 /// How the drone moves from the scan that starts the map over on.

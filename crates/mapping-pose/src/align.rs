@@ -245,7 +245,10 @@ mod tests {
         assert!((fit.yaw - yaw).abs() < 1e-9, "yaw {}", fit.yaw);
         assert!(fit.residual_m < 1e-3, "residual {}", fit.residual_m);
         let off = h.offset(fit.yaw).unwrap();
-        assert!((off[0] - c[0]).abs() < 1e-6 && (off[1] - c[1]).abs() < 1e-6, "{off:?}");
+        assert!(
+            (off[0] - c[0]).abs() < 1e-6 && (off[1] - c[1]).abs() < 1e-6,
+            "{off:?}"
+        );
     }
 
     #[test]
@@ -271,7 +274,10 @@ mod tests {
         }
         let off = h.offset(0.0).unwrap()[0];
         let now = 0.03 * 199.0;
-        assert!(now - off < 1.1 * 0.03 * NEAR_SAMPLES && off > 0.7 * now, "{off} vs {now}");
+        assert!(
+            now - off < 1.1 * 0.03 * NEAR_SAMPLES && off > 0.7 * now,
+            "{off} vs {now}"
+        );
     }
 
     #[test]
@@ -304,9 +310,16 @@ mod tests {
         for s in (60..80).map(|k| [k as f64 * 1.5, 0.2 * k as f64]) {
             h.observe(s, shifted(-0.4, s, [20.0, 0.0]));
         }
-        assert_eq!(h.fit(), Some(before), "20 samples after the jump are under the baseline");
+        assert_eq!(
+            h.fit(),
+            Some(before),
+            "20 samples after the jump are under the baseline"
+        );
         let off = h.offset(-0.4).unwrap();
-        assert!((off[0] - 20.0).abs() < 1e-6 && off[1].abs() < 1e-6, "{off:?}");
+        assert!(
+            (off[0] - 20.0).abs() < 1e-6 && off[1].abs() < 1e-6,
+            "{off:?}"
+        );
     }
 
     #[test]

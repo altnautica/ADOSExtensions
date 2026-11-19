@@ -4,6 +4,21 @@ All notable changes to the World Engine extension.
 
 ## [Unreleased]
 
+### Removed
+
+- **Navigation moved to the Navigation extension.** The LiDAR and VIO pose
+  providers, the RPLIDAR and Livox drivers, the navigation map, the live
+  occupancy and sweep cloud, and the `plugin.world-engine.{pose,scan,map_status,lidar}`
+  topics are Navigation's `lidar-slam` service and `plugin.navigation.*`
+  topics. The capture service poses keyframes with the flight
+  controller's EKF; the `atlas.pose_provider`, `atlas.vio`, `atlas.lidar`,
+  `atlas.nav_pose`, `atlas.pose_publish_interval_ms` and
+  `atlas.takeoff_heading_deg` keys, the basalt-ados, Livox SDK2 and uv
+  payloads and the optional `hardware.uart` grant go with them.
+  `atlas.memory_budget_mb` now splits between the keyframe queue (80 %)
+  and the LiDAR scan queue (20 %). A closing session no longer gets the
+  live map under `map/`.
+
 ### Added
 
 - **The LiDAR status counts returns, not just scans.** `plugin.world-engine.lidar`

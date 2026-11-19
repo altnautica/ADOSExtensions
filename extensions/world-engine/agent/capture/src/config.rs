@@ -6,9 +6,9 @@
 //! enabled count, it never forks on it).
 
 use crate::AtlasError;
+use ados_mapping_protocol::atlas::CameraRole;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use ados_mapping_protocol::atlas::CameraRole;
 
 fn default_camera_role() -> CameraRole {
     CameraRole::Primary

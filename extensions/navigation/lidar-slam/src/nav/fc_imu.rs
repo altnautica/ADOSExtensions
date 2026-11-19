@@ -1,6 +1,6 @@
 //! The IMU stream of a companion with no IMU of its own (a drone whose
 //! planar LiDAR sits on the companion and whose IMU is on the FC), taken
-//! from the flight controller. Set `atlas.lidar.imu = "fc"` and declare a rig
+//! from the flight controller. Set `navigation.lidar.imu = "fc"` and declare a rig
 //! IMU sensor `fc` mounted at the body origin.
 //!
 //! The FC's `RAW_IMU` (its calibrated gyro, body FRD) is the stream's rate,
@@ -48,13 +48,13 @@ use std::sync::{Arc, Mutex};
 use ados_capture_contract::v1::{ImuBatch, ImuSample};
 use ados_scan2d::{HeightSample, VelocitySample};
 
+use ados_mapping_pose::fc_ekf::{NavSample, NavSink};
 use ados_mapping_pose::geodesy::{R_ENU_NED, R_FRD_FLU};
 use ados_mapping_pose::mavlink_msg::RawImu;
-use ados_mapping_pose::fc_ekf::{NavSample, NavSink};
 use ados_mapping_pose::{se3, PoseProvider};
 use ados_mapping_protocol::atlas::{ImuFeedReason, ImuFeedState, VioHealth};
 
-/// The `atlas.lidar.imu` id that selects this stream.
+/// The `navigation.lidar.imu` id that selects this stream.
 pub const FC_IMU_ID: &str = "fc";
 const G: f64 = 9.81;
 /// Attitudes further apart than this start the stream over.
@@ -184,7 +184,10 @@ impl FeedState {
             }
         }
         times.push_back(arrival_ns);
-        while times.front().is_some_and(|&t| t + RATE_WINDOW_NS < arrival_ns) {
+        while times
+            .front()
+            .is_some_and(|&t| t + RATE_WINDOW_NS < arrival_ns)
+        {
             times.pop_front();
         }
         drop(times);
@@ -256,7 +259,11 @@ impl FeedState {
             return None;
         }
         let times = self.raw_times();
-        let n = times.iter().rev().take_while(|&&t| t + RATE_WINDOW_NS >= now_ns).count();
+        let n = times
+            .iter()
+            .rev()
+            .take_while(|&&t| t + RATE_WINDOW_NS >= now_ns)
+            .count();
         Some(n as f32 * 1e9 / RATE_WINDOW_NS as f32)
     }
 }
@@ -386,11 +393,23 @@ mod tests {
         let s = sample(Some((0, a)), (20_000_000, b)).unwrap();
         assert!(s.gyro.iter().all(|w| w.abs() < 1e-9), "{:?}", s.gyro);
         // A tilted vehicle turning: still no rate.
-        let s = sample(Some((0, rpy(0.2, -0.1, 1.0))), (20_000_000, rpy(0.2, -0.1, 3.0))).unwrap();
+        let s = sample(
+            Some((0, rpy(0.2, -0.1, 1.0))),
+            (20_000_000, rpy(0.2, -0.1, 3.0)),
+        )
+        .unwrap();
         assert!(s.gyro.iter().all(|w| w.abs() < 1e-9), "{:?}", s.gyro);
         // Rolling 0.02 rad in 20 ms while yawing: 1 rad/s about x.
-        let s = sample(Some((0, rpy(0.0, 0.0, 0.5))), (20_000_000, rpy(0.02, 0.0, 0.9))).unwrap();
-        assert!((s.gyro[0] - 1.0).abs() < 1e-6 && s.gyro[2].abs() < 1e-9, "{:?}", s.gyro);
+        let s = sample(
+            Some((0, rpy(0.0, 0.0, 0.5))),
+            (20_000_000, rpy(0.02, 0.0, 0.9)),
+        )
+        .unwrap();
+        assert!(
+            (s.gyro[0] - 1.0).abs() < 1e-6 && s.gyro[2].abs() < 1e-9,
+            "{:?}",
+            s.gyro
+        );
         assert!(
             sample(Some((0, a)), (2_000_000_000, b)).is_none(),
             "a gap restarts"
@@ -415,7 +434,10 @@ mod tests {
             attitude: None,
         };
         state.note_imu(5_000_000_000);
-        assert_eq!(state.degraded(5_000_000_000), Some(ImuFeedReason::AttitudeStandIn));
+        assert_eq!(
+            state.degraded(5_000_000_000),
+            Some(ImuFeedReason::AttitudeStandIn)
+        );
         assert_eq!(state.raw_rate_hz(5_000_000_000), None);
         // 20 Hz for a second: starved.
         for k in 0..20 {
@@ -462,7 +484,10 @@ mod tests {
         assert_eq!(state.degraded(last + 5_000_000), None, "arriving steadily");
         assert_eq!(state.raw_rate_hz(last + 5_000_000), Some(80.0));
         assert_eq!(state.degraded(last + 240_000_000), None);
-        assert_eq!(state.degraded(last + 260_000_000), Some(ImuFeedReason::Stalled));
+        assert_eq!(
+            state.degraded(last + 260_000_000),
+            Some(ImuFeedReason::Stalled)
+        );
         assert_eq!(state.take_raw_gaps(), (0, 0.0));
         sink(raw(last + 400_000_000, 0));
         sink(raw(last + 412_500_000, 0));
@@ -497,9 +522,15 @@ mod tests {
         };
         let held = |reason| held_since(reason, Some(0));
         use VioHealth::*;
-        assert_eq!(held(Some(ImuFeedReason::AttitudeStandIn)), [Lost, Lost, Lost]);
+        assert_eq!(
+            held(Some(ImuFeedReason::AttitudeStandIn)),
+            [Lost, Lost, Lost]
+        );
         assert_eq!(held(Some(ImuFeedReason::Stalled)), [Lost, Lost, Lost]);
-        assert_eq!(held(Some(ImuFeedReason::Starved)), [Degraded, Degraded, Lost]);
+        assert_eq!(
+            held(Some(ImuFeedReason::Starved)),
+            [Degraded, Degraded, Lost]
+        );
         assert_eq!(held(None), [Good, Degraded, Lost]);
         // A pose from before the first RAW_IMU sample rode the stand-in.
         assert_eq!(held_since(None, Some(1)), [Lost, Lost, Lost]);
@@ -515,8 +546,16 @@ mod tests {
         };
         let s = from_raw(7, &raw, None);
         assert_eq!(s.t_ns, 7);
-        assert_eq!(s.gyro, vec![0.1, -0.2, -0.3], "a right yaw (FRD +z) is FLU -z");
-        assert_eq!(s.accel, vec![0.5, -0.0, 9.8], "level and still reads +g on FLU z");
+        assert_eq!(
+            s.gyro,
+            vec![0.1, -0.2, -0.3],
+            "a right yaw (FRD +z) is FLU -z"
+        );
+        assert_eq!(
+            s.accel,
+            vec![0.5, -0.0, 9.8],
+            "level and still reads +g on FLU z"
+        );
     }
 
     /// Braking hard, the accelerometer leans back with the thrust; the
@@ -536,7 +575,11 @@ mod tests {
         assert!((roll - 0.1745).abs() < 1e-6, "{roll}");
         assert!(s.accel[0].abs() < 1e-9, "no lean along x: {:?}", s.accel);
         let stale = from_raw(2_000_000_000, &raw, Some((60_000_000, r)));
-        assert_eq!(stale.accel, vec![3.0, -0.0, 9.8], "a stale attitude is not used");
+        assert_eq!(
+            stale.accel,
+            vec![3.0, -0.0, 9.8],
+            "a stale attitude is not used"
+        );
     }
 
     /// What a provider was fed, in order.
@@ -564,14 +607,21 @@ mod tests {
         }
         fn feed_imu(&self, src: &str, batch: &ImuBatch) {
             let mut g = self.got.lock();
-            g.extend(batch.samples.iter().map(|s| Got::Imu(src.into(), s.clone())));
+            g.extend(
+                batch
+                    .samples
+                    .iter()
+                    .map(|s| Got::Imu(src.into(), s.clone())),
+            );
         }
         fn feed_velocity(&self, src: &str, samples: &[VelocitySample]) {
             let mut g = self.got.lock();
             g.extend(samples.iter().map(|s| Got::Velocity(src.into(), *s)));
         }
         fn feed_height(&self, samples: &[HeightSample]) {
-            self.got.lock().extend(samples.iter().map(|s| Got::Height(*s)));
+            self.got
+                .lock()
+                .extend(samples.iter().map(|s| Got::Height(*s)));
         }
         fn feed_fc_heading(&self, t_ns: u64, heading: f64) {
             self.got.lock().push(Got::FcHeading(t_ns, heading));
@@ -628,14 +678,31 @@ mod tests {
         };
         // The FC's attitude rides the sample: nose north is ENU yaw +90°.
         assert_eq!(*ht, 90_000_000);
-        assert!((heading - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "{heading}");
+        assert!(
+            (heading - std::f64::consts::FRAC_PI_2).abs() < 1e-9,
+            "{heading}"
+        );
         assert_eq!((src.as_str(), vsrc.as_str()), (FC_IMU_ID, FC_IMU_ID));
         assert_eq!(imu.t_ns, 100_000_000);
-        assert_eq!(imu.gyro, vec![0.0, -0.0, -0.3], "a right yaw (FRD +z) is FLU -z");
+        assert_eq!(
+            imu.gyro,
+            vec![0.0, -0.0, -0.3],
+            "a right yaw (FRD +z) is FLU -z"
+        );
         let g = imu.accel.iter().map(|a| a * a).sum::<f64>().sqrt();
         let roll = imu.accel[1].atan2(imu.accel[2]).abs();
-        assert!((g - G).abs() < 1e-9 && (roll - 0.1745).abs() < 1e-6, "{:?}", imu.accel);
-        assert_eq!(*v, VelocitySample { t_ns: 105_000_000, v: [1.5, -0.25] });
+        assert!(
+            (g - G).abs() < 1e-9 && (roll - 0.1745).abs() < 1e-6,
+            "{:?}",
+            imu.accel
+        );
+        assert_eq!(
+            *v,
+            VelocitySample {
+                t_ns: 105_000_000,
+                v: [1.5, -0.25]
+            }
+        );
         assert_eq!(
             *h,
             HeightSample {
@@ -661,7 +728,10 @@ mod tests {
         for s in samples() {
             sink(s);
         }
-        assert!(matches!(fed.got.lock().as_slice(), [Got::Height(_), Got::FcPosition(..)]));
+        assert!(matches!(
+            fed.got.lock().as_slice(),
+            [Got::Height(_), Got::FcPosition(..)]
+        ));
         assert!(!state.raw_imu() && state.newest_imu_ns().is_none());
     }
 }

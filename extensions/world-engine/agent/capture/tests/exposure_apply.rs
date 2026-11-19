@@ -6,19 +6,19 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_pose::frame_source::{AtlasFrameSource, EngineFrameSource};
+use ados_mapping_pose::replay::ReplayPose;
+use ados_mapping_pose::sensor_bus::SensorState;
+use ados_mapping_pose::vehicle::VehicleFeed;
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, ExposureView};
 use ados_protocol::shutdown::Shutdown;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use world_engine_capture::camera_control::{CameraControl, CameraOutcome, REPLY_BUDGET};
-use ados_mapping_pose::replay::ReplayPose;
-use ados_mapping_pose::sensor_bus::SensorState;
-use ados_mapping_pose::frame_source::{AtlasFrameSource, EngineFrameSource};
-use ados_mapping_pose::vehicle::VehicleFeed;
 use world_engine_capture::{
     run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths,
 };
-use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, ExposureView};
 
 /// Takes the values after `delay`, reading back a slightly different exposure.
 struct SlowCamera {
@@ -78,7 +78,6 @@ async fn a_slow_camera_answers_pending_and_the_state_catches_up() {
         vehicle: VehicleFeed::new(),
         sensors: Arc::new(Mutex::new(SensorState::default())),
         bus_rx,
-        lidar_rx: None,
         publisher,
         control_rx: ctl_rx,
         hud_rx: None,
@@ -92,7 +91,6 @@ async fn a_slow_camera_answers_pending_and_the_state_catches_up() {
             rig: dir.path().join("rig.json"),
             active_marker: None,
         },
-        nav: Default::default(),
         reconstruct_steps: Default::default(),
     };
     let lp = tokio::spawn(run_capture_loop(deps, cancel.clone()));

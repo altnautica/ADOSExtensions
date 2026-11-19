@@ -172,7 +172,11 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
             FcMessage::Attitude(AttitudeQuaternion {
                 time_boot_ms: u32_at(&b, 0),
                 q: quat_from_euler(roll, pitch, f32_at(&b, 12)),
-                heading_rate: heading_rate(roll, pitch, [f32_at(&b, 16), f32_at(&b, 20), f32_at(&b, 24)]),
+                heading_rate: heading_rate(
+                    roll,
+                    pitch,
+                    [f32_at(&b, 16), f32_at(&b, 20), f32_at(&b, 24)],
+                ),
             })
         }
         MSG_ATTITUDE_QUATERNION => {
@@ -183,7 +187,11 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
             FcMessage::Attitude(AttitudeQuaternion {
                 time_boot_ms: u32_at(&b, 0),
                 q,
-                heading_rate: heading_rate(roll, pitch, [f32_at(&b, 20), f32_at(&b, 24), f32_at(&b, 28)]),
+                heading_rate: heading_rate(
+                    roll,
+                    pitch,
+                    [f32_at(&b, 20), f32_at(&b, 24), f32_at(&b, 28)],
+                ),
             })
         }
         MSG_LOCAL_POSITION_NED => {
@@ -211,7 +219,11 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
             FcMessage::Imu(RawImu {
                 time_usec: u64::from_le_bytes(b[0..8].try_into().expect("8 bytes")),
                 accel: [i16_at(&b, 8) * MG, i16_at(&b, 10) * MG, i16_at(&b, 12) * MG],
-                gyro: [i16_at(&b, 14) * 1e-3, i16_at(&b, 16) * 1e-3, i16_at(&b, 18) * 1e-3],
+                gyro: [
+                    i16_at(&b, 14) * 1e-3,
+                    i16_at(&b, 16) * 1e-3,
+                    i16_at(&b, 18) * 1e-3,
+                ],
             })
         }
         // The FC's own flow only: a companion's (the navigation extension sends
@@ -362,20 +374,30 @@ mod tests {
         p[8..12].copy_from_slice(&129_716_000i32.to_le_bytes());
         p[28] = 3;
         p[29] = 14;
-        assert_eq!(decode(&frame_v2(MSG_GPS_RAW_INT, &p)), Some(FcMessage::GpsFix(3)));
+        assert_eq!(
+            decode(&frame_v2(MSG_GPS_RAW_INT, &p)),
+            Some(FcMessage::GpsFix(3))
+        );
         // No fix: MAVLink 2 trims every zero byte from the satellite count on.
         p[28] = 0;
         p[29] = 0;
         while p.last() == Some(&0) {
             p.pop();
         }
-        assert_eq!(decode(&frame_v2(MSG_GPS_RAW_INT, &p)), Some(FcMessage::GpsFix(0)));
+        assert_eq!(
+            decode(&frame_v2(MSG_GPS_RAW_INT, &p)),
+            Some(FcMessage::GpsFix(0))
+        );
     }
 
     /// A `RAW_IMU` frame, milli-g and milli-rad/s.
     fn raw_imu(time_usec: u64, accel_mg: [i16; 3], gyro_mrad: [i16; 3]) -> Vec<u8> {
         let mut p = time_usec.to_le_bytes().to_vec();
-        for v in accel_mg.iter().chain(gyro_mrad.iter()).chain([0i16; 3].iter()) {
+        for v in accel_mg
+            .iter()
+            .chain(gyro_mrad.iter())
+            .chain([0i16; 3].iter())
+        {
             p.extend_from_slice(&v.to_le_bytes());
         }
         frame_v2(MSG_RAW_IMU, &p)

@@ -13,12 +13,12 @@ use std::time::{Duration, Instant};
 
 use ados_capture_contract::v1::{ImuBatch, ImuSample as BusImu};
 use ados_capture_contract::Rig;
+use ados_mapping_protocol::atlas::ComputePlacement;
 use serde_json::json;
-use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseMode};
 
 use super::*;
-use ados_mapping_pose::fc_ekf::test_frames::{att_turning, pos};
 use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
+use ados_mapping_pose::fc_ekf::test_frames::{att_turning, pos};
 use ados_mapping_pose::pose::PoseProvider;
 
 /// Beams per revolution and revolution period of the recorded LiDAR.
@@ -44,7 +44,10 @@ fn flight(text: &str) -> Flight {
         fc_yaw: Vec::new(),
         scans: Vec::new(),
     };
-    for l in text.lines().filter(|l| !l.starts_with('#') && !l.trim().is_empty()) {
+    for l in text
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+    {
         let mut it = l.split_whitespace();
         let kind = it.next().expect("a line kind");
         let v: Vec<i64> = it.map(|x| x.parse().expect("an integer")).collect();
@@ -72,7 +75,8 @@ fn flight(text: &str) -> Flight {
                     k += p[0] as u64;
                     let az = k as f64 * 2.0 * PI / BEAMS as f64;
                     let r = p[1] as f64 * 1e-3;
-                    s.points.push([(r * az.cos()) as f32, (r * az.sin()) as f32, 0.0]);
+                    s.points
+                        .push([(r * az.cos()) as f32, (r * az.sin()) as f32, 0.0]);
                     s.t_offset_ns.push((k * PERIOD_NS / BEAMS) as u32);
                     s.intensity.push(50);
                 }
@@ -166,7 +170,6 @@ fn replay(
     .expect("spawn");
     let fc = FcEkfPose::new();
     let mut nav = NavMap::new(NavSettings {
-        nav_pose: NavPoseMode::Always,
         placement: ComputePlacement::Onboard,
         budget: Budget::from_mb(64),
         pose_interval_ms: 33,
@@ -174,7 +177,11 @@ fn replay(
     });
     let mut seen = 0u32;
     let mut atts = f.fc_yaw.iter().peekable();
-    let mut imu = f.imu.iter().filter(|s| !(hole.0 < s.t_ns && s.t_ns < hole.1)).peekable();
+    let mut imu = f
+        .imu
+        .iter()
+        .filter(|s| !(hole.0 < s.t_ns && s.t_ns < hole.1))
+        .peekable();
     let mut newest_imu = 0u64;
     let mut out = Vec::new();
     let mut poses = Vec::new();
@@ -191,7 +198,8 @@ fn replay(
             fc.on_frame(&pos(ms, [ne[0] as f32, ne[1] as f32, -2.0]), t);
             p.feed_fc_position(t, ne);
         }
-        let samples: Vec<BusImu> = std::iter::from_fn(|| imu.next_if(|s| s.t_ns <= until).cloned()).collect();
+        let samples: Vec<BusImu> =
+            std::iter::from_fn(|| imu.next_if(|s| s.t_ns <= until).cloned()).collect();
         if let Some(last) = samples.last() {
             newest_imu = last.t_ns;
             // The capture feeds the FC's heading with each `RAW_IMU` sample.
@@ -201,7 +209,11 @@ fn replay(
         }
         p.feed_lidar(scan);
         // A scan the IMU does not reach yet waits for it (or the next scan).
-        let want = if newest_imu + 10_000_000 >= until { i + 1 } else { i } as u64;
+        let want = if newest_imu + 10_000_000 >= until {
+            i + 1
+        } else {
+            i
+        } as u64;
         let deadline = Instant::now() + Duration::from_secs(60);
         while p.stats().scans_processed < want {
             assert!(Instant::now() < deadline, "scan {i} not matched in 60 s");
@@ -227,8 +239,9 @@ fn replay(
         }
         let published = out.last().and_then(|e| {
             let heading = fc.heading_at(e.t_ns);
-            let _ = nav.on_pose(e, Some(0.0), heading, (e.t_ns / 1_000_000) as i64, 0, false);
-            nav.latest.map(|(r, t)| (e.t_ns, e.health, [t[0], t[1]], frd_yaw(&r)))
+            let _ = nav.on_pose(e, Some(0.0), heading, (e.t_ns / 1_000_000) as i64, 0);
+            nav.latest
+                .map(|(r, t)| (e.t_ns, e.health, [t[0], t[1]], frd_yaw(&r)))
         });
         poses.push(published);
         heading_ok.push(out.last().is_some_and(|e| e.heading_ok));
@@ -290,7 +303,10 @@ fn holed(f: &Flight, refs: &Refs, at_ns: u64, len_ns: u64) -> (Scored, Published
         let k = k_at(t);
         let (a, b) = (refs[k - 1], refs[k]);
         let w = ((t as f64 - a.0 as f64) / (b.0 - a.0) as f64).clamp(0.0, 1.0);
-        let p = [a.1[0] + w * (b.1[0] - a.1[0]), a.1[1] + w * (b.1[1] - a.1[1])];
+        let p = [
+            a.1[0] + w * (b.1[0] - a.1[0]),
+            a.1[1] + w * (b.1[1] - a.1[1]),
+        ];
         (p, a.2 + w * wrap_pi(b.2 - a.2))
     };
     let rate = |t: u64| {
@@ -322,15 +338,22 @@ fn holed(f: &Flight, refs: &Refs, at_ns: u64, len_ns: u64) -> (Scored, Published
         [FC_DRIFT_MPS[0] * s, FC_DRIFT_MPS[1] * s]
     };
     let fc_ned = |t: u64| {
-        let k = fc_path.partition_point(|r| r.0 <= t).clamp(1, fc_path.len() - 1);
+        let k = fc_path
+            .partition_point(|r| r.0 <= t)
+            .clamp(1, fc_path.len() - 1);
         let (a, b) = (fc_path[k - 1], fc_path[k]);
         let w = ((t as f64 - a.0 as f64) / (b.0 - a.0) as f64).clamp(0.0, 1.0);
         let d = drift(t);
-        [a.1[0] + w * (b.1[0] - a.1[0]) + d[0], a.1[1] + w * (b.1[1] - a.1[1]) + d[1]]
+        [
+            a.1[0] + w * (b.1[0] - a.1[0]) + d[0],
+            a.1[1] + w * (b.1[1] - a.1[1]) + d[1],
+        ]
     };
     let run = replay(f, hole, &rate, &fc_ned);
     for s in &run.seeds {
-        let deg = |p: Option<(f64, f64)>| p.map_or("-".into(), |(t, h)| format!("{t:.3} s at {h:.3} deg"));
+        let deg = |p: Option<(f64, f64)>| {
+            p.map_or("-".into(), |(t, h)| format!("{t:.3} s at {h:.3} deg"))
+        };
         eprintln!(
             "  restart at {:.3} s (scan {:.3} s): FC moved {:.2} m in {:.2} s since the hole; last good {}, last measured {}; north {}",
             s.t_s,
@@ -347,7 +370,9 @@ fn holed(f: &Flight, refs: &Refs, at_ns: u64, len_ns: u64) -> (Scored, Published
     // unholed replay's heading (degrees).
     let mut first_good = None;
     for (pose, ok) in run.poses.iter().zip(&run.heading_ok) {
-        let Some(&(t, health, _, h)) = pose.as_ref() else { continue };
+        let Some(&(t, health, _, h)) = pose.as_ref() else {
+            continue;
+        };
         if t + 500_000_000 < hole.0 {
             continue;
         }
@@ -358,7 +383,10 @@ fn holed(f: &Flight, refs: &Refs, at_ns: u64, len_ns: u64) -> (Scored, Published
             break;
         }
         let err = wrap_pi(h - lerp(t).1).to_degrees();
-        eprintln!("  trace t {:.3} s {health:?} heading_ok {ok} err {err:+.3} deg", t as f64 * 1e-9);
+        eprintln!(
+            "  trace t {:.3} s {health:?} heading_ok {ok} err {err:+.3} deg",
+            t as f64 * 1e-9
+        );
     }
     let mut s = Scored {
         restarts: run.restarts,
@@ -450,7 +478,9 @@ fn apart(a: &Published, b: &Published, from_ns: u64) -> (f64, f64, usize) {
 /// within [`NUDGE_DEG`] and [`NUDGE_M`] of each other over the scored span.
 #[test]
 fn a_map_restarted_in_flight_is_published_where_the_drone_is() {
-    let f = flight(include_str!("../../../../../crates/scan2d/tests/data/warehouse_return_leg.txt"));
+    let f = flight(include_str!(
+        "../../../../../crates/scan2d/tests/data/warehouse_return_leg.txt"
+    ));
     let refs = reference(&f);
     let (s, ms) = (1_000_000_000u64, 1_000_000u64);
     let mut scored: Vec<_> = [
@@ -484,8 +514,16 @@ fn a_map_restarted_in_flight_is_published_where_the_drone_is() {
     for (name, r, restarts, _) in &scored {
         assert_eq!(r.restarts > 0, *restarts, "{name}: restarts {}", r.restarts);
         let bound = r.fc_drift_m + SLACK_M;
-        assert!(r.worst_m <= bound, "{name}: {:.2} m off (bound {bound:.2} m)", r.worst_m);
-        assert!(r.worst_deg <= 2.0, "{name}: {:.2} deg off the map's north", r.worst_deg);
+        assert!(
+            r.worst_m <= bound,
+            "{name}: {:.2} m off (bound {bound:.2} m)",
+            r.worst_m
+        );
+        assert!(
+            r.worst_deg <= 2.0,
+            "{name}: {:.2} deg off the map's north",
+            r.worst_deg
+        );
     }
     assert!(n > 0, "no poses compared");
     assert!(

@@ -34,15 +34,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use ados_capture_contract::{LidarModel, Rig, RigSensorKind};
+use ados_mapping_protocol::atlas::PoseSource;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use ados_mapping_protocol::atlas::PoseSource;
 
 use self::supervise::{supervise, ChildSpec};
 use self::wire::encode_scan;
-use ados_mapping_pose::{PoseProvider, PoseTrack};
 use ados_mapping_pose::lidar_scan::LidarScan;
+use ados_mapping_pose::{PoseProvider, PoseTrack};
 
 /// Scans that may wait for the child (~0.2 s at 10 Hz).
 pub const SCAN_QUEUE_DEPTH: usize = 2;

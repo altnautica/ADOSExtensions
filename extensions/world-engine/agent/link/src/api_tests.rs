@@ -6,12 +6,12 @@ use crate::control::tests::{capturing_status, fake_status_socket};
 use crate::forward::ForwardStatus;
 use crate::testing::FakeHost;
 use crate::upload::RootFn;
+use ados_mapping_transport::BulkConfig;
 use axum::body::Body;
 use axum::http::Request;
 use parking_lot::Mutex;
 use std::path::Path;
 use tower::ServiceExt;
-use ados_mapping_transport::BulkConfig;
 
 /// A drone API over `host`, the control socket at `control`, sessions under
 /// `root` and the calib store at `<root>/calib`.

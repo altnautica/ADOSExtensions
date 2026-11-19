@@ -4,7 +4,7 @@ import type { PluginContext } from "@altnautica/plugin-sdk";
 
 import { freshnessOf, LIVE, useNow, type Freshness } from "../freshness";
 import { tr } from "../i18n";
-import { useEngage, useNavState, useNavigationTelemetry } from "../store";
+import { useEngage, useLidarStatus, useMapStatus, useNavState, useNavigationTelemetry } from "../store";
 import type { FirmwareType, NavState, NavigationTelemetry } from "../types";
 
 import { ArduPilotVisionParams } from "./ArduPilotVisionParams";
@@ -14,6 +14,7 @@ import { EstimatorCard } from "./EstimatorCard";
 import { FallbackBanner } from "./FallbackBanner";
 import { FlowHealthCard } from "./FlowHealthCard";
 import { InavVisionParams } from "./InavVisionParams";
+import { LidarSlamCard } from "./LidarSlamCard";
 import { ModeCard } from "./ModeCard";
 import { NavStateCard } from "./NavStateCard";
 import { PreArmStatus } from "./PreArmStatus";
@@ -40,6 +41,8 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
   const live = useNavigationTelemetry(props.ctx);
   const liveNav = useNavState(props.ctx);
   const engage = useEngage(props.ctx);
+  const mapStatus = useMapStatus(props.ctx);
+  const lidarStatus = useLidarStatus(props.ctx);
   const [themeVars, setThemeVars] = useState<Record<string, string>>({});
   const [tourReplay, setTourReplay] = useState(false);
 
@@ -60,6 +63,9 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
     : freshnessOf(liveNav.receivedAt, now);
   const engaged = freshnessOf(engage.receivedAt, now).kind === "live" ? engage.value : null;
   const stale = telemetryFresh.kind === "stale";
+  // A Visor has no flight controller: the flow and FC-bridge cards would
+  // only show an idle agent, so one sentence stands in for them.
+  const noFc = telemetry.noFlightController === true;
 
   useEffect(() => {
     const off = props.ctx.theme.onChange((vars) => {
@@ -107,33 +113,49 @@ export function NavigationTab(props: NavigationTabProps): JSX.Element {
           {tr(t, "navigation.feedStale", { s: telemetryFresh.ageS })}
         </p>
       ) : null}
-      <div
-        style={stale ? { ...body, opacity: 0.5 } : body}
-        data-testid="vn-telemetry-body"
-        data-stale={stale ? "true" : "false"}
-      >
-        {telemetryFresh.kind === "live" ? (
-          <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
-        ) : null}
-        <ModeCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} engaged={engaged} />
-        <SensorsCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
-        <EstimatorCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
-        <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
-        <FlowHealthCard ctx={props.ctx} telemetry={telemetry} />
-        <PreArmStatus
-          ctx={props.ctx}
-          telemetry={telemetry}
-          freshness={telemetryFresh}
-          subscription={subscription}
-        />
-      </div>
-      <NavStateCard
+      {noFc ? (
+        <p style={staleNotice} role="status" data-testid="vn-no-fc">
+          {tr(t, "navigation.noFlightController")}
+        </p>
+      ) : (
+        <>
+          <div
+            style={stale ? { ...body, opacity: 0.5 } : body}
+            data-testid="vn-telemetry-body"
+            data-stale={stale ? "true" : "false"}
+          >
+            {telemetryFresh.kind === "live" ? (
+              <FallbackBanner ctx={props.ctx} telemetry={telemetry} />
+            ) : null}
+            <ModeCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} engaged={engaged} />
+            <SensorsCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
+            <EstimatorCard ctx={props.ctx} telemetry={telemetry} freshness={telemetryFresh} />
+            <TelemetryCharts ctx={props.ctx} telemetry={telemetry} />
+            <FlowHealthCard ctx={props.ctx} telemetry={telemetry} />
+            <PreArmStatus
+              ctx={props.ctx}
+              telemetry={telemetry}
+              freshness={telemetryFresh}
+              subscription={subscription}
+            />
+          </div>
+          <NavStateCard
+            ctx={props.ctx}
+            state={navState}
+            freshness={navFresh}
+            poseAgeMs={telemetryFresh.kind === "live" ? telemetry.poseAgeMs : null}
+          />
+        </>
+      )}
+      <LidarSlamCard
         ctx={props.ctx}
-        state={navState}
-        freshness={navFresh}
-        poseAgeMs={telemetryFresh.kind === "live" ? telemetry.poseAgeMs : null}
+        map={mapStatus.value}
+        mapFresh={freshnessOf(mapStatus.receivedAt, now)}
+        lidar={lidarStatus.value}
+        lidarFresh={freshnessOf(lidarStatus.receivedAt, now)}
+        lidarSeen={lidarStatus.receivedAt !== null}
       />
-      {props.firmware === "ardupilot" ? (
+      {noFc ? null : props.firmware === "ardupilot" ? (
         <ArduPilotVisionParams ctx={props.ctx} />
       ) : props.firmware === "px4" ? (
         <Px4VisionParams ctx={props.ctx} fcParams={telemetry.fcParams} />

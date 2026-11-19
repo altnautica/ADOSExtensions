@@ -172,8 +172,8 @@ mod tests {
     use super::*;
     use crate::credentials::{ATLAS_INGEST_LANE, SESSION_UPLOAD_LANE, STORE_FILE};
     use crate::testing::FakeHost;
-    use serde_json::json;
     use ados_mapping_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
+    use serde_json::json;
 
     fn discovered() -> Option<ResolvedComputeNode> {
         Some(ResolvedComputeNode {

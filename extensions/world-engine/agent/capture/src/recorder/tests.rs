@@ -464,7 +464,10 @@ fn a_full_disk_ends_the_recording_and_the_writer_answers_the_close() {
     }
     let s = wait_for(&rec, |s| s.error.is_some() && s.lost_after_error > 0);
     assert!(s.error.is_some(), "the full disk failed the recording");
-    assert!(s.lost_after_error > 0, "nothing is written after the failure");
+    assert!(
+        s.lost_after_error > 0,
+        "nothing is written after the failure"
+    );
     let op = Operator {
         site: None,
         floor: None,

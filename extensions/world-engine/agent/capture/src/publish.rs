@@ -1,5 +1,5 @@
-//! The atlas bus: the capture service publishes keyframes, poses, and capture
-//! state on a single Unix-socket broadcast, every message wrapped in an
+//! The atlas bus: the capture service publishes keyframes and capture state
+//! on a single Unix-socket broadcast, every message wrapped in an
 //! [`AtlasEvent`] tagged with its topic so a subscriber demultiplexes one
 //! connection. Heavy keyframe images (JPEG) ride the same bus; the frame cap is
 //! the plugin-envelope ceiling (4 MiB), generous for a compressed keyframe.
@@ -7,15 +7,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use ados_mapping_protocol::atlas::{
+    AtlasEvent, CaptureStatus, KeyframeEnvelope, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
+};
 use ados_protocol::frame::{encode_frame, FrameError, PLUGIN_MAX_FRAME};
 use ados_protocol::ipc::IpcBroadcast;
-use ados_mapping_protocol::atlas::{
-    AtlasEvent, CaptureStatus, KeyframeEnvelope, LidarStatus, LiveOccupancy, LivePointCloud,
-    MapStatus, PolarScan, PoseDescriptor, ScanDescriptor, ATLAS_CAPTURE_STATE_TOPIC,
-    ATLAS_KEYFRAME_TOPIC, ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_LIDAR_TOPIC,
-    PLUGIN_ATLAS_MAP_STATUS_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
-    PLUGIN_ATLAS_POSE_TOPIC, PLUGIN_ATLAS_SCAN_TOPIC,
-};
 
 /// Per-client outbound queue depth. Keyframes are large and arrive at the
 /// selection rate (a few per second at most); 16 frames bounds memory while
@@ -110,62 +106,6 @@ impl AtlasPublisher {
         }
         0
     }
-
-    async fn publish_encoded(
-        &self,
-        topic: &'static str,
-        body: Result<Vec<u8>, rmp_serde::encode::Error>,
-    ) {
-        match body {
-            Ok(body) => self.publish(topic, body).await,
-            Err(e) => tracing::warn!(topic, error = %e, "atlas_publish_encode_failed"),
-        }
-    }
-
-    /// Publish the navigation pose (`map_ned`, shared).
-    pub async fn publish_pose(&self, pose: &PoseDescriptor) {
-        self.publish_encoded(PLUGIN_ATLAS_POSE_TOPIC, pose.to_msgpack())
-            .await;
-    }
-
-    /// Publish one binned body-frame scan (shared).
-    pub async fn publish_scan(&self, scan: &ScanDescriptor) {
-        self.publish_encoded(PLUGIN_ATLAS_SCAN_TOPIC, scan.to_msgpack())
-            .await;
-    }
-
-    /// Publish the changed live occupancy tiles (shared).
-    pub async fn publish_live_occupancy(&self, occ: &LiveOccupancy) {
-        self.publish_encoded(PLUGIN_ATLAS_OCCUPANCY_TOPIC, occ.to_msgpack())
-            .await;
-    }
-
-    /// Publish a live sweep-cloud delta (shared).
-    pub async fn publish_live_pointcloud(&self, cloud: &LivePointCloud) {
-        self.publish_encoded(PLUGIN_ATLAS_POINTCLOUD_TOPIC, cloud.to_msgpack())
-            .await;
-    }
-
-    /// Publish one raw polar scan for the compute node (internal; the binary
-    /// record, not msgpack).
-    pub async fn publish_raw_scan(&self, scan: &PolarScan) {
-        let mut body = Vec::with_capacity(scan.encoded_len());
-        scan.encode(&mut body);
-        self.publish(ATLAS_SCAN_TOPIC, body).await;
-    }
-
-    /// Publish the live map status (shared).
-    pub async fn publish_map_status(&self, status: &MapStatus) {
-        self.publish_encoded(PLUGIN_ATLAS_MAP_STATUS_TOPIC, status.to_msgpack())
-            .await;
-    }
-
-    /// Publish the configured LiDAR's link status (shared).
-    pub async fn publish_lidar_status(&self, status: &LidarStatus) {
-        self.publish_encoded(PLUGIN_ATLAS_LIDAR_TOPIC, status.to_msgpack())
-            .await;
-    }
-
     /// Publish the capture-session state. The link folds the latest one into
     /// the extension's `status` telemetry, so the capture loop publishes it on
     /// every change and re-publishes it on a fixed cadence while running.
@@ -182,9 +122,8 @@ mod tests {
     use super::*;
     use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
 
-    #[test]
-    fn event_frame_round_trips_with_topic_and_payload() {
-        let status = CaptureStatus {
+    fn status() -> CaptureStatus {
+        CaptureStatus {
             session_id: "s".into(),
             state: CaptureState::Capturing,
             keyframes: 1,
@@ -196,7 +135,12 @@ mod tests {
             pose_tier: PoseSource::FcEkf,
             dropped_keyframes: 0,
             reconstruct_steps: None,
-        };
+        }
+    }
+
+    #[test]
+    fn event_frame_round_trips_with_topic_and_payload() {
+        let status = status();
         let frame =
             encode_event_frame(ATLAS_CAPTURE_STATE_TOPIC, status.to_msgpack().unwrap()).unwrap();
         let len = u32::from_be_bytes(frame[..4].try_into().unwrap()) as usize;
@@ -208,7 +152,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_clone_publishes_the_lidar_status_on_the_same_bus() {
+    async fn a_clone_publishes_on_the_same_bus() {
         use tokio::io::AsyncReadExt;
 
         let dir = tempfile::tempdir().unwrap();
@@ -224,19 +168,14 @@ mod tests {
             );
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
-        let status = LidarStatus {
-            connected: true,
-            scans: 3,
-            ..LidarStatus::default()
-        };
-        shared.publish_lidar_status(&status).await;
+        shared.publish_capture_state(&status()).await;
         let mut len = [0u8; 4];
         sub.read_exact(&mut len).await.unwrap();
         let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
         sub.read_exact(&mut body).await.unwrap();
         let ev = AtlasEvent::decode(&body).unwrap();
-        assert_eq!(ev.topic, PLUGIN_ATLAS_LIDAR_TOPIC);
-        assert_eq!(LidarStatus::from_msgpack(&ev.payload).unwrap(), status);
+        assert_eq!(ev.topic, ATLAS_CAPTURE_STATE_TOPIC);
+        assert_eq!(CaptureStatus::from_msgpack(&ev.payload).unwrap(), status());
         // The socket lives until the last publisher goes.
         drop(publisher);
         assert!(path.exists());

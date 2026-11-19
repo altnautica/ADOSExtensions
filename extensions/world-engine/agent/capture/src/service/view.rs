@@ -31,9 +31,9 @@ impl Engine {
         let total = self.cams.values().map(|c| c.frames).sum();
         let health = self.pose.health();
         let latest = self.pose.latest();
-        let fresh = latest
-            .as_ref()
-            .is_some_and(|e| now.saturating_sub(e.t_ns) <= ados_mapping_pose::pose::MAX_EXTRAPOLATION_NS * 10);
+        let fresh = latest.as_ref().is_some_and(|e| {
+            now.saturating_sub(e.t_ns) <= ados_mapping_pose::pose::MAX_EXTRAPOLATION_NS * 10
+        });
         let pose = PoseView {
             source: if fresh {
                 ados_mapping_pose::pose::source_str(self.pose.source()).to_string()

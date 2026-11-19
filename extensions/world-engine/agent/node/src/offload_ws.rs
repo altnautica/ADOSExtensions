@@ -10,6 +10,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use ados_mapping_protocol::offload::OffloadDetectionBatch;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -20,7 +21,6 @@ use axum::{
     Router,
 };
 use tokio::sync::{broadcast, watch};
-use ados_mapping_protocol::offload::OffloadDetectionBatch;
 
 /// The WS route the drone subscribes to, one path per session.
 pub const OFFLOAD_WS_ROUTE: &str = "/ws/offload/:session_id";
@@ -183,8 +183,8 @@ async fn forward_batches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
     use ados_mapping_protocol::offload::Detection;
+    use futures_util::StreamExt;
 
     fn batch(session: &str, seq: u64) -> OffloadDetectionBatch {
         OffloadDetectionBatch::new(

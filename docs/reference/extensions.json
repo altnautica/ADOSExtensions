@@ -72,15 +72,10 @@
       "id": "com.altnautica.navigation",
       "name": "ADOS Navigation",
       "version": "1.0.0",
-      "description": "GNSS-denied navigation. Optical flow from a downward camera, or an external pose sent as ODOMETRY with EKF source-set switching, plus a planar-scan obstacle feed. Supports ArduPilot, PX4, and iNav 7.0+.",
+      "description": "GNSS-denied navigation: optical flow, LiDAR SLAM and VIO poses, a live occupancy map, and the external-navigation bridge to the flight controller.",
       "category": null,
       "supported_boards": [
-        "cm4",
-        "cm5",
-        "rock-5c-lite",
-        "rk3588s2",
-        "rk3576",
-        "rpi5"
+        "*"
       ],
       "permissions": [
         "estimator.pose.inject",
@@ -90,6 +85,8 @@
         "mavlink.component.vio",
         "mavlink.read",
         "mavlink.write",
+        "node.info.read",
+        "sensor.stream.read",
         "telemetry.extend",
         "telemetry.read",
         "telemetry.subscribe.navigation",
@@ -196,7 +193,6 @@
         "display.oled.page",
         "event.publish",
         "hardware.gpu",
-        "hardware.uart",
         "mavlink.read",
         "mcp.expose",
         "network.listen",

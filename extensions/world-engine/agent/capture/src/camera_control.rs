@@ -14,10 +14,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_protocol::capture_ctl::{ExposureView, CONTROL_REQUEST_TIMEOUT_MS};
 use ados_protocol::camera_control::ENGINE_WAIT_MS;
 use async_trait::async_trait;
 use tokio::task::JoinSet;
-use ados_mapping_protocol::capture_ctl::{ExposureView, CONTROL_REQUEST_TIMEOUT_MS};
 
 /// Host RPC and loop overhead on top of the host's engine wait.
 pub const REPLY_MARGIN_MS: u64 = 500;

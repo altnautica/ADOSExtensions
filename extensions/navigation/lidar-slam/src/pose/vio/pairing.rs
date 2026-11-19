@@ -20,7 +20,7 @@ use ados_mapping_pose::frame_source::CapturedFrame;
 /// Largest timestamp gap of an untriggered pair.
 pub const PAIR_TOLERANCE_NS: u64 = 1_000_000;
 
-/// The resolution VIO runs at (`atlas.vio.scale`): the frames as captured
+/// The resolution VIO runs at (`navigation.vio.scale`): the frames as captured
 /// (`1`), or halved in each direction (`0.5`) for a device without the CPU
 /// for full-resolution optical flow. The Basalt calibration is scaled to
 /// match ([`super::calib::scaled_rig`]).
@@ -41,7 +41,7 @@ impl TryFrom<f64> for VioScale {
         } else if v == 0.5 {
             Ok(Self::Half)
         } else {
-            Err(format!("atlas.vio.scale must be 1 or 0.5, got {v}"))
+            Err(format!("navigation.vio.scale must be 1 or 0.5, got {v}"))
         }
     }
 }

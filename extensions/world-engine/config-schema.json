@@ -86,22 +86,13 @@
       ],
       "default": "hybrid"
     },
-    "atlas.nav_pose": {
-      "type": "string",
-      "title": "Navigation pose",
-      "description": "always: publish the navigation pose, scan and live map whenever the pose provider runs. capture: only while a capture session is open. The default is always when a planar LiDAR device is set.",
-      "enum": [
-        "always",
-        "capture"
-      ]
-    },
     "atlas.memory_budget_mb": {
       "type": [
         "integer",
         "null"
       ],
-      "title": "Map memory budget (MB)",
-      "description": "RAM the live map stores may hold: keyframe queue 40 %, scan ring 10 %, sweep cloud 30 %, occupancy 20 %. Unset: 80 % of the capture service's memory cap.",
+      "title": "Capture memory budget (MB)",
+      "description": "RAM the capture queues may hold: keyframe queue 80 %, LiDAR scan queue 20 %. Unset: 80 % of the capture service's memory cap.",
       "minimum": 16,
       "default": null
     },
@@ -131,24 +122,6 @@
       },
       "additionalProperties": false,
       "default": {}
-    },
-    "atlas.pose_publish_interval_ms": {
-      "type": "integer",
-      "title": "Pose publish interval (ms)",
-      "description": "Interval between published navigation poses in their own measurement time (33 for 30 Hz), kept on average; a pose up to half an interval early is published. The pose cannot publish faster than its provider estimates.",
-      "minimum": 0,
-      "default": 100
-    },
-    "atlas.takeoff_heading_deg": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "title": "Take-off heading (deg)",
-      "description": "The heading the drone faces where it starts, degrees clockwise from true north. Set it when the flight controller takes its heading from the map indoors: the map's north is then fixed from it once and never from the flight controller. Leave empty to follow the flight controller's compass heading until take-off.",
-      "minimum": -360,
-      "maximum": 360,
-      "default": null
     },
     "atlas.selection.min_translation_m": {
       "type": "number",
@@ -285,18 +258,6 @@
       "description": "The compute node the relay re-posts to (http://host:8092). Empty discovers one on the LAN.",
       "default": null
     },
-    "atlas.pose_provider": {
-      "type": "string",
-      "title": "Pose provider",
-      "enum": [
-        "auto",
-        "fc_ekf",
-        "vio",
-        "lidar"
-      ],
-      "default": "auto",
-      "description": "auto: Basalt VIO on a visor stereo rig, else the flight controller EKF."
-    },
     "atlas.record_on_start": {
       "type": "boolean",
       "default": false,
@@ -349,99 +310,6 @@
             "short",
             null
           ]
-        }
-      }
-    },
-    "atlas.vio": {
-      "type": "object",
-      "default": {},
-      "additionalProperties": false,
-      "properties": {
-        "binary": {
-          "type": "string"
-        },
-        "left": {
-          "type": "string",
-          "default": "cam_fl"
-        },
-        "right": {
-          "type": "string",
-          "default": "cam_fr"
-        },
-        "imu": {
-          "type": "string",
-          "default": "imu0"
-        },
-        "scale": {
-          "description": "Resolution VIO tracks at: 1 (as captured) or 0.5 (half in each direction, a quarter of the optical-flow work).",
-          "type": "number",
-          "enum": [1, 0.5],
-          "default": 1
-        }
-      }
-    },
-    "atlas.lidar": {
-      "type": "object",
-      "default": {},
-      "additionalProperties": false,
-      "properties": {
-        "lidar_id": {
-          "description": "Rig sensor id of the LiDAR; its `lidar.model` picks the driver.",
-          "type": "string",
-          "default": "lidar0"
-        },
-        "imu": {
-          "description": "Rig IMU a planar LiDAR's scans are levelled with. `fc` synthesises it from the flight controller's attitude for a companion without an IMU (declare a rig IMU sensor `fc` at the body origin).",
-          "type": "string",
-          "default": "imu0"
-        },
-        "uv": {
-          "type": "string"
-        },
-        "project_dir": {
-          "type": "string"
-        },
-        "rplidar": {
-          "type": "object",
-          "default": {},
-          "additionalProperties": false,
-          "properties": {
-            "device": {
-              "description": "Serial port path, `tcp:<host>:<port>`, or `auto` (USB discovery); empty turns the driver off.",
-              "type": "string",
-              "default": "auto"
-            },
-            "baud": {
-              "type": "integer",
-              "minimum": 1,
-              "default": 460800
-            }
-          }
-        },
-        "livox": {
-          "type": "object",
-          "default": {},
-          "additionalProperties": false,
-          "properties": {
-            "sdk_library": {
-              "type": "string"
-            },
-            "host_ip": {
-              "description": "Host address on the LiDAR's subnet; null turns the driver off.",
-              "type": [
-                "string",
-                "null"
-              ],
-              "default": null
-            },
-            "lidar_ips": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              },
-              "default": []
-            }
-          }
         }
       }
     },

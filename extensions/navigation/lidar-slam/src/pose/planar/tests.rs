@@ -207,7 +207,10 @@ fn a_restarted_map_is_lost_until_it_holds_its_first_scans() {
     assert_eq!(health.len(), 20);
     let lost = health.iter().take_while(|h| **h == VioHealth::Lost).count();
     assert!(lost >= MIN_SUBMAP_SCANS - 1, "{health:?}");
-    assert!(health[12..].iter().all(|h| *h != VioHealth::Lost), "{health:?}");
+    assert!(
+        health[12..].iter().all(|h| *h != VioHealth::Lost),
+        "{health:?}"
+    );
 }
 
 /// Live order: each scan reaches the matcher before the IMU batch covering
@@ -328,7 +331,10 @@ fn a_corridor_walk_follows_the_measured_velocity_and_stays_degraded() {
     );
     let other = run("imu1");
     let lag = truth - other.last().unwrap().t[0];
-    assert!(lag > 1.0, "without the velocity the pose lags only {lag:.2} m");
+    assert!(
+        lag > 1.0,
+        "without the velocity the pose lags only {lag:.2} m"
+    );
 }
 
 #[test]
@@ -430,15 +436,15 @@ fn a_rig_without_the_planar_lidar_is_refused() {
     assert!(matches!(&err, PlanarPoseError::NoLidar(id) if id == "imu0"));
 }
 
-/// The FC as the matcher's IMU (`atlas.lidar.imu = "fc"`): its `RAW_IMU`
+/// The FC as the matcher's IMU (`navigation.lidar.imu = "fc"`): its `RAW_IMU`
 /// frames go from the MAVLink delivery straight to the matcher through the
 /// FC feed's sink, so a scan the IMU has not covered yet is matched by the
 /// frame that covers it, with nothing else fed: no pose tick, no next scan.
 #[test]
 fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
-    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
     use crate::nav::fc_imu::{self, FeedState};
     use ados_mapping_pose::fc_ekf::FcEkfPose;
+    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
 
     /// `RAW_IMU` at 100 Hz.
     const STEP_NS: u64 = 10_000_000;
@@ -487,7 +493,10 @@ fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
         raw_imu(t_imu);
         let deadline = Instant::now() + Duration::from_secs(5);
         while p.stats().scans_processed < i + 1 {
-            assert!(Instant::now() < deadline, "the covering frame left scan {i} waiting");
+            assert!(
+                Instant::now() < deadline,
+                "the covering frame left scan {i} waiting"
+            );
             std::thread::sleep(Duration::from_millis(1));
         }
         t_imu += STEP_NS;
@@ -510,9 +519,9 @@ fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
 /// holds the heading, and the turn is all there after the stall.
 #[test]
 fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
-    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
     use crate::nav::fc_imu::{self, FeedState};
     use ados_mapping_pose::fc_ekf::FcEkfPose;
+    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
 
     const STEP_NS: u64 = 10_000_000;
     const STALL: (u64, u64) = (T0 + 3_000_000_000, T0 + 4_000_000_000);
@@ -520,7 +529,13 @@ fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
     const TURN: (u64, u64) = (STALL.0 + 650_000_000, STALL.1);
     let w = 40f64.to_radians();
     let yaw = move |t: u64| w * (t.clamp(TURN.0, TURN.1) - TURN.0) as f64 * 1e-9;
-    let rate = move |t: u64| if (TURN.0..TURN.1).contains(&t) { w } else { 0.0 };
+    let rate = move |t: u64| {
+        if (TURN.0..TURN.1).contains(&t) {
+            w
+        } else {
+            0.0
+        }
+    };
     let walls = rect(0.0, 0.0, 6.0, 4.0);
     // Walking at 0.5 m/s so scans are inserted (a still body inserts one a
     // second) and the first submap fills before the stall.
@@ -534,7 +549,11 @@ fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
         .expect("spawn"),
     );
     let fc = FcEkfPose::new();
-    fc.set_nav_sink(Some(fc_imu::sink(p.clone(), true, Arc::new(FeedState::default()))));
+    fc.set_nav_sink(Some(fc_imu::sink(
+        p.clone(),
+        true,
+        Arc::new(FeedState::default()),
+    )));
     // Host time = FC time; a frame normally arrives 1 ms after it is sampled.
     let raw_imu = |t: u64, arrival: u64| {
         let mut b = (t / 1_000).to_le_bytes().to_vec();
@@ -599,17 +618,31 @@ fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
     }
     p.drain_new(&mut est);
     assert_eq!(p.stats().scans_dropped, 0);
-    let err = |e: &PoseEstimate| (e.r[3].atan2(e.r[0]) - yaw(e.t_ns)).sin().asin().to_degrees();
+    let err = |e: &PoseEstimate| {
+        (e.r[3].atan2(e.r[0]) - yaw(e.t_ns))
+            .sin()
+            .asin()
+            .to_degrees()
+    };
     let mut good_after = 0;
     for e in &est {
         if e.health == VioHealth::Good {
-            assert!(err(e).abs() < 1.5, "good pose at t {} heading err {:.2}°", e.t_ns, err(e));
+            assert!(
+                err(e).abs() < 1.5,
+                "good pose at t {} heading err {:.2}°",
+                e.t_ns,
+                err(e)
+            );
             good_after += usize::from(e.t_ns > STALL.1 + PERIOD_NS);
         }
     }
     assert!(good_after >= 10, "{good_after} good poses after the stall");
     let last = est.last().expect("poses");
-    assert!(err(last).abs() < 1.0, "heading err {:.2}° after the stall", err(last));
+    assert!(
+        err(last).abs() < 1.0,
+        "heading err {:.2}° after the stall",
+        err(last)
+    );
 }
 
 /// A bench take's ground spin, replayed: the drone sits still on the ground
@@ -675,7 +708,12 @@ fn a_still_drone_on_the_attitude_stand_in_does_not_spin() {
             let (c, s) = (ekf_yaw.cos(), ekf_yaw.sin());
             let cur = (t, [c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]);
             if let Some(sample) = fc_imu::sample(prev, cur) {
-                p.feed_imu(fc_imu::FC_IMU_ID, &ImuBatch { samples: vec![sample] });
+                p.feed_imu(
+                    fc_imu::FC_IMU_ID,
+                    &ImuBatch {
+                        samples: vec![sample],
+                    },
+                );
             }
             prev = Some(cur);
             lcg = lcg.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
@@ -707,6 +745,10 @@ fn a_still_drone_on_the_attitude_stand_in_does_not_spin() {
     assert!(est.len() > 150, "{} poses", est.len());
     for e in &est {
         let yaw = e.r[3].atan2(e.r[0]).to_degrees();
-        assert!(yaw.abs() < 1.0, "pose at t {} turned {yaw:.2}° standing still", e.t_ns - T0);
+        assert!(
+            yaw.abs() < 1.0,
+            "pose at t {} turned {yaw:.2}° standing still",
+            e.t_ns - T0
+        );
     }
 }

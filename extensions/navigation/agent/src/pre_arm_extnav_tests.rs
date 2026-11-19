@@ -382,7 +382,11 @@ fn fc_params_ekf_yaw_from_a_map_with_its_own_north_passes() {
     for north in [MapNorth::Declared, MapNorth::Gnss] {
         let mut i = with_param("EK3_SRC1_YAW", 6.0);
         i.north = Some(north);
-        assert_eq!(check(&eval(i), "fc_params"), (Severity::Ok, ""), "{north:?}");
+        assert_eq!(
+            check(&eval(i), "fc_params"),
+            (Severity::Ok, ""),
+            "{north:?}"
+        );
     }
 }
 

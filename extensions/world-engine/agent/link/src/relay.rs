@@ -19,12 +19,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
 use ados_protocol::aux_mux::AuxChannel;
 use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use ados_mapping_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
 
 use crate::compute_node;
 use crate::credentials::{CredentialStore, ATLAS_INGEST_LANE};

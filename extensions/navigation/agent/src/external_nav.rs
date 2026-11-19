@@ -316,7 +316,9 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         Some("map_ned") => (
             r,
             t,
-            get(p, "north").and_then(Value::as_str).and_then(MapNorth::parse),
+            get(p, "north")
+                .and_then(Value::as_str)
+                .and_then(MapNorth::parse),
         ),
         Some("map_flu") => {
             let (r, t) = flu_to_frd(&r, &t);

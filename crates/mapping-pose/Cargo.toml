@@ -30,6 +30,7 @@ parking_lot = { workspace = true }
 prost = "0.14"
 serde = { workspace = true }
 serde_json = { workspace = true }
+thiserror = { workspace = true }
 rmpv = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

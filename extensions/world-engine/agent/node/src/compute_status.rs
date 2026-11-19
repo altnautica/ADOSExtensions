@@ -70,10 +70,10 @@ async fn get_compute_status(State(latest): State<Arc<LatestComputeStatus>>) -> R
 mod tests {
     use super::*;
     use crate::{ClusterDescriptor, ComputeGpu, ComputeRole};
+    use ados_mapping_protocol::compute::ComputeHeartbeat;
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
-    use ados_mapping_protocol::compute::ComputeHeartbeat;
 
     async fn get(router: &Router) -> (StatusCode, serde_json::Value) {
         let resp = router

@@ -77,7 +77,10 @@ mod tests {
 
     #[test]
     fn low_quality_flow_is_rejected() {
-        assert_eq!(body_velocity(&flow([0.1, 0.1], MIN_FLOW_QUALITY - 1), 1.0), None);
+        assert_eq!(
+            body_velocity(&flow([0.1, 0.1], MIN_FLOW_QUALITY - 1), 1.0),
+            None
+        );
         assert!(body_velocity(&flow([0.1, 0.1], MIN_FLOW_QUALITY), 1.0).is_some());
     }
 
@@ -91,9 +94,29 @@ mod tests {
             orientation: DOWNWARD,
         };
         assert_eq!(ground_range(&r), Some(1.14));
-        assert_eq!(ground_range(&DistanceSensor { distance_m: 12.0, ..r }), None, "no return");
-        assert_eq!(ground_range(&DistanceSensor { distance_m: 0.05, ..r }), None);
-        assert_eq!(ground_range(&DistanceSensor { orientation: 0, ..r }), None, "forward");
+        assert_eq!(
+            ground_range(&DistanceSensor {
+                distance_m: 12.0,
+                ..r
+            }),
+            None,
+            "no return"
+        );
+        assert_eq!(
+            ground_range(&DistanceSensor {
+                distance_m: 0.05,
+                ..r
+            }),
+            None
+        );
+        assert_eq!(
+            ground_range(&DistanceSensor {
+                orientation: 0,
+                ..r
+            }),
+            None,
+            "forward"
+        );
     }
 
     #[test]

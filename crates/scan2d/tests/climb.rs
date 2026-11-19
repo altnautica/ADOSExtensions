@@ -146,7 +146,10 @@ fn a_take_off_with_heights_keeps_the_pose() {
     let err = final_error(&poses);
     assert!(err < 0.05, "the pose slid {err:.3} m");
     assert!(
-        poses.iter().filter(|(t, _)| in_climb(*t)).all(|(_, p)| p.score == 0.0),
+        poses
+            .iter()
+            .filter(|(t, _)| in_climb(*t))
+            .all(|(_, p)| p.score == 0.0),
         "a scan of the climb was matched"
     );
     assert!(
@@ -222,7 +225,11 @@ fn descend(slam: &mut LocalSlam) -> Vec<(f64, PoseOut)> {
     const DOWN_S: f64 = 12.0;
     let height = |t: f64| {
         let down = (t - HOLD_S).clamp(0.0, DOWN_S);
-        let rate = if (HOLD_S..HOLD_S + DOWN_S).contains(&t) { -1.0 } else { 0.0 };
+        let rate = if (HOLD_S..HOLD_S + DOWN_S).contains(&t) {
+            -1.0
+        } else {
+            0.0
+        };
         (40.0 - down, rate)
     };
     let mut rng = Rng::new(7);
@@ -335,7 +342,11 @@ fn windy_descent(slam: &mut LocalSlam) -> Vec<(f64, f64, PoseOut)> {
                 });
             }
             if k.is_multiple_of(50) {
-                let rate = if (HOLD_S..HOLD_S + DOWN_S).contains(&t_s) { -0.3 } else { 0.0 };
+                let rate = if (HOLD_S..HOLD_S + DOWN_S).contains(&t_s) {
+                    -0.3
+                } else {
+                    0.0
+                };
                 slam.feed_height(&HeightSample {
                     t_ns,
                     up_m: 6.0 - 0.3 * down(t_s),
@@ -359,10 +370,17 @@ fn an_unmeasured_descent_is_matched_again_after_the_time_bound() {
     let (_, x0, p0) = poses.iter().find(|(t, _, _)| *t >= 5.0).unwrap();
     let (_, x1, p1) = poses.last().unwrap();
     let (moved, truth) = (p1.x - p0.x, x1 - x0);
-    assert!((moved - truth).abs() < 0.1, "the pose moved {moved:.3} m, the rig {truth:.3} m");
+    assert!(
+        (moved - truth).abs() < 0.1,
+        "the pose moved {moved:.3} m, the rig {truth:.3} m"
+    );
     let err = (p1.x - x1).abs();
     assert!(err < 0.3, "pose {} vs truth {x1}", p1.x);
-    assert!(err <= p1.sigma_xy_m, "{err:.3} m off and says {:.3} m", p1.sigma_xy_m);
+    assert!(
+        err <= p1.sigma_xy_m,
+        "{err:.3} m off and says {:.3} m",
+        p1.sigma_xy_m
+    );
     let late = poses.iter().filter(|(t, _, _)| (5.0..17.0).contains(t));
     let matched = late.clone().filter(|(_, _, p)| p.score > 0.0).count();
     assert!(
@@ -379,7 +397,11 @@ fn an_unmeasured_descent_on_the_prior_alone_misses_the_drift() {
     unbounded.max_unmatched_climb_s = f64::INFINITY;
     let poses = windy_descent(&mut LocalSlam::new(unbounded));
     let (_, truth_x, last) = poses.last().unwrap();
-    assert!((last.x - truth_x).abs() > 0.5, "pose {} vs truth {truth_x}", last.x);
+    assert!(
+        (last.x - truth_x).abs() > 0.5,
+        "pose {} vs truth {truth_x}",
+        last.x
+    );
 }
 
 /// Without a measured velocity a 0.5 m/s climb rides the prior for
@@ -437,13 +459,19 @@ fn sigma_grows_while_the_prior_rides_and_holds_in_the_submap_it_placed() {
         .filter(|(t, p)| *t < GROUND_S && p.score > 0.0)
         .map(|(_, p)| p.sigma_xy_m)
         .collect();
-    assert!(!floor.is_empty() && floor.iter().all(|&s| s == 0.05), "floor: {floor:?}");
+    assert!(
+        !floor.is_empty() && floor.iter().all(|&s| s == 0.05),
+        "floor: {floor:?}"
+    );
     let riding: Vec<f64> = poses
         .iter()
         .filter(|(_, p)| p.score == 0.0)
         .map(|(_, p)| p.sigma_xy_m)
         .collect();
-    assert!(riding.windows(2).all(|w| w[1] >= w[0]), "monotone while riding: {riding:?}");
+    assert!(
+        riding.windows(2).all(|w| w[1] >= w[0]),
+        "monotone while riding: {riding:?}"
+    );
     let placed = *riding.last().expect("a ridden scan");
     assert!(placed > 0.05, "never grew: {riding:?}");
     let hover: Vec<f64> = poses
@@ -451,7 +479,10 @@ fn sigma_grows_while_the_prior_rides_and_holds_in_the_submap_it_placed() {
         .filter(|(t, p)| *t > GROUND_S + CLIMB_S && p.score > 0.0)
         .map(|(_, p)| p.sigma_xy_m)
         .collect();
-    assert!(!hover.is_empty() && hover.iter().all(|&s| s == placed), "hover: {hover:?}");
+    assert!(
+        !hover.is_empty() && hover.iter().all(|&s| s == placed),
+        "hover: {hover:?}"
+    );
 }
 
 /// A 90° pivot at 70°/s in a 4 m aisle with racking posts, hovering at
@@ -465,7 +496,13 @@ fn a_fast_pivot_at_hover_height_keeps_the_heading() {
     const START_S: f64 = 2.0;
     let pivot_s = std::f64::consts::FRAC_PI_2 / RATE;
     let yaw = |t: f64| RATE * (t - START_S).clamp(0.0, pivot_s);
-    let rate = |t: f64| if (START_S..START_S + pivot_s).contains(&t) { RATE } else { 0.0 };
+    let rate = |t: f64| {
+        if (START_S..START_S + pivot_s).contains(&t) {
+            RATE
+        } else {
+            0.0
+        }
+    };
     let mut world = common::rect(-20.0, -2.0, 20.0, 2.0);
     for x in [-9.0, -5.0, -1.5, 3.0, 7.0, 11.0] {
         world.extend(common::rect(x, 1.6, x + 0.3, 2.0));
@@ -507,5 +544,8 @@ fn a_fast_pivot_at_hover_height_keeps_the_heading() {
             worst_after = worst_after.max(err);
         }
     }
-    assert!(worst_after < 1.0, "heading off by {worst_after:.2}° after the pivot");
+    assert!(
+        worst_after < 1.0,
+        "heading off by {worst_after:.2}° after the pivot"
+    );
 }

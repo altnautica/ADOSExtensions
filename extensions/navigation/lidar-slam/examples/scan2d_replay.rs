@@ -13,8 +13,8 @@
 use std::fs::File;
 use std::time::Instant;
 
-use ados_scan2d::{ImuSample, LocalSlam, Scan2dConfig, ScanInput};
 use ados_mapping_protocol::atlas::PolarScan;
+use ados_scan2d::{ImuSample, LocalSlam, Scan2dConfig, ScanInput};
 
 fn scan_input(s: &PolarScan) -> ScanInput {
     let points: Vec<[f32; 3]> = (0..s.range_mm.len())

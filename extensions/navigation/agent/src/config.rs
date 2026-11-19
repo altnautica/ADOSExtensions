@@ -194,6 +194,9 @@ impl Default for FirmwareConfig {
     }
 }
 
+/// The node profile with no flight controller.
+pub const NO_FC_PROFILE: &str = "visor";
+
 /// Top-level plugin configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NavigationConfig {
@@ -228,6 +231,17 @@ impl NavigationConfig {
         } else {
             Mode::Off
         }
+    }
+
+    /// The configuration for the node profile the host runs this on. A
+    /// Visor has no flight controller: optical flow, external navigation
+    /// and the obstacle feed stay off there whatever the config says, and
+    /// the lidar-slam service is all the extension runs.
+    pub fn for_profile(mut self, profile: Option<&str>) -> Self {
+        if profile == Some(NO_FC_PROFILE) {
+            self.mode = Mode::Off;
+        }
+        self
     }
 
     /// The fail-closed configuration: no mode, not engaged. A config

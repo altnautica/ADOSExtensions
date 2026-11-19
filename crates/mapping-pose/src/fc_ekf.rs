@@ -37,17 +37,17 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use ados_capture_contract::GeoAnchor;
-use parking_lot::Mutex;
 use ados_mapping_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
+use parking_lot::Mutex;
 
-use crate::pose::{PoseEstimate, PoseProvider, PoseTrack};
-use crate::se3;
+use crate::align::GNSS_SETTLE_MS;
+use crate::fc_flow;
 use crate::geodesy::{EnuFrame, R_ENU_NED, R_FRD_FLU};
 use crate::mavlink_msg::{
     decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, LocalPositionNed, RawImu,
 };
-use crate::align::GNSS_SETTLE_MS;
-use crate::fc_flow;
+use crate::pose::{PoseEstimate, PoseProvider, PoseTrack};
+use crate::se3;
 
 /// Largest FC-clock gap between the attitude and the position paired into one
 /// estimate.
@@ -601,7 +601,9 @@ fn pair_estimate(g: &mut FeedInner, p: &LocalPositionNed) -> Option<PoseEstimate
         t_ns,
         r,
         t,
-        cov: g.cov.unwrap_or_else(|| crate::pose::diagonal_cov(1.0, 0.05)),
+        cov: g
+            .cov
+            .unwrap_or_else(|| crate::pose::diagonal_cov(1.0, 0.05)),
         source: PoseSource::FcEkf,
         health: VioHealth::Good,
         sigma_xy_m: None,

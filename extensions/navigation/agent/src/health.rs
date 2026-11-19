@@ -66,6 +66,8 @@ pub struct HealthSnapshot {
     /// External nav: the median age (ms) of a pose when its `ODOMETRY` is
     /// sent, over the last 50 poses.
     pub pose_age_ms: Option<f32>,
+    /// The node has no flight controller (a Visor): the FC cards say so.
+    pub no_flight_controller: bool,
 }
 
 impl HealthSnapshot {
@@ -119,6 +121,10 @@ impl HealthSnapshot {
             (k("degradedReasons"), str_array(&self.degraded_reasons)),
             (k("fcParams"), str_array(&self.fc_params)),
             (k("poseAgeMs"), opt_f32(self.pose_age_ms)),
+            (
+                k("noFlightController"),
+                Value::Boolean(self.no_flight_controller),
+            ),
         ];
         // Keep insertion order stable for tests.
         entries.shrink_to_fit();

@@ -11,6 +11,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_transport::{
+    AtlasBearer, AtlasEvent, AuxLane, BearerKind, DetectionPublisher, DetectionTee, TransportError,
+};
 use ados_protocol::aux_mux::AuxChannel;
 use ados_protocol::cloud_publish::{MAX_PAYLOAD, VISION_DETECTIONS_STREAM};
 use ados_protocol::framebus::DetectionBatch;
@@ -18,9 +21,6 @@ use ados_sdk::ClientError;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use ados_mapping_transport::{
-    AtlasBearer, AtlasEvent, AuxLane, BearerKind, DetectionPublisher, DetectionTee, TransportError,
-};
 
 use crate::host::{reply_error, reply_field, reply_ok, Host};
 

@@ -8,8 +8,8 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use ados_scan2d::ScanInput;
 use ados_mapping_protocol::atlas::PolarScan;
+use ados_scan2d::ScanInput;
 
 use super::StageError;
 
@@ -64,8 +64,8 @@ pub fn origin_flu(scan: &PolarScan) -> [f64; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
     use ados_mapping_protocol::atlas::VioHealth;
+    use std::io::Write;
 
     fn scan() -> PolarScan {
         PolarScan {

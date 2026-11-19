@@ -44,7 +44,7 @@ pub const ATLAS_KEYFRAME_TOPIC: &str = "atlas.keyframe";
 pub const ATLAS_SCAN_TOPIC: &str = "atlas.scan";
 
 /// Shared-data: current 6-DoF navigation pose in `map_ned` (see [`nav`]),
-/// published while the pose provider runs (`atlas.nav_pose`).
+/// published while the pose provider runs.
 pub const PLUGIN_ATLAS_POSE_TOPIC: &str = "plugin.world-engine.pose";
 
 /// Shared-data: point-cloud descriptor (count, bounds, url), or the live
@@ -187,12 +187,15 @@ mod descriptors;
 mod keyframe;
 pub mod nav;
 pub mod polar;
+pub mod stream;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_bus;
 #[cfg(test)]
 mod tests_nav;
+#[cfg(test)]
+mod tests_stream;
 
 pub use descriptors::{
     Generation, MeshDescriptor, OccupancyDescriptor, OccupancyField, PointCloudDescriptor,
@@ -205,11 +208,15 @@ pub use keyframe::{
 };
 pub use nav::{
     ComputePlacement, ImuFeedReason, ImuFeedState, ImuFeedStatus, LidarHealth, LidarStatus,
-    LiveOccupancy, LivePointCloud, MapNorth, MapPayloadKind, MapStatus, NavFrame, NavPoseMode,
-    NavPoseSource, OccupancyTile, ScanDescriptor, StreamPhase, StreamProgress, UploadPhase,
-    UploadProgress, LIDAR_STATUS_VERSION,
+    LiveOccupancy, LivePointCloud, MapNorth, MapPayloadKind, MapStatus, NavFrame, NavPoseSource,
+    OccupancyTile, ScanDescriptor, StreamPhase, StreamProgress, UploadPhase, UploadProgress,
+    LIDAR_STATUS_VERSION,
 };
 pub use polar::{PolarError, PolarScan};
+pub use stream::{
+    chunk_scan, pack_points, unpack_points, PoseTrackBatch, PoseTrackEntry, ScanAssembler,
+    ScanChunk, POINT_STRIDE, SCAN_CHUNK_POINTS,
+};
 
 /// The on-wire version stamped on every [`AtlasEvent`] envelope. Every atlas
 /// message crosses as an envelope, and the inner topic structs are decoded from

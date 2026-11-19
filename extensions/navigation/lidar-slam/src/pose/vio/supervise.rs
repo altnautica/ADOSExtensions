@@ -14,11 +14,11 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 
 use super::wire::{encode_hello, parse_line, ChildLine, ChildState, ChildStatus};
 use super::VioCounters;

@@ -84,6 +84,8 @@ export interface NavigationTelemetry {
   /** External nav: median age (ms) of a pose when its ODOMETRY is sent,
    * or ``null`` before the first one. */
   poseAgeMs?: number | null;
+  /** The node has no flight controller (a Visor). */
+  noFlightController?: boolean;
 }
 
 export type PreArmCheckSeverity = "ok" | "pending" | "blocking";

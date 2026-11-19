@@ -188,17 +188,6 @@ impl ComputePlacement {
     }
 }
 
-/// When the navigation pose is published (`atlas.nav_pose`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum NavPoseMode {
-    /// Whenever the pose provider runs.
-    #[default]
-    Always,
-    /// Only while a capture session is open.
-    Capture,
-}
-
 /// The post-flight upload's progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -313,29 +302,25 @@ pub struct ImuFeedStatus {
     pub rate_hz: Option<f32>,
 }
 
-/// The live map's state on `plugin.world-engine.map_status` (1 Hz).
+/// The live map's state on `plugin.navigation.map_status` (1 Hz):
+/// navigation's own facts only.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct MapStatus {
-    /// The open capture session, if any.
-    pub session_id: Option<String>,
+    /// Where the heavy map is built (`navigation.map_placement`).
     pub placement: ComputePlacement,
-    /// The capture process's resident memory (`VmRSS`), MiB; null when it
+    /// The navigation process's resident memory (`VmRSS`), MiB; null when it
     /// could not be read.
     pub memory_used_mb: Option<f32>,
-    /// `atlas.memory_budget_mb` as resolved.
+    /// `navigation.memory_budget_mb` as resolved.
     pub memory_budget_mb: f32,
     /// The live sweep-cloud voxel edge, metres (grows when coarsened).
     pub voxel_m: f32,
-    /// Keyframes dropped to stay inside the keyframe share of the budget.
-    pub keyframes_dropped: u64,
     pub sweep_points: u64,
     /// Area of known (free or occupied) live occupancy cells, m².
     pub area_m2: f32,
-    pub nav_pose: NavPoseMode,
-    pub upload: UploadProgress,
-    pub stream: StreamProgress,
+    /// The pose provider running; null when none runs.
+    pub pose_provider: Option<NavPoseSource>,
     /// The FC IMU feed; null when the pose does not take the FC as its IMU.
-    #[serde(default)]
     pub imu_feed: Option<ImuFeedStatus>,
 }
 

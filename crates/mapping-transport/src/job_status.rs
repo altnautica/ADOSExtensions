@@ -5,8 +5,8 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
 use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Why a job failed or was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

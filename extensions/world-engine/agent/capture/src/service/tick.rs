@@ -1,12 +1,10 @@
 //! Sensor-bus records, the 10 Hz tick (pose drain, closing, record retry) and
-//! the 1 Hz slow tick (health record, HUD, state and live-map publish).
+//! the 1 Hz slow tick (health record, HUD, state publish, queue caps).
 
 use ados_capture_contract::v1::ImuBatch;
 use ados_mapping_protocol::capture_ctl::StartArgs;
 
-use ados_mapping_protocol::atlas::PoseDescriptor;
-
-use super::{Engine, SLOW_TICKS};
+use super::{Engine, KEYFRAME_SHARE, SCAN_SHARE, SLOW_TICKS};
 use crate::quality::{ClockReading, Level, StorageReading};
 use crate::recorder::{convert, Item};
 use crate::recording::Phase;
@@ -28,7 +26,8 @@ impl Engine {
             BusEvent::Imu { src, batch } => {
                 self.pose.feed_imu(src, batch);
                 if let Some(s) = batch.samples.last() {
-                    self.quality.on_gyro(ados_mapping_pose::clock::mono_ns(), &s.gyro);
+                    self.quality
+                        .on_gyro(ados_mapping_pose::clock::mono_ns(), &s.gyro);
                 }
             }
             // The open session's map follows its own timebase, paused or not.
@@ -84,9 +83,7 @@ impl Engine {
 
     pub(super) async fn on_tick(&mut self) {
         let now = ados_mapping_pose::clock::mono_ns();
-        if let Some(pd) = self.drain_poses() {
-            self.publisher.publish_pose(&pd).await;
-        }
+        self.drain_poses();
         self.poll_closing().await;
         if let Some(at) = self.record_retry_at.filter(|at| now >= *at) {
             self.record_retry_at = None;
@@ -125,39 +122,25 @@ impl Engine {
             let _ = tx.send(view);
         }
         self.publish_status().await;
-        self.nav_slow_tick().await;
+        if let Some(r) = self.recorder() {
+            r.sidecars().set_caps(
+                self.budget.share(KEYFRAME_SHARE),
+                self.budget.share(SCAN_SHARE),
+            );
+        }
     }
 
-    /// Hand every new pose estimate to the navigation lane and the recorder;
-    /// the pose descriptor to publish when its interval is due.
-    pub(super) fn drain_poses(&mut self) -> Option<PoseDescriptor> {
+    /// Hand every new pose estimate to the quality monitor and, while
+    /// recording, the recorder.
+    pub(super) fn drain_poses(&mut self) {
         let mut out = Vec::new();
         self.pose.drain_new(&mut out);
         let q = self.pose.quality();
         self.quality.recording = self.is_recording();
         self.quality
             .on_pose_quality(q.degeneracy_ratio, q.tracked_features);
-        let now_mono_ns = ados_mapping_pose::clock::mono_ns();
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as i64);
-        self.degrade_on_imu_feed(&mut out, now_mono_ns);
-        let (fc_up, heading, open) = (self.fc_up(), self.fc_heading(), self.session.is_some());
-        // A map the matcher started over in flight is placed from the FC.
-        let fc = self.nav_deps.fc_feed.as_ref();
-        self.nav
-            .on_matcher_poses(&out, q.map_restarts, &mut self.nav_map_restarts, fc_up, fc);
-        self.fold_gnss_alignment(&out);
-        // A pose the feed left alone says why it is lost: a map restarted
-        // without the FC's turn has no north, and a heading the feed's gap
-        // left unmeasured is not yet re-confirmed.
-        let imu_feed = self.imu_feed_degraded.or(self.nav_imu_reason(q.heading_unconfirmed));
-        let due = out
-            .last()
-            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns, open))
-            .map(|pd| PoseDescriptor { imu_feed, ..pd });
         if out.is_empty() || self.recorder().is_none() {
-            return due;
+            return;
         }
         let source = ados_mapping_pose::pose::source_str(self.pose.source());
         for e in out {
@@ -172,7 +155,6 @@ impl Engine {
                 });
             }
         }
-        due
     }
 
     /// Record the newest vehicle-state GNSS fix, once.
@@ -224,8 +206,8 @@ impl Engine {
                 level: Level::Bad,
             },
         };
-        self.bus_timebase =
-            ados_mapping_pose::clock::ClockSidecar::read(&self.paths.clock_sidecar).map(|c| c.timebase());
+        self.bus_timebase = ados_mapping_pose::clock::ClockSidecar::read(&self.paths.clock_sidecar)
+            .map(|c| c.timebase());
         let s = self.sensors.lock();
         let (locked, sigma) = s.clock.lock();
         self.quality.clock = ClockReading {
@@ -236,7 +218,6 @@ impl Engine {
     }
 
     pub(super) async fn shutdown(&mut self) {
-        self.detach_fc_nav();
         if self.session.is_some() {
             self.begin_close();
         }

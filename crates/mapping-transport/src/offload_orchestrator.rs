@@ -28,11 +28,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use ados_mapping_protocol::offload::OffloadDetectionBatch;
 use ados_offload::OffloadMode;
 use ados_protocol::framebus::DetectionBatch;
 use anyhow::{anyhow, Result};
 use tokio::sync::{mpsc, watch, Notify};
-use ados_mapping_protocol::offload::OffloadDetectionBatch;
 
 use crate::offload_bridge::{CameraGeometry, DetectionPublisher, OffloadReturnBridge};
 use crate::offload_client::stream_offload_detections;

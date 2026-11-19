@@ -53,13 +53,6 @@ world-model stream, offload, artifacts, job submission) and installs it on
 the drone. A ground station is issued the ingest lane only. The compute
 node's Jobs & outputs page lists and revokes these credentials.
 
-Native helpers: basalt-ados (BSD-3) and the Livox SDK2 library (MIT) are
-release payloads with their licence texts. x86_64-linux builds in the
-release workflow; aarch64-linux is a manual release step
-(`../navigation/lidar-slam/basalt/README.md`, `../navigation/lidar-slam/livox/build-sdk2.sh`). The
-KISS-ICP odometry environment is built on the device by `uv sync --frozen` on
-the first LiDAR start, which needs network once.
-
 ## GCS pages
 
 Agent pages:
@@ -96,20 +89,15 @@ Per-node plugin configuration (`config-schema.json`):
 |---|---|
 | `atlas.enabled` | Run the capture service on this drone |
 | `atlas.capture_profile` | Keyframe selection profile |
-| `atlas.pose_provider` | Pose provider: `auto`, `fc_ekf` (flight controller), `vio` (on-device visual-inertial) or `lidar` (on-device LiDAR odometry: 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one). `auto` picks `lidar` when the rig has the configured LiDAR and IMU (on a drone too, where the LiDAR pose is the navigation source the flight controller fuses), else on a visor `vio` with a front stereo pair and IMU, else `fc_ekf` |
-| `atlas.lidar` | LiDAR input: `lidar_id` (rig sensor; its `lidar.model` picks the driver, `rplidar-c1` or `livox-mid360`), `imu` (the rig IMU a planar LiDAR is levelled with; `fc`, for a companion without an IMU, takes the flight controller's `RAW_IMU` gyro with gravity in the FC's reported attitude as the specific force (until `RAW_IMU` arrives, the attitude's roll and pitch only, never its yaw, which under external navigation is the matcher's own heading fed back; the matcher learns the gyro's z bias from the scans; the planar pose is degraded while the feed is that stand-in, or `RAW_IMU` stalls for over 250 ms or arrives under 40 Hz, logged as `nav_imu_feed_degraded`) and, when the FC has a flow sensor, its `OPTICAL_FLOW` (quality 128 and up) times its downward `DISTANCE_SENSOR` range as the ground velocity the matcher follows along a corridor the scans leave unconstrained; each sample reaches the matcher as its message arrives), and per-driver blocks `rplidar` (`device`: serial port, `tcp:<host>:<port>` or `auto`; `baud`) and `livox` (`sdk_library`, `host_ip`, `lidar_ips`). A planar LiDAR's matcher also takes the FC's EKF height and climb rate (`LOCAL_POSITION_NED`): it neither matches nor maps while the scan plane climbs or descends faster than 0.15 m/s, riding the IMU heading and the flow velocity, and keeps each submap to 0.3 m of height, since a planar scan cuts sloped walls at a different outline at every height |
 | `atlas.auto_upload` | Upload finished sessions to the paired compute node over the LAN when the device is idle or charging and not recording (default `false`; a `post_flight` or `hybrid` placement uploads regardless) |
-| `atlas.nav_pose` | `always`: publish the navigation pose, scan, live occupancy, sweep cloud and map status whenever the pose provider runs; `capture`: only with a session open. Default `always` when an RPLIDAR device is set |
 | `atlas.compute_placement` | Where the heavy map products are built: `onboard` (5 cm sweep cloud on the drone), `stream` (keyframes, poses and raw polar scans stream to the compute node, which reconstructs in flight and serves a full-resolution live map on the device's world stream; the drone keeps a 20 cm cloud), `post_flight` (record, upload after landing), `hybrid` (10 cm on board plus the post-flight upload; default). Navigation SLAM and the live occupancy always stay on board |
-| `atlas.memory_budget_mb` | RAM the live map stores may hold (keyframe queue 40 %, scan ring 10 %, sweep cloud 30 %, occupancy 20 %); unset, 80 % of the capture unit's memory cap. A full sweep cloud doubles its voxel (`sweep_cloud_coarsened`); full queues drop their oldest entry and count it |
+| `atlas.memory_budget_mb` | RAM the capture queues may hold (keyframe queue 80 %, LiDAR scan queue 20 %); unset, 80 % of the capture unit's memory cap. Full queues drop their oldest entry and count it |
 | `atlas.rig_id` | Rig whose calibrations `GET /atlas/calib` lists; empty uses the only rig in the device calibration store |
 | `atlas.reconstruct_steps` | Splat training steps (the detail level) for this drone's reconstructions, the GCS-submitted ones and those the compute node runs itself from the capture stream; carried on every capture status. Unset, the node uses `ADOS_COMPUTE_TRAIN_ITERS` (default 30000) |
 | `atlas.cameras[]` | Cameras the capture service reads. With no stored rig (or for a camera the stored rig lacks) each one is placed at the body origin, pointed by its agent roster entry's `mount_pitch_deg` (negative below the nose; else by role: `down` straight down with the image top toward the nose, `up` straight up, side and back cameras level) and given a pinhole from the roster's `fov_deg` (70 degrees when absent), which the vision engine stamps on every frame |
 | `atlas.selection.*` | Keyframe selection thresholds |
 | `atlas.intrinsics.*` | Camera intrinsics |
 | `atlas.pose_prior.*` | Pose uncertainty priors: `position_sigma_m`, `gnss_uere_m` (2.5), `orientation_sigma_rad` (0.02) |
-| `atlas.pose_publish_interval_ms` | Interval between published navigation poses in the poses' own measurement time, in ms (100; 33 for 30 Hz, bounded by the provider's own rate). Kept on average; a pose up to half an interval early is published, so a provider at exactly the interval loses none. Poses are polled every 10 ms and published as soon as the gate allows |
-| `atlas.takeoff_heading_deg` | The heading the vehicle faces where it starts, degrees clockwise from true north. Set, the navigation map's north is latched from it once at the first pose and never taken from the flight controller (pose `north: declared`), so the flight controller may take its yaw from the map (ArduPilot `EK3_SRCn_YAW` 6). Unset (default), the north follows the flight controller's heading until take-off (`north: fc_heading`), which must then not be the EKF's yaw source |
 | `offload.enabled` | Perception offload: `auto`, `on` or `off` |
 | `offload.compute_node_addr` | Compute node pinned as `host:port` for both the Atlas forwarder and the offload session; empty discovers one on the LAN over mDNS |
 | `serving.enabled` | Serve perception offload on this compute node |
@@ -117,24 +105,11 @@ Per-node plugin configuration (`config-schema.json`):
 | `relay.enabled` | Run the Atlas relay on this ground station (default `false`) |
 | `relay.compute_base_url` | Compute node the ground-station relay forwards to |
 
-## Navigation and live map lanes
+## Navigation
 
-While the pose provider runs (`atlas.nav_pose`), the capture service
-publishes shared topics other extensions and the agent's navigation API read:
-
-| Topic | Rate | Payload |
-|---|---|---|
-| `plugin.world-engine.pose` | pose interval | Body pose in `map_ned` (north-aligned: x north, y east, z down; the planar SLAM world rotated to north, origin at the first scan; the north is latched from `atlas.takeoff_heading_deg` when set, else taken from the flight controller's heading at take-off (followed while the vehicle sits within 0.5 m of where the first pose was taken, so a heading that turns onto true north once the EKF origin is set is the one kept); then moved onto the FC's `LOCAL_POSITION_NED` by a yaw and offset fitted against the EKF's GNSS track once the FC's `GPS_RAW_INT` has held a 3D fix for 15 s, frozen when GNSS goes; z is the FC's height above the first pose), with `ts_ms` (the unix time the pose describes: a lidar pose's scan's first return, not the publish time), `health`, `frame`, `source`, `north` (`declared`, `fc_heading` or `gnss`: where the map's north comes from) and, from the planar scan matcher, `sigma_xy_m` (horizontal one-sigma uncertainty in metres: growing by half the distance the motion prior carries the pose while scans ride it unmatched, and by half the height climbed while a climb without a measured velocity is matched band by band, up to 5; a matched scan otherwise carries the sigma of the submap it matched in, 0.05 for one started at a matched pose). Map lanes wait for the first heading |
-| `plugin.world-engine.scan` | per scan | The scan binned to 360 one-degree bins in the body FRD frame, nearest range per bin, `0` for no return. Every return is kept, airframe and floor included (the agent pilot reads an empty bin as free space); `blocked_bins` lists the bins the rig LiDAR's `blocked_azimuth_deg` sectors cover, absent when there are none |
-| `plugin.world-engine.occupancy` | 1 Hz | Live: changed 64×64-cell tiles at 5 cm as grey PNG (0 occupied, 254 free, 205 unknown), `kind: "live"`; node products say `kind: "product"` |
-| `plugin.world-engine.pointcloud` | 1 Hz | Live: up to 20 000 new voxel centroids of the sweep cloud (every scan placed by SLAM x, y, yaw, the FC height and the IMU roll and pitch), `kind: "live"` |
-| `plugin.world-engine.map_status` | 1 Hz | Placement, the capture process's resident memory (`VmRSS`, null when unreadable) beside the map budget, voxel size, keyframes dropped, sweep points, mapped area, upload and stream progress, and `imu_feed` (the FC IMU feed's state, reason and `RAW_IMU` rate while `atlas.lidar.imu` is `fc` and the planar LiDAR pose is the one running; null otherwise, including a run whose pose fell back to the FC's EKF or runs KISS-ICP on a 3D LiDAR) |
-| `plugin.world-engine.lidar` | 1 Hz while the rig declares `atlas.lidar.lidar_id` | The LiDAR link: `v` (2), `device` (the opened port, the resolved `/dev/serial/by-id` path under `auto`; null when never opened), `connected`, `health` (`good`, `warning` or `error`) and `health_code` from the device's latest (re)connect (null when it never connected or the driver has no health report, as on the Livox), `rate_hz` (revolutions per second over the last second; null when not connected), `returns_last_scan` (the returns in the newest scan, `0` when it saw nothing; null when not connected or before the first scan), and `scans`, `empty_scans` (scans with no return at all), `dropped_scans` and `reconnects` since the run started. A scan arriving says the link is up, not that the sensor sees anything: an RPLIDAR behind a blocked window, with a failed receiver, facing open sky or in open air delivers scans with no returns. A Livox delivers a scan only around a valid point, so one that sees nothing stops sending scans and reads `connected: false`. A LiDAR absent when capture starts is retried every 2 s and reports `connected: false` with null device, health, rate and returns until it answers. Not forwarded to the compute node |
-
-Occupancy tiles farther than 200 m from the vehicle, or past the occupancy
-share of the budget (farthest first), are written to the session's
-`map/occupancy/` and leave RAM. A closing session also gets the whole sweep
-cloud as `map/sweep_cloud.f32` (little-endian `f32` xyz).
+The LiDAR and VIO pose, the live occupancy map and their shared topics are
+the Navigation extension's (`../navigation`). The capture service poses its
+keyframes with the flight controller's EKF.
 
 A planar LiDAR records into the session as `lidar/<sensor>.polar.zst`: a zstd
 (level 3) stream of polar records, each with the sensor pose and 720 bins of
@@ -142,10 +117,6 @@ A planar LiDAR records into the session as `lidar/<sensor>.polar.zst`: a zstd
 preset turns those alone into a LAZ cloud, occupancy per height band (0–3,
 3–8 and 8–15 m above the first scan) in `map_server` PNG + YAML, and a
 floorplan, after closing loops offline over the scans; a LiDAR-only session needs no pinned tool, and a session with camera frames also gets a preview splat and its mesh (COLMAP, splat-transform and Brush, `E_TOOL_MISSING` without them).
-
-`cargo run --release -p world-engine-capture --example scan2d_replay --
-<lidar0.polar.zst>` replays a recorded scan log through the scan matcher and
-prints the wall time, a fixed workload for comparing CPUs.
 
 ## Reconstruction tools
 

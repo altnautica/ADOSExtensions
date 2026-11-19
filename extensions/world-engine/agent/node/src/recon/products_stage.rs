@@ -491,7 +491,12 @@ pub(super) fn copy_coloured_cloud(
     }
     fs::copy(&src, out.join(COLOURED_CLOUD_FILE))?;
     let sidecar = place(COLOURED_CLOUD_FILE, Kind::Pointcloud, Fmt::Laz)?;
-    Ok(vec![art("pointcloud", COLOURED_CLOUD_FILE, "laz", Some(sidecar))])
+    Ok(vec![art(
+        "pointcloud",
+        COLOURED_CLOUD_FILE,
+        "laz",
+        Some(sidecar),
+    )])
 }
 
 pub(super) fn art(kind: &str, file: &str, format: &str, place_json: Option<String>) -> ArtifactOut {
@@ -729,10 +734,12 @@ mod tests {
         assert_eq!(src(json!("fc_ekf"), "pose_prior_mapper"), "fc_ekf+ba");
         assert_eq!(src(json!(null), "mapper"), "images");
         // GLIM re-posed a truth-recorded session: the poses are its SLAM poses.
-        let glim = json!({ "prior_source": "truth", "method": "known_poses", "glim": { "used": true } });
+        let glim =
+            json!({ "prior_source": "truth", "method": "known_poses", "glim": { "used": true } });
         assert_eq!(pose_source(&glim), "slam");
         // A rejected GLIM trajectory left the recorded poses.
-        let rejected = json!({ "prior_source": "vio", "method": "known_poses", "glim": { "used": false } });
+        let rejected =
+            json!({ "prior_source": "vio", "method": "known_poses", "glim": { "used": false } });
         assert_eq!(pose_source(&rejected), "vio");
     }
 
@@ -744,7 +751,8 @@ mod tests {
         std::fs::write(job.join("dataset").join("cloud_rgb.laz"), b"LASF").unwrap();
         let out = job.join("out");
         std::fs::create_dir_all(&out).unwrap();
-        let arts = copy_coloured_cloud(job, &out, &|f, _k, _fmt| Ok(format!("{f}.place.json"))).unwrap();
+        let arts =
+            copy_coloured_cloud(job, &out, &|f, _k, _fmt| Ok(format!("{f}.place.json"))).unwrap();
         assert_eq!(arts.len(), 1);
         assert_eq!(arts[0].file, "cloud_rgb.laz");
         assert!(out.join("cloud_rgb.laz").is_file());

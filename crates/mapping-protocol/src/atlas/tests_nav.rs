@@ -42,6 +42,7 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         },
         anchor: None,
         ts_ms: 7,
+        t_ns: 4_150_000_000,
         health: VioHealth::Good,
         frame: NavFrame::MapNed,
         source: NavPoseSource::LidarPlanar,
@@ -56,6 +57,10 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
     assert_eq!(v["north"], "declared");
     assert_eq!(v["sigma_xy_m"], 0.35);
     assert_eq!(v["imu_feed"], "stalled");
+    assert_eq!(
+        v["t_ns"], 4_150_000_000u64,
+        "the host monotonic instant beside ts_ms"
+    );
     assert_eq!(v["pose"]["R"][0], 1.0);
     assert_eq!(
         PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(),
@@ -143,28 +148,33 @@ fn scan_and_map_status_use_the_documented_keys() {
 
     let st = MapStatus {
         placement: ComputePlacement::PostFlight,
+        pose_provider: Some(NavPoseSource::LidarPlanar),
         ..MapStatus::default()
     };
     let v = serde_json::to_value(&st).unwrap();
     assert_eq!(v["placement"], "post_flight");
-    assert_eq!(v["nav_pose"], "always");
-    assert!(v["session_id"].is_null());
-    assert_eq!(v["upload"]["state"], "idle");
-    assert_eq!(v["stream"]["state"], "off");
+    assert_eq!(v["pose_provider"], "lidar_planar");
     assert!(
         v["memory_used_mb"].is_null(),
         "unread resident memory is null, never 0"
     );
-    for key in [
-        "memory_used_mb",
-        "memory_budget_mb",
-        "voxel_m",
-        "keyframes_dropped",
-        "sweep_points",
-        "area_m2",
-    ] {
-        assert!(v.get(key).is_some(), "{key}");
-    }
+    let mut keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "area_m2",
+            "imu_feed",
+            "memory_budget_mb",
+            "memory_used_mb",
+            "placement",
+            "pose_provider",
+            "sweep_points",
+            "voxel_m",
+        ],
+        "navigation's facts only: the session, upload and stream are reported by their own processes"
+    );
+    assert!(serde_json::to_value(MapStatus::default()).unwrap()["pose_provider"].is_null());
 }
 
 /// `imu_feed` is null without an FC IMU, absent on an older device, and
@@ -196,10 +206,8 @@ fn map_status_carries_the_fc_imu_feed() {
         serde_json::to_value(ImuFeedReason::NorthUnknown).unwrap(),
         "north_unknown"
     );
-    let mut old = serde_json::to_value(MapStatus::default()).unwrap();
-    old.as_object_mut().unwrap().remove("imu_feed");
-    let back: MapStatus = serde_json::from_value(old).unwrap();
-    assert_eq!(back.imu_feed, None);
+    let back: MapStatus = serde_json::from_value(serde_json::to_value(&st).unwrap()).unwrap();
+    assert_eq!(back, st);
 }
 
 #[test]

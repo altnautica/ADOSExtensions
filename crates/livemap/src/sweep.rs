@@ -9,11 +9,9 @@
 //! logged. Never allocating past the budget wins over resolution.
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::path::Path;
 
-use base64::Engine as _;
 use ados_mapping_protocol::atlas::nav::POINTCLOUD_DELTA_MAX_POINTS;
+use base64::Engine as _;
 
 /// RAM one voxel costs: key, centroid sum, count, flag, plus hash overhead.
 pub const VOXEL_BYTES: usize = 48;
@@ -162,18 +160,15 @@ impl SweepCloud {
         (count, base64::engine::general_purpose::STANDARD.encode(buf))
     }
 
-    /// Write every centroid as little-endian `f32` xyz to `path`.
-    pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let mut f = std::io::BufWriter::new(std::fs::File::create(path)?);
+    /// Every centroid as little-endian `f32` xyz.
+    pub fn points_le(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.voxels.len() * 12);
         for v in self.voxels.values() {
             for c in v.centroid() {
-                f.write_all(&c.to_le_bytes())?;
+                out.extend_from_slice(&c.to_le_bytes());
             }
         }
-        f.flush()
+        out
     }
 }
 

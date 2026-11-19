@@ -45,14 +45,14 @@ use std::thread::JoinHandle;
 
 use ados_capture_contract::v1::ImuBatch;
 use ados_capture_contract::{Rig, RigSensorKind};
+use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 use ados_scan2d::{
     HeightSample, ImuSample, LocalSlam, PoseOut, Scan2dConfig, ScanInput, VelocitySample,
 };
-use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 
 use super::lidar::supervise::{nominal_cov, world_from_body};
-use ados_mapping_pose::{se3, PoseEstimate, PoseProvider, PoseQuality, PoseTrack};
 use ados_mapping_pose::lidar_scan::LidarScan;
+use ados_mapping_pose::{se3, PoseEstimate, PoseProvider, PoseQuality, PoseTrack};
 
 /// Scans that may wait for the matcher (~0.2 s at 10 Hz).
 pub const SCAN_QUEUE_DEPTH: usize = 2;

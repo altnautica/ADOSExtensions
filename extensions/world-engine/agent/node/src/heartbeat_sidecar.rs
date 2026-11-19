@@ -7,8 +7,8 @@
 //! host `gpu` block. The same value backs the node's `GET /compute/status` on
 //! its operator socket.
 
-use serde::Serialize;
 use ados_mapping_protocol::compute::ComputeHeartbeat;
+use serde::Serialize;
 
 use crate::{ComputeGpu, ComputeRole};
 

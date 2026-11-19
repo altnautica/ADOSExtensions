@@ -46,7 +46,7 @@ use rmpv::Value;
 use tokio::sync::{mpsc, Notify};
 
 use crate::clock_align::ClockAlign;
-use crate::config::{Mode, Topology, NavigationConfig};
+use crate::config::{Mode, NavigationConfig, Topology};
 use crate::estimator::{Estimator, RangeReading, StepInputs};
 use crate::estimators::{
     available_estimators, NullEstimator, OpticalFlowDegradedEstimator, OpticalFlowEstimator,
@@ -104,6 +104,14 @@ impl Plugin for NavigationPlugin {
             eprintln!("navigation: config invalid, staying disengaged: {e}");
             NavigationConfig::disengaged()
         });
+        let profile = std::env::var(ados_sdk::NODE_PROFILE_ENV).ok();
+        let no_fc = profile.as_deref() == Some(crate::config::NO_FC_PROFILE);
+        if no_fc {
+            eprintln!(
+                "navigation: no flight controller on a Visor; flow and the FC bridge stay off"
+            );
+        }
+        let cfg = cfg.for_profile(profile.as_deref());
         self.tasks.push(live_config::spawn_config_watch(
             ctx,
             self.static_config.clone(),
@@ -142,6 +150,7 @@ impl Plugin for NavigationPlugin {
         {
             let mut h = self.health.lock().expect("health lock");
             h.mode = Some(mode.as_str().to_string());
+            h.no_flight_controller = no_fc;
             h.available_estimators = available_estimators()
                 .iter()
                 .map(|s| s.to_string())

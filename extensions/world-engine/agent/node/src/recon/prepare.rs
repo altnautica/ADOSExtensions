@@ -244,7 +244,11 @@ pub fn run(
     // A planar LiDAR records its compact polar stream instead of the
     // Cartesian channel; its scans join the sweeps on the same track.
     if let Some(track) = index.poses.as_ref() {
-        for s in rig.sensors.iter().filter(|s| s.kind == RigSensorKind::Lidar) {
+        for s in rig
+            .sensors
+            .iter()
+            .filter(|s| s.kind == RigSensorKind::Lidar)
+        {
             sweeps.add_polar(
                 reader.dir(),
                 &s.id,

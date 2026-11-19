@@ -11,11 +11,6 @@
 #![cfg(unix)]
 
 use ados_capture_contract::Placement;
-use tokio::net::TcpListener;
-use tokio::sync::mpsc;
-use world_engine_node::{
-    submit_reconstruct_job, AtlasIngest, JobRecord, RerunArchetype, RerunRecording,
-};
 use ados_mapping_protocol::atlas::{SplatDescriptor, PLUGIN_ATLAS_SPLAT_TOPIC};
 use ados_mapping_protocol::compute::{
     ComputeJobKind, ComputeJobState, ComputeRole, SlaveDescriptor,
@@ -23,6 +18,11 @@ use ados_mapping_protocol::compute::{
 use ados_mapping_transport::{
     atlas_event_router, AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer,
     LoopbackBearer, WorldBroadcaster,
+};
+use tokio::net::TcpListener;
+use tokio::sync::mpsc;
+use world_engine_node::{
+    submit_reconstruct_job, AtlasIngest, JobRecord, RerunArchetype, RerunRecording,
 };
 
 #[path = "support/atlas_sitl.rs"]

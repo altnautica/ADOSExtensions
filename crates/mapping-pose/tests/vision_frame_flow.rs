@@ -10,9 +10,9 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use ados_mapping_pose::frame_source::{CapturedFrame, EngineFrameSource, FrameRouter};
 use ados_protocol::framebus::FrameFormat;
 use ados_sdk::testing::FakeVisionEngine;
-use ados_mapping_pose::frame_source::{CapturedFrame, EngineFrameSource, FrameRouter};
 
 /// An 8x8 RGB24 frame with a non-uniform pattern, so a wrong slot or a
 /// truncated read is caught instead of being masked by all-equal bytes.

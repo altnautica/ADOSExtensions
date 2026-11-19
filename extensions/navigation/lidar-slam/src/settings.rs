@@ -1,45 +1,123 @@
-//! The structured navigation settings: pose provider, VIO and LiDAR inputs.
+//! The `navigation.*` plugin config keys `navigation-lidar-slam` runs with:
+//! the pose provider, the pose publish interval, the declared take-off
+//! heading, the VIO and LiDAR inputs, the memory budget and where the heavy
+//! map is built. [`NavConfig::from_values`] resolves a map of those keys
+//! (absent keys take their defaults).
 
+use std::collections::BTreeMap;
+
+use ados_mapping_pose::config::{heading_deg, integer, optional_unsigned, typed, ConfigError};
+use ados_mapping_protocol::atlas::{ComputePlacement, PoseSource};
 use serde::Deserialize;
-use ados_mapping_protocol::atlas::PoseSource;
+use serde_json::Value;
 
 use crate::pose::vio::pairing::VioScale;
 
-/// The configured pose provider (`atlas.pose_provider`). `Auto` picks by
-/// profile and rig (see [`resolve_pose_provider`]).
+pub const KEY_POSE_PROVIDER: &str = "navigation.pose_provider";
+pub const KEY_POSE_PUBLISH_INTERVAL_MS: &str = "navigation.pose_publish_interval_ms";
+pub const KEY_TAKEOFF_HEADING_DEG: &str = "navigation.takeoff_heading_deg";
+pub const KEY_VIO: &str = "navigation.vio";
+pub const KEY_LIDAR: &str = "navigation.lidar";
+pub const KEY_MEMORY_BUDGET_MB: &str = "navigation.memory_budget_mb";
+pub const KEY_MAP_PLACEMENT: &str = "navigation.map_placement";
+
+/// Every key the service reads.
+pub const CONFIG_KEYS: &[&str] = &[
+    KEY_POSE_PROVIDER,
+    KEY_POSE_PUBLISH_INTERVAL_MS,
+    KEY_TAKEOFF_HEADING_DEG,
+    KEY_VIO,
+    KEY_LIDAR,
+    KEY_MEMORY_BUDGET_MB,
+    KEY_MAP_PLACEMENT,
+];
+
+/// The configured pose provider (`navigation.pose_provider`). `Auto` picks
+/// by profile and rig (see [`resolve_pose_provider`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum PoseProviderConfig {
     #[default]
     Auto,
-    FcEkf,
     Vio,
     Lidar,
+    Off,
 }
 
-/// Resolve the configured provider. `Auto`: LiDAR odometry when the rig has
-/// the configured LiDAR (with its scan model) and IMU, on a drone too (there
-/// the LiDAR pose is the navigation source the flight controller fuses, so the
-/// FC's own EKF would be circular); else, on a visor, VIO when it has a front
-/// stereo pair and an IMU; else the FC EKF.
+/// Resolve the configured provider; `None` runs none. `Auto`: LiDAR
+/// odometry when the rig has the configured LiDAR (with its scan model) and
+/// IMU, on a drone too (there the LiDAR pose is the navigation source the
+/// flight controller fuses); else, on a visor, VIO when it has a front stereo
+/// pair and an IMU; else none.
 pub fn resolve_pose_provider(
     cfg: PoseProviderConfig,
     profile: &str,
     rig_has_stereo_imu: bool,
     rig_has_lidar_imu: bool,
-) -> PoseSource {
+) -> Option<PoseSource> {
     match cfg {
-        PoseProviderConfig::FcEkf => PoseSource::FcEkf,
-        PoseProviderConfig::Vio => PoseSource::Vio,
-        PoseProviderConfig::Lidar => PoseSource::Lidar,
-        PoseProviderConfig::Auto if rig_has_lidar_imu => PoseSource::Lidar,
-        PoseProviderConfig::Auto if profile == "visor" && rig_has_stereo_imu => PoseSource::Vio,
-        PoseProviderConfig::Auto => PoseSource::FcEkf,
+        PoseProviderConfig::Off => None,
+        PoseProviderConfig::Vio => Some(PoseSource::Vio),
+        PoseProviderConfig::Lidar => Some(PoseSource::Lidar),
+        PoseProviderConfig::Auto if rig_has_lidar_imu => Some(PoseSource::Lidar),
+        PoseProviderConfig::Auto if profile == "visor" && rig_has_stereo_imu => {
+            Some(PoseSource::Vio)
+        }
+        PoseProviderConfig::Auto => None,
     }
 }
 
-/// VIO inputs (`atlas.vio`): the Basalt binary, the rig sensors it reads and
-/// the resolution it tracks at (`scale`: 1 or 0.5).
+/// The resolved `navigation.*` config.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavConfig {
+    pub pose_provider: PoseProviderConfig,
+    /// The pose topic's interval on the poses' own measurement time, ms.
+    pub pose_publish_interval_ms: i64,
+    /// The heading the vehicle faces at take-off, degrees clockwise from
+    /// north; `None` takes the north from the flight controller.
+    pub takeoff_heading_deg: Option<f64>,
+    pub vio: VioSettings,
+    pub lidar: LidarSettings,
+    /// `None`: 80 % of the unit's memory cap.
+    pub memory_budget_mb: Option<u64>,
+    pub map_placement: ComputePlacement,
+}
+
+impl Default for NavConfig {
+    fn default() -> Self {
+        Self {
+            pose_provider: PoseProviderConfig::Auto,
+            pose_publish_interval_ms: 100,
+            takeoff_heading_deg: None,
+            vio: VioSettings::default(),
+            lidar: LidarSettings::default(),
+            memory_budget_mb: None,
+            map_placement: ComputePlacement::default(),
+        }
+    }
+}
+
+impl NavConfig {
+    pub fn from_values(values: &BTreeMap<String, Value>) -> Result<Self, ConfigError> {
+        let d = Self::default();
+        Ok(Self {
+            pose_provider: typed(values, KEY_POSE_PROVIDER, d.pose_provider)?,
+            pose_publish_interval_ms: integer(
+                values,
+                KEY_POSE_PUBLISH_INTERVAL_MS,
+                d.pose_publish_interval_ms,
+            )?,
+            takeoff_heading_deg: heading_deg(values, KEY_TAKEOFF_HEADING_DEG)?,
+            vio: typed(values, KEY_VIO, d.vio)?,
+            lidar: typed(values, KEY_LIDAR, d.lidar)?,
+            memory_budget_mb: optional_unsigned(values, KEY_MEMORY_BUDGET_MB)?,
+            map_placement: typed(values, KEY_MAP_PLACEMENT, d.map_placement)?,
+        })
+    }
+}
+
+/// VIO inputs (`navigation.vio`): the Basalt binary, the rig sensors it reads
+/// and the resolution it tracks at (`scale`: 1 or 0.5).
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VioSettings {
@@ -63,7 +141,7 @@ impl Default for VioSettings {
     }
 }
 
-/// LiDAR inputs (`atlas.lidar`): which rig sensor, the IMU a planar LiDAR is
+/// LiDAR inputs (`navigation.lidar`): which rig sensor, the IMU a planar LiDAR is
 /// levelled with, the 3D odometry project, and the per-driver device settings.
 /// The rig sensor's `lidar.model` picks the driver.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -95,7 +173,7 @@ impl Default for LidarSettings {
     }
 }
 
-/// An RPLIDAR on a serial port (`atlas.lidar.rplidar`).
+/// An RPLIDAR on a serial port (`navigation.lidar.rplidar`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RplidarSettings {
@@ -114,7 +192,7 @@ impl Default for RplidarSettings {
     }
 }
 
-/// A Livox LiDAR through the SDK2 shared library (`atlas.lidar.livox`).
+/// A Livox LiDAR through the SDK2 shared library (`navigation.lidar.livox`).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LivoxSettings {
@@ -138,3 +216,7 @@ impl Default for LivoxSettings {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod tests;

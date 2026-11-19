@@ -35,9 +35,9 @@ use ados_capture_contract::{
 use ados_protocol::framebus::FrameFormat;
 use parking_lot::Mutex;
 
+use ados_mapping_protocol::atlas::PolarScan;
 use convert::{ImageEncoding, ImageMsg};
 use sidecars::{PolarWriter, Sidecars};
-use ados_mapping_protocol::atlas::PolarScan;
 
 /// Items the queue holds before new ones are dropped. Sensor records are
 /// small and must survive an image backlog, so images have their own bound.

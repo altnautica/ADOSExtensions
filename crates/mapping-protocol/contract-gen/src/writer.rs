@@ -338,8 +338,8 @@ impl SessionWriter {
         let file = format!("segments/{:06}.mcap", self.next_index);
         self.next_index += 1;
         let high = Arc::new(AtomicU64::new(0));
-        let inner = (self.open_sink)(&self.dir.join(&file))
-            .inspect_err(|e| latch(&self.fault, e))?;
+        let inner =
+            (self.open_sink)(&self.dir.join(&file)).inspect_err(|e| latch(&self.fault, e))?;
         let out = CountingWriter {
             inner,
             pos: 0,

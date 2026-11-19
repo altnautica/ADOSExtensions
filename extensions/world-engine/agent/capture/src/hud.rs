@@ -14,8 +14,8 @@
 //! `passthrough` action, so a board whose map gives B1 another job never
 //! starts a session by accident.
 
-use ados_protocol::buttons::ButtonPress;
 use ados_mapping_protocol::capture_ctl::CaptureStateView;
+use ados_protocol::buttons::ButtonPress;
 
 /// The page's title.
 pub const PAGE_TITLE: &str = "Capture";

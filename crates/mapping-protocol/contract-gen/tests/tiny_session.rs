@@ -432,7 +432,8 @@ fn a_full_disk_fails_the_session_without_panicking() {
             .unwrap()
             .with_sink(Box::new(move |path: &Path| {
                 let file = std::fs::File::create(path)?;
-                Ok(Box::new(FullDisk { file, room }) as Box<dyn ados_capture_contract::SegmentSink>)
+                Ok(Box::new(FullDisk { file, room })
+                    as Box<dyn ados_capture_contract::SegmentSink>)
             }));
         let failed_at = (0..200u64)
             .find(|&seq| {
@@ -440,8 +441,7 @@ fn a_full_disk_fails_the_session_without_panicking() {
                     .is_err()
             })
             .ok_or("no write failed")?;
-        if w
-            .write_proto(&topics::cam_image("cam0"), T0 + failed_at + 1, &image(0))
+        if w.write_proto(&topics::cam_image("cam0"), T0 + failed_at + 1, &image(0))
             .is_ok()
         {
             return Err("a write after the failure went through".into());
@@ -461,5 +461,10 @@ fn a_full_disk_fails_the_session_without_panicking() {
         }
     }
     let n = rooms.len();
-    assert!(wrong.is_empty(), "{} of {n} rooms:\n{}", wrong.len(), wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "{} of {n} rooms:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
 }

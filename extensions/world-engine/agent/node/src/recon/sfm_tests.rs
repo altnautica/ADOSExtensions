@@ -215,10 +215,7 @@ fn prior_sigma_follows_the_source_unless_the_track_recorded_a_wider_one() {
     );
     let v = prior_variances(&planar);
     assert_eq!(v.len(), 4);
-    assert!(
-        v.iter().all(|v| close(*v, [0.0225, 0.0225, 0.09])),
-        "{v:?}"
-    );
+    assert!(v.iter().all(|v| close(*v, [0.0225, 0.0225, 0.09])), "{v:?}");
     let mut recorded = frames(4, true);
     recorded[1].prior_sigma_m = Some([0.2, 0.2, 0.2]);
     recorded[2].prior_sigma_m = Some([0.8, 0.8, 0.8]);
@@ -444,5 +441,8 @@ fn a_repeated_frame_record_is_listed_once() {
     let want: Vec<&str> = unique.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, want);
     let extract = ran.cmd("feature_extractor").unwrap();
-    assert_eq!(value(extract, "--image_list_path"), ran.sfm.join("images_cam0.txt").to_str());
+    assert_eq!(
+        value(extract, "--image_list_path"),
+        ran.sfm.join("images_cam0.txt").to_str()
+    );
 }

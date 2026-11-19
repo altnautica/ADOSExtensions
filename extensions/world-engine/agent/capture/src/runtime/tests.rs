@@ -1,27 +1,12 @@
 use super::*;
-use serde_json::json;
 use ados_mapping_protocol::atlas::CameraRole;
-use ados_mapping_protocol::atlas::PoseSource;
-
-use navigation_lidar_slam::pose::vio::pairing::VioScale;
+use serde_json::json;
 
 fn values(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
     pairs
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect()
-}
-
-#[test]
-fn vio_scale_is_one_or_a_half() {
-    let load = |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_VIO, v)]));
-    assert_eq!(load(json!({})).unwrap().vio.scale, VioScale::Full);
-    assert_eq!(load(json!({"scale": 1})).unwrap().vio.scale, VioScale::Full);
-    assert_eq!(
-        load(json!({"scale": 0.5})).unwrap().vio.scale,
-        VioScale::Half
-    );
-    assert!(load(json!({"scale": 0.25})).is_err());
 }
 
 #[test]
@@ -53,35 +38,15 @@ fn reconstruct_steps_resolve_and_never_restart_a_run() {
 }
 
 #[test]
-fn takeoff_heading_is_an_optional_angle() {
-    let load =
-        |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_TAKEOFF_HEADING_DEG, v)]));
-    assert_eq!(load(json!(180)).unwrap().takeoff_heading_deg, Some(180.0));
-    assert_eq!(load(json!(-12.5)).unwrap().takeoff_heading_deg, Some(-12.5));
-    assert_eq!(load(Value::Null).unwrap().takeoff_heading_deg, None);
-    assert_eq!(
-        AtlasRuntimeConfig::from_values("", &BTreeMap::new())
-            .unwrap()
-            .takeoff_heading_deg,
-        None
-    );
-    assert!(load(json!(400)).is_err());
-    assert!(load(json!("north")).is_err());
-    assert!(CONFIG_KEYS.contains(&KEY_TAKEOFF_HEADING_DEG));
-}
-
-#[test]
 fn no_keys_is_the_disabled_default() {
     let c = AtlasRuntimeConfig::from_values("drone-42", &BTreeMap::new()).unwrap();
     assert!(!c.enabled);
     assert_eq!(c.device_id, "drone-42");
-    assert_eq!(c.pose_provider, PoseProviderConfig::Auto);
     assert!(!c.record_on_start);
     assert_eq!(c.mains_hz, 50);
     assert_eq!(c.capture.profile, CaptureProfile::Freeform);
     assert!(c.capture.cameras.is_empty());
     assert_eq!(c.capture.selection, SelectionParams::default());
-    assert_eq!(c.pose_publish_interval_ms, 100);
     // A null value (the host's "unset") is the same as an absent key.
     let nulls = values(&[(KEY_ENABLED, Value::Null), (KEY_CAMERAS, Value::Null)]);
     assert_eq!(
@@ -112,11 +77,9 @@ fn full_key_set_loads() {
     let v = values(&[
         (KEY_ENABLED, json!(true)),
         (KEY_CAPTURE_PROFILE, json!("orbit")),
-        (KEY_POSE_PROVIDER, json!("vio")),
         (KEY_RECORD_ON_START, json!(true)),
         (KEY_IMAGE_ENCODING, json!("jpeg")),
         (KEY_MAINS_HZ, json!(60)),
-        (KEY_VIO, json!({"left": "a", "right": "b"})),
         (KEY_SEGMENT, json!({"max_duration_s": 60})),
         (
             KEY_CAMERAS,
@@ -138,11 +101,9 @@ fn full_key_set_loads() {
     ]);
     let c = AtlasRuntimeConfig::from_values("", &v).unwrap();
     assert!(c.enabled);
-    assert_eq!(c.pose_provider, PoseProviderConfig::Vio);
     assert!(c.record_on_start);
     assert_eq!(c.image_encoding, ImageEncoding::Jpeg);
     assert_eq!(c.mains_hz, 60);
-    assert_eq!((c.vio.left.as_str(), c.vio.imu.as_str()), ("a", "imu0"));
     assert_eq!(c.segment.limits().max_duration_ns, 60_000_000_000);
     assert_eq!(c.capture.profile, CaptureProfile::Orbit);
     assert_eq!(c.capture.enabled_camera_count(), 1);
@@ -190,12 +151,12 @@ fn an_unparseable_key_is_an_error_naming_it() {
             .key,
         KEY_CAMERAS
     );
-    let bad_tier = values(&[(KEY_POSE_PROVIDER, json!("telepathic"))]);
+    let bad_encoding = values(&[(KEY_IMAGE_ENCODING, json!("telepathic"))]);
     assert_eq!(
-        AtlasRuntimeConfig::from_values("", &bad_tier)
+        AtlasRuntimeConfig::from_values("", &bad_encoding)
             .unwrap_err()
             .key,
-        KEY_POSE_PROVIDER
+        KEY_IMAGE_ENCODING
     );
     let bad_mains = values(&[(KEY_MAINS_HZ, json!(55))]);
     assert_eq!(
@@ -214,66 +175,6 @@ fn an_unparseable_key_is_an_error_naming_it() {
     assert_eq!(
         AtlasRuntimeConfig::from_values("", &neg).unwrap_err().key,
         KEY_MAX_KEYFRAMES
-    );
-}
-
-#[test]
-fn auto_picks_lidar_anywhere_then_vio_on_a_visor_and_the_ekf_elsewhere() {
-    let r = |c, p, s, l| resolve_pose_provider(c, p, s, l);
-    let auto = PoseProviderConfig::Auto;
-    assert_eq!(r(auto, "visor", true, false), PoseSource::Vio);
-    assert_eq!(r(auto, "visor", false, true), PoseSource::Lidar);
-    // A LiDAR and IMU outrank the stereo pair.
-    assert_eq!(r(auto, "visor", true, true), PoseSource::Lidar);
-    assert_eq!(r(auto, "visor", false, false), PoseSource::FcEkf);
-    // A drone with a planar LiDAR and IMU navigates on the LiDAR pose.
-    assert_eq!(r(auto, "drone", true, true), PoseSource::Lidar);
-    assert_eq!(r(auto, "drone", true, false), PoseSource::FcEkf);
-    assert_eq!(
-        r(PoseProviderConfig::Lidar, "drone", false, false),
-        PoseSource::Lidar
-    );
-    assert_eq!(
-        r(PoseProviderConfig::FcEkf, "visor", true, true),
-        PoseSource::FcEkf
-    );
-    assert_eq!(
-        r(PoseProviderConfig::Vio, "visor", false, true),
-        PoseSource::Vio
-    );
-}
-
-#[test]
-fn lidar_settings_take_per_driver_blocks() {
-    let load = |v: Value| AtlasRuntimeConfig::from_values("", &values(&[(KEY_LIDAR, v)]));
-    let d = load(json!({})).unwrap().lidar;
-    assert_eq!((d.lidar_id.as_str(), d.imu.as_str()), ("lidar0", "imu0"));
-    assert_eq!(
-        (d.rplidar.device.as_str(), d.rplidar.baud),
-        ("auto", 460_800)
-    );
-    assert_eq!(d.livox.host_ip, None);
-    assert!(d
-        .livox
-        .sdk_library
-        .ends_with("liblivox_lidar_sdk_shared.so"));
-    let c = load(json!({
-        "lidar_id": "lidar1",
-        "rplidar": {"device": "tcp:192.168.50.1:7700"},
-        "livox": {"host_ip": "192.168.1.50", "lidar_ips": ["192.168.1.12"]},
-    }))
-    .unwrap()
-    .lidar;
-    assert_eq!(c.lidar_id, "lidar1");
-    assert_eq!(c.rplidar.device, "tcp:192.168.50.1:7700");
-    assert_eq!(c.rplidar.baud, 460_800);
-    assert_eq!(c.livox.host_ip.as_deref(), Some("192.168.1.50"));
-    assert_eq!(c.livox.lidar_ips, ["192.168.1.12"]);
-    // The old flat Livox keys and unknown driver keys are refused, naming the key.
-    assert_eq!(load(json!({"host_ip": "x"})).unwrap_err().key, KEY_LIDAR);
-    assert_eq!(
-        load(json!({"rplidar": {"port": "x"}})).unwrap_err().key,
-        KEY_LIDAR
     );
 }
 
@@ -340,35 +241,12 @@ fn the_pre_contract_override_shape_fails_loudly() {
 }
 
 #[test]
-fn nav_lanes_default_on_with_a_planar_lidar_and_placement_defaults_to_hybrid() {
+fn the_memory_budget_is_optional_and_never_negative() {
     let d = AtlasRuntimeConfig::from_values("", &BTreeMap::new()).unwrap();
-    assert_eq!(
-        d.nav_pose,
-        NavPoseMode::Always,
-        "the RPLIDAR device defaults to auto"
-    );
-    assert_eq!(d.placement, ComputePlacement::Hybrid);
     assert_eq!(d.memory_budget_mb, None);
-
-    let no_lidar = values(&[(KEY_LIDAR, json!({"rplidar": {"device": ""}}))]);
-    let c = AtlasRuntimeConfig::from_values("", &no_lidar).unwrap();
-    assert_eq!(c.nav_pose, NavPoseMode::Capture);
-
-    let set = values(&[
-        (KEY_NAV_POSE, json!("capture")),
-        (KEY_COMPUTE_PLACEMENT, json!("post_flight")),
-        (KEY_MEMORY_BUDGET_MB, json!(600)),
-    ]);
-    let c = AtlasRuntimeConfig::from_values("", &set).unwrap();
-    assert_eq!(c.nav_pose, NavPoseMode::Capture);
-    assert_eq!(c.placement, ComputePlacement::PostFlight);
+    let c = AtlasRuntimeConfig::from_values("", &values(&[(KEY_MEMORY_BUDGET_MB, json!(600))]))
+        .unwrap();
     assert_eq!(c.memory_budget_mb, Some(600));
-
-    let bad = values(&[(KEY_COMPUTE_PLACEMENT, json!("cloud"))]);
-    assert_eq!(
-        AtlasRuntimeConfig::from_values("", &bad).unwrap_err().key,
-        KEY_COMPUTE_PLACEMENT
-    );
     let neg = values(&[(KEY_MEMORY_BUDGET_MB, json!(-5))]);
     assert_eq!(
         AtlasRuntimeConfig::from_values("", &neg).unwrap_err().key,

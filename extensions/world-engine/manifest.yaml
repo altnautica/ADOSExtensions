@@ -52,19 +52,20 @@ agent:
     max_pids: 1024
   # The cap the host applies on the running node profile; `resources` is the
   # ceiling for a profile not listed. A 4 GB drone cannot give a reconstruction
-  # node's 16 GB to one plugin, so the drone and visor caps bound the live
-  # mapping stores (`atlas.memory_budget_mb` defaults to 80 % of this cap).
+  # node's 16 GB to one plugin, so the drone and visor caps bound the capture
+  # queues (`atlas.memory_budget_mb` defaults to 80 % of this cap). The
+  # Navigation extension carries the navigation share of each machine.
   resources_by_profile:
     drone:
       class: heavy
-      max_ram_mb: 768
-      max_cpu_percent: 200
-      max_pids: 128
+      max_ram_mb: 448
+      max_cpu_percent: 120
+      max_pids: 64
     visor:
       class: heavy
-      max_ram_mb: 1536
-      max_cpu_percent: 400
-      max_pids: 1024
+      max_ram_mb: 768
+      max_cpu_percent: 200
+      max_pids: 512
     ground-station:
       class: heavy
       max_ram_mb: 512
@@ -152,57 +153,6 @@ agent:
       size_bytes: 1
       arch_os: x86_64-windows
       profiles: [workstation, compute]
-    # Native capture helpers (x86_64-linux; aarch64-linux is a manual release
-    # step, see extensions/navigation/lidar-slam/basalt/README.md) with their licence texts, and
-    # uv for the on-device KISS-ICP environment sync.
-    - path: bin/x86_64-linux/basalt-ados
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-basalt-ados-x86_64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [drone, visor]
-    - path: bin/x86_64-linux/LICENSE-basalt-ados.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-basalt-ados-LICENSES-x86_64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [drone, visor]
-    - path: lib/x86_64-linux/liblivox_lidar_sdk_shared.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-livox-sdk2-x86_64-linux.so"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [visor]
-    - path: lib/x86_64-linux/LICENSE-livox-sdk2.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-livox-sdk2-LICENSE-x86_64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [visor]
-    - path: bin/aarch64-linux/uv
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-uv-aarch64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: aarch64-linux
-      profiles: [visor]
-    - path: bin/x86_64-linux/uv
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-uv-x86_64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [visor]
-    - path: bin/aarch64-linux/LICENSE-uv.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-uv-LICENSE-aarch64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: aarch64-linux
-      profiles: [visor]
-    - path: bin/x86_64-linux/LICENSE-uv.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-uv-LICENSE-x86_64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [visor]
     # The Rerun web viewer's wasm, served to the GCS half as a plugin asset.
     # Every profile serves the GCS module, so every profile fetches it.
     - path: gcs/assets/re_viewer_bg.wasm
@@ -245,12 +195,6 @@ agent:
     - id: video.whep.relay
     - id: sensors.rig.write
     - id: camera.control.write
-    # capture (visor): a serial-port LiDAR such as an RPLIDAR, opened through
-    # its USB serial bridge. Optional: without it the LiDAR driver cannot open
-    # the port and the visor captures without live LiDAR scans.
-    - id: hardware.uart
-      required: false
-      degraded_behavior: "No live serial LiDAR: the visor captures without LiDAR scans or LiDAR pose."
   contributes:
     services:
       - name: capture
@@ -261,8 +205,6 @@ agent:
         profiles: [workstation, compute]
         listen_ports: [8092]
     shared_topics:
-      - topic: plugin.world-engine.pose
-        subscribe_capability: telemetry.read
       - topic: plugin.world-engine.pointcloud
         subscribe_capability: plugin.world-engine.world.read
       - topic: plugin.world-engine.occupancy
@@ -271,12 +213,6 @@ agent:
         subscribe_capability: plugin.world-engine.world.read
       - topic: plugin.world-engine.mesh
         subscribe_capability: plugin.world-engine.world.read
-      - topic: plugin.world-engine.scan
-        subscribe_capability: telemetry.read
-      - topic: plugin.world-engine.map_status
-        subscribe_capability: telemetry.read
-      - topic: plugin.world-engine.lidar
-        subscribe_capability: telemetry.read
     tools:
       - name: capture_start
         description: "Start a capture session on this device, optionally tagged with site, floor and room."

@@ -1,23 +1,25 @@
 # Navigation
 
-GPS-denied navigation for ADOS drones. The plugin ships four
+GPS-denied navigation for ADOS drones and Visors. The plugin ships four
 selectable modes: optical flow with a rangefinder, optical flow
-without one, external navigation from a shared pose topic, and off.
+without one, external navigation from a shared pose topic, and off. Its
+`lidar-slam` service runs a LiDAR or VIO pose of its own and builds the
+live occupancy map from it.
 
-The agent half is a compiled **Rust** binary. It does not open a
-camera: it subscribes to the shared vision frame bus, pairs each frame
-with the closest IMU sample, runs the selected estimator, and emits the
-flow message for the configured firmware (`OPTICAL_FLOW` for ArduPilot
-and iNav, `OPTICAL_FLOW_RAD` for PX4; plus `DISTANCE_SENSOR` when the
-rangefinder is companion-wired) that the flight controller fuses into
-its estimator. It asks the flight controller for `RAW_IMU` at 100 Hz,
-`DISTANCE_SENSOR` at 20 Hz and its own `OPTICAL_FLOW` at 20 Hz. External
-navigation reads that flow for its `fc_flow` pre-arm row, and the
-world-engine lidar SLAM follows its ground velocity along a corridor its
-scans leave unconstrained. The GCS half mounts a node-detail tab with the mode
-list, sensors card, estimator card, telemetry charts, pre-arm status,
-and a fallback banner that fires when the estimator goes degraded or
-fails.
+The agent half is two compiled **Rust** processes. The entrypoint
+(`navigation`) does not open a camera: it subscribes to the shared vision
+frame bus, pairs each frame with the closest IMU sample, runs the selected
+estimator, and emits the flow message for the configured firmware
+(`OPTICAL_FLOW` for ArduPilot and iNav, `OPTICAL_FLOW_RAD` for PX4; plus
+`DISTANCE_SENSOR` when the rangefinder is companion-wired) that the flight
+controller fuses into its estimator. It asks the flight controller for
+`RAW_IMU` at 100 Hz, `DISTANCE_SENSOR` at 20 Hz and its own `OPTICAL_FLOW`
+at 20 Hz. External navigation reads that flow for its `fc_flow` pre-arm
+row, and the planar scan matcher follows its ground velocity along a
+corridor its scans leave unconstrained. The GCS half mounts a cockpit panel
+and an Agent page with the mode list, sensors card, estimator card,
+telemetry charts, pre-arm status, and a fallback banner that fires when the
+estimator goes degraded or fails.
 
 Camera calibration is a Kalibr-style `camchain.yaml` in the plugin's
 data directory, produced offline with Kalibr. The Rust agent reads the
@@ -45,8 +47,8 @@ advisory and does not stop the flight controller from arming.
 ## External navigation
 
 `external_nav` (ArduPilot) takes the pose another installed plugin
-publishes on a shared topic (default `plugin.navigation.pose`, the
-World Engine extension's planar lidar SLAM) and sends it to the flight
+publishes on a shared topic (default `plugin.navigation.pose`, this
+extension's own `lidar-slam` service) and sends it to the flight
 controller as `ODOMETRY` (#331) on component 197, at up to
 `external_nav.rate_hz` (30 Hz):
 
@@ -56,8 +58,8 @@ controller as `ODOMETRY` (#331) on component 197, at up to
   `y = -y`, `z = -z`, `yaw = -yaw`). `VISO_TYPE 1` aligns only the
   external position to the EKF's, not its yaw, so the EKF yaw stays on
   the compass (`EK3_SRC1_YAW 1`) unless the pose's map holds its own north
-  (the pose's `north` is `declared`, from the World Engine extension's
-  `atlas.takeoff_heading_deg`, or `gnss`); then `EK3_SRC1_YAW 6` takes yaw
+  (the pose's `north` is `declared`, from
+  `navigation.takeoff_heading_deg`, or `gnss`); then `EK3_SRC1_YAW 6` takes yaw
   from the pose. The external-nav set takes no velocity from the pose
   (never `EK3_SRC1_VELXY 6`: ArduPilot ignores the `ODOMETRY` velocity
   covariance); with an optical-flow sensor (`FLOW_TYPE` set) it takes
@@ -73,7 +75,7 @@ controller as `ODOMETRY` (#331) on component 197, at up to
   good, 0.30 m and 0.1 rad while degraded; z carries the horizontal
   variance because ArduPilot folds the three position variances into
   one error. A pose that reports its own horizontal uncertainty
-  (`sigma_xy_m`, the World Engine planar scan matcher's while it rides
+  (`sigma_xy_m`, the `lidar-slam` planar scan matcher's while it rides
   its motion prior unmatched) widens the position σ to it where it is
   larger. `quality` is 100 (good) or 50 (degraded), and 30 while that
   σ is over 1 m.
@@ -184,6 +186,59 @@ otherwise):
 Fields a mode does not produce are `null`. The Navigation page shows it
 as the navigation feed card, and the cockpit panel shows it in flight.
 
+## LiDAR SLAM and the live map
+
+The `lidar-slam` service (`navigation-lidar-slam`, on drones and Visors)
+runs the pose provider `navigation.pose_provider` names: `lidar` (2D scan
+matching for a planar LiDAR, KISS-ICP for a 3D one), `vio` (Basalt on a
+stereo pair and IMU) or `off`. `auto` (default) picks `lidar` when the rig
+declares the configured LiDAR and IMU, else `vio` on a Visor with a front
+stereo pair and IMU, else none. The flight controller's own EKF is not a
+Navigation pose: it is the flight controller's fallback source set. A
+provider that cannot start (no rig document, a missing binary) leaves the
+service without a pose and says why in its log and on
+`GET /navigation/status`; the rig's LiDAR still publishes its binned scans
+for the obstacle feed.
+
+It publishes:
+
+| Topic | Rate | Payload |
+|---|---|---|
+| `plugin.navigation.pose` | pose interval | Body pose in `map_ned` (north-aligned: x north, y east, z down; the planar SLAM world rotated to north, origin at the first scan; the north is latched from `navigation.takeoff_heading_deg` when set, else taken from the flight controller's heading at take-off (followed while the vehicle sits within 0.5 m of where the first pose was taken, so a heading that turns onto true north once the EKF origin is set is the one kept); then moved onto the FC's `LOCAL_POSITION_NED` by a yaw and offset fitted against the EKF's GNSS track once the FC's `GPS_RAW_INT` has held a 3D fix for 15 s, frozen when GNSS goes; z is the FC's height above the first pose), with `ts_ms` (the unix time the pose describes: a lidar pose's scan's first return, not the publish time) and `t_ns` (the same instant on the host monotonic clock), `health`, `frame`, `source`, `north` (`declared`, `fc_heading` or `gnss`: where the map's north comes from) and, from the planar scan matcher, `sigma_xy_m` (horizontal one-sigma uncertainty in metres: growing by half the distance the motion prior carries the pose while scans ride it unmatched, and by half the height climbed while a climb without a measured velocity is matched band by band, up to 5; a matched scan otherwise carries the sigma of the submap it matched in, 0.05 for one started at a matched pose). Map lanes wait for the first heading |
+| `plugin.navigation.scan` | per scan | The scan binned to 360 one-degree bins in the body FRD frame, nearest range per bin, `0` for no return. Every return is kept, airframe and floor included (the agent pilot reads an empty bin as free space); `blocked_bins` lists the bins the rig LiDAR's `blocked_azimuth_deg` sectors cover, absent when there are none |
+| `plugin.navigation.map_status` | 1 Hz | Placement, this service's resident memory (`VmRSS`, null when unreadable) beside its map budget, voxel size, sweep points, mapped area, `pose_provider` (null when none runs), and `imu_feed` (the FC IMU feed's state, reason and `RAW_IMU` rate while `navigation.lidar.imu` is `fc` and the planar LiDAR pose is the one running; null otherwise, including KISS-ICP on a 3D LiDAR) |
+| `plugin.navigation.lidar` | 1 Hz while the rig declares `navigation.lidar.lidar_id` | The LiDAR link: `v` (2), `device` (the opened port, the resolved `/dev/serial/by-id` path under `auto`; null when never opened), `connected`, `health` (`good`, `warning` or `error`) and `health_code` from the device's latest (re)connect (null when it never connected or the driver has no health report, as on the Livox), `rate_hz` (revolutions per second over the last second; null when not connected), `returns_last_scan` (the returns in the newest scan, `0` when it saw nothing; null when not connected or before the first scan), and `scans`, `empty_scans` (scans with no return at all), `dropped_scans` and `reconnects` since the run started. A scan arriving says the link is up, not that the sensor sees anything: an RPLIDAR behind a blocked window, with a failed receiver, facing open sky or in open air delivers scans with no returns. A Livox delivers a scan only around a valid point, so one that sees nothing stops sending scans and reads `connected: false`. A LiDAR absent when the service starts is retried every 2 s and reports `connected: false` with null device, health, rate and returns until it answers |
+| `plugin.navigation.occupancy` | 1 Hz | Changed 64×64-cell tiles at 5 cm as grey PNG (0 occupied, 254 free, 205 unknown), `kind: "live"` |
+| `plugin.navigation.scan_polar` | per placed scan, only with `navigation.map_placement = stream` | The placed planar scan with its sensor pose in `map_ned`, for a reconstruction node that builds the full-resolution map |
+| `plugin.navigation.scan_raw` | per scan, only while a capture session records | One LiDAR scan as measured, in the sensor frame, in parts of at most 3,500 points (17 bytes each: `x, y, z` `f32`, `intensity` `u8`, `t_offset_ns` `u32`), for the capture recorder |
+| `plugin.navigation.pose_track` | 10 Hz | Every estimate since the last batch in the provider's own world frame, for a capture session posed by Navigation |
+
+The first four need `telemetry.read`; the last four need
+`plugin.navigation.map.read`, which this extension declares. Occupancy
+tiles farther than 200 m from the vehicle, or past the occupancy share of
+the budget (farthest first), are written to the service's data directory
+and leave RAM.
+
+Routes on the plugin's HTTP socket
+(`/api/plugins/com.altnautica.navigation/x/…`):
+
+| Route | Method | Serves |
+|---|---|---|
+| `/navigation/status` | GET | provider, tracking health, pose age, LiDAR link, the map status |
+| `/navigation/sweep?since=<seq>` | GET | the live sweep cloud: a 24-byte little-endian header (`seq: u64`, `count: u32`, `voxel_m: f32`, `reset: u32`, `reserved: u32`) then `count` `f32` `x, y, z` triples in `map_ned`; the deltas after `since`, or the whole cloud with `reset = 1` without `since`, with one older than the last 64 deltas, or after the cloud was coarsened |
+| `/navigation/config` | PUT | patch the `navigation.*` keys; the patch is resolved with the stored keys and refused whole when any value is invalid |
+
+`cargo run --release -p navigation-lidar-slam --example scan2d_replay --
+<lidar0.polar.zst>` replays a recorded scan log through the scan matcher and
+prints the wall time, a fixed workload for comparing CPUs.
+
+Native helpers: basalt-ados (BSD-3) and the Livox SDK2 library (MIT) are
+release payloads with their licence texts. x86_64-linux builds in the
+release workflow; aarch64-linux is a manual release step
+(`lidar-slam/basalt/README.md`, `lidar-slam/livox/build-sdk2.sh`). The
+KISS-ICP odometry environment is built on the device by `uv sync --frozen` on
+the first LiDAR start, which needs network once.
+
 ## Public docs
 
 Public docs (full mode breakdown, per-mode pre-arm matrix, fallback
@@ -270,8 +325,8 @@ pnpm --filter ./extensions/navigation/gcs test
 Agent (Rust) build + tests, from the repo root:
 
 ```sh
-cargo build -p navigation
-cargo test -p navigation
+cargo build -p navigation -p navigation-lidar-slam
+cargo test -p navigation -p navigation-lidar-slam
 ```
 
 Calibration helper (Python) tests:
@@ -282,21 +337,10 @@ python -m pip install -e .
 python -m pytest -q
 ```
 
-The shipped binary is statically linked against musl so one build runs
-on every supported board. The `aarch64-unknown-linux-musl` target and
-`musl-tools` (for the musl-gcc linker) are prerequisites:
-
-```sh
-rustup target add aarch64-unknown-linux-musl
-sudo apt-get install -y musl-tools     # Debian / Ubuntu
-```
-
-To produce a `.adosplug` (cross-compiles the Rust binary to the
-aarch64 musl target and stages it at the manifest entrypoint):
-
-```sh
-./scripts/pack-rust.sh navigation
-```
+The shipped binaries are statically linked against musl so one build runs
+on every supported board; the release workflow cross-compiles them with
+zig (`cargo zigbuild`) and ships them as install-time payloads with the
+native helpers (`scripts/navigation-payloads.tsv`).
 
 ## Surfaces contributed
 
@@ -331,18 +375,23 @@ Agent:
 - `vision.frame.read` (reads normalized frames from the shared vision
   frame bus; the plugin does not open a camera, so the camera / UVC /
   CSI / depth permissions are not requested)
-- `hardware.uart` (the companion-wired TF-Luna)
+- `hardware.uart`, optional (the companion-wired TF-Luna and a serial
+  LiDAR such as an RPLIDAR)
 - `telemetry.extend`, `event.publish`
-- `event.subscribe`, `telemetry.read` (the shared pose and scan topics)
+- `event.subscribe`, `telemetry.read` (the shared pose and scan topics,
+  and the capture state `lidar-slam` streams raw scans for)
+- `node.info.read` (the node profile `lidar-slam` picks its provider by)
 - `mavlink.read`, `mavlink.write`
 - `estimator.pose.inject` (`ODOMETRY` and `SET_GPS_GLOBAL_ORIGIN` reach
   the flight controller's state estimator; the host requires it for both)
 - `mavlink.component.vio` (the host reserves components 197 and 198
   for kind `vio`)
+- `sensor.stream.read` (`lidar-slam`: the LiDAR and IMU from the sensor
+  bus)
 
 GCS:
 
-- `ui.slot.node-detail-tab`, `ui.slot.flight-skill`
+- `ui.slot.cockpit-panel`, `ui.slot.node-agent-page`, `ui.slot.flight-skill`
 - `telemetry.subscribe.navigation`
 
 Risk band: high. The plugin writes MAVLink and feeds a velocity source
@@ -374,7 +423,17 @@ fields:
   `rate_hz`.
 
 The agent reads these keys live from the per-drone store once a second
-and restarts itself when any of them changes.
+and restarts itself when any of them changes. The `lidar-slam` service
+reads its own keys every 5 s and restarts its run on a change:
+
+| Key | Purpose |
+|---|---|
+| `navigation.map_placement` | Where the heavy map is built: `onboard` (5 cm sweep cloud on the drone), `stream` (placed scans stream to a reconstruction node on `plugin.navigation.scan_polar`; the drone keeps a 20 cm cloud), `post_flight` (record, upload after landing), `hybrid` (10 cm on board plus the post-flight upload; default). The navigation map and the live occupancy always stay on board |
+| `navigation.memory_budget_mb` | RAM the live map may hold (sweep cloud 60 %, occupancy 40 %); unset, 80 % of this extension's memory cap. A full sweep cloud doubles its voxel (`sweep_cloud_coarsened`) |
+| `navigation.pose_provider` | Pose provider: `auto` (default), `vio` (on-device visual-inertial), `lidar` (on-device LiDAR odometry: 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one) or `off`. `auto` picks `lidar` when the rig has the configured LiDAR and IMU (on a drone too, where the LiDAR pose is the navigation source the flight controller fuses), else on a Visor `vio` with a front stereo pair and IMU, else none |
+| `navigation.lidar` | LiDAR input: `lidar_id` (rig sensor; its `lidar.model` picks the driver, `rplidar-c1` or `livox-mid360`), `imu` (the rig IMU a planar LiDAR is levelled with; `fc`, for a companion without an IMU, takes the flight controller's `RAW_IMU` gyro with gravity in the FC's reported attitude as the specific force (until `RAW_IMU` arrives, the attitude's roll and pitch only, never its yaw, which under external navigation is the matcher's own heading fed back; the matcher learns the gyro's z bias from the scans; the planar pose is degraded while the feed is that stand-in, or `RAW_IMU` stalls for over 250 ms or arrives under 40 Hz, logged as `nav_imu_feed_degraded`) and, when the FC has a flow sensor, its `OPTICAL_FLOW` (quality 128 and up) times its downward `DISTANCE_SENSOR` range as the ground velocity the matcher follows along a corridor the scans leave unconstrained; each sample reaches the matcher as its message arrives), and per-driver blocks `rplidar` (`device`: serial port, `tcp:<host>:<port>` or `auto`; `baud`) and `livox` (`sdk_library`, `host_ip`, `lidar_ips`). A planar LiDAR's matcher also takes the FC's EKF height and climb rate (`LOCAL_POSITION_NED`): it neither matches nor maps while the scan plane climbs or descends faster than 0.15 m/s, riding the IMU heading and the flow velocity, and keeps each submap to 0.3 m of height, since a planar scan cuts sloped walls at a different outline at every height |
+| `navigation.pose_publish_interval_ms` | Interval between published navigation poses in the poses' own measurement time, in ms (100; 33 for 30 Hz, bounded by the provider's own rate). Kept on average; a pose up to half an interval early is published, so a provider at exactly the interval loses none. Poses are polled every 10 ms and published as soon as the gate allows |
+| `navigation.takeoff_heading_deg` | The heading the vehicle faces where it starts, degrees clockwise from true north. Set, the navigation map's north is latched from it once at the first pose and never taken from the flight controller (pose `north: declared`), so the flight controller may take its yaw from the map (ArduPilot `EK3_SRCn_YAW` 6). Unset (default), the north follows the flight controller's heading until take-off (`north: fc_heading`), which must then not be the EKF's yaw source |
 
 ## MAVLink components
 

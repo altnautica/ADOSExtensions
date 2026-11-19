@@ -1,0 +1,34 @@
+# Navigation release payloads: the files a node fetches at install instead
+# of finding them in the .adosplug archive. One row per release asset:
+#
+#   <asset-name> <path-in-archive> <arch_os|-> <profiles|->
+#
+# The asset name is the GitHub release asset (and the file name the release
+# workflow stages it under). The workflow appends a fifth column, the
+# download URL, then hands the list to `scripts/pack-rust.sh
+# --payload-manifest`. Every `agent.binaries` path in
+# extensions/navigation/manifest.yaml needs a row here.
+navigation-aarch64-linux             bin/aarch64-linux/navigation             aarch64-linux  -
+navigation-x86_64-linux              bin/x86_64-linux/navigation              x86_64-linux   -
+navigation-lidar-slam-aarch64-linux  bin/aarch64-linux/navigation-lidar-slam  aarch64-linux  -
+navigation-lidar-slam-x86_64-linux   bin/x86_64-linux/navigation-lidar-slam   x86_64-linux   -
+# Native helpers of the lidar-slam service, built on the x86_64-linux release
+# leg by the pinned upstream build scripts (glibc, Ubuntu 24.04 runner):
+#   extensions/navigation/lidar-slam/basalt/build.sh --arch x86_64 --out <dir>
+#     -> <dir>/bin/x86_64-linux/basalt-ados; its licence file is Basalt's and
+#        basalt-ados's BSD-3 texts plus every vcpkg port's copyright file.
+#   extensions/navigation/lidar-slam/livox/build-sdk2.sh --arch x86_64 --out <dir>
+#     -> <dir>/lib/x86_64-linux/{liblivox_lidar_sdk_shared.so,LICENSE-livox-sdk2.txt}
+# aarch64-linux rows are added once that build is part of the release (see
+# extensions/navigation/lidar-slam/basalt/README.md and livox/build-sdk2.sh).
+navigation-basalt-ados-x86_64-linux          bin/x86_64-linux/basalt-ados                   x86_64-linux  drone,visor
+navigation-basalt-ados-LICENSES-x86_64-linux bin/x86_64-linux/LICENSE-basalt-ados.txt       x86_64-linux  drone,visor
+navigation-livox-sdk2-x86_64-linux.so        lib/x86_64-linux/liblivox_lidar_sdk_shared.so  x86_64-linux  visor
+navigation-livox-sdk2-LICENSE-x86_64-linux   lib/x86_64-linux/LICENSE-livox-sdk2.txt        x86_64-linux  visor
+# uv runs the on-device `uv sync --frozen` of the KISS-ICP odometry
+# environment; the release workflow stages the pinned, checksum-verified
+# musl build and its MIT licence.
+navigation-uv-aarch64-linux                  bin/aarch64-linux/uv                           aarch64-linux visor
+navigation-uv-x86_64-linux                   bin/x86_64-linux/uv                            x86_64-linux  visor
+navigation-uv-LICENSE-aarch64-linux          bin/aarch64-linux/LICENSE-uv.txt               aarch64-linux visor
+navigation-uv-LICENSE-x86_64-linux           bin/x86_64-linux/LICENSE-uv.txt                x86_64-linux  visor

@@ -5,6 +5,25 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 ## [1.0.0] (unreleased)
 
+Navigation: optical flow, LiDAR SLAM, VIO and the flight-controller bridge
+in one extension.
+
+### Added
+
+- The `lidar-slam` service (`navigation-lidar-slam`, drone and Visor) runs
+  the LiDAR pose (planar scan matching, KISS-ICP) or the stereo VIO pose,
+  the north-aligned navigation map, the live occupancy and sweep cloud, and
+  the RPLIDAR and Livox drivers, configured by the `navigation.*` keys
+  (`pose_provider`, `pose_publish_interval_ms`, `takeoff_heading_deg`,
+  `vio`, `lidar`, `memory_budget_mb`, `map_placement`). It publishes
+  `plugin.navigation.{pose,scan,map_status,lidar,occupancy,scan_polar,scan_raw,pose_track}`
+  and serves `/navigation/{status,sweep,config}`. The live sweep cloud is
+  served on `GET /navigation/sweep` instead of a topic.
+- The pose carries `t_ns`, the instant it describes on the host monotonic
+  clock, beside `ts_ms`.
+- The archive ships its binaries, basalt-ados, the Livox SDK2 library and
+  uv as install-time payloads.
+
 ### Changed
 
 - The extension is `com.altnautica.navigation`, "ADOS Navigation"
@@ -12,7 +31,15 @@ All notable changes to the Navigation extension (Vision Navigation before
   `navigation-v*`). An installed `com.altnautica.vision-nav` is uninstalled
   and this one installed in its place; there is no migration of its config.
 - The external pose and planar-scan topic defaults are
-  `plugin.navigation.pose` and `plugin.navigation.scan`.
+  `plugin.navigation.pose` and `plugin.navigation.scan`, which this
+  extension's `lidar-slam` service publishes.
+- `navigation.pose_provider` has no `fc_ekf`: the flight controller's own
+  EKF is its fallback source set, not a Navigation pose. With no LiDAR or
+  VIO rig, `auto` runs no provider.
+- The map status reports only navigation facts (`placement`, memory,
+  voxel, sweep points, area, `pose_provider`, `imu_feed`); the capture
+  session, keyframe drops, upload and stream progress are reported by the
+  processes that own them. The pose no longer waits for a capture session.
 - The node-detail "Vision Nav" tab is gone. The same bundle renders a
   "Navigation" page in the drone's Agent tab (under Video and vision) and a
   "Navigation" cockpit panel, routing on the contribution it is mounted as.
