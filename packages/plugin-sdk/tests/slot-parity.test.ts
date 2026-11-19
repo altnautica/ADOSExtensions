@@ -1,7 +1,7 @@
 /**
  * The SDK's slot union must equal the GCS host's slot registry.
  *
- * The registry in `ADOSMissionControl/src/lib/plugins/types.ts` decides what
+ * The registry in `ADOSMissionControlGCS/src/lib/plugins/types.ts` decides what
  * can actually mount; this union is what a plugin author writes against. When
  * they diverge the failure is invisible: the manifest parses on both sides,
  * the install dialog shows an "unknown capability" placeholder, and the
@@ -17,7 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import type { PluginSlotName } from "../src/manifest";
 
-/** `PLUGIN_SLOTS` in ADOSMissionControl/src/lib/plugins/types.ts. */
+/** `PLUGIN_SLOTS` in ADOSMissionControlGCS/src/lib/plugins/types.ts. */
 const HOST_SLOTS = [
   "fc.tab",
   "hardware.tab",

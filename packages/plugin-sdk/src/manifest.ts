@@ -6,7 +6,7 @@
  * contribution rows; this module mirrors the same shapes so plugin authors
  * get a typed, documented surface to build their manifest against without
  * depending on the GCS source tree. The authoritative parsers live in
- * `ADOSMissionControl/src/lib/plugins/{parameters,contributions}/parse.ts` and
+ * `ADOSMissionControlGCS/src/lib/plugins/{parameters,contributions}/parse.ts` and
  * `.../parameters/schema.ts`; these declarations track them field-for-field.
  *
  * The two iframe-mounting kinds the host already supported — skills and the

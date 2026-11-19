@@ -1,6 +1,6 @@
 /**
  * Pure helpers for the declarative parameter model. These mirror the host's
- * validator (`ADOSMissionControl/src/lib/plugins/parameters/schema.ts`) so a
+ * validator (`ADOSMissionControlGCS/src/lib/plugins/parameters/schema.ts`) so a
  * plugin author can unit-test the values their settings produce against the
  * exact rules the GCS applies on commit — validate, clamp/quantize, infer the
  * default, and resolve the effective binding/widget.

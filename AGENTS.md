@@ -168,7 +168,7 @@ tooling or host contracts require a broader update.
 
 - [ADOS Drone Agent](https://github.com/altnautica/ADOSDroneAgent) - Python
   agent runtime for extension agent halves.
-- [ADOS Mission Control](https://github.com/altnautica/ADOSMissionControl) -
+- [ADOS Mission Control](https://github.com/altnautica/ADOSMissionControlGCS) -
   browser GCS runtime for extension UI halves.
 - [ADOS Documentation](https://github.com/altnautica/Documentation) - public
   docs for plugin authoring and distribution.

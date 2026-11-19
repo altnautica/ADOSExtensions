@@ -1,6 +1,6 @@
 /**
  * Wire protocol shared by host and plugin. The plugin host owns the
- * authoritative version in `ADOSMissionControl/src/lib/plugins/types.ts`;
+ * authoritative version in `ADOSMissionControlGCS/src/lib/plugins/types.ts`;
  * this module re-declares the same shape so plugin authors can build
  * without depending on the GCS source tree.
  */
