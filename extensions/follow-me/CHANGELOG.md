@@ -4,6 +4,17 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [Unreleased]
+
+### Added
+
+- The follow read-back carries `frame` (`fc_local_ned`, the frame of every
+  position in it), `target_bbox` (the followed track's box from its newest
+  batch while the lock is held, with its frame size and the frame's capture
+  times `ts_ms` and `ts_sensor_ms`) and `predicted_ned` (the predicted
+  subject position every 0.5 s over the next 5 s while there is an
+  estimate), so a replay draws the lock box and the prediction from the run.
+
 ## [0.5.2] - 2026-11-20
 
 ### Changed

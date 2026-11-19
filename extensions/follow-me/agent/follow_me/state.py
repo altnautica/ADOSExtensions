@@ -13,6 +13,10 @@ from dataclasses import asdict, dataclass, field
 # The topic the agent publishes the follow read-back on and the GCS skill
 # + tab subscribe to. Must equal the manifest skill ``state.topic``.
 FOLLOW_STATE_TOPIC = "follow.state"
+# The frame of every position in the read-back (target_ned, predicted_ned,
+# predicted_path_ne, vantage_ne, hold_ne, search_area): the flight
+# controller's local NED, metres from its EKF origin, as the pilot's.
+FRAME_FC_LOCAL_NED = "fc_local_ned"
 # One-shot events: a smart re-acquire designated a new track, and the follow
 # gave the subject up.
 FOLLOW_REACQUIRED_TOPIC = "follow.reacquired"
@@ -333,7 +337,16 @@ class FollowState:
     depression_deg: float | None = None
     target_ned: list[float] | None = None
     target_vel_ned: list[float] | None = None
+    # The filter's predicted subject position (north, east) every 0.5 s from
+    # now over the next 5 s, while it has an estimate.
+    predicted_ned: list[list[float]] | None = None
+    # The followed track's box from its newest batch, while the lock is
+    # held: {camera_id, frame_w, frame_h, x, y, w, h, ts_ms, ts_sensor_ms,
+    # track_id}, `ts_ms` the frame's capture time on the host monotonic clock
+    # and `ts_sensor_ms` on the simulation clock (None off a simulator).
+    target_bbox: dict[str, object] | None = None
     predicted_bbox: dict[str, object] | None = None
+    frame: str = FRAME_FC_LOCAL_NED
     setpoint_rate_hz: float = 0.0
     agl_m: float | None = None
     agl_source: str | None = None
@@ -390,6 +403,7 @@ class FollowState:
 
 __all__ = [
     "FOLLOW_STATE_TOPIC",
+    "FRAME_FC_LOCAL_NED",
     "FOLLOW_REACQUIRED_TOPIC",
     "FOLLOW_LOST_TOPIC",
     "FOLLOW_STOPPED_TOPIC",

@@ -314,7 +314,11 @@ The other `follow.state` fields:
 
 - **Range:** `range_m`, `range_sigma_m`, `range_cues`.
 - **Subject:** `target_speed_mps`, `bearing_deg`, `depression_deg`,
-  `target_ned`, `target_vel_ned`, `predicted_bbox`.
+  `target_ned`, `target_vel_ned`, `predicted_ned` (every 0.5 s over the
+  next 5 s), `predicted_bbox`, `target_bbox` (the locked box with its
+  frame's capture times `ts_ms` and `ts_sensor_ms`).
+- **Frame:** `frame`, `fc_local_ned`: every position above is in the flight
+  controller's local NED.
 - **Height:** `agl_m`, `agl_source`, `height_raised`.
 - **Re-acquire:** `reacquire_mode`, `uncertain_mode`, `predictive_search`,
   `reacquire_remaining_s`, `search_budget_s`, `search_step`, `search_area`,

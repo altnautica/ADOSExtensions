@@ -355,6 +355,7 @@ class ReadbackMixin:
                 state.height_setpoint_m = cfg.follow_height_m
         if self._sighting is not None and self._tracker.has_lock:
             state.confidence = _r(float(self._sighting.confidence), 3)
+            state.target_bbox = _sighting_box(self._sighting)
         if self._pose.attitude.is_fresh(now):
             agl, source = self._agl(now)
             state.agl_m = _r(agl)
@@ -365,6 +366,7 @@ class ReadbackMixin:
             state.target_ned = [round(x[0], 2), round(x[1], 2)]
             state.target_vel_ned = [round(x[2], 2), round(x[3], 2)]
             state.target_speed_mps = _r(math.hypot(x[2], x[3]))
+            state.predicted_ned = _predicted_ned(self._filter, now)
         if cfg is not None:
             limit = effective_limit(cfg.max_speed_mps, self._nav_feed, now)
             state.speed_limit_mps = limit
@@ -422,6 +424,44 @@ class ReadbackMixin:
             "heading_deg": round(area.heading_deg, 1),
         }
         state.predicted_path_ne = [[n, e] for n, e in predicted_path(self._filter, now)] or None
+
+
+# The read-back's predicted subject positions: every PREDICTED_STEP_S over
+# PREDICTED_HORIZON_S from now.
+PREDICTED_STEP_S = 0.5
+PREDICTED_HORIZON_S = 5.0
+
+
+def _predicted_ned(filt: Any, now: float) -> list[list[float]] | None:
+    """The filter's predicted subject position (north, east) at now and every
+    PREDICTED_STEP_S after it, up to PREDICTED_HORIZON_S or as far as it
+    still predicts."""
+    out: list[list[float]] = []
+    for k in range(int(PREDICTED_HORIZON_S / PREDICTED_STEP_S) + 1):
+        pred = filt.predicted(now + k * PREDICTED_STEP_S)
+        if pred is None:
+            break
+        out.append([round(pred[0][0], 2), round(pred[0][1], 2)])
+    return out or None
+
+
+def _sighting_box(s: Any) -> dict[str, object]:
+    """The followed track's box as the read-back carries it, with its frame
+    size and capture times."""
+    w, h = s.frame_wh if s.frame_wh else (None, None)
+    b = s.bbox
+    return {
+        "camera_id": s.camera_id,
+        "track_id": s.track_id,
+        "frame_w": w,
+        "frame_h": h,
+        "x": round(float(b.x), 1),
+        "y": round(float(b.y), 1),
+        "w": round(float(b.width), 1),
+        "h": round(float(b.height), 1),
+        "ts_ms": s.ts_ms,
+        "ts_sensor_ms": s.ts_sensor_ms,
+    }
 
 
 __all__ = ["ReadbackMixin"]
