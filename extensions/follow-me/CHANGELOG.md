@@ -8,6 +8,8 @@ uses independent semantic versioning per extension.
 
 ### Added
 
+- Follow-Me runs on ADOS time (`ados.sdk.clock`): its loop, freshness marks and windows follow the simulator's clock on a node running at another speed, and wall time otherwise. Needs agent 0.124.0.
+
 - The follow read-back carries `frame` (`fc_local_ned`, the frame of every
   position in it), `target_bbox` (the followed track's box from its newest
   batch while the lock is held, with its frame size and the frame's capture

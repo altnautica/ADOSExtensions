@@ -1,0 +1,10 @@
+# Files on ADOS time and the wall-clock uses they keep (check-clock-seam.py).
+#   seam  <path>
+#   allow <path> <pattern> -- <reason>
+
+seam extensions/navigation/agent/src/pipeline/extnav.rs
+seam extensions/navigation/agent/src/mavlink_emit.rs
+seam extensions/follow-me/agent/follow_me/fc_state.py
+seam extensions/follow-me/agent/follow_me/loop.py
+
+allow extensions/navigation/agent/src/mavlink_emit.rs Instant::now() -- the send-error log rate limit is real time

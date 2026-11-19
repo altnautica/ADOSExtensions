@@ -29,6 +29,7 @@ from collections import deque
 from dataclasses import dataclass, replace
 from typing import Any
 
+from ados.sdk import clock
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 
 from follow_me import fc_state, mavlink_frames, setpoint
@@ -228,7 +229,7 @@ class FollowLoopMixin:
 
     async def _follow_loop(self) -> None:
         while True:
-            await asyncio.sleep(_LOOP_PERIOD)
+            await clock.sleep(_LOOP_PERIOD)
             try:
                 await self._housekeeping(fc_state.monotonic())
                 await self._tick()

@@ -178,8 +178,8 @@ describe("manifest 0.5 release", () => {
     expect(keys).not.toContain("reacquire_window_s");
   });
 
-  it("needs the agent that lets it read Navigation's shared state topic", () => {
-    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.122.0");
+  it("needs the agent with Navigation's shared state topic and ADOS time", () => {
+    expect(/^\s+ados_version: "([^"]+)"/m.exec(text)?.[1]).toBe(">=0.124.0");
   });
 
   it("may send commands, for the hold prompt's actions", () => {

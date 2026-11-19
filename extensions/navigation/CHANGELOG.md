@@ -3,6 +3,12 @@
 All notable changes to the Navigation extension (Vision Navigation before
 1.0.0).
 
+## [Unreleased]
+
+### Fixed
+
+- Navigation runs on ADOS time (`ados_sdk::clock`): the external-nav, obstacle and state loops and every freshness and rate tick in sim time on a node following a simulator's clock. A pose's wall-clock age is scaled by the simulator's speed before it dates an `ODOMETRY` (a scan at 3× read three times fresher than it was); running as fast as the simulator can, a pose is dated at its receipt. Needs agent 0.124.0.
+
 ## [1.0.0] - 2026-11-20
 
 Navigation: optical flow, LiDAR SLAM, VIO and the flight-controller bridge

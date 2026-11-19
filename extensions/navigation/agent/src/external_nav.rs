@@ -243,11 +243,27 @@ impl PoseSample {
 /// time for the flight controller to fuse it where it belongs. A pose is
 /// never later than its receipt `recv_ns` nor older than [`MAX_POSE_AGE_NS`]
 /// before it; an unstamped pose (`ts_ms` 0) is taken at its receipt.
-pub fn measured_at_ns(ts_ms: i64, now_unix_ms: i64, now_ns: i64, recv_ns: i64) -> i64 {
+///
+/// The stamp's age is wall time; `now_ns` and `recv_ns` are ADOS time.
+/// `wall_to_ados` is how much ADOS time passes per wall second: 1 on a real
+/// node, the simulator's speed on a node following its clock (3 at 3×, so a
+/// 50 ms old scan is 150 ms of sim time old). `None` (a simulator running
+/// as fast as it can, with no fixed ratio) takes the pose at its receipt.
+pub fn measured_at_ns(
+    ts_ms: i64,
+    now_unix_ms: i64,
+    now_ns: i64,
+    recv_ns: i64,
+    wall_to_ados: Option<f64>,
+) -> i64 {
+    let Some(k) = wall_to_ados.filter(|k| k.is_finite() && *k > 0.0) else {
+        return recv_ns;
+    };
     if ts_ms <= 0 {
         return recv_ns;
     }
-    let t = now_ns - (now_unix_ms - ts_ms).saturating_mul(1_000_000);
+    let age_ns = ((now_unix_ms - ts_ms) as f64 * 1e6 * k) as i64;
+    let t = now_ns - age_ns;
     t.clamp(recv_ns - MAX_POSE_AGE_NS, recv_ns)
 }
 

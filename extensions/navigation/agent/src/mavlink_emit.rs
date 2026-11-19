@@ -431,10 +431,11 @@ pub fn send_refusal(reply: &rmpv::Value) -> Option<String> {
     None
 }
 
-/// Monotonic clock in nanoseconds.
+/// ADOS time in nanoseconds (`ados_sdk::clock`): monotonic on a real node,
+/// the simulator's time on a node following its clock. Every freshness,
+/// rate and stamp in this plugin reads it.
 pub fn monotonic_ns() -> i64 {
-    static EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
-    EPOCH.elapsed().as_nanos() as i64
+    ados_sdk::clock().now_ns() as i64
 }
 
 #[cfg(test)]

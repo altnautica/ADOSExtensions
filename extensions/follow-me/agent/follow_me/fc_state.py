@@ -13,9 +13,10 @@ from __future__ import annotations
 import asyncio
 import bisect
 import math
-import time
 from collections import deque
 from typing import Any
+
+from ados.sdk import clock
 
 from follow_me import mavlink_frames
 from follow_me.freshness import FreshnessGate
@@ -116,9 +117,10 @@ _PX4_MAIN_MODE_OFFBOARD = 6
 
 def monotonic() -> float:
     """The one clock every freshness mark and window check in this plugin
-    reads. Routed through a single function so the whole staleness surface
-    can be driven from a test without sleeping through real windows."""
-    return time.monotonic()
+    reads: ADOS time (``ados.sdk.clock``), the simulator's when the node
+    follows it. Routed through a single function so the whole staleness
+    surface can be driven from a test without sleeping through real windows."""
+    return clock.now()
 
 
 class FcClock:

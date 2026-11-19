@@ -261,16 +261,31 @@ fn builder_needs_two_samples_then_reports_velocity() {
 #[test]
 fn the_measurement_time_comes_from_the_pose_stamp() {
     let (now_unix, now, recv) = (1_700_000_000_200, 10_200_000_000, 10_150_000_000);
+    let real = Some(1.0);
     assert_eq!(
-        measured_at_ns(1_700_000_000_020, now_unix, now, recv),
+        measured_at_ns(1_700_000_000_020, now_unix, now, recv, real),
         10_020_000_000
     );
-    assert_eq!(measured_at_ns(1_700_000_000_190, now_unix, now, recv), recv);
+    assert_eq!(measured_at_ns(1_700_000_000_190, now_unix, now, recv, real), recv);
     assert_eq!(
-        measured_at_ns(1_699_999_990_000, now_unix, now, recv),
+        measured_at_ns(1_699_999_990_000, now_unix, now, recv, real),
         recv - MAX_POSE_AGE_NS
     );
-    assert_eq!(measured_at_ns(0, now_unix, now, recv), recv);
+    assert_eq!(measured_at_ns(0, now_unix, now, recv, real), recv);
+}
+
+/// At 3× sim time a scan 50 ms of wall time old is 150 ms of sim time old;
+/// running as fast as the simulator can, there is no ratio and the pose is
+/// taken at its receipt. Before, a scan at N× read as N× fresher than it was.
+#[test]
+fn a_sim_clock_scales_the_pose_age() {
+    let (now_unix, now, recv) = (1_700_000_000_200, 10_200_000_000, 10_150_000_000);
+    assert_eq!(
+        measured_at_ns(1_700_000_000_150, now_unix, now, recv, Some(3.0)),
+        10_050_000_000
+    );
+    assert_eq!(measured_at_ns(1_700_000_000_150, now_unix, now, recv, None), recv);
+    assert_eq!(measured_at_ns(1_700_000_000_150, now_unix, now, recv, Some(0.0)), recv);
 }
 
 #[test]

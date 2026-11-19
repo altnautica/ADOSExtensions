@@ -18,7 +18,6 @@ use std::time::Duration;
 use ados_protocol::mavlink::MavMessage;
 use ados_sdk::context::PluginContext;
 use tokio::task::JoinHandle;
-use tokio::time::MissedTickBehavior;
 
 use super::nav_shared::{companion_for, estimator_state_for, NavShared};
 use super::subscriptions::Sinks;
@@ -88,8 +87,10 @@ impl ExtnavTask {
 
 pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs_f32(1.0 / task.cfg.rate_hz));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        // On ADOS time: at N× sim speed the emission keeps its rate in sim
+        // time, as the flight controller it feeds sees it.
+        let clock = ados_sdk::clock();
+        let mut interval = clock.interval(Duration::from_secs_f32(1.0 / task.cfg.rate_hz));
         let gate = PreArmGate::default();
         let mut builder = OdometryBuilder::default();
         let mut switch = SourceSwitch::new(&task.cfg);
@@ -118,7 +119,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
             if let Some((pose, recv)) = view.fresh.filter(|_| view.seq != last_seq) {
                 last_seq = view.seq;
                 odom_ts_ms = pose.ts_ms;
-                let t = measured_at_ns(pose.ts_ms, unix_ms(), now, recv);
+                let t = measured_at_ns(pose.ts_ms, unix_ms(), now, recv, clock.wall_to_ados());
                 odom = builder.build(task.sinks.clock.fc_time_us(t), t, &pose, &fc);
             }
             if let Some(odom) = odom {
@@ -285,8 +286,8 @@ pub fn spawn_obstacle(
 ) -> JoinHandle<()> {
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs_f32(1.0 / cfg.rate_hz));
-        interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut interval =
+            ados_sdk::clock().interval(Duration::from_secs_f32(1.0 / cfg.rate_hz));
         let mut rate = RateMeter::new(RATE_WINDOW_NS);
         let mut last_seq = 0u64;
         let mut min_obstacle = None;
@@ -331,7 +332,7 @@ pub fn spawn_nav_state(
         } else {
             Duration::from_secs(1)
         };
-        let mut interval = tokio::time::interval(period);
+        let mut interval = ados_sdk::clock().interval(period);
         loop {
             interval.tick().await;
             let fix = sinks.fc_nav.snapshot(monotonic_ns()).gps_fix;

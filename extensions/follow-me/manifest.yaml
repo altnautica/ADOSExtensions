@@ -78,8 +78,9 @@ compatibility:
   # in 0.112.1; the cockpit, kiosk, dashboard and terminal UI show the
   # recovery phases and the waiting prompt from 0.115.0; the pilot shapes and
   # flies a goal's complete velocity (vel_mode command) from 0.118.0; the
-  # plugin host lets it subscribe to plugin.navigation.state from 0.122.0.
-  ados_version: ">=0.122.0"
+  # plugin host lets it subscribe to plugin.navigation.state from 0.122.0;
+  # ADOS time (ados.sdk.clock) from 0.124.0.
+  ados_version: ">=0.124.0"
   gcs_version: ">=0.56.0"
   supported_boards: ["cm4", "cm5", "rock-5c-lite", "rk3588s2", "rk3576", "rpi5", "cubie-a7s", "cubie-a7z"]
 
