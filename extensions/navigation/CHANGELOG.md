@@ -26,8 +26,9 @@ in one extension.
 
 ### Changed
 
-- The `lidar-slam` service declares the Livox data ports
-  (`udp_listen_ports` 56101, 56201, 56301, 56401, 56501) and the optional
+- The `lidar-slam` service declares the UDP ports
+  the Livox SDK2 binds (`udp_listen_ports`: discovery 56000, 56101, 56201,
+  56301, 56401, 56501 and the debug point cloud 44332) and the optional
   `network.listen` permission, so a Livox LiDAR's UDP ports bind under the
   plugin sandbox. Without the grant they stay closed.
 
