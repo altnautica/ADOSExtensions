@@ -12,6 +12,61 @@ importers:
         specifier: ^2.9.0
         version: 2.9.1
 
+  extensions/capture/gcs:
+    dependencies:
+      '@altnautica/mapping-ui':
+        specifier: workspace:^
+        version: link:../../../packages/mapping-ui
+      '@altnautica/plugin-sdk':
+        specifier: workspace:^
+        version: link:../../../packages/plugin-sdk
+      lucide-react:
+        specifier: ^0.570.0
+        version: 0.570.0(react@19.2.3)
+      three:
+        specifier: ^0.183.2
+        version: 0.183.2
+      zustand:
+        specifier: ^5.0.5
+        version: 5.0.15(@types/react@19.3.0)(react@19.2.3)
+    devDependencies:
+      '@tailwindcss/cli':
+        specifier: ^4.2.0
+        version: 4.3.3
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@types/react':
+        specifier: ^19.2.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.0
+        version: 19.3.0(@types/react@19.3.0)
+      '@types/three':
+        specifier: ^0.183.1
+        version: 0.183.1
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      happy-dom:
+        specifier: ^15.7.4
+        version: 15.11.7
+      react:
+        specifier: 19.2.3
+        version: 19.2.3
+      react-dom:
+        specifier: 19.2.3
+        version: 19.2.3(react@19.2.3)
+      tailwindcss:
+        specifier: ^4.2.0
+        version: 4.3.3
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
   extensions/follow-me: {}
 
   extensions/follow-me/gcs:
@@ -72,6 +127,106 @@ importers:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
 
+  extensions/navigation: {}
+
+  extensions/navigation/gcs:
+    dependencies:
+      '@altnautica/extension-ui':
+        specifier: workspace:*
+        version: link:../../../packages/extension-ui
+      '@altnautica/plugin-sdk':
+        specifier: workspace:^
+        version: link:../../../packages/plugin-sdk
+      react:
+        specifier: ^18.3.1
+        version: 18.3.1
+      react-dom:
+        specifier: ^18.3.1
+        version: 18.3.1(react@18.3.1)
+    devDependencies:
+      '@testing-library/react':
+        specifier: ^16.0.1
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@types/react':
+        specifier: ^18.3.12
+        version: 18.3.28
+      '@types/react-dom':
+        specifier: ^18.3.1
+        version: 18.3.7(@types/react@18.3.28)
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      happy-dom:
+        specifier: ^15.7.4
+        version: 15.11.7
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
+  extensions/reconstruct/gcs:
+    dependencies:
+      '@altnautica/mapping-ui':
+        specifier: workspace:^
+        version: link:../../../packages/mapping-ui
+      '@altnautica/plugin-sdk':
+        specifier: workspace:^
+        version: link:../../../packages/plugin-sdk
+      lucide-react:
+        specifier: ^0.570.0
+        version: 0.570.0(react@19.2.3)
+      three:
+        specifier: ^0.183.2
+        version: 0.183.2
+      zustand:
+        specifier: ^5.0.5
+        version: 5.0.15(@types/react@19.3.0)(react@19.2.3)
+    devDependencies:
+      '@tailwindcss/cli':
+        specifier: ^4.2.0
+        version: 4.3.3
+      '@tailwindcss/vite':
+        specifier: ^4.2.0
+        version: 4.3.3(vite@7.3.7(@types/node@25.9.9)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.1))
+      '@testing-library/react':
+        specifier: ^16.3.2
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      '@types/react':
+        specifier: ^19.2.0
+        version: 19.3.0
+      '@types/react-dom':
+        specifier: ^19.2.0
+        version: 19.3.0(@types/react@19.3.0)
+      '@types/three':
+        specifier: ^0.183.1
+        version: 0.183.1
+      esbuild:
+        specifier: ^0.24.0
+        version: 0.24.2
+      happy-dom:
+        specifier: ^15.7.4
+        version: 15.11.7
+      react:
+        specifier: 19.2.3
+        version: 19.2.3
+      react-dom:
+        specifier: 19.2.3
+        version: 19.2.3(react@19.2.3)
+      tailwindcss:
+        specifier: ^4.2.0
+        version: 4.3.3
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+      vite:
+        specifier: ^7
+        version: 7.3.7(@types/node@25.9.9)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.1)
+      vitest:
+        specifier: ^2.1.4
+        version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
+
   extensions/siyi-pod: {}
 
   extensions/siyi-pod/gcs:
@@ -114,16 +269,10 @@ importers:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
 
-  extensions/vision-nav: {}
+  packages/create-ados-plugin: {}
 
-  extensions/vision-nav/gcs:
+  packages/extension-ui:
     dependencies:
-      '@altnautica/extension-ui':
-        specifier: workspace:*
-        version: link:../../../packages/extension-ui
-      '@altnautica/plugin-sdk':
-        specifier: workspace:^
-        version: link:../../../packages/plugin-sdk
       react:
         specifier: ^18.3.1
         version: 18.3.1
@@ -140,9 +289,6 @@ importers:
       '@types/react-dom':
         specifier: ^18.3.1
         version: 18.3.7(@types/react@18.3.28)
-      esbuild:
-        specifier: ^0.24.0
-        version: 0.24.2
       happy-dom:
         specifier: ^15.7.4
         version: 15.11.7
@@ -153,11 +299,11 @@ importers:
         specifier: ^2.1.4
         version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
 
-  extensions/world-engine/gcs:
+  packages/mapping-ui:
     dependencies:
       '@altnautica/plugin-sdk':
         specifier: workspace:^
-        version: link:../../../packages/plugin-sdk
+        version: link:../plugin-sdk
       '@loaders.gl/core':
         specifier: ^4.3.4
         version: 4.5.4
@@ -186,9 +332,6 @@ importers:
       '@tailwindcss/cli':
         specifier: ^4.2.0
         version: 4.3.3
-      '@tailwindcss/vite':
-        specifier: ^4.2.0
-        version: 4.3.3(vite@7.3.7(@types/node@25.9.9)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.1))
       '@testing-library/react':
         specifier: ^16.3.2
         version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
@@ -222,39 +365,6 @@ importers:
       ts-proto:
         specifier: 2.18.0
         version: 2.18.0
-      typescript:
-        specifier: ^5.6.3
-        version: 5.9.3
-      vite:
-        specifier: ^7
-        version: 7.3.7(@types/node@25.9.9)(jiti@2.7.0)(lightningcss@1.32.0)(yaml@2.9.1)
-      vitest:
-        specifier: ^2.1.4
-        version: 2.1.9(@types/node@25.9.9)(happy-dom@15.11.7)(lightningcss@1.32.0)
-
-  packages/create-ados-plugin: {}
-
-  packages/extension-ui:
-    dependencies:
-      react:
-        specifier: ^18.3.1
-        version: 18.3.1
-      react-dom:
-        specifier: ^18.3.1
-        version: 18.3.1(react@18.3.1)
-    devDependencies:
-      '@testing-library/react':
-        specifier: ^16.0.1
-        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.28))(@types/react@18.3.28)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      '@types/react':
-        specifier: ^18.3.12
-        version: 18.3.28
-      '@types/react-dom':
-        specifier: ^18.3.1
-        version: 18.3.7(@types/react@18.3.28)
-      happy-dom:
-        specifier: ^15.7.4
-        version: 15.11.7
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

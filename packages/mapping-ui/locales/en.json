@@ -1,0 +1,73 @@
+{
+  "viewerError": "Could not load the {what}.",
+  "viewerStatus": {
+    "loading": "Loading",
+    "loadingViewer": "Loading viewer",
+    "loadingRecording": "Loading recording",
+    "downloadingCloud": "Downloading cloud",
+    "decimated": "showing {kept} / {total} points",
+    "what": {
+      "rerun": "Rerun recording",
+      "splat": "splat",
+      "pointCloud": "point cloud"
+    }
+  },
+  "viewer": {
+    "rerun": "Recording",
+    "splat": "Splat",
+    "cloud": "Cloud",
+    "lod": "LOD"
+  },
+  "reconstructedWith": "Reconstructed with {backend}",
+  "reconstructedWithHint": "Reconstructed by the {backend} backend",
+  "pipeline": {
+    "eta": "ETA {eta}",
+    "stages": "Pipeline stages",
+    "stage": {
+      "prepare": "Prepare",
+      "sfm": "SfM",
+      "train": "Train",
+      "mesh": "Mesh",
+      "products": "Products"
+    },
+    "gpu": "GPU {name} · {util} · {vram}",
+    "toolMissing": "Missing tool on the compute node: {tool}",
+    "localOnly": "Open this page on the compute node to see its pipeline.",
+    "unreachable": "The compute node did not answer.",
+    "none": "No staged reconstruction jobs on this node."
+  },
+  "world": {
+    "splat": "splat",
+    "toolbar": "Viewer controls",
+    "mode": {
+      "orbit": "Orbit",
+      "dollhouse": "Dollhouse",
+      "walk": "Walk"
+    },
+    "plan": "Plan",
+    "floor": "Floor",
+    "floorN": "Floor {n}",
+    "measure": "Measure",
+    "measureHint": "Click two points to measure",
+    "onSurface": "on surface {d}",
+    "joystick": "Walk joystick",
+    "navNode": "Walk to point {id}",
+    "loading": "Loading splat",
+    "empty": "The splat is empty or fully transparent: nothing to show."
+  },
+  "job": {
+    "openingWorld": "Opening reconstruction",
+    "worldUnavailable": "The reconstruction outputs could not be read.",
+    "downloadTour": "Download tour bundle",
+    "downloadExport": "Download dataset",
+    "exportHint": "COLMAP sparse model and transforms.json",
+    "downloadFailed": "The download failed.",
+    "noSplat": "This job produced no splat."
+  },
+  "config": {
+    "applied": "Saved",
+    "applyFailed": "Could not save the change",
+    "notSet": "not set",
+    "notReported": "not reported"
+  }
+}

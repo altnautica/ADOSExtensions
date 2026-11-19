@@ -43,6 +43,7 @@ export const CAPABILITY_IDS = [
   "node.info.read",
   "perception.read",
   "perception.subscribe",
+  "plugin.http",
   "process.spawn",
   "radio.aux_stream",
   "recording.write",

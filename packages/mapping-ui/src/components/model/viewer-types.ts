@@ -1,0 +1,134 @@
+/**
+ * @module model/viewer-types
+ * @description The model viewer registry. The operator switches
+ * between viewers on the same world (a `viewer` parameter). Rerun is the
+ * first-class default world viewer + live-stream surface; the splat viewer
+ * (Spark) plays photoreal gaussian splats (`.spz`, `.ply`, or a streamed `.rad`
+ * level-of-detail file), the one thing Rerun does not render natively; the
+ * cloud viewer renders a dense point cloud (`.ply` / `.laz`) on three.js. The LOD viewer is the cloud viewer that survives
+ * very large clouds — it decimates a multi-million-point `.ply` to a point
+ * budget (a single-level voxel-grid pass) so the retained buffer never
+ * exhausts memory, the gap the plain cloud viewer has. Out-of-core octree
+ * streaming for clouds that don't fit in memory at all is not implemented.
+ */
+
+/** A selectable model viewer. */
+export type ModelViewer = "rerun" | "splat" | "cloud" | "lod";
+
+/** A switcher entry; its label is the `viewer.<id>` catalogue key. */
+export interface AtlasViewerSpec {
+  id: ModelViewer;
+}
+
+/** The viewers offered in the switcher, in order; the first is the default. */
+export const MODEL_VIEWERS: readonly AtlasViewerSpec[] = [{ id: "rerun" }, { id: "splat" }, { id: "cloud" }, { id: "lod" }];
+
+/** The first viewer in the switcher. */
+export const DEFAULT_VIEWER: ModelViewer = "rerun";
+
+/**
+ * The viewer a world prefers, read from a reconstruction job's opaque
+ * `metadata.viewerHint`. Returns null when the metadata is absent or carries
+ * no recognized hint, so the caller falls back to {@link DEFAULT_VIEWER}.
+ */
+export function viewerHintOf(metadata: unknown): ModelViewer | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const hint = (metadata as Record<string, unknown>).viewerHint;
+  if (typeof hint === "string" && MODEL_VIEWERS.some((v) => v.id === hint)) {
+    return hint as ModelViewer;
+  }
+  return null;
+}
+
+/**
+ * The concrete reconstruction backend a cloud job record's world carries,
+ * read from the job's opaque `metadata.backend` — the same honesty field the
+ * local compute output stamps on `meta.backend`. Returns null when absent, so
+ * the cloud path shows no backend badge until the producer forwards it.
+ * Sibling of {@link viewerHintOf}.
+ */
+export function backendOf(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const b = (metadata as Record<string, unknown>).backend;
+  return typeof b === "string" && b.length > 0 ? b : null;
+}
+
+/**
+ * The best viewer for a compute-node output's artifact kind (`splat`, `cloud` /
+ * `ply` / `pointcloud`, …). Used when sourcing a reconstruction local-first from the
+ * compute node, where the artifact's kind is the hint (there is no job-record
+ * `metadata.viewerHint`). Falls back to the default Rerun world viewer.
+ */
+export function viewerForKind(kind: string): ModelViewer {
+  switch (kind) {
+    case "splat":
+    case "splat_lod":
+      return "splat";
+    case "cloud":
+    case "ply":
+    case "pointcloud":
+      return "cloud";
+    default:
+      return DEFAULT_VIEWER;
+  }
+}
+
+/** Point-cloud artifact kinds (consumed by the Cloud / LOD viewers). */
+const CLOUD_KINDS = ["cloud", "pointcloud", "ply"];
+
+/** A splat output's format: the node's `format`, else the file extension. */
+function splatFormat(o: { format?: string | null; file?: string | null; uri?: string }): string {
+  if (o.format) return o.format.toLowerCase();
+  const name = (o.file ?? o.uri ?? "").split(/[?#]/)[0] ?? "";
+  return name.toLowerCase().split(".").pop() ?? "";
+}
+
+/** Splat format preference: the `.rad` level-of-detail file first (streamed,
+ * only the visible detail is fetched), then the compressed SPZ (≈10× smaller
+ * than the raw PLY), then the raw PLY. */
+const SPLAT_RANK = ["rad", "spz", "ply"];
+
+type SplatLike = { kind: string; format?: string | null; file?: string | null; placeJson?: string | null };
+
+const isSplat = (o: { kind: string }) => o.kind === "splat" || o.kind === "splat_lod";
+
+/** The best splat among a job's outputs (`splat` and `splat_lod` kinds). */
+export function pickSplatOutput<T extends SplatLike>(outputs: readonly T[]): T | undefined {
+  const rank = (o: T) => {
+    const r = SPLAT_RANK.indexOf(splatFormat(o));
+    return r < 0 ? SPLAT_RANK.length : r;
+  };
+  return outputs.filter(isSplat).sort((a, b) => rank(a) - rank(b))[0];
+}
+
+/**
+ * The placement sidecar for `picked`: its own `.place.json`, else, for a
+ * splat, the sidecar of a sibling splat of the same job (the `.rad` LOD file
+ * is built from the SPZ and shares its placement but carries no sidecar of
+ * its own), the SPZ's first. Null when the job names none.
+ */
+export function splatPlaceJson<T extends SplatLike>(outputs: readonly T[], picked: T | undefined): string | null {
+  if (!picked) return null;
+  if (picked.placeJson) return picked.placeJson;
+  if (!isSplat(picked)) return null;
+  const siblings = outputs.filter((o) => isSplat(o) && o.placeJson);
+  return (siblings.find((o) => splatFormat(o) === "spz") ?? siblings[0])?.placeJson ?? null;
+}
+
+/**
+ * The output artifact a given viewer should load, matched by the artifact's
+ * `kind`. A reconstruct job can emit several outputs (a splat, a point cloud,
+ * a mesh, a `rerun` `.rrd`), so each viewer must pick ITS kind — the splat
+ * viewer needs a gaussian splat, not a plain point cloud (which lacks
+ * scale/rotation/opacity and renders as a black nothing). Returns undefined
+ * when no matching kind exists, so the caller can fall back.
+ */
+export function pickArtifactForViewer<T extends { kind: string; format?: string | null; file?: string | null }>(
+  outputs: readonly T[],
+  viewer: ModelViewer,
+): T | undefined {
+  if (viewer === "rerun") return outputs.find((o) => o.kind === "rerun");
+  if (viewer === "splat") return pickSplatOutput(outputs);
+  // cloud / lod → a dense point cloud
+  return outputs.find((o) => CLOUD_KINDS.includes(o.kind));
+}

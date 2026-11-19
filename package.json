@@ -15,8 +15,11 @@
     "test:siyi-pod": "pnpm --filter ./extensions/siyi-pod/gcs test",
     "build:navigation": "pnpm --filter ./extensions/navigation/gcs build",
     "test:navigation": "pnpm --filter ./extensions/navigation/gcs test",
-    "build:world-engine": "pnpm --filter @altnautica/plugin-sdk build && pnpm --filter ./extensions/world-engine/gcs build",
-    "test:world-engine": "pnpm --filter ./extensions/world-engine/gcs test"
+    "build:capture": "pnpm --filter @altnautica/plugin-sdk build && pnpm --filter ./extensions/capture/gcs build",
+    "test:capture": "pnpm --filter ./extensions/capture/gcs test",
+    "build:reconstruct": "pnpm --filter @altnautica/plugin-sdk build && pnpm --filter ./extensions/reconstruct/gcs build",
+    "test:reconstruct": "pnpm --filter ./extensions/reconstruct/gcs test",
+    "test:mapping-ui": "pnpm --filter ./packages/mapping-ui test"
   },
   "devDependencies": {
     "yaml": "^2.9.0"

@@ -1,0 +1,167 @@
+{
+  "tour": {
+    "loading": "Loading tour…",
+    "failed": "This tour could not be opened: tour.json is missing or names no splat.",
+    "rooms": "{n, plural, one {# room} other {# rooms}}",
+    "roomList": "Rooms"
+  },
+  "nodeSettings": {
+    "perception": {
+      "title": "Perception setup",
+      "blurb": "What this node detects and where perception runs — on its own accelerator, or offloaded to a serving workstation.",
+      "offloadTitle": "Offload",
+      "enabledAuto": "Auto",
+      "enabledOn": "On",
+      "enabledOff": "Off",
+      "enabledAutoDefault": "Auto (default)",
+      "offload": {
+        "blurb": "When this drone has no local accelerator, it streams frames to a serving workstation that runs the detector and returns the results.",
+        "activeLabel": "Active target",
+        "activeHint": "The workstation the agent is offloading to right now.",
+        "activeNone": "not offloading",
+        "enabledLabel": "Offload",
+        "enabledHint": "Auto offloads only when this node has no local accelerator. On always offloads; Off keeps perception on-node.",
+        "pinLabel": "Pin workstation",
+        "pinHint": "Pin a specific serving workstation, or leave on Auto to use any on the LAN.",
+        "pinAuto": "Auto (any on LAN)",
+        "pinNoWorkstation": "No paired workstation. Pair a workstation node to pin it here.",
+        "pinNoAddress": "No paired workstation has a LAN address. Connect to one over the LAN to pin it here."
+      },
+      "serving": {
+        "blurb": "This workstation runs the detector for drones that offload perception to it.",
+        "enabledLabel": "Serve offloaded perception",
+        "enabledHint": "Auto serves when a drone requests it. On advertises this node as available; Off declines offload requests.",
+        "modelLabel": "Detector model",
+        "modelHint": "The model this workstation runs for offloaded detection. Leave on default to let the node choose.",
+        "modelDefault": "Default",
+        "gpuTitle": "GPU",
+        "gpuName": "Adapter",
+        "gpuCores": "Cores",
+        "gpuMemory": "Unified memory",
+        "gpuUtil": "Utilization"
+      },
+      "unsupportedProfile": "Perception offload applies to drone, workstation and compute nodes."
+    }
+  },
+  "nodeConsole": {
+    "jobs": {
+      "groupBy": "Group by",
+      "flat": "Flat",
+      "byDataset": "By dataset",
+      "byStatus": "By status",
+      "noDataset": "No dataset",
+      "title": "Compute jobs",
+      "viewAll": "View all",
+      "unavailable": "Compute jobs unavailable",
+      "awaiting": "Awaiting compute node",
+      "none": "No jobs yet",
+      "running": "Running",
+      "queued": "Queued",
+      "failed": "Failed"
+    }
+  },
+  "agent": {
+    "sparklinePaused": "Paused"
+  },
+  "pipeline": {
+    "eta": "ETA {eta}",
+    "stages": "Pipeline stages",
+    "stage": {
+      "prepare": "Prepare",
+      "sfm": "SfM",
+      "train": "Train",
+      "mesh": "Mesh",
+      "products": "Products"
+    },
+    "gpu": "GPU {name} · {util} · {vram}",
+    "toolMissing": "Missing tool on the compute node: {tool}",
+    "localOnly": "Open this page on the compute node to see its pipeline.",
+    "unreachable": "The compute node did not answer.",
+    "none": "No staged reconstruction jobs on this node."
+  },
+  "sessions": {
+    "changeQueued": "Change detection queued",
+    "changeBefore": "Before",
+    "changeNeedsTwo": "Upload two sessions of one site to the same compute node to compare them.",
+    "compare": "Compare",
+    "changeAfter": "After",
+    "pickSession": "Pick a session"
+  },
+  "node": {
+    "gpuHistory": "GPU history",
+    "forgeRetryQueued": "Job re-queued.",
+    "forgeCancel": "Cancel",
+    "forgeRetry": "Run again",
+    "forgeRetryFailed": "The compute node refused the re-run.",
+    "forgeNoJobs": "No reconstruction jobs yet.",
+    "forgeCancelFailed": "The compute node did not cancel that job.",
+    "gpu": "GPU",
+    "gpuCores": "{cores} cores",
+    "gpuAwaiting": "Awaiting GPU telemetry…",
+    "unifiedMemory": "Unified memory",
+    "utilization": "{pct}% utilization",
+    "metal": "Metal",
+    "forgeAwaiting": "Awaiting compute node. Connect a workstation or compute node on your network to dispatch and review reconstruction jobs.",
+    "forgeLocalOnly": "Jobs and products are read from the compute node directly over your local network. Pair the node to use them.",
+    "droneAccess": {
+      "unreachable": "This workstation did not answer, so what it has issued is unknown.",
+      "notIssued": "Workstation: no credential issued",
+      "issuedAt": "Workstation: credential issued {at}",
+      "revoke": "Revoke",
+      "revokeFailed": "Revoke failed: {error}",
+      "reprovision": "Re-provision",
+      "provisioning": "Provisioning…",
+      "noPeers": "No drone or ground station is paired with this GCS yet.",
+      "intro": "Each paired drone and ground station needs a credential from this workstation before it can stream capture, offload perception or fetch artifacts here. It is provisioned automatically.",
+      "notInstalled": "Node: not provisioned yet",
+      "peerUnreachable": "Node: not reachable from this GCS, so it cannot be provisioned until it is back on the network",
+      "revoked": "Node: revoked by the operator",
+      "issuedStale": "Workstation: credential predates the last pairing and admits nothing",
+      "provision": "Provision",
+      "issuedUnknown": "Workstation: unknown",
+      "failed": "Node: last attempt failed ({error}); retrying",
+      "localOnly": "Pair this workstation on the local network to manage which drones may use it.",
+      "installedAt": "Node: installed {at}"
+    },
+    "awaitingHeartbeat": "Awaiting compute heartbeat…",
+    "master": "Master",
+    "slave": "Slave",
+    "servingSessions": "Serving sessions",
+    "stale": "stale",
+    "active": "Active",
+    "clusterIdleWorkers": "Cluster idle workers",
+    "computeCluster": "Compute Cluster",
+    "queue": "Queue",
+    "idle": "Idle",
+    "slaves": "Slaves",
+    "forgeOutputsLoading": "Loading outputs…",
+    "forgeOutputs": "Outputs",
+    "forgeNoOutputs": "No outputs for this job yet.",
+    "forgeOutputsFailed": "Could not read this job's outputs from the compute node.",
+    "forgeNoViewableArtifact": "This job's outputs include no artifact these viewers can show.",
+    "forgeSelectJob": "Select a job",
+    "forgeOutputsRetry": "Retry",
+    "forgeSubmit": "Queue job",
+    "forgeSteps": "Training steps",
+    "forgeSubmitCancel": "Cancel",
+    "forgeNoDatasets": "No datasets on this node yet.",
+    "forgeSubmitFailed": "The compute node refused the job.",
+    "forgeSubmitQueued": "Reconstruction queued."
+  },
+  "reconstruct": {
+    "unknownPage": "This Reconstruct version has no page \"{id}\".",
+    "viewsLabel": "Reconstruct views",
+    "jobs": "Jobs",
+    "products": "Products",
+    "editor": "Editor",
+    "access": "Device access",
+    "serving": "Perception serving",
+    "localOnly": "Open this page on a browser that reaches the node over your local network to read its products."
+  },
+  "editor": {
+    "localOnly": "Open this page on a browser that reaches the node over your local network to open its clouds.",
+    "noJobs": "No finished reconstruction on this node yet.",
+    "pickJob": "Select a job",
+    "noCloud": "This job produced no point cloud."
+  }
+}

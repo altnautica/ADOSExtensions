@@ -1,0 +1,106 @@
+/**
+ * @module status/atlas
+ * @description Maps the `atlas` slice of the extension's agent state (the
+ * capture service's own report, published by the drone half) onto the atlas
+ * store's live slice. Pure.
+ */
+
+import type { CaptureLiveState } from "../../stores/capture-store";
+
+export interface CaptureSliceCurrent {
+  live: CaptureLiveState;
+}
+
+function asNumber(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function asString(v: unknown): string | null {
+  return typeof v === "string" && v.length > 0 ? v : null;
+}
+
+function asBool(v: unknown): boolean | null {
+  return typeof v === "boolean" ? v : null;
+}
+
+/**
+ * Map the capture service's state slice onto the atlas store's live slice.
+ * Returns `null` when the slice carries nothing (a present-but-empty /
+ * non-capturing slice) so the previous live values are preserved. The drone
+ * emits its own
+ * capture + transport facts (state / session / cameras / VIO health / keyframes /
+ * ingest rate / compute node / bearer / last keyframe); reconstruction metrics
+ * (gaussian count, training rate) belong to the compute node's World Model
+ * surface, not this drone-capture slice.
+ */
+export function mapCaptureSlice(
+  slice: Record<string, unknown>,
+  current: CaptureSliceCurrent,
+  nowMs: number,
+): { live: CaptureLiveState } | null {
+  const state = asString(slice.state);
+  const sessionId = asString(slice.sessionId);
+  const keyframesIngested = asNumber(slice.keyframesIngested);
+  const ingestRateHz = asNumber(slice.ingestRateHz);
+  const cameraCount = asNumber(slice.cameraCount);
+  const vioHealth = asString(slice.vioHealth);
+  const computeNodeId = asString(slice.computeNodeId);
+  const lastKfAt = asNumber(slice.lastKfAt);
+  const bearer = asString(slice.bearer);
+  const keyframesCarried = asBool(slice.keyframesCarried);
+  const capped = asBool(slice.capped);
+  const anchored = asBool(slice.anchored);
+  const poseTier = asString(slice.poseTier);
+  const droppedKeyframes = asNumber(slice.droppedKeyframes);
+  const degradedReason = asString(slice.degradedReason);
+
+  // A present-but-empty slice carries nothing to merge.
+  if (
+    state === null &&
+    sessionId === null &&
+    keyframesIngested === null &&
+    ingestRateHz === null &&
+    cameraCount === null &&
+    vioHealth === null &&
+    computeNodeId === null &&
+    lastKfAt === null &&
+    bearer === null &&
+    keyframesCarried === null &&
+    capped === null &&
+    anchored === null &&
+    poseTier === null &&
+    droppedKeyframes === null &&
+    degradedReason === null
+  ) {
+    return null;
+  }
+
+  // Merge over the current slice so a sparse heartbeat preserves last-known
+  // values for fields it omitted. The bearer and the keyframe facts derived
+  // from it are the exception: the agent sends a full slice (one with `state`)
+  // without a bearer once nothing forwards, so such a slice clears all three
+  // rather than keeping the last forward status and its notice.
+  const forwardReported = bearer !== null || state !== null;
+  const live: CaptureLiveState = {
+    state: state ?? current.live.state,
+    sessionId: sessionId ?? current.live.sessionId,
+    keyframesIngested: keyframesIngested ?? current.live.keyframesIngested,
+    ingestRateHz: ingestRateHz ?? current.live.ingestRateHz,
+    cameraCount: cameraCount ?? current.live.cameraCount,
+    vioHealth: vioHealth ?? current.live.vioHealth,
+    computeNodeId: computeNodeId ?? current.live.computeNodeId,
+    lastKfAt: lastKfAt ?? current.live.lastKfAt,
+    bearer: forwardReported ? bearer : current.live.bearer,
+    keyframesCarried: forwardReported ? keyframesCarried : (keyframesCarried ?? current.live.keyframesCarried),
+    capped: capped ?? current.live.capped,
+    anchored: anchored ?? current.live.anchored,
+    poseTier: poseTier ?? current.live.poseTier,
+    droppedKeyframes: droppedKeyframes ?? current.live.droppedKeyframes,
+    // The agent omits the reason whenever the bearer carries keyframes, so a
+    // slice that reports the forward status replaces it outright.
+    degradedReason: forwardReported ? degradedReason : (degradedReason ?? current.live.degradedReason),
+    updatedAt: nowMs,
+  };
+
+  return { live };
+}

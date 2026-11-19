@@ -56,7 +56,8 @@ export interface InlineAgentApi {
  * whose `code` names it (`refused`, `permission_denied`, `timeout`, ...).
  * Host capabilities that are unavailable here reject with an error whose
  * `code` is one of `websocket_unavailable_over_https_proxy`,
- * `no_node_agent`, `node_unreachable`, `unknown_node`, `asset_unavailable`.
+ * `no_node_agent`, `node_unreachable`, `unknown_node`, `asset_unavailable`,
+ * `plugin_not_granted`.
  */
 export interface InlineHostApi {
   /** The plugin SDK context, served in-memory by the host. */
@@ -67,6 +68,12 @@ export interface InlineHostApi {
   /** The plugin's server on the mounted node (`no_node_agent` when there is
    * no reach to it). */
   agent: InlineAgentApi;
+  /**
+   * A companion extension's server on the mounted node. Needs the GCS
+   * permission `plugin.http.<plugin>`; without it every call rejects with
+   * `plugin_not_granted`.
+   */
+  agentFor(plugin: string): InlineAgentApi;
   /**
    * An object URL for a file under the plugin's `gcs/` directory (`path`
    * relative to it), typed by extension. Revoked when the module unmounts.
@@ -87,8 +94,10 @@ export interface InlineHostApi {
      * The plugin's server on another node (a device id from `list()`), over
      * that node's LAN address or its ground station's relay. Its calls reject
      * with `node_unreachable` while this browser has no reach to the node.
+     * `plugin` names a companion extension instead, under the same
+     * `plugin.http.<plugin>` grant as {@link InlineHostApi.agentFor}.
      */
-    agent(deviceId: string): InlineAgentApi;
+    agent(deviceId: string, opts?: { plugin?: string }): InlineAgentApi;
     /** This plugin's config on another node, through that node's agent. */
     pluginConfig(deviceId: string): {
       get(): Promise<Record<string, unknown>>;

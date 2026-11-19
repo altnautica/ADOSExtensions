@@ -8,16 +8,20 @@ __pycache__/
 .DS_Store
 extensions/*/gcs/plugin.bundle.js
 
-# World Engine inline GCS build output. The Rerun wasm is copied from
-# node_modules by the build and staged as a release payload, never committed.
-extensions/world-engine/gcs/world-engine.mjs
-extensions/world-engine/gcs/plugin.css
-extensions/world-engine/gcs/assets/
-extensions/world-engine/gcs/tour-viewer/
+# Capture and Reconstruct inline GCS build output. The Rerun wasm is copied
+# from node_modules by the build and staged as a release payload, never
+# committed.
+extensions/capture/gcs/capture.mjs
+extensions/capture/gcs/plugin.css
+extensions/capture/gcs/assets/
+extensions/reconstruct/gcs/reconstruct.mjs
+extensions/reconstruct/gcs/plugin.css
+extensions/reconstruct/gcs/assets/
+extensions/reconstruct/gcs/tour-viewer/
 
-# World Engine node: fetched third-party tools and python project envs.
-extensions/world-engine/agent/node/tools/cache/
-extensions/world-engine/agent/node/python/*/.venv/
+# Reconstruct node: fetched third-party tools and python project envs.
+extensions/reconstruct/agent/node/tools/cache/
+extensions/reconstruct/agent/node/python/*/.venv/
 
 # Rust build output (the cargo workspace at the repo root)
 /target

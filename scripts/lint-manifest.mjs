@@ -28,9 +28,10 @@
  *      package.json, the `definePlugin({ version })` literal, and the agent
  *      half's pyproject.toml / Cargo.toml (top level and one directory down).
  *   5. a permission id that is neither in the capability catalog
- *      (packages/plugin-sdk/src/capabilities.generated.ts) nor scoped to this
- *      plugin as `plugin.<leaf>.<...>`, where <leaf> is the last segment of
- *      the manifest id.
+ *      (packages/plugin-sdk/src/capabilities.generated.ts), nor scoped to this
+ *      plugin as `plugin.<leaf>.<...>` (where <leaf> is the last segment of
+ *      the manifest id), nor a capability a sibling extension declares, nor a
+ *      `plugin.http.<plugin id>` companion grant.
  *   6. a `documentation_url` on the docs site whose page does not exist in a
  *      sibling Documentation checkout (anchors are not checked). Skipped with
  *      a note when no checkout is present; ADOS_DOCS_ROOT overrides the path.
@@ -71,6 +72,30 @@ export function loadCatalog(path = CATALOG_PATH) {
   if (!block) throw new Error(`no CAPABILITY_IDS array in ${path}`);
   return new Set([...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]));
 }
+
+/**
+ * The capabilities other extensions declare (`agent.declared_capabilities[].id`
+ * in a sibling `extensions/<name>/manifest.yaml`): a plugin may hold another
+ * plugin's declared capability to subscribe to its gated shared topics.
+ */
+export function siblingDeclaredCapabilities(extDir) {
+  const root = dirname(extDir);
+  const out = new Set();
+  if (!existsSync(root)) return out;
+  for (const name of readdirSync(root)) {
+    const path = join(root, name, "manifest.yaml");
+    if (join(root, name) === extDir || !existsSync(path)) continue;
+    const text = readFileSync(path, "utf8");
+    const block = text.match(/\n {2}declared_capabilities:\n((?: {4}.*\n)+)/);
+    if (!block) continue;
+    for (const m of block[1].matchAll(/^ {4}- id: (plugin\.[\w.-]+)$/gm)) out.add(m[1]);
+  }
+  return out;
+}
+
+/** `plugin.http.<plugin id>`: the grant to call one companion extension's
+ * server, a scoped form of the catalog's `plugin.http`. */
+const PLUGIN_HTTP_SCOPED = /^plugin\.http\.[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
 /** Collect every source file under a directory, recursively. */
 function sources(dir, exts) {
@@ -129,8 +154,10 @@ const GCS_SURFACE_CALLS = {
 // the catalog has an entry: a hardware grant with no driver code is the most
 // alarming kind of decorative permission an install dialog can show.
 const AGENT_SURFACE_CALLS = {
-  "telemetry.extend": [/\w+\s*\.\s*extend\s*\(/],
-  "event.publish": [/events\s*\.\s*publish\s*\(/],
+  // The shared mapping crates' host facade (`Host::telemetry_extend`,
+  // `Host::event_publish`) counts as the call.
+  "telemetry.extend": [/\w+\s*\.\s*extend\s*\(/, /telemetry_extend\s*\(/],
+  "event.publish": [/events\s*\.\s*publish\s*\(/, /event_publish\s*\(/],
   "video.source.set": [/set_source\s*\(/],
   "vision.detection.publish": [/publish_box|vision\.detection/],
   "mcp.expose": [/tools\s*\.\s*(register|serve)\s*\(/],
@@ -304,11 +331,14 @@ export function lintManifest(manifestPath, { catalog, docsRoot }) {
 
   const leaf = (manifestScalar("id") ?? "").split(".").pop();
   const scoped = `plugin.${leaf}.`;
+  const foreign = siblingDeclaredCapabilities(extDir);
   for (const [half, perms] of [["gcs", gcsPerms], ["agent", agentPerms]]) {
     for (const id of perms) {
       const known =
         catalog.has(id) ||
         (leaf && id.startsWith(scoped)) ||
+        foreign.has(id) ||
+        (PLUGIN_HTTP_SCOPED.test(id) && catalog.has("plugin.http")) ||
         (id.startsWith("telemetry.subscribe.") && catalog.has("telemetry.subscribe"));
       if (!known) {
         fail(

@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "title": "ADOS Reconstruct settings",
+  "description": "Settings of the Reconstruct extension on this node.",
+  "additionalProperties": false,
+  "properties": {
+    "reconstruct.offload.enabled": {
+      "type": "string",
+      "title": "Perception offload",
+      "description": "auto offloads detection when the drone has no accelerator and a compute node is reachable on the LAN; on forces offload; off never offloads.",
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "default": "auto"
+    },
+    "reconstruct.offload.compute_node_addr": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "title": "Compute node address",
+      "description": "Pin a compute node as host:port for perception offload, the live scan stream and reconstruction tools. Empty discovers one on the LAN.",
+      "default": null
+    },
+    "reconstruct.serving.enabled": {
+      "type": "string",
+      "title": "Serve perception offload",
+      "description": "auto accepts and serves LAN offload sessions; on forces serving; off never serves.",
+      "enum": [
+        "auto",
+        "on",
+        "off"
+      ],
+      "default": "auto"
+    },
+    "reconstruct.serving.detector_model": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "title": "Served detector model",
+      "description": "Model id of the detector served to drones. Empty uses the node's default.",
+      "default": null
+    },
+    "reconstruct.offload_camera": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "title": "Offload camera",
+      "default": null,
+      "description": "The camera id perception offload streams when the vision engine has no main tap. Empty uses the main tap."
+    }
+  }
+}
