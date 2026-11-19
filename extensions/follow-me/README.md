@@ -47,7 +47,7 @@ then on the agent runs a 20 Hz loop:
    - **box height**: the slant range to a 1.70 m subject. It is used only
      when the box clears every frame edge;
    - **lidar**: the planar scan return at the subject's bearing, from the
-     optional `plugin.world-engine.scan` topic. It is accepted only within
+     optional `plugin.navigation.scan` topic. It is accepted only within
      25 % of the other cues.
 4. A constant-velocity Kalman filter tracks the subject's north/east position
    and velocity in the flight controller's local frame (`LOCAL_POSITION_NED`).
@@ -374,7 +374,7 @@ Per-drone configuration (see `config-schema.json`):
   while follow-me needs it.
 - Recommended: a downward rangefinder on the flight controller for
   terrain-following height.
-- Optional: the world-engine extension's planar scan, for the lidar range cue.
+- Optional: the Navigation extension's planar scan, for the lidar range cue.
 
 ## Build, test, pack
 

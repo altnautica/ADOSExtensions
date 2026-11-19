@@ -4,6 +4,13 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [0.5.2] (unreleased)
+
+### Changed
+
+- The optional planar scan is read from `plugin.navigation.scan`: the
+  Navigation extension publishes it now.
+
 ## [0.5.1] - 2026-11-17
 
 ### Fixed

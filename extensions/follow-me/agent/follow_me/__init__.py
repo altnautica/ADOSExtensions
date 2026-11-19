@@ -98,10 +98,10 @@ _TRACK_GAP_S = 1.5
 # is re-read each tick so arm/disarm stays responsive.
 _CONFIG_REFRESH_S = 1.0
 
-# The planar scan the world-engine extension shares. Optional: when that
+# The planar scan the Navigation extension shares. Optional: when that
 # extension is absent the subscription is refused and retried on this period,
 # and the lidar range cue is simply unavailable.
-SCAN_TOPIC = "plugin.world-engine.scan"
+SCAN_TOPIC = "plugin.navigation.scan"
 _SCAN_SUBSCRIBE_RETRY_S = 10.0
 
 _CONFIG_KEYS = (
@@ -131,7 +131,7 @@ _CONFIG_KEYS = (
 
 
 def parse_scan(payload: dict[str, Any]) -> Scan | None:
-    """A body-frame planar scan from a ``plugin.world-engine.scan`` payload, or
+    """A body-frame planar scan from a ``plugin.navigation.scan`` payload, or
     ``None`` when the payload is not one."""
     if payload.get("frame") != "body_frd":
         return None

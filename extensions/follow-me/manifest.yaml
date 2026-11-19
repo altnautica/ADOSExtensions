@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.follow-me
 name: "ADOS Follow-Me"
-version: "0.5.1"
+version: "0.5.2"
 description: "Lock onto an operator-designated subject and follow it at a distance and an angle (behind, side or lead) or orbit it, flown by the agent's pilot with obstacle avoidance. A flight Skill in the cockpit skill picker, a click-a-target Follow action, and a per-drone settings tab."
 description_long: |
   Click a subject in the live video and the drone follows it at a set
@@ -99,8 +99,8 @@ agent:
     # vantage goal (flight.goal.status), forwarded to the lease holder only.
     - id: flight.motion
     - id: event.publish
-    # The optional planar scan the world-engine extension shares
-    # (plugin.world-engine.scan, subscribe capability telemetry.read).
+    # The optional planar scan the Navigation extension shares
+    # (plugin.navigation.scan, subscribe capability telemetry.read).
     - id: event.subscribe
     - id: telemetry.read
     - id: mcp.expose
