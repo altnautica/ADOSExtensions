@@ -128,6 +128,7 @@
         "mavlink.component.vio",
         "mavlink.read",
         "mavlink.write",
+        "network.listen",
         "network.outbound",
         "node.info.read",
         "sensor.stream.read",
