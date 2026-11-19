@@ -22,8 +22,8 @@ name = "world-engine-node"
 path = "src/main.rs"
 
 [dependencies]
-world-engine-protocol = { path = "../protocol" }
-world-engine-livemap = { path = "../livemap" }
+ados-mapping-protocol = { workspace = true }
+ados-livemap = { workspace = true }
 ados-capture-contract = { workspace = true }
 rusqlite = { version = "0.31", features = ["bundled"] }
 anyhow = { workspace = true }
@@ -72,7 +72,7 @@ jsonschema = { version = "0.59", default-features = false }
 aprilgrid = "0.8"
 nalgebra = "0.33"
 # A planar LiDAR session's trajectory (scan matching, loop closure).
-ados-scan2d = { path = "../scan2d" }
+ados-scan2d = { workspace = true }
 
 # Owner-only DACLs on the standalone node's secret files.
 [target.'cfg(windows)'.dependencies]
@@ -88,7 +88,7 @@ windows-sys = { version = "0.61", features = [
 [target.'cfg(unix)'.dependencies]
 # The Atlas event receiver, the world-model WebSocket fan-out, the compute-node
 # service type and TXT record, and the compute client the offload tests drive.
-world-engine-transport = { path = "../transport" }
+ados-mapping-transport = { workspace = true }
 # The plugin host connection (plugin config, telemetry.extend) when the node
 # runs as the extension's `node` service.
 ados-sdk = { workspace = true }

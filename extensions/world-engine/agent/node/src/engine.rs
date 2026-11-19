@@ -7,7 +7,7 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use world_engine_protocol::compute::ComputeHeartbeat;
+use ados_mapping_protocol::compute::ComputeHeartbeat;
 
 use crate::recon::{ProcessRunner, ToolRunner};
 use crate::{Cluster, ComputeError, ComputeJobState, JobOutcome, Scheduler};

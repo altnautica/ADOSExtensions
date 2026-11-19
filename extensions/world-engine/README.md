@@ -30,10 +30,8 @@ The extension has two halves:
 | `agent/node/` | Reconstruction node: session upload lane, staged pipeline (prepare, SfM, train, mesh, products), indoor products, calibration jobs, job API, artifacts, offload serving |
 | `agent/node/tools/` | `tool-pins.json` (the exact third-party tool versions) and `fetch-tools.ps1` / `fetch-tools.sh` |
 | `agent/node/python/gsplat_train/` | uv project: gsplat training, mesh, depth priors, masks and hero stills |
-| `agent/transport/` | Keyframe bearers (LAN, WFB relay, cloud), mDNS discovery, offload client |
-| `agent/protocol/` | Wire types and topic names shared by every agent crate |
+| `../../crates/` | Shared with the other mapping extensions: the wire protocol and the MIT capture contract (`mapping-protocol`), transport (`mapping-transport`), pose inputs (`mapping-pose`), planar SLAM (`scan2d`) and the live map (`livemap`) |
 | `agent/link/` | The extension's main process on every node: the bearer ladder and offload reconciler on a drone, the relay on a ground station, and the HTTP server the GCS reaches |
-| `contract/` | The MIT capture contract `ados.capture/1` (schemas, protobuf messages, fixtures) |
 | `gcs/` | The inline GCS module |
 | `locales/` | GCS strings |
 

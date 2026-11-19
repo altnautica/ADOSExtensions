@@ -16,10 +16,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use world_engine_protocol::capture_ctl::{CoverageSummary, CoverageView};
+use ados_mapping_protocol::capture_ctl::{CoverageSummary, CoverageView};
 
 use super::lidar_depth::LidarDepth;
-use crate::pose::se3;
+use ados_mapping_pose::se3;
 
 /// Voxel edge, metres.
 pub const VOXEL_M: f64 = 0.25;

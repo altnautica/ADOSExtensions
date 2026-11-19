@@ -36,9 +36,7 @@
 //! ([`align`]), frozen when GNSS goes, so a switch to external navigation
 //! finds the two frames in agreement.
 
-pub mod align;
 pub mod budget;
-pub mod fc_flow;
 pub mod fc_imu;
 pub mod frames;
 pub mod scan_wait;
@@ -50,17 +48,18 @@ mod tests;
 
 use std::path::{Path, PathBuf};
 
-use world_engine_livemap::LiveMap;
-use world_engine_protocol::atlas::{
+use ados_livemap::LiveMap;
+use ados_mapping_protocol::atlas::{
     ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapStatus, NavFrame, NavPoseMode,
     NavPoseSource, PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, StreamPhase,
     StreamProgress, VioHealth,
 };
 
-use crate::lidar_scan::LidarScan;
-use crate::pose::fc_ekf::FcEkfPose;
-use crate::pose::{se3, PoseEstimate};
-use align::MapAlign;
+use ados_mapping_pose::lidar_scan::LidarScan;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::{se3, PoseEstimate};
+use ados_mapping_pose::align::MapAlign;
+use ados_mapping_pose::se3::{frd_yaw, wrap_pi};
 use budget::Budget;
 
 /// A fitted yaw is logged again once it has moved this far, radians.
@@ -219,21 +218,6 @@ fn rz(yaw: f64) -> [f64; 9] {
     [c, -s, 0.0, s, c, 0.0, 0.0, 0.0, 1.0]
 }
 
-/// The FRD yaw of a world-from-body FRD rotation (body x's heading).
-pub fn frd_yaw(r: &[f64; 9]) -> f64 {
-    r[3].atan2(r[0])
-}
-
-/// An angle wrapped to `(-π, π]`.
-pub(crate) fn wrap_pi(a: f64) -> f64 {
-    let w = a.rem_euclid(std::f64::consts::TAU);
-    if w > std::f64::consts::PI {
-        w - std::f64::consts::TAU
-    } else {
-        w
-    }
-}
-
 /// How far `t_frd` is from `spot` (both `map_frd`), horizontally and in
 /// climb, metres, and whether that is still on the spot ([`ON_SPOT_M`]).
 fn from_spot(spot: [f64; 3], t_frd: [f64; 3]) -> (f64, f64, bool) {
@@ -293,7 +277,7 @@ impl NavMap {
 
     /// One matcher pose `e` for placing a map the matcher started over in
     /// flight: `restarted` when the matcher's restart count rose since the
-    /// last pose ([`crate::pose::PoseQuality::map_restarts`]), so
+    /// last pose ([`ados_mapping_pose::pose::PoseQuality::map_restarts`]), so
     /// [`Self::restart_in_flight`], else [`Self::seat_while_lost`].
     pub fn on_matcher_pose(
         &mut self,

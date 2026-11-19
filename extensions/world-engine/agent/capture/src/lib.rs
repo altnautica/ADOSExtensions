@@ -24,28 +24,22 @@
 //! keyframes, poses and capture state on the extension's private atlas bus.
 //!
 //! The wire types ([`KeyframeEnvelope`], [`PoseDescriptor`], [`CaptureStatus`],
-//! …) are the shared `world_engine_protocol::atlas` contract; this crate
+//! …) are the shared `ados_mapping_protocol::atlas` contract; this crate
 //! consumes them, it does not redefine them. They are re-exported here for one
 //! import surface.
 
 mod config;
-pub mod geo;
 mod selector;
 mod session;
 
 pub mod calib;
 mod calib_kalibr;
 pub mod camera_control;
-pub mod clock;
 pub mod control;
 pub mod encode;
-pub mod frame_source;
-pub mod geodesy;
 pub mod hud;
 pub mod lidar_record;
-pub mod lidar_scan;
 pub mod lidar_source;
-pub mod mavlink_msg;
 pub mod nav;
 pub mod pose;
 pub mod providers;
@@ -55,11 +49,9 @@ pub mod recorder;
 pub mod recording;
 pub mod rig_source;
 pub mod runtime;
-pub mod sensor_bus;
 pub mod service;
 pub mod storage;
 pub mod supervisor;
-pub mod vehicle;
 
 pub use config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 pub use selector::{rotation_angle, KeyframeSelector};
@@ -67,16 +59,12 @@ pub use session::{CaptureOutput, CaptureSession, FrameInput};
 
 pub use control::{serve_control, ControlMsg};
 pub use encode::encode_keyframe_jpeg;
-pub use frame_source::{
-    AtlasFrameSource, CapturedFrame, EngineFrameSource, FrameRouter, SyntheticFrameSource,
-};
-pub use pose::{PoseEstimate, PoseProvider, PoseTrack};
 pub use publish::AtlasPublisher;
 pub use runtime::{default_intrinsics, AtlasRuntimeConfig, ConfigError, PosePrior, CONFIG_KEYS};
 pub use service::{run_capture_loop, LoopDeps, NavDeps, Paths};
 
 // Re-export the shared wire contract so callers get one import surface.
-pub use world_engine_protocol::atlas::{
+pub use ados_mapping_protocol::atlas::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeBudget, KeyframeEnvelope,
     KeyframeFlags, KeyframeImage, KeyframeReject, KeyframeTier, MeshDescriptor,
     OccupancyDescriptor, OccupancyField, PointCloudDescriptor, Pose, PoseDescriptor, PoseSource,

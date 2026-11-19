@@ -1,0 +1,44 @@
+# The pose and sensor inputs a mapping process shares: the pose provider
+# interface and its track, the flight controller's EKF pose with exact WGS-84
+# geodesy and the EGM2008 geoid, the MAVLink messages it reads, the optical
+# flow and map alignment helpers, the frame source, the sensor bus client
+# wrapper, the vehicle state and the host clock. Linked by capture (the FC EKF
+# pose outdoors) and navigation (its own pose plus the FC feeds).
+# Workspace-internal; never published.
+[package]
+name = "ados-mapping-pose"
+version = "1.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADOS mapping pose inputs: the pose provider interface, the FC EKF pose, geodesy, frames, sensor bus and clock."
+
+[lib]
+name = "ados_mapping_pose"
+path = "src/lib.rs"
+
+[dependencies]
+ados-mapping-protocol = { workspace = true }
+ados-capture-contract = { workspace = true }
+ados-scan2d = { workspace = true }
+ados-sdk = { workspace = true }
+ados-protocol = { workspace = true }
+ados-sensorbus = { workspace = true }
+parking_lot = { workspace = true }
+prost = "0.14"
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmpv = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+# CLOCK_MONOTONIC, the host_monotonic timebase every estimate is stamped on.
+nix = { version = "0.29", default-features = false, features = ["time"] }
+
+[features]
+# MAVLink frame builders (`fc_ekf::test_frames`) for a dependent's tests.
+testing = []
+
+[dev-dependencies]
+tempfile = { workspace = true }

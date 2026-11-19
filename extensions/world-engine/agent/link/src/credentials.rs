@@ -23,7 +23,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::json;
-use world_engine_protocol::node_credential::{
+use ados_mapping_protocol::node_credential::{
     InstalledCredential, NodeLane, WorkstationCredentials,
 };
 

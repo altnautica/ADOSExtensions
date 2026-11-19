@@ -4,7 +4,7 @@
 
 use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
-use world_engine_protocol::compute::{Dataset, JobRecord, Output};
+use ados_mapping_protocol::compute::{Dataset, JobRecord, Output};
 
 use crate::{ComputeError, ComputeJobState};
 

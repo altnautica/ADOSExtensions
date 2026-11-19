@@ -34,7 +34,7 @@ pub(super) async fn supervise_session<S, F>(
     spec: SessionSpec,
     mut factory: F,
     detector: Arc<dyn Detector>,
-    tx: mpsc::Sender<world_engine_protocol::offload::OffloadDetectionBatch>,
+    tx: mpsc::Sender<ados_mapping_protocol::offload::OffloadDetectionBatch>,
     cancel: Arc<Notify>,
     registry: Arc<SessionRegistry>,
 ) where

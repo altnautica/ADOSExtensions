@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use ados_protocol::frame::{encode_frame, FrameError, PLUGIN_MAX_FRAME};
 use ados_protocol::ipc::IpcBroadcast;
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     AtlasEvent, CaptureStatus, KeyframeEnvelope, LidarStatus, LiveOccupancy, LivePointCloud,
     MapStatus, PolarScan, PoseDescriptor, ScanDescriptor, ATLAS_CAPTURE_STATE_TOPIC,
     ATLAS_KEYFRAME_TOPIC, ATLAS_SCAN_TOPIC, PLUGIN_ATLAS_LIDAR_TOPIC,
@@ -180,7 +180,7 @@ impl AtlasPublisher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_protocol::atlas::{CaptureState, PoseSource, VioHealth};
+    use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
 
     #[test]
     fn event_frame_round_trips_with_topic_and_payload() {

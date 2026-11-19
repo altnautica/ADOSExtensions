@@ -2,14 +2,14 @@
 
 use ados_capture_contract::{RigSensorKind, Timebase};
 use ados_protocol::framebus::TIMEBASE_SIM;
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     ImageEncoding as KfEncoding, KeyframeImage, Pose, TimeAlignment,
 };
 
 use super::Engine;
-use crate::clock::ClockMap;
-use crate::frame_source::CapturedFrame;
-use crate::pose::{se3, PoseEstimate};
+use ados_mapping_pose::clock::ClockMap;
+use ados_mapping_pose::frame_source::CapturedFrame;
+use ados_mapping_pose::{se3, PoseEstimate};
 use crate::quality;
 use crate::recorder::Item;
 use crate::recording::Phase;
@@ -25,7 +25,7 @@ impl Engine {
     /// idle keyframe is labelled with.
     pub(super) fn to_session(&self, host_ns: u64) -> u64 {
         match &self.session {
-            Some(s) => crate::clock::session_time(s.timebase, &s.clock, host_ns),
+            Some(s) => ados_mapping_pose::clock::session_time(s.timebase, &s.clock, host_ns),
             None => host_ns,
         }
     }

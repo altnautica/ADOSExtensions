@@ -18,11 +18,11 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::Command;
 use tokio::sync::mpsc;
-use world_engine_protocol::atlas::{PoseSource, VioHealth};
+use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 
 use super::wire::{encode_hello, parse_line, ChildLine, ChildState, ChildStatus};
 use super::VioCounters;
-use crate::pose::{diagonal_cov, se3, PoseEstimate, PoseQuality, PoseTrack};
+use ados_mapping_pose::{diagonal_cov, se3, PoseEstimate, PoseQuality, PoseTrack};
 
 pub const MIN_BACKOFF: Duration = Duration::from_secs(1);
 pub const MAX_BACKOFF: Duration = Duration::from_secs(30);

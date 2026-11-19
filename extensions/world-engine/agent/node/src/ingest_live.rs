@@ -3,8 +3,8 @@
 
 use std::collections::HashSet;
 
-use world_engine_protocol::atlas::KeyframeEnvelope;
-use world_engine_protocol::compute::{ComputeJobKind, ComputeJobState};
+use ados_mapping_protocol::atlas::KeyframeEnvelope;
+use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
 
 use super::{AtlasIngest, DEFAULT_RECONSTRUCT_BACKEND};
 use crate::keyframe_persister::dataset_id_for;

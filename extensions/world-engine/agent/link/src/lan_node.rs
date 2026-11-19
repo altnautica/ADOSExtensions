@@ -13,8 +13,8 @@
 use std::net::{IpAddr, SocketAddr};
 
 use axum::http::StatusCode;
-use world_engine_protocol::node_credential::NodeLane;
-use world_engine_transport::PinnedHost;
+use ados_mapping_protocol::node_credential::NodeLane;
+use ados_mapping_transport::PinnedHost;
 
 use crate::compute_node::{self, ComputeNode};
 use crate::credentials::{CredentialGap, CredentialStore};

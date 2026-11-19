@@ -15,7 +15,7 @@
 //! starts a session by accident.
 
 use ados_protocol::buttons::ButtonPress;
-use world_engine_protocol::capture_ctl::CaptureStateView;
+use ados_mapping_protocol::capture_ctl::CaptureStateView;
 
 /// The page's title.
 pub const PAGE_TITLE: &str = "Capture";
@@ -119,7 +119,7 @@ pub fn page_rows(st: &CaptureStateView) -> Vec<(String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_protocol::capture_ctl::{
+    use ados_mapping_protocol::capture_ctl::{
         CoverageSummary, ExposureView, FramesView, HealthView, PoseView, StorageView,
     };
 

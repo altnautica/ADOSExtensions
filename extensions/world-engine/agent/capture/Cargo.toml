@@ -22,7 +22,8 @@ name = "world-engine-capture"
 path = "src/main.rs"
 
 [dependencies]
-world-engine-protocol = { path = "../protocol" }
+ados-mapping-protocol = { workspace = true }
+ados-mapping-pose = { workspace = true }
 ados-capture-contract = { workspace = true }
 ados-sdk = { workspace = true }
 # The vision framebus value types and the Unix-socket framing the atlas bus,
@@ -33,8 +34,8 @@ ados-sensorbus = { workspace = true }
 ados-config = { workspace = true }
 ados-livox = { path = "livox" }
 ados-rplidar = { path = "rplidar" }
-ados-scan2d = { path = "../scan2d" }
-world-engine-livemap = { path = "../livemap" }
+ados-scan2d = { workspace = true }
+ados-livemap = { workspace = true }
 prost = "0.14"
 prost-types = "0.14"
 # Kalibr calibration YAML import.
@@ -64,4 +65,5 @@ default = ["livox-sdk"]
 livox-sdk = ["ados-livox/sdk"]
 
 [dev-dependencies]
+ados-mapping-pose = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }

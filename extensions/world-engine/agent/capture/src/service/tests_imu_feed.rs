@@ -11,18 +11,18 @@ use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     AtlasEvent, MapStatus, PoseSource, PLUGIN_ATLAS_MAP_STATUS_TOPIC,
 };
 
 use super::{run_capture_loop, LoopDeps, NavDeps, Paths};
-use crate::frame_source::{AtlasFrameSource, SyntheticFrameSource};
-use crate::pose::fc_ekf::FcEkfPose;
-use crate::pose::{PoseProvider, PoseTrack};
+use ados_mapping_pose::frame_source::{AtlasFrameSource, SyntheticFrameSource};
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::{PoseProvider, PoseTrack};
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
-use crate::sensor_bus::SensorState;
-use crate::vehicle::VehicleFeed;
+use ados_mapping_pose::sensor_bus::SensorState;
+use ados_mapping_pose::vehicle::VehicleFeed;
 
 /// A LiDAR pose that never estimates: the run's provider is the LiDAR one.
 #[derive(Default)]

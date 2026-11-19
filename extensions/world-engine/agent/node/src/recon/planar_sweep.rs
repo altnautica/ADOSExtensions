@@ -21,7 +21,7 @@ use std::path::Path;
 
 use image::codecs::png::PngEncoder;
 use image::{ExtendedColorType, ImageEncoder};
-use world_engine_protocol::atlas::{PolarScan, VioHealth};
+use ados_mapping_protocol::atlas::{PolarScan, VioHealth};
 
 use ados_capture_contract::{
     ArtifactDescriptorFormat as Fmt, ArtifactDescriptorKind as Kind, Placement,

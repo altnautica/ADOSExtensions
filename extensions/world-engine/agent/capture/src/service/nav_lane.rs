@@ -4,12 +4,12 @@
 use std::path::Path;
 
 use ados_capture_contract::v1::ImuBatch;
-use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus, PoseSource};
+use ados_mapping_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus, PoseSource};
 
 use super::Engine;
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 use crate::nav::{fc_imu, TickInputs};
-use crate::pose::{se3, PoseEstimate, PoseProvider};
+use ados_mapping_pose::{se3, PoseEstimate, PoseProvider};
 use crate::quality::lidar_depth::LidarDepth;
 use crate::recorder::Item;
 
@@ -93,7 +93,7 @@ impl Engine {
             .fc_feed
             .as_ref()
             .and_then(|f| f.attitude())
-            .map(|(_, r_ned_frd)| crate::nav::frd_yaw(&r_ned_frd))
+            .map(|(_, r_ned_frd)| ados_mapping_pose::se3::frd_yaw(&r_ned_frd))
     }
 
     /// Pair each new provider estimate with the flight controller's EKF
@@ -173,7 +173,7 @@ impl Engine {
     /// [`crate::nav::scan_wait`]), oldest first.
     pub(super) async fn place_scans(&mut self) {
         loop {
-            let now = crate::clock::mono_ns();
+            let now = ados_mapping_pose::clock::mono_ns();
             let newest = self.pose.latest().map(|e| e.t_ns);
             let pose = &self.pose;
             let Some((scan, world)) = self.scan_wait.next(now, newest, |t| pose.pose_at(t)) else {
@@ -347,7 +347,7 @@ impl Engine {
         self.publisher.publish_map_status(&out.status).await;
     }
 
-    /// [`world_engine_protocol::atlas::MapStatus::imu_feed`]: with the FC
+    /// [`ados_mapping_protocol::atlas::MapStatus::imu_feed`]: with the FC
     /// feeding the LiDAR pose, whether its feed measures the heading, why
     /// not, and the `RAW_IMU` rate; `None` otherwise, including a run whose
     /// pose fell back to the FC's EKF.
@@ -355,7 +355,7 @@ impl Engine {
         if !self.fc_feeds_lidar_pose() {
             return None;
         }
-        let now = crate::clock::mono_ns();
+        let now = ados_mapping_pose::clock::mono_ns();
         // The feed first; with it measuring, a restarted map's unknown north
         // or a heading its gap left unmeasured.
         let unconfirmed = self.pose.quality().heading_unconfirmed;

@@ -12,10 +12,10 @@ use std::thread::{self, JoinHandle};
 
 use ados_rplidar::{Health, HealthStatus, RawScan, Rplidar, RplidarConfig};
 use tokio::sync::mpsc;
-use world_engine_protocol::atlas::LidarHealth;
+use ados_mapping_protocol::atlas::LidarHealth;
 
 use super::{LidarDriver, LidarDriverStats, LidarSourceError, ReturnCounter};
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 /// A revolution as the capture path carries it; the vectors move, no copy.
 pub fn scan_from_rplidar(sensor_id: &str, s: RawScan) -> LidarScan {

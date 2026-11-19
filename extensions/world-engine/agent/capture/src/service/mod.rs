@@ -30,25 +30,25 @@ use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
-use world_engine_protocol::capture_ctl::{CaptureStateView, CtlReply, ExposureView};
+use ados_mapping_protocol::capture_ctl::{CaptureStateView, CtlReply, ExposureView};
 
 use crate::camera_control::CameraControl;
 use crate::control::ControlMsg;
-use crate::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
+use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
 use crate::hud::HudAction;
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 use crate::nav::{NavMap, NavSettings};
-use crate::pose::fc_ekf::FcEkfPose;
-use crate::pose::PoseProvider;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::pose::PoseProvider;
 use crate::publish::AtlasPublisher;
 use crate::quality::coverage::Coverage;
 use crate::quality::lidar_depth::LidarDepth;
 use crate::quality::QualityMonitor;
 use crate::recording::ActiveSession;
 use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
-use crate::sensor_bus::{BusEvent, SensorState};
+use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
 use crate::session::CaptureSession;
-use crate::vehicle::VehicleFeed;
+use ados_mapping_pose::vehicle::VehicleFeed;
 
 /// The loop's tick: pose drain and state refresh.
 pub const TICK: Duration = Duration::from_millis(100);
@@ -73,7 +73,7 @@ impl Paths {
     pub fn from_env() -> Self {
         Self {
             storage_sidecar: crate::storage::sidecar_path(),
-            clock_sidecar: crate::clock::clock_sidecar_path(),
+            clock_sidecar: ados_mapping_pose::clock::clock_sidecar_path(),
             rig: crate::rig_source::rig_path(),
             active_marker: Some(crate::storage::active_marker()),
         }
@@ -135,7 +135,7 @@ struct CamStats {
     /// Host ns of this camera's last keyframe (its IMU window starts there).
     last_kf_ns: Option<u64>,
     /// The roster geometry the camera's latest frame carried.
-    geometry: crate::rig_source::CameraGeometry,
+    geometry: ados_mapping_pose::frame_source::CameraGeometry,
 }
 
 /// A finished exposure apply, back on the loop.
@@ -194,9 +194,9 @@ pub(crate) struct Engine {
     fc_nav: Arc<crate::nav::fc_imu::FeedState>,
     /// Why the FC IMU feed last left the planar pose degraded, `None` while
     /// it measures the heading ([`crate::nav::fc_imu::FeedState::degraded`]).
-    imu_feed_degraded: Option<world_engine_protocol::atlas::ImuFeedReason>,
+    imu_feed_degraded: Option<ados_mapping_protocol::atlas::ImuFeedReason>,
     /// The planar matcher's in-flight map restarts the navigation map has
-    /// re-anchored ([`crate::pose::PoseQuality::map_restarts`]).
+    /// re-anchored ([`ados_mapping_pose::pose::PoseQuality::map_restarts`]).
     nav_map_restarts: u32,
     /// The scan coverage since the last `nav_imu_feed`.
     nav_feed: nav_lane::NavFeedStats,
@@ -242,7 +242,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         }
     }
     let (exposure_tx, mut exposure_rx) = mpsc::unbounded_channel();
-    let bus_timebase = crate::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
+    let bus_timebase = ados_mapping_pose::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
     let budget = crate::nav::budget::resolve(
         cfg.memory_budget_mb,
         std::env::var(crate::nav::budget::MEMORY_MAX_ENV)
@@ -271,7 +271,7 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
         exposure_tx,
         record_retry_at: cfg
             .record_on_start
-            .then(|| crate::clock::mono_ns() + 2_000_000_000),
+            .then(|| ados_mapping_pose::clock::mono_ns() + 2_000_000_000),
         cfg,
         profile,
         router,

@@ -6,7 +6,7 @@ use ados_capture_contract::foxglove::{
 use ados_capture_contract::v1::PoseCov;
 use ados_protocol::framebus::FrameFormat;
 
-use crate::pose::{health_str, se3, PoseEstimate};
+use ados_mapping_pose::{health_str, se3, PoseEstimate};
 
 /// Session image encoding (`atlas.capture.image_encoding`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
@@ -156,7 +156,7 @@ pub fn location_fix(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_protocol::atlas::{PoseSource, VioHealth};
+    use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 
     #[test]
     fn formats_pick_their_message() {
@@ -225,7 +225,7 @@ mod tests {
             t_ns: 1,
             r: se3::IDENTITY,
             t: [1.0, 2.0, 3.0],
-            cov: crate::pose::diagonal_cov(0.1, 0.01),
+            cov: ados_mapping_pose::pose::diagonal_cov(0.1, 0.01),
             source: PoseSource::Vio,
             health: VioHealth::Degraded,
             sigma_xy_m: None,

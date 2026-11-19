@@ -24,7 +24,7 @@ const PUT_FILES: [&str; 3] = ["rig.json", MCAP, "checksums.b3"];
 
 fn fixture(rel: &str) -> Vec<u8> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contract/fixtures/tiny-session")
+        .join("../../../../crates/mapping-protocol/contract/fixtures/tiny-session")
         .join(ID);
     std::fs::read(dir.join(rel)).unwrap()
 }

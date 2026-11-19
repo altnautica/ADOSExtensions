@@ -11,14 +11,14 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use world_engine_capture::camera_control::{CameraControl, CameraOutcome, REPLY_BUDGET};
-use world_engine_capture::pose::replay::ReplayPose;
-use world_engine_capture::sensor_bus::SensorState;
-use world_engine_capture::vehicle::VehicleFeed;
+use ados_mapping_pose::replay::ReplayPose;
+use ados_mapping_pose::sensor_bus::SensorState;
+use ados_mapping_pose::frame_source::{AtlasFrameSource, EngineFrameSource};
+use ados_mapping_pose::vehicle::VehicleFeed;
 use world_engine_capture::{
-    run_capture_loop, AtlasFrameSource, AtlasPublisher, AtlasRuntimeConfig, ControlMsg,
-    EngineFrameSource, LoopDeps, Paths,
+    run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths,
 };
-use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest, ExposureView};
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, ExposureView};
 
 /// Takes the values after `delay`, reading back a slightly different exposure.
 struct SlowCamera {

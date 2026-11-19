@@ -21,7 +21,7 @@ pub mod lidar_depth;
 use std::collections::HashMap;
 
 use ados_protocol::framebus::FrameFormat;
-use world_engine_protocol::capture_ctl::HealthView;
+use ados_mapping_protocol::capture_ctl::HealthView;
 
 use flicker::{FlickerDetector, FLICKER_BAD_PCT, FLICKER_WARN_PCT};
 

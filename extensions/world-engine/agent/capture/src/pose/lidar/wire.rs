@@ -20,7 +20,7 @@
 
 use serde::Deserialize;
 
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 /// Bytes after the length field before the point data.
 const HEAD_LEN: usize = 12;

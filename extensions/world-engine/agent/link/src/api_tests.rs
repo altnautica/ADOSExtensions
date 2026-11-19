@@ -11,7 +11,7 @@ use axum::http::Request;
 use parking_lot::Mutex;
 use std::path::Path;
 use tower::ServiceExt;
-use world_engine_transport::BulkConfig;
+use ados_mapping_transport::BulkConfig;
 
 /// A drone API over `host`, the control socket at `control`, sessions under
 /// `root` and the calib store at `<root>/calib`.

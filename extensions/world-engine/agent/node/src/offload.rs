@@ -11,9 +11,9 @@
 use crate::ComputeError;
 
 // The offload wire (the frame reference + the returned detection) lives in
-// `world_engine_protocol::offload` so this node crate and the drone-side return bridge
+// `ados_mapping_protocol::offload` so this node crate and the drone-side return bridge
 // build against one frozen definition without depending on each other.
-pub use world_engine_protocol::offload::{Detection, FrameRef};
+pub use ados_mapping_protocol::offload::{Detection, FrameRef};
 
 /// A detection backend. `Send + Sync` so a worker pool can share one.
 pub trait Detector: Send + Sync {

@@ -3,7 +3,7 @@
 //! A scan's pose describes its first return, and a provider that matches on
 //! a worker thread (the planar matcher) estimates it only after the scan was
 //! fed. Asked at once, the scan's time lies a revolution past the newest
-//! estimate, beyond [`crate::pose::MAX_EXTRAPOLATION_NS`], and the pose is
+//! estimate, beyond [`ados_mapping_pose::pose::MAX_EXTRAPOLATION_NS`], and the pose is
 //! refused; a scan placed then went into neither the live map, the session's
 //! polar record nor the node stream (with a 10 Hz planar LiDAR, about 97 % of
 //! the scans). Scans wait here in arrival order until the provider's track
@@ -11,8 +11,8 @@
 
 use std::collections::VecDeque;
 
-use crate::lidar_scan::LidarScan;
-use crate::pose::PoseEstimate;
+use ados_mapping_pose::lidar_scan::LidarScan;
+use ados_mapping_pose::pose::PoseEstimate;
 
 /// How long a scan waits for its pose before it is placed without one
 /// (host monotonic nanoseconds past its first return).
@@ -71,8 +71,8 @@ impl ScanWait {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pose::{interpolate, se3};
-    use world_engine_protocol::atlas::{PoseSource, VioHealth};
+    use ados_mapping_pose::{interpolate, se3};
+    use ados_mapping_protocol::atlas::{PoseSource, VioHealth};
 
     fn scan(t_ns: u64) -> LidarScan {
         LidarScan {

@@ -2,7 +2,7 @@
 //! HUD buttons and the segment roll.
 
 use serde::Deserialize;
-use world_engine_protocol::atlas::PoseSource;
+use ados_mapping_protocol::atlas::PoseSource;
 
 use crate::pose::vio::pairing::VioScale;
 

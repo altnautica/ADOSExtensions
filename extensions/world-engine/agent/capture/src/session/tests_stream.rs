@@ -2,7 +2,7 @@
 
 use super::tests::{cam, config, started};
 use super::*;
-use world_engine_protocol::atlas::CameraRole;
+use ados_mapping_protocol::atlas::CameraRole;
 
 #[test]
 fn a_camera_that_stops_delivering_reads_zero_hz_not_its_last_rate() {

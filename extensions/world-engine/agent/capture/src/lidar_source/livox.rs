@@ -16,7 +16,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::{LidarDriver, LidarDriverStats, LidarSourceError, ReturnCounter};
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 pub use ados_livox::SdkNetConfig;
 
@@ -91,7 +91,7 @@ impl LidarDriver for LivoxSource {
         let c = &self.counters;
         let last = c.last_scan_ns.load(Ordering::Relaxed);
         LidarDriverStats {
-            connected: link_fresh(last, crate::clock::mono_ns()),
+            connected: link_fresh(last, ados_mapping_pose::clock::mono_ns()),
             device: None,
             health: None,
             revolutions: c.frames.load(Ordering::Relaxed),
@@ -146,7 +146,7 @@ fn start_impl(
         }
         c.frames.fetch_add(1, Ordering::Relaxed);
         c.last_scan_ns
-            .store(crate::clock::mono_ns(), Ordering::Relaxed);
+            .store(ados_mapping_pose::clock::mono_ns(), Ordering::Relaxed);
         c.returns.on_scan(scan.points.len());
         let counter = match scans.try_send(scan_from_livox(&sensor_id, scan)) {
             Ok(()) => &c.delivered,

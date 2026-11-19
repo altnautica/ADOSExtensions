@@ -2,15 +2,15 @@
 //! the 1 Hz slow tick (health record, HUD, state and live-map publish).
 
 use ados_capture_contract::v1::ImuBatch;
-use world_engine_protocol::capture_ctl::StartArgs;
+use ados_mapping_protocol::capture_ctl::StartArgs;
 
-use world_engine_protocol::atlas::PoseDescriptor;
+use ados_mapping_protocol::atlas::PoseDescriptor;
 
 use super::{Engine, SLOW_TICKS};
 use crate::quality::{ClockReading, Level, StorageReading};
 use crate::recorder::{convert, Item};
 use crate::recording::Phase;
-use crate::sensor_bus::BusEvent;
+use ados_mapping_pose::sensor_bus::BusEvent;
 
 /// Retry period of `record_on_start` when a start is refused.
 const RECORD_RETRY_NS: u64 = 5_000_000_000;
@@ -28,7 +28,7 @@ impl Engine {
             BusEvent::Imu { src, batch } => {
                 self.pose.feed_imu(src, batch);
                 if let Some(s) = batch.samples.last() {
-                    self.quality.on_gyro(crate::clock::mono_ns(), &s.gyro);
+                    self.quality.on_gyro(ados_mapping_pose::clock::mono_ns(), &s.gyro);
                 }
             }
             // The open session's map follows its own timebase, paused or not.
@@ -83,7 +83,7 @@ impl Engine {
     }
 
     pub(super) async fn on_tick(&mut self) {
-        let now = crate::clock::mono_ns();
+        let now = ados_mapping_pose::clock::mono_ns();
         if let Some(pd) = self.drain_poses() {
             self.publisher.publish_pose(&pd).await;
         }
@@ -137,7 +137,7 @@ impl Engine {
         self.quality.recording = self.is_recording();
         self.quality
             .on_pose_quality(q.degeneracy_ratio, q.tracked_features);
-        let now_mono_ns = crate::clock::mono_ns();
+        let now_mono_ns = ados_mapping_pose::clock::mono_ns();
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
@@ -159,7 +159,7 @@ impl Engine {
         if out.is_empty() || self.recorder().is_none() {
             return due;
         }
-        let source = crate::pose::source_str(self.pose.source());
+        let source = ados_mapping_pose::pose::source_str(self.pose.source());
         for e in out {
             let t = self.to_session(e.t_ns);
             let (pose, cov) = convert::pose(&e, t);
@@ -225,7 +225,7 @@ impl Engine {
             },
         };
         self.bus_timebase =
-            crate::clock::ClockSidecar::read(&self.paths.clock_sidecar).map(|c| c.timebase());
+            ados_mapping_pose::clock::ClockSidecar::read(&self.paths.clock_sidecar).map(|c| c.timebase());
         let s = self.sensors.lock();
         let (locked, sigma) = s.clock.lock();
         self.quality.clock = ClockReading {
@@ -261,7 +261,7 @@ impl Engine {
 
     /// The keyframe session's status, carrying the drone's live
     /// `atlas.reconstruct_steps` for the compute node.
-    pub(super) fn capture_status(&self) -> world_engine_protocol::atlas::CaptureStatus {
+    pub(super) fn capture_status(&self) -> ados_mapping_protocol::atlas::CaptureStatus {
         let mut status = self.keyframes.status();
         status.reconstruct_steps = self.reconstruct_steps.get();
         status

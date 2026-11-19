@@ -8,9 +8,9 @@ use ados_capture_contract::{
     session_id, ContractId, GeoAnchor, GeoAnchorDatum, GeoAnchorSource, Manifest, ManifestProfile,
     Operator, Rig, RigRef, Room, SessionHealth, Timebase,
 };
-use world_engine_protocol::capture_ctl::{codes, CtlReply, OperatorAnchor, StartArgs};
+use ados_mapping_protocol::capture_ctl::{codes, CtlReply, OperatorAnchor, StartArgs};
 
-use crate::clock::ClockMap;
+use ados_mapping_pose::clock::ClockMap;
 use crate::recorder::convert::ImageEncoding;
 use crate::recorder::{Recorder, RecorderConfig};
 use crate::storage;
@@ -28,7 +28,7 @@ pub struct StartEnv<'a> {
     pub profile: &'a str,
     pub rig: Rig,
     pub timebase: Timebase,
-    /// The session's own host → session map ([`crate::clock::ClockMap::for_session`]).
+    /// The session's own host → session map ([`ados_mapping_pose::clock::ClockMap::for_session`]).
     pub clock: ClockMap,
     pub sigma_ns: i64,
     /// Session-timebase ns now.
@@ -80,7 +80,7 @@ pub fn operator_anchor(a: &OperatorAnchor) -> Result<GeoAnchor, CtlReply> {
         lat_deg: a.lat_deg,
         lon_deg: a.lon_deg,
         h_ellipsoid_m: a.h_ellipsoid_m,
-        geoid_undulation_m: crate::geo::geoid_undulation_m(a.lat_deg, a.lon_deg),
+        geoid_undulation_m: ados_mapping_pose::geo::geoid_undulation_m(a.lat_deg, a.lon_deg),
         datum: GeoAnchorDatum::Wgs84,
         source: GeoAnchorSource::Operator,
     })

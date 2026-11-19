@@ -256,19 +256,19 @@ pub(super) async fn publish_world_generation(
     let mut published = 0usize;
     for (topic, payload) in [
         (
-            world_engine_protocol::atlas::PLUGIN_ATLAS_SPLAT_TOPIC,
+            ados_mapping_protocol::atlas::PLUGIN_ATLAS_SPLAT_TOPIC,
             set.splat.as_ref().map(|d| d.to_msgpack()),
         ),
         (
-            world_engine_protocol::atlas::PLUGIN_ATLAS_POINTCLOUD_TOPIC,
+            ados_mapping_protocol::atlas::PLUGIN_ATLAS_POINTCLOUD_TOPIC,
             set.pointcloud.as_ref().map(|d| d.to_msgpack()),
         ),
         (
-            world_engine_protocol::atlas::PLUGIN_ATLAS_MESH_TOPIC,
+            ados_mapping_protocol::atlas::PLUGIN_ATLAS_MESH_TOPIC,
             set.mesh.as_ref().map(|d| d.to_msgpack()),
         ),
         (
-            world_engine_protocol::atlas::PLUGIN_ATLAS_OCCUPANCY_TOPIC,
+            ados_mapping_protocol::atlas::PLUGIN_ATLAS_OCCUPANCY_TOPIC,
             set.occupancy.as_ref().map(|d| d.to_msgpack()),
         ),
     ] {

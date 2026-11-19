@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
-use world_engine_protocol::compute::ComputeGpu;
+use ados_mapping_protocol::compute::ComputeGpu;
 
 /// Sample the host GPU: the cached static identity plus a freshly-sampled (short-
 /// cached) utilisation. On a non-macOS host this is all-`null`.

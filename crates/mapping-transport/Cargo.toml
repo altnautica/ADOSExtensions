@@ -1,0 +1,47 @@
+# The mapping transport: the capture stream lane (LAN HTTP, WFB relay and
+# loopback bearers behind a failover ladder, the compute-side live WebSocket
+# fan-out) and the drone-side client of a compute node (job API, compute-node
+# discovery over the host's mDNS, the perception-offload orchestrator and its
+# safety-gated return bridge). Workspace-internal; never published.
+[package]
+name = "ados-mapping-transport"
+version = "1.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADOS mapping transport: the capture stream lane and the drone-side compute-node client."
+
+[lib]
+name = "ados_mapping_transport"
+path = "src/lib.rs"
+
+[dependencies]
+ados-mapping-protocol = { workspace = true }
+# Node-credential header, WebSocket-ticket subprotocol, the mDNS browse types,
+# the vision detection-bus types, and the rustls crypto-provider install the
+# reqwest client builder needs.
+ados-protocol = { workspace = true, features = ["tls"] }
+# The offload safety gates (freshness + lock state) the return bridge drives.
+ados-offload = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
+bytes = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+tower = { workspace = true }
+futures-util = { workspace = true }
+reqwest = { workspace = true, features = ["json"] }
+tokio-tungstenite = { workspace = true }
+
+[dev-dependencies]
+ados-capture-contract = { workspace = true }
+tempfile = { workspace = true }

@@ -5,15 +5,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ados_capture_contract::{LidarModelPattern, Rig};
-use world_engine_protocol::atlas::PoseSource;
+use ados_mapping_protocol::atlas::PoseSource;
 
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 use crate::lidar_source::{self, LidarRunner};
-use crate::pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
 use crate::pose::lidar::{kiss_config, Launcher, LidarPose, LidarPoseConfig};
 use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
 use crate::pose::vio::{VioConfig, VioPose};
-use crate::pose::PoseProvider;
+use ados_mapping_pose::pose::PoseProvider;
 use crate::rig_source;
 use crate::runtime::{resolve_pose_provider, AtlasRuntimeConfig};
 

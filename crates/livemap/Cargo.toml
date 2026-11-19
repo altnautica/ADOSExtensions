@@ -1,0 +1,26 @@
+# The live map builders shared by navigation (on board) and the reconstruct
+# node (streamed): 5 cm occupancy tiles from ray-traced planar scans and a
+# bounded voxel-centroid sweep cloud, both emitting the live payloads of the
+# mapping protocol. Workspace-internal; never published.
+[package]
+name = "ados-livemap"
+version = "1.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADOS live occupancy tiles and sweep cloud from posed planar scans."
+
+[lib]
+name = "ados_livemap"
+path = "src/lib.rs"
+
+[dependencies]
+ados-mapping-protocol = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

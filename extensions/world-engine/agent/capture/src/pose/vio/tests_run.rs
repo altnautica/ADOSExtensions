@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 
 use ados_capture_contract::CameraModelModel;
 use ados_protocol::framebus::FrameFormat;
-use world_engine_protocol::atlas::VioHealth;
+use ados_mapping_protocol::atlas::VioHealth;
 
 use super::pairing::{PairOutcome, StereoPairer, VioScale};
 use super::tests::{assert_close, mat4_inv, mat4_mul, rig, POSE, R_Z90};
 use super::*;
-use crate::pose::{se3, PoseProvider};
+use ados_mapping_pose::{se3, PoseProvider};
 
 fn frame(
     cam: &str,

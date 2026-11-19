@@ -26,7 +26,7 @@ use ados_capture_contract::{
     CameraModel, CameraModelModel, ContractId, GeoAnchor, TransformsFrame, TransformsJson,
     TransformsJsonCameraModel,
 };
-use world_engine_protocol::atlas::{ImageEncoding, KeyframeEnvelope};
+use ados_mapping_protocol::atlas::{ImageEncoding, KeyframeEnvelope};
 
 /// Subdirectory under a dataset directory that holds the keyframe images.
 const IMAGES_DIR: &str = "images";

@@ -148,7 +148,7 @@ pub(super) async fn atlas_receiver_loop(
             maybe_event = rx.recv() => {
                 let Some(event) = maybe_event else { break };
                 // A streaming drone's raw scans build the live map, not a dataset.
-                if event.topic == world_engine_protocol::atlas::ATLAS_SCAN_TOPIC {
+                if event.topic == ados_mapping_protocol::atlas::ATLAS_SCAN_TOPIC {
                     live_maps.on_scan(&event);
                     continue;
                 }

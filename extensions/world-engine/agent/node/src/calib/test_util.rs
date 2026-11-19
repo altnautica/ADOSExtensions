@@ -35,7 +35,7 @@ pub fn fixture(name: &str) -> String {
 /// The committed tiny capture session (2 frames of `cam0`, 20 `imu0` samples).
 pub fn tiny_session() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contract/fixtures/tiny-session/sim-1-20261019T000000Z-0001")
+        .join("../../../../crates/mapping-protocol/contract/fixtures/tiny-session/sim-1-20261019T000000Z-0001")
 }
 
 /// A copy of the tiny session under `root` with `edit` applied to its rig.

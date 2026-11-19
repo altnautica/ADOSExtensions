@@ -3,7 +3,7 @@
 //! A pinned address (plugin config `offload.compute_node_addr`, `host:port` or a
 //! bare host) wins over mDNS, for segmented networks where multicast does not
 //! reach the node; the node at that address is asked its id
-//! ([`NODE_IDENTITY_PATH`](world_engine_protocol::compute::NODE_IDENTITY_PATH))
+//! ([`NODE_IDENTITY_PATH`](ados_mapping_protocol::compute::NODE_IDENTITY_PATH))
 //! so the lanes present only the credential it issued. Otherwise the node is a
 //! compute-node job-API advert ([`COMPUTE_SERVICE`]) found through the host's
 //! `mdns.browse`, preferring one that issued this drone a credential. The Atlas
@@ -13,13 +13,13 @@
 use std::future::Future;
 use std::time::Duration;
 
-use world_engine_transport::{
+use ados_mapping_transport::{
     node_identity, pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE,
 };
 
 use crate::credentials::{CredentialGap, CredentialStore};
 use crate::host::{config_string, Host};
-use world_engine_protocol::node_credential::NodeLane;
+use ados_mapping_protocol::node_credential::NodeLane;
 
 /// The plugin config key that pins the compute node.
 pub const PIN_KEY: &str = "offload.compute_node_addr";
@@ -173,7 +173,7 @@ mod tests {
     use crate::credentials::{ATLAS_INGEST_LANE, SESSION_UPLOAD_LANE, STORE_FILE};
     use crate::testing::FakeHost;
     use serde_json::json;
-    use world_engine_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
+    use ados_mapping_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
 
     fn discovered() -> Option<ResolvedComputeNode> {
         Some(ResolvedComputeNode {
@@ -242,7 +242,7 @@ mod tests {
         let mut app = axum::Router::new();
         if let Some(id) = identity {
             app = app.route(
-                world_engine_protocol::compute::NODE_IDENTITY_PATH,
+                ados_mapping_protocol::compute::NODE_IDENTITY_PATH,
                 get(move || async move { axum::Json(json!({ "node_id": id })) }),
             );
         }
@@ -326,7 +326,7 @@ mod tests {
                 hostname: "ws.local".into(),
                 port: 8092,
                 addresses: vec!["192.0.2.9".into()],
-                txt: world_engine_transport::compute_advert_txt("ws-mdns"),
+                txt: ados_mapping_transport::compute_advert_txt("ws-mdns"),
             }],
         );
         let node = resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE)

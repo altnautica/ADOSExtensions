@@ -26,9 +26,9 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 
-use world_engine_protocol::node_credential::{NodeLane, NODE_CREDENTIAL_HEADER};
+use ados_mapping_protocol::node_credential::{NodeLane, NODE_CREDENTIAL_HEADER};
 #[cfg(unix)]
-use world_engine_transport::UnixPeer;
+use ados_mapping_transport::UnixPeer;
 
 use crate::node_credentials::NodeCredentialStore;
 
@@ -163,7 +163,7 @@ fn own_job_read(path: &str) -> bool {
 /// Whether a job-API request is open to any caller: only reading the node's
 /// identity, which it also advertises over mDNS.
 pub fn public_job_api_route(method: &Method, path: &str) -> bool {
-    method == Method::GET && path == world_engine_protocol::compute::NODE_IDENTITY_PATH
+    method == Method::GET && path == ados_mapping_protocol::compute::NODE_IDENTITY_PATH
 }
 
 /// The issued credential a node request was admitted with (its id), set on

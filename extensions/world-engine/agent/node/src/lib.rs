@@ -11,7 +11,7 @@
 //! out to, behind the [`Reconstructor`] and [`Detector`] traits. The mock
 //! backends keep the whole engine testable with no GPU, no camera, and no
 //! network. The job and cluster wire types live in
-//! [`world_engine_protocol::compute`]; this crate owns the store, the
+//! [`ados_mapping_protocol::compute`]; this crate owns the store, the
 //! scheduler, and the backends.
 
 mod api;
@@ -133,7 +133,7 @@ pub use world_descriptors::{
 };
 
 // Re-export the shared wire contract so callers get one import surface.
-pub use world_engine_protocol::compute::{
+pub use ados_mapping_protocol::compute::{
     CancelResponse, ClusterDescriptor, ComputeGpu, ComputeHeartbeat, ComputeJobKind,
     ComputeJobRequest, ComputeJobState, ComputeJobStatus, ComputeRole, Dataset, JobRecord, Output,
     SlaveDescriptor, SubmitResponse,

@@ -1,7 +1,7 @@
 //! The `GET /atlas/capture/state` view.
 
-use world_engine_protocol::atlas::VioHealth;
-use world_engine_protocol::capture_ctl::{
+use ados_mapping_protocol::atlas::VioHealth;
+use ados_mapping_protocol::capture_ctl::{
     CameraFramesView, CaptureStateView, FramesView, PoseView, StorageView,
 };
 
@@ -10,7 +10,7 @@ use crate::recording::Phase;
 
 impl Engine {
     pub(crate) fn state_view(&mut self) -> CaptureStateView {
-        let now = crate::clock::mono_ns();
+        let now = ados_mapping_pose::clock::mono_ns();
         self.quality.recording = self.is_recording();
         let (state, session_id) = state_and_id(
             self.session
@@ -33,10 +33,10 @@ impl Engine {
         let latest = self.pose.latest();
         let fresh = latest
             .as_ref()
-            .is_some_and(|e| now.saturating_sub(e.t_ns) <= crate::pose::MAX_EXTRAPOLATION_NS * 10);
+            .is_some_and(|e| now.saturating_sub(e.t_ns) <= ados_mapping_pose::pose::MAX_EXTRAPOLATION_NS * 10);
         let pose = PoseView {
             source: if fresh {
-                crate::pose::source_str(self.pose.source()).to_string()
+                ados_mapping_pose::pose::source_str(self.pose.source()).to_string()
             } else {
                 "none".to_string()
             },

@@ -30,30 +30,30 @@ use ados_sdk::{ClientError, PluginContext};
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
-use world_engine_protocol::atlas::LidarStatus;
-use world_engine_protocol::paths::{ipc_dir, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
+use ados_mapping_protocol::atlas::LidarStatus;
+use ados_mapping_protocol::paths::{ipc_dir, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
 
 use crate::control::serve_control;
-use crate::frame_source::{AtlasFrameSource, FrameRouter};
+use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
 use crate::hud::{button_action, HudAction};
 use crate::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
-use crate::pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
-use crate::sensor_bus::{run_ingest, SensorState};
+use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
 use crate::service::{run_capture_loop, LoopDeps, Paths};
-use crate::vehicle::VehicleFeed;
+use ados_mapping_pose::vehicle::VehicleFeed;
 
 /// How often the plugin config is re-read.
 pub const CONFIG_POLL: Duration = Duration::from_secs(5);
 
 /// The FC messages the EKF pose and the navigation map read. `ATTITUDE` is
 /// there because the drone stream table carries it and not the quaternion
-/// outside a capture session ([`crate::mavlink_msg`]); `GPS_RAW_INT` says when
-/// the EKF's position is GNSS-referenced ([`crate::nav::align`]); `RAW_IMU`
+/// outside a capture session ([`ados_mapping_pose::mavlink_msg`]); `GPS_RAW_INT` says when
+/// the EKF's position is GNSS-referenced ([`ados_mapping_pose::align`]); `RAW_IMU`
 /// is the gyro the planar matcher's `fc` IMU integrates ([`crate::nav::fc_imu`]);
 /// `OPTICAL_FLOW` over the downward `DISTANCE_SENSOR` range is the ground
-/// velocity it follows along a corridor ([`crate::nav::fc_flow`]).
+/// velocity it follows along a corridor ([`ados_mapping_pose::fc_flow`]).
 const FC_MESSAGES: [&str; 8] = [
     "ATTITUDE",
     "ATTITUDE_QUATERNION",
@@ -287,7 +287,7 @@ pub fn rig_restart_due(started: Option<&[u8]>, now: Option<&[u8]>, recording: bo
 /// published as it is produced. Ends when the run aborts it.
 async fn lidar_task(
     runner: LidarRunner,
-    scans: mpsc::Sender<crate::lidar_scan::LidarScan>,
+    scans: mpsc::Sender<ados_mapping_pose::lidar_scan::LidarScan>,
     publisher: AtlasPublisher,
 ) {
     let (status_tx, mut status_rx) = watch::channel(LidarStatus::default());
@@ -305,7 +305,7 @@ async fn lidar_task(
 /// logged once.
 async fn hud_page(
     ctx: PluginContext,
-    mut rx: watch::Receiver<world_engine_protocol::capture_ctl::CaptureStateView>,
+    mut rx: watch::Receiver<ados_mapping_protocol::capture_ctl::CaptureStateView>,
     cancel: Shutdown,
 ) {
     let mut last: Option<Vec<(String, String)>> = None;
@@ -364,7 +364,7 @@ async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 4
                         .and_then(|(_, v)| v.as_slice().map(<[u8]>::to_vec))
                 });
                 if let Some(frame) = frame {
-                    fc.on_frame(&frame, crate::clock::mono_ns());
+                    fc.on_frame(&frame, ados_mapping_pose::clock::mono_ns());
                 }
             });
             if let Err(e) = ctx.mavlink.subscribe(name, cb).await {
@@ -485,7 +485,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
 mod tests {
     use super::*;
     use crate::config::{CameraConfig, CaptureConfig};
-    use world_engine_protocol::atlas::CameraRole;
+    use ados_mapping_protocol::atlas::CameraRole;
 
     fn enabled_config() -> AtlasRuntimeConfig {
         AtlasRuntimeConfig {

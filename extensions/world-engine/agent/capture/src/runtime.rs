@@ -20,8 +20,8 @@ use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
-use world_engine_protocol::atlas::{ComputePlacement, NavPoseMode, POSE_COV_LEN};
-use world_engine_protocol::capture_ctl::{ExposureMode, ExposureView};
+use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseMode, POSE_COV_LEN};
+use ados_mapping_protocol::capture_ctl::{ExposureMode, ExposureView};
 
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 use crate::recorder::convert::ImageEncoding;
@@ -166,7 +166,7 @@ impl PosePrior {
             .position_sigma_m
             .unwrap_or(ASSUMED_DOP * self.gnss_uere_m)
             .max(f64::MIN_POSITIVE);
-        crate::pose::diagonal_cov(sigma, self.orientation_sigma_rad)
+        ados_mapping_pose::pose::diagonal_cov(sigma, self.orientation_sigma_rad)
     }
 }
 

@@ -10,12 +10,12 @@ use ados_capture_contract::{
 use std::sync::Arc;
 use tokio::sync::broadcast;
 use world_engine_node::{Cluster, Engine, JobStore, MockDetector, MockReconstructor, Scheduler};
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     CameraRole, CaptureState, CaptureStatus, ImageEncoding, KeyframeEnvelope, KeyframeFlags,
     KeyframeImage, KeyframeTier, Pose, PoseSource, TimeAlignment, VioHealth,
     ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC, POSE_COV_LEN,
 };
-use world_engine_transport::AtlasEvent;
+use ados_mapping_transport::AtlasEvent;
 
 pub fn engine() -> Engine {
     let store = JobStore::open(":memory:").unwrap();

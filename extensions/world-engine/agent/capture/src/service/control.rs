@@ -4,12 +4,12 @@
 use ados_capture_contract::{SessionHealth, Timebase};
 use serde_json::json;
 use tokio::sync::oneshot;
-use world_engine_protocol::atlas::CaptureState;
-use world_engine_protocol::capture_ctl::{codes, CtlReply, CtlRequest, ExposureView, StartArgs};
+use ados_mapping_protocol::atlas::CaptureState;
+use ados_mapping_protocol::capture_ctl::{codes, CtlReply, CtlRequest, ExposureView, StartArgs};
 
 use super::{Engine, ExposureDone};
 use crate::camera_control::{apply_within, PENDING, REPLY_BUDGET};
-use crate::clock::ClockSidecar;
+use ados_mapping_pose::clock::ClockSidecar;
 use crate::control::ControlMsg;
 use crate::hud::HudAction;
 use crate::quality::coverage::Coverage;
@@ -109,7 +109,7 @@ impl Engine {
     }
 
     fn mark(&mut self, room: String, floor: Option<i64>) -> Option<u32> {
-        let t = self.to_session(crate::clock::mono_ns());
+        let t = self.to_session(ados_mapping_pose::clock::mono_ns());
         let s = self.session.as_mut()?;
         let floor = floor.unwrap_or(s.floor);
         let seg = s.mark(room, floor, t);
@@ -202,25 +202,25 @@ impl Engine {
             Some(c) => (c.timebase(), c.sigma_ns),
             None => (Timebase::HostMonotonic, -1),
         };
-        let now = crate::clock::mono_ns();
+        let now = ados_mapping_pose::clock::mono_ns();
         let (t0, utc, map) = {
             let s = self.sensors.lock();
             // A session never mixes timebases: a non-host one waits for its
             // first bus sample instead of starting on the host clock.
-            if !crate::clock::timebase_ready(timebase, &s.clock) {
+            if !ados_mapping_pose::clock::timebase_ready(timebase, &s.clock) {
                 return Err(CtlReply::err(
                     codes::CLOCK_NOT_READY,
                     format!(
                         "timebase {} has no clock sample yet",
-                        crate::clock::timebase_str(timebase)
+                        ados_mapping_pose::clock::timebase_str(timebase)
                     ),
                 ));
             }
             let map = s.clock.for_session();
             let utc = map
                 .utc_at(now)
-                .or_else(|| (timebase == Timebase::HostMonotonic).then(crate::clock::realtime_ns));
-            (crate::clock::session_time(timebase, &map, now), utc, map)
+                .or_else(|| (timebase == Timebase::HostMonotonic).then(ados_mapping_pose::clock::realtime_ns));
+            (ados_mapping_pose::clock::session_time(timebase, &map, now), utc, map)
         };
         let env = StartEnv {
             device_id: &self.cfg.device_id,
@@ -265,7 +265,7 @@ impl Engine {
     /// Close the open session on a blocking thread (checksums over a large
     /// session take a while); the state reads `closing` until it is done.
     pub(super) fn begin_close(&mut self) {
-        let t_end = self.to_session(crate::clock::mono_ns());
+        let t_end = self.to_session(ados_mapping_pose::clock::mono_ns());
         let Some(s) = self.session.take() else { return };
         if s.clock.rejected > 0 {
             tracing::warn!(

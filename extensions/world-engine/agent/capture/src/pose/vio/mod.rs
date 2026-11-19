@@ -39,14 +39,14 @@ use ados_capture_contract::Rig;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use world_engine_protocol::atlas::PoseSource;
+use ados_mapping_protocol::atlas::PoseSource;
 
 use self::calib::{basalt_calib, basalt_config, imu_from_body, scaled_rig, CalibError};
 use self::pairing::{PairOutcome, StereoPairer, VioScale};
 use self::supervise::{supervise, ChildSpec};
 use self::wire::{encode_imu, encode_stereo, HEADER_LEN, IMU_LEN};
-use super::{se3, PoseProvider, PoseTrack};
-use crate::frame_source::CapturedFrame;
+use ados_mapping_pose::{se3, PoseProvider, PoseTrack};
+use ados_mapping_pose::frame_source::CapturedFrame;
 
 /// IMU batches that may wait for the child.
 pub const IMU_QUEUE_DEPTH: usize = 256;

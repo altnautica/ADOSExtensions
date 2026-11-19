@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use world_engine_node::recon::planar_sweep::{close_loops, sweep};
-use world_engine_protocol::atlas::{PolarScan, VioHealth};
+use ados_mapping_protocol::atlas::{PolarScan, VioHealth};
 
 /// The sweep's z-up world (`x`, `-y`, `-z`) back to `map_ned`.
 fn flu_to_ned(p: [f64; 3]) -> [f32; 3] {

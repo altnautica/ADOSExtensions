@@ -28,7 +28,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use world_engine_protocol::capture_ctl::{CtlRequest, MarkArgs, StartArgs};
+use ados_mapping_protocol::capture_ctl::{CtlRequest, MarkArgs, StartArgs};
 
 use crate::api::DroneApi;
 use crate::host::to_json;
@@ -204,7 +204,7 @@ mod tests {
     use crate::control::tests::fake_control_socket;
     use crate::testing::FakeHost;
     use serde_json::json;
-    use world_engine_protocol::capture_ctl::CtlReply;
+    use ados_mapping_protocol::capture_ctl::CtlReply;
 
     #[tokio::test]
     async fn tools_run_the_route_operations() {

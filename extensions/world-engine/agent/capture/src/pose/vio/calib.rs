@@ -20,7 +20,7 @@ use ados_capture_contract::{
 use serde_json::{json, Value};
 
 use super::pairing::VioScale;
-use crate::pose::se3;
+use ados_mapping_pose::se3;
 
 /// IMU sample rate the noise densities are discretised at. The sensor bus
 /// carries the flight controller's raw IMU at about this rate.

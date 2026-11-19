@@ -1,5 +1,5 @@
 use super::*;
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 /// OpenCV camera looking along world +x (ENU east), y down = world −z.
 const LOOK_EAST: [f64; 9] = [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0];

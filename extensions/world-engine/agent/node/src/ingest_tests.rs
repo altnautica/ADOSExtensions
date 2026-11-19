@@ -2,7 +2,7 @@ use super::*;
 use ados_capture_contract::{
     CameraModel, CameraModelModel, GeoAnchor, GeoAnchorDatum, GeoAnchorSource,
 };
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     CameraRole, ImageEncoding, KeyframeFlags, KeyframeImage, KeyframeTier, Pose, PoseSource,
     VioHealth,
 };
@@ -38,9 +38,9 @@ fn real_keyframe_event(session: &str, kf_id: u64) -> AtlasEvent {
             t: [0.0, 0.0, 0.0],
             cov: None,
         },
-        pose_cov: vec![0.0009; world_engine_protocol::atlas::POSE_COV_LEN],
+        pose_cov: vec![0.0009; ados_mapping_protocol::atlas::POSE_COV_LEN],
         pose_source: PoseSource::FcEkf,
-        time: world_engine_protocol::atlas::TimeAlignment::unmeasured(),
+        time: ados_mapping_protocol::atlas::TimeAlignment::unmeasured(),
         anchor: Some(GeoAnchor {
             lat_deg: 12.97,
             lon_deg: 77.59,
@@ -308,7 +308,7 @@ fn live_disabled_produces_no_periodic_reconstructs() {
 
 #[test]
 fn a_streaming_drone_session_reconstructs_live_without_the_node_override() {
-    use world_engine_protocol::atlas::{
+    use ados_mapping_protocol::atlas::{
         ComputePlacement, MapStatus, PLUGIN_ATLAS_MAP_STATUS_TOPIC,
     };
     let dir = tempfile::tempdir().unwrap();

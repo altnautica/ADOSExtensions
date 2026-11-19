@@ -5,7 +5,7 @@ use crate::api::drone_router;
 use crate::api::tests::{call, test_api};
 use crate::control::tests::fake_control_socket;
 use crate::testing::FakeHost;
-use world_engine_protocol::capture_ctl::{codes as ctl_codes, CtlReply, ExposureMode};
+use ados_mapping_protocol::capture_ctl::{codes as ctl_codes, CtlReply, ExposureMode};
 
 fn live_view() -> CaptureStateView {
     let mut v = idle_view(StorageView {

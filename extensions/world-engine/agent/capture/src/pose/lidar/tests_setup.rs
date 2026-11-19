@@ -4,12 +4,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use world_engine_protocol::atlas::VioHealth;
+use ados_mapping_protocol::atlas::VioHealth;
 
 use super::setup::{ensure_env, env_python, SetupError, STAMP_FILE};
 use super::tests::{config, scan, FAKE_MAIN};
 use super::*;
-use crate::pose::PoseProvider;
+use ados_mapping_pose::pose::PoseProvider;
 
 /// A stand-in `uv`: checks the exact command line and environment the
 /// capture service uses, fails when the project holds a `FAIL` file, and

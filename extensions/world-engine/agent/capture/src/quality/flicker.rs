@@ -17,7 +17,7 @@
 
 use std::collections::VecDeque;
 
-use world_engine_protocol::capture_ctl::{ExposureMode, ExposureView};
+use ados_mapping_protocol::capture_ctl::{ExposureMode, ExposureView};
 
 /// Window of the mean-intensity series.
 pub const WINDOW_NS: u64 = 2_000_000_000;

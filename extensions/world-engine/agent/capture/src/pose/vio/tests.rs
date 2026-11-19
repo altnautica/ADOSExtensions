@@ -3,14 +3,14 @@ use ados_capture_contract::{
     CameraModel, CameraModelModel, ContractId, ImuNoise, Rig, RigSensor, RigSensorKind,
     RigSensorRole, Transform,
 };
-use world_engine_protocol::atlas::VioHealth;
+use ados_mapping_protocol::atlas::VioHealth;
 
 use super::calib::{basalt_calib, basalt_config, scaled_rig, CalibError, DEFAULT_IMU_NOISE};
 use super::pairing::VioScale;
 use super::supervise::{apply_line, nominal_cov, to_estimate};
 use super::wire::*;
 use super::*;
-use crate::pose::{se3, PoseTrack};
+use ados_mapping_pose::{se3, PoseTrack};
 
 /// Body FLU -> camera OpenCV: camera z = body x, camera x = -body y, camera y = -body z.
 const R_BODY_CAM: [f64; 9] = [0.0, 0.0, 1.0, -1.0, 0.0, 0.0, 0.0, -1.0, 0.0];

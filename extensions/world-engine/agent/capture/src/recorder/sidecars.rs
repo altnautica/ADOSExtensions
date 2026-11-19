@@ -13,7 +13,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use world_engine_protocol::atlas::PolarScan;
+use ados_mapping_protocol::atlas::PolarScan;
 
 use super::bounded::BoundedQueue;
 
@@ -147,7 +147,7 @@ pub fn read_polar(session_dir: &Path, sensor: &str) -> anyhow::Result<Vec<PolarS
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_protocol::atlas::VioHealth;
+    use ados_mapping_protocol::atlas::VioHealth;
 
     fn scan(t: u64) -> PolarScan {
         PolarScan {

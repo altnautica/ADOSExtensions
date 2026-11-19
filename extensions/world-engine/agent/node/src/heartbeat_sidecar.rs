@@ -8,7 +8,7 @@
 //! its operator socket.
 
 use serde::Serialize;
-use world_engine_protocol::compute::ComputeHeartbeat;
+use ados_mapping_protocol::compute::ComputeHeartbeat;
 
 use crate::{ComputeGpu, ComputeRole};
 

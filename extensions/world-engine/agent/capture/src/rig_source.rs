@@ -21,7 +21,8 @@ use std::path::{Path, PathBuf};
 use ados_capture_contract::{
     CameraModel, ContractId, LidarModel, Rig, RigSensor, RigSensorKind, RigSensorRole,
 };
-use world_engine_protocol::atlas::CameraRole;
+use ados_mapping_protocol::atlas::CameraRole;
+use ados_mapping_pose::frame_source::CameraGeometry;
 
 use crate::config::CameraConfig;
 use crate::runtime::AtlasRuntimeConfig;
@@ -56,17 +57,6 @@ pub fn load_rig(path: &Path) -> Option<Rig> {
 const I4: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
 ];
-
-/// A camera's lens and mount as the agent's camera roster declares them,
-/// carried on each of its frames. `None` where the roster leaves it out.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct CameraGeometry {
-    /// Horizontal field of view in degrees (`cameras[].fov_deg`).
-    pub hfov_deg: Option<f64>,
-    /// Optical-axis pitch in degrees, negative below the nose
-    /// (`cameras[].mount_pitch_deg`).
-    pub mount_pitch_deg: Option<f64>,
-}
 
 /// What the service has seen of a camera: its frame size and the geometry
 /// its frames carry.

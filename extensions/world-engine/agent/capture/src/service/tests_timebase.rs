@@ -14,17 +14,17 @@ use ados_config::capture_storage::CaptureState;
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
-use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 
 use super::{run_capture_loop, LoopDeps, Paths};
-use crate::clock::mono_ns;
+use ados_mapping_pose::clock::mono_ns;
 use crate::control::ControlMsg;
-use crate::frame_source::{AtlasFrameSource, SyntheticFrameSource};
-use crate::pose::fc_ekf::FcEkfPose;
+use ados_mapping_pose::frame_source::{AtlasFrameSource, SyntheticFrameSource};
+use ados_mapping_pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, SharedSteps};
-use crate::sensor_bus::{BusEvent, SensorState};
-use crate::vehicle::VehicleFeed;
+use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
+use ados_mapping_pose::vehicle::VehicleFeed;
 
 /// The hub free-run clock reads three hours ahead of the host clock.
 const HUB_OFFSET_NS: u64 = 3 * 3_600 * 1_000_000_000;

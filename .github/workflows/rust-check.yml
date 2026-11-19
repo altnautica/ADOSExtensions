@@ -10,6 +10,7 @@ on:
     paths:
       - "extensions/vision-nav/agent/**"
       - "extensions/world-engine/agent/**"
+      - "crates/**"
       - "Cargo.toml"
       - "ADOS_AGENT_REV"
       - "Cargo.lock"
@@ -18,6 +19,7 @@ on:
     paths:
       - "extensions/vision-nav/agent/**"
       - "extensions/world-engine/agent/**"
+      - "crates/**"
       - "Cargo.toml"
       - "ADOS_AGENT_REV"
       - "Cargo.lock"
@@ -51,16 +53,20 @@ jobs:
       - name: Check the release target compiles
         run: cargo check -p vision-nav --target aarch64-unknown-linux-musl
 
-  # The five World Engine crates. The node links rerun and bundled SQLite, and
-  # the transport links rustls/ring, so the musl cross-check needs a C
-  # cross-compiler: zig via cargo-zigbuild, the same toolchain the release
-  # workflow builds the shipped binaries with.
+  # The shared mapping crates and the World Engine crates. The node links
+  # rerun and bundled SQLite, and the transport links rustls/ring, so the musl
+  # cross-check needs a C cross-compiler: zig via cargo-zigbuild, the same
+  # toolchain the release workflow builds the shipped binaries with.
   world-engine-crates:
     runs-on: ubuntu-24.04-arm
     env:
       WE_CRATES: >-
-        -p world-engine-protocol
-        -p world-engine-transport
+        -p ados-mapping-protocol
+        -p ados-capture-contract
+        -p ados-mapping-transport
+        -p ados-mapping-pose
+        -p ados-scan2d
+        -p ados-livemap
         -p world-engine-capture
         -p world-engine-node
         -p world-engine-link

@@ -1,7 +1,7 @@
 use super::*;
 use serde_json::json;
-use world_engine_protocol::atlas::CameraRole;
-use world_engine_protocol::atlas::PoseSource;
+use ados_mapping_protocol::atlas::CameraRole;
+use ados_mapping_protocol::atlas::PoseSource;
 
 use crate::pose::vio::pairing::VioScale;
 

@@ -51,7 +51,7 @@ async fn request(
         .unwrap();
     if operator {
         req.extensions_mut()
-            .insert(world_engine_transport::UnixPeer);
+            .insert(ados_mapping_transport::UnixPeer);
     }
     let resp = router.clone().oneshot(req).await.unwrap();
     let status = resp.status();

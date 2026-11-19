@@ -45,8 +45,8 @@ use ados_sdk::{ClientError, Plugin, PluginContext};
 use parking_lot::Mutex;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
-use world_engine_protocol::paths::{self, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
-use world_engine_transport::{serve_unix, BulkConfig};
+use ados_mapping_protocol::paths::{self, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCKET};
+use ados_mapping_transport::{serve_unix, BulkConfig};
 
 use crate::api::DroneApi;
 use crate::control::ControlClient;

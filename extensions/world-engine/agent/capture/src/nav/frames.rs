@@ -8,11 +8,11 @@
 
 use std::f32::consts::TAU;
 
-use world_engine_protocol::atlas::nav::SCAN_BINS;
-use world_engine_protocol::atlas::{NavFrame, PolarScan, ScanDescriptor, VioHealth};
+use ados_mapping_protocol::atlas::nav::SCAN_BINS;
+use ados_mapping_protocol::atlas::{NavFrame, PolarScan, ScanDescriptor, VioHealth};
 
-use crate::lidar_scan::LidarScan;
-use crate::pose::se3;
+use ados_mapping_pose::lidar_scan::LidarScan;
+use ados_mapping_pose::se3;
 
 /// Bins of a recorded polar scan (0.5°, finer than a 0.72° planar LiDAR).
 pub const POLAR_BINS: usize = 720;

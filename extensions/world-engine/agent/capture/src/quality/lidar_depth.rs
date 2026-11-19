@@ -2,8 +2,8 @@
 //! baseline scales with it) and, once the scan's world attitude is known, the
 //! median range around each world azimuth (coverage rays stop there).
 
-use crate::lidar_scan::LidarScan;
-use crate::pose::se3;
+use ados_mapping_pose::lidar_scan::LidarScan;
+use ados_mapping_pose::se3;
 
 /// Points nearer than this are the rig or its operator, not the scene.
 pub const MIN_RANGE_M: f64 = 0.3;

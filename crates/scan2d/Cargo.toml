@@ -1,0 +1,21 @@
+# Planar (2D) LiDAR scan matching and mapping: a pure-Rust local SLAM front
+# end (IMU-levelled scans matched into probability-grid submaps) and an
+# offline pose-graph back end with branch-and-bound loop search. No threads,
+# no I/O; callers feed scans and IMU samples. Linked by navigation (on board)
+# and the reconstruct node (planar sweeps). Workspace-internal; never published.
+[package]
+name = "ados-scan2d"
+version = "1.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Planar LiDAR scan matching, submap mapping and loop closure for ADOS navigation and reconstruction."
+
+[lib]
+name = "ados_scan2d"
+path = "src/lib.rs"
+
+[dependencies]
+nalgebra = "0.33"

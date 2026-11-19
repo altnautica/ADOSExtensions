@@ -32,9 +32,9 @@ use ados_capture_contract::LidarModel;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use world_engine_protocol::atlas::{LidarHealth, LidarStatus};
+use ados_mapping_protocol::atlas::{LidarHealth, LidarStatus};
 
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 use crate::runtime::LidarSettings;
 
 pub use livox::{scan_from_livox, LivoxSource, LivoxSourceConfig, SdkNetConfig, SDK_CONFIG_FILE};

@@ -23,9 +23,9 @@ use world_engine_node::{
     Cluster, ComputeAuth, DetectionBroadcaster, Engine, JobStore, MockDetector, MockReconstructor,
     NodeCredentialStore, Scheduler, SessionProgress, SessionSpec, VecFrameStream,
 };
-use world_engine_protocol::node_credential::NodeLane;
-use world_engine_protocol::offload::{Detection, OffloadDetectionBatch};
-use world_engine_transport::{
+use ados_mapping_protocol::node_credential::NodeLane;
+use ados_mapping_protocol::offload::{Detection, OffloadDetectionBatch};
+use ados_mapping_transport::{
     run_offload_orchestrator, stream_offload_detections, DetectionPublisher, NodeEndpoint,
     OffloadReturnBridge, OrchestratorConfig,
 };
@@ -242,7 +242,7 @@ async fn the_orchestrator_drives_the_offload_loop_end_to_end() {
         model_id: "offload".into(),
         publisher,
         detection_tee: None,
-        camera_geometry: tokio::sync::watch::channel(world_engine_transport::CameraGeometry {
+        camera_geometry: tokio::sync::watch::channel(ados_mapping_transport::CameraGeometry {
             hfov_deg: Some(87.0),
             mount_pitch_deg: Some(-15.0),
         })

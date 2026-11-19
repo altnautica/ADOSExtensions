@@ -8,7 +8,7 @@
 use crate::AtlasError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use world_engine_protocol::atlas::CameraRole;
+use ados_mapping_protocol::atlas::CameraRole;
 
 fn default_camera_role() -> CameraRole {
     CameraRole::Primary

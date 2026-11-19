@@ -309,7 +309,7 @@ async fn auto_jobs_wait_while_the_gate_is_closed_and_operator_jobs_do_not() {
 
 #[tokio::test]
 async fn auto_upload_without_a_usable_credential_reads_blocked_with_the_reason() {
-    use world_engine_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
+    use ados_mapping_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
     let root = tempfile::tempdir().unwrap();
     let id = "a-20261019T101500Z-0001";
     finished_session(root.path(), id);

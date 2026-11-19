@@ -30,12 +30,12 @@ use rmpv::Value;
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use tokio::time::Instant;
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     AtlasEvent, AtlasForwardStatus, CaptureStatus, MapStatus, StreamPhase, UploadPhase,
     UploadProgress, ATLAS_CAPTURE_STATE_TOPIC, PLUGIN_ATLAS_MAP_STATUS_TOPIC, PLUGIN_ATLAS_TOPICS,
 };
-use world_engine_protocol::atlas_state::atlas_state_json;
-use world_engine_protocol::STATUS_CHANNEL;
+use ados_mapping_protocol::atlas_state::atlas_state_json;
+use ados_mapping_protocol::STATUS_CHANNEL;
 
 use crate::forward::{now_ms, SharedForward, CONNECT_RETRIES, CONNECT_RETRY_DELAY};
 use crate::host::Host;
@@ -287,7 +287,7 @@ mod tests {
     use crate::testing::FakeHost;
     use tokio::io::AsyncWriteExt;
     use tokio::net::UnixListener;
-    use world_engine_protocol::atlas::{ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_POSE_TOPIC};
+    use ados_mapping_protocol::atlas::{ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_POSE_TOPIC};
 
     fn frame(topic: &str, payload: &Value) -> Vec<u8> {
         let mut inner = Vec::new();
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn the_link_fills_the_stream_state_and_the_upload_into_a_map_status() {
-        use world_engine_protocol::atlas::ComputePlacement;
+        use ados_mapping_protocol::atlas::ComputePlacement;
         let status = MapStatus {
             session_id: Some("sess-1".into()),
             placement: ComputePlacement::Stream,

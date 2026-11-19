@@ -16,11 +16,11 @@ use tokio::sync::mpsc;
 use world_engine_node::{
     submit_reconstruct_job, AtlasIngest, JobRecord, RerunArchetype, RerunRecording,
 };
-use world_engine_protocol::atlas::{SplatDescriptor, PLUGIN_ATLAS_SPLAT_TOPIC};
-use world_engine_protocol::compute::{
+use ados_mapping_protocol::atlas::{SplatDescriptor, PLUGIN_ATLAS_SPLAT_TOPIC};
+use ados_mapping_protocol::compute::{
     ComputeJobKind, ComputeJobState, ComputeRole, SlaveDescriptor,
 };
-use world_engine_transport::{
+use ados_mapping_transport::{
     atlas_event_router, AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer,
     LoopbackBearer, WorldBroadcaster,
 };

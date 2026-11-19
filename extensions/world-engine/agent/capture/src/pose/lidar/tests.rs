@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 
 use ados_capture_contract::Rig;
 use serde_json::json;
-use world_engine_protocol::atlas::VioHealth;
+use ados_mapping_protocol::atlas::VioHealth;
 
 use super::supervise::{apply_line, health_of, world_from_body};
 use super::wire::{encode_scan, parse_line, ChildPose};
 use super::*;
-use crate::pose::{se3, PoseProvider, PoseTrack};
+use ados_mapping_pose::{se3, PoseProvider, PoseTrack};
 
 /// `T_body_lidar`: LiDAR yawed +90 deg about body z, 0.1 m forward, 0.2 m up.
 const T_BODY_LIDAR: [f64; 16] = [

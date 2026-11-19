@@ -1,5 +1,5 @@
 //! The capture service's control-socket client (protocol v2,
-//! [`world_engine_protocol::capture_ctl`]).
+//! [`ados_mapping_protocol::capture_ctl`]).
 //!
 //! The capture service binds `atlas-control.sock` in the extension's private
 //! socket directory. One connection per exchange: one newline-delimited JSON
@@ -13,8 +13,8 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use world_engine_protocol::atlas::CaptureStatus;
-use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest, CONTROL_REQUEST_TIMEOUT_MS};
+use ados_mapping_protocol::atlas::CaptureStatus;
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, CONTROL_REQUEST_TIMEOUT_MS};
 
 /// A bounded per-request timeout so a wedged capture service cannot hang the
 /// route's connection; a local reply is near-instant and an exposure apply
@@ -143,7 +143,7 @@ pub mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use tokio::net::UnixListener;
-    use world_engine_protocol::atlas::{CaptureState, PoseSource, VioHealth};
+    use ados_mapping_protocol::atlas::{CaptureState, PoseSource, VioHealth};
 
     pub fn capturing_status() -> CaptureStatus {
         CaptureStatus {

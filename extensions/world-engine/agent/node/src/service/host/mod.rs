@@ -78,8 +78,8 @@ use world_engine_node::{
     OffloadSessionManager, Prepared, PreparedInput, Scheduler, SelectingReconstructor, SessionSpec,
     WorldDescriptorSet, DEFAULT_NODE_CREDENTIALS_PATH, JOBS_COLLECTION,
 };
-use world_engine_protocol::STATUS_CHANNEL;
-use world_engine_transport::{AtlasEvent, WorldBroadcaster};
+use ados_mapping_protocol::STATUS_CHANNEL;
+use ados_mapping_transport::{AtlasEvent, WorldBroadcaster};
 
 /// Bounded capacity of the Atlas event receive channel. When it fills, the event
 /// router returns `503` so the sender's failover ladder retries or drops — the
@@ -380,18 +380,18 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// How long the job-API advert waits before asking the host again.
 const ADVERT_RETRY: Duration = Duration::from_secs(5);
 
-/// Publish the job API as [`world_engine_transport::COMPUTE_SERVICE`] through
+/// Publish the job API as [`ados_mapping_transport::COMPUTE_SERVICE`] through
 /// the host, retrying on a fixed cadence until it is published: a node whose
 /// hostname is not set yet, or whose host responder is not up, gets its advert
 /// the moment that clears, with no restart. A repeated failure is logged once
 /// per distinct reason.
 async fn advertise_job_api(ctx: PluginContext, node_id: String, port: u16) {
-    let txt = world_engine_transport::compute_advert_txt(&node_id);
+    let txt = ados_mapping_transport::compute_advert_txt(&node_id);
     let mut last_error: Option<String> = None;
     loop {
         match ctx
             .mdns
-            .advertise(world_engine_transport::COMPUTE_SERVICE, port, &txt)
+            .advertise(ados_mapping_transport::COMPUTE_SERVICE, port, &txt)
             .await
         {
             Ok(advert) => {
@@ -418,7 +418,7 @@ async fn advertise_job_api(ctx: PluginContext, node_id: String, port: u16) {
 /// Bind the plugin's `http.sock` and serve `router` on it for the process
 /// lifetime. A bind failure is logged; the TCP listener carries on.
 fn serve_operator_socket(router: axum::Router) {
-    let path = world_engine_protocol::paths::http_socket();
+    let path = ados_mapping_protocol::paths::http_socket();
     if let Some(parent) = path.parent() {
         if let Err(e) = std::fs::create_dir_all(parent) {
             tracing::error!(dir = %parent.display(), error = %e, "http.sock dir create failed; operator socket not served");
@@ -428,7 +428,7 @@ fn serve_operator_socket(router: axum::Router) {
     match ados_sdk::http::bind(&path) {
         Ok(listener) => {
             tracing::info!(path = %path.display(), "operator socket listening");
-            tokio::spawn(world_engine_transport::serve_unix(
+            tokio::spawn(ados_mapping_transport::serve_unix(
                 listener,
                 router,
                 std::future::pending::<()>(),

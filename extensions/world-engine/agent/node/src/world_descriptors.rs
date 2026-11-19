@@ -18,7 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use ados_capture_contract::Placement;
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     Generation, MeshDescriptor, OccupancyDescriptor, OccupancyField, PointCloudDescriptor,
     SplatDescriptor,
 };
@@ -85,7 +85,7 @@ pub fn derive_descriptors(
             "pointcloud" => {
                 let points = local_ply_points(out, work_root);
                 set.pointcloud = Some(PointCloudDescriptor {
-                    kind: world_engine_protocol::atlas::MapPayloadKind::Product,
+                    kind: ados_mapping_protocol::atlas::MapPayloadKind::Product,
                     session_id: session_id.to_string(),
                     generation,
                     placement: placement.clone(),
@@ -170,7 +170,7 @@ pub fn derive_occupancy(
 
     Ok(Some((
         OccupancyDescriptor {
-            kind: world_engine_protocol::atlas::MapPayloadKind::Product,
+            kind: ados_mapping_protocol::atlas::MapPayloadKind::Product,
             session_id: session_id.to_string(),
             generation,
             placement: placement.clone(),

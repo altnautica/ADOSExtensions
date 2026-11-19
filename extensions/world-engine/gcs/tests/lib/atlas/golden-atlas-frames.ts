@@ -1,7 +1,7 @@
 /**
  * Golden msgpack frames rendered from the agent's own producer
- * (`world-engine-protocol` atlas types, `rmp_serde::to_vec_named`) by the Rust
- * test `agent/protocol/tests/golden_frames.rs`, which also fails when this
+ * (`ados-mapping-protocol` atlas types, `rmp_serde::to_vec_named`) by the Rust
+ * test `crates/mapping-protocol/tests/golden_frames.rs`, which also fails when this
  * block drifts from what the producer emits. That is the point of them: a
  * fixture built by a local encoder only proves the decoder agrees with itself,
  * while these prove it agrees with the process that actually publishes.
@@ -36,7 +36,7 @@ export function hexBytes(hex: string): Uint8Array {
   return out;
 }
 
-// <generated:golden-frames> (ADOS_ATLAS_REGEN_GOLDEN=1 cargo test -p world-engine-protocol --test golden_frames)
+// <generated:golden-frames> (ADOS_ATLAS_REGEN_GOLDEN=1 cargo test -p ados-mapping-protocol --test golden_frames)
 
 export const GOLDEN_SPLAT_HEX =
   "89aa73657373696f6e5f6964b261746c61732d64726f6e652d312d31303030aa67656e65726174696f6e07a9706c6163656d656e7484a6616e63686f7286a5646174756da55747533834b267656f69645f756e64756c6174696f6e5f6dcbc055900000000000ad685f656c6c6970736f69645f6dcb408a140000000000a76c61745f646567cb4029f1758e219653a76c6f6e5f646567cb4053660ded288ce7a6736f75726365a9676e73735f6d65616eae525f656e755f617274696661637499cb3ff0000000000000cb0000000000000000cb0000000000000000cb0000000000000000cb0000000000000000cbbff0000000000000cb0000000000000000cb3ff0000000000000cb0000000000000000a57363616c65cb3ff0000000000000ae745f656e755f617274696661637493cb3ff8000000000000cbc000000000000000cb3fd0000000000000ae676175737369616e5f636f756e74ce001312d0a473746570cd7530a375726cd932687474703a2f2f3139382e35312e3130302e353a383039322f6172746966616374732f6a6f622d312f73706c61742e706c79a668616e646c65c0ac6d616e69666573745f75726cd936687474703a2f2f3139382e35312e3130302e353a383039322f6172746966616374732f6a6f622d312f6d616e69666573742e6a736f6eaa6c6f645f6c6576656c7304";

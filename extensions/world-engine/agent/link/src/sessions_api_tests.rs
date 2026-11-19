@@ -146,7 +146,7 @@ async fn delete_needs_a_commit_or_force_and_never_touches_a_recording() {
 async fn a_crashed_session_is_listed_failed_refused_for_upload_and_deletable_with_force() {
     use crate::control::tests::fake_control_socket;
     use crate::sessions::age_marker;
-    use world_engine_protocol::capture_ctl::{CaptureStateView, CtlReply};
+    use ados_mapping_protocol::capture_ctl::{CaptureStateView, CtlReply};
 
     let dir = tempfile::tempdir().unwrap();
     let sock = dir.path().join("atlas-control.sock");

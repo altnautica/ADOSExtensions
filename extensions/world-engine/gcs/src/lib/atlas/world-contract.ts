@@ -4,7 +4,7 @@
  * topic names, the shared-data capability gate, the bearer keyframe rule, and
  * the framed `AtlasEvent` envelope decoder.
  *
- * Mirrors the extension's agent protocol crate (`world-engine-protocol`),
+ * Mirrors the extension's agent protocol crate (`ados-mapping-protocol`),
  * which is the single authority for every constant here, the envelope version
  * included.
  *

@@ -37,12 +37,12 @@ use ados_capture_contract::{LidarModel, Rig, RigSensorKind};
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use world_engine_protocol::atlas::PoseSource;
+use ados_mapping_protocol::atlas::PoseSource;
 
 use self::supervise::{supervise, ChildSpec};
 use self::wire::encode_scan;
-use super::{PoseProvider, PoseTrack};
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::{PoseProvider, PoseTrack};
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 /// Scans that may wait for the child (~0.2 s at 10 Hz).
 pub const SCAN_QUEUE_DEPTH: usize = 2;

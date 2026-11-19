@@ -5,15 +5,15 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
-use world_engine_protocol::capture_ctl;
-use world_engine_transport::ClientError as NodeClientError;
+use ados_mapping_protocol::capture_ctl;
+use ados_mapping_transport::ClientError as NodeClientError;
 
 use crate::control::ControlError;
 
 /// Codes the link itself answers with (the capture service's own refusal
 /// codes pass through from [`capture_ctl::codes`]).
 pub mod codes {
-    pub use world_engine_protocol::capture_ctl::codes::BAD_REQUEST;
+    pub use ados_mapping_protocol::capture_ctl::codes::BAD_REQUEST;
     /// The capture service is not running.
     pub const CAPTURE_UNAVAILABLE: &str = "E_CAPTURE_UNAVAILABLE";
     /// The capture service did not answer in time; the command may still apply.

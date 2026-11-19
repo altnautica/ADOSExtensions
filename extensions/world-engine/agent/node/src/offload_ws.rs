@@ -3,7 +3,7 @@
 //! A streaming offload session ([`crate::offload_stream::run_offload_session`])
 //! emits one [`OffloadDetectionBatch`] per frame; the node fans them out here,
 //! and the drone subscribes over a per-session WebSocket. This mirrors the atlas
-//! delta lane (`world_engine_transport::delta`): a broadcast channel + a WS router,
+//! delta lane (`ados_mapping_transport::delta`): a broadcast channel + a WS router,
 //! a slow subscriber that lags is skipped (never blocking the detector), and a
 //! disconnected one is reaped even while the stream is idle.
 
@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use tokio::sync::{broadcast, watch};
-use world_engine_protocol::offload::OffloadDetectionBatch;
+use ados_mapping_protocol::offload::OffloadDetectionBatch;
 
 /// The WS route the drone subscribes to, one path per session.
 pub const OFFLOAD_WS_ROUTE: &str = "/ws/offload/:session_id";
@@ -184,7 +184,7 @@ async fn forward_batches(
 mod tests {
     use super::*;
     use futures_util::StreamExt;
-    use world_engine_protocol::offload::Detection;
+    use ados_mapping_protocol::offload::Detection;
 
     fn batch(session: &str, seq: u64) -> OffloadDetectionBatch {
         OffloadDetectionBatch::new(

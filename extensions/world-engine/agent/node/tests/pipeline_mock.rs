@@ -26,7 +26,7 @@ const SESSION: &str = "sim-1-20261019T000000Z-0001";
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contract/fixtures/tiny-session")
+        .join("../../../../crates/mapping-protocol/contract/fixtures/tiny-session")
         .join(SESSION)
 }
 

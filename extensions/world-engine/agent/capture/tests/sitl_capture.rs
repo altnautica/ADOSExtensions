@@ -16,15 +16,16 @@ use ados_protocol::framebus::{FrameFormat, TIMEBASE_SIM};
 use ados_protocol::shutdown::Shutdown;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
-use world_engine_capture::pose::replay::ReplayPose;
-use world_engine_capture::pose::{diagonal_cov, se3, PoseEstimate};
-use world_engine_capture::sensor_bus::{BusEvent, SensorState};
-use world_engine_capture::vehicle::VehicleFeed;
+use ados_mapping_pose::replay::ReplayPose;
+use ados_mapping_pose::{diagonal_cov, se3, PoseEstimate};
+use ados_mapping_pose::sensor_bus::{BusEvent, SensorState};
+use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, EngineFrameSource};
+use ados_mapping_pose::vehicle::VehicleFeed;
 use world_engine_capture::{
-    run_capture_loop, AtlasFrameSource, AtlasPublisher, AtlasRuntimeConfig, CapturedFrame,
-    ControlMsg, EngineFrameSource, LoopDeps, Paths, PoseSource, VioHealth,
+    run_capture_loop, AtlasPublisher, AtlasRuntimeConfig, ControlMsg, LoopDeps, Paths,
+    PoseSource, VioHealth,
 };
-use world_engine_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
+use ados_mapping_protocol::capture_ctl::{CtlReply, CtlRequest, StartArgs};
 
 /// Host monotonic ns at simulation time 0.
 const HOST0: u64 = 50_000_000_000;

@@ -4,7 +4,7 @@
 //! translation baseline scaled by the scene depth when a LiDAR scan gives it.
 
 use crate::config::SelectionParams;
-use world_engine_protocol::atlas::Pose;
+use ados_mapping_protocol::atlas::Pose;
 
 /// Per-camera keyframe gate. Holds the last accepted keyframe's pose and
 /// timestamp; the next frame is accepted when it crosses any selection

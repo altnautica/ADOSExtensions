@@ -17,8 +17,8 @@ use world_engine_node::{
     build_router, Cluster, ComputeAuth, ComputeJobKind, ComputeJobState, ComputeRole, Engine,
     JobStore, MockDetector, MockReconstructor, NodeCredentialStore, Scheduler,
 };
-use world_engine_protocol::node_credential::NodeLane;
-use world_engine_transport::{ClientError, ComputeClient, UnixPeer};
+use ados_mapping_protocol::node_credential::NodeLane;
+use ados_mapping_transport::{ClientError, ComputeClient, UnixPeer};
 
 /// Spin the real job-API router over a fresh engine on a loopback port.
 /// `operator` marks every request as arriving on the operator socket (the

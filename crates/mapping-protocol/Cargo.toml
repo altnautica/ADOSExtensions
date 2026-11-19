@@ -1,0 +1,29 @@
+# The mapping wire contract: the capture envelope and descriptors, the
+# compute-node job and cluster types, and the perception-offload batch types.
+# Pure serde types with no I/O, linked by the capture, reconstruct and
+# navigation extensions so the drone, ground-station and compute halves speak
+# one vocabulary. Workspace-internal; never published.
+[package]
+name = "ados-mapping-protocol"
+version = "1.0.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADOS mapping wire contract: capture envelope and descriptors, compute-node job types, and perception-offload batches."
+
+[lib]
+name = "ados_mapping_protocol"
+path = "src/lib.rs"
+
+[dependencies]
+ados-capture-contract = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

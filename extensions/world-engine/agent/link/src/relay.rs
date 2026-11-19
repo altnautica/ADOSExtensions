@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use world_engine_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
+use ados_mapping_transport::{AtlasBearer, AtlasEvent, LanHttpBearer};
 
 use crate::compute_node;
 use crate::credentials::{CredentialStore, ATLAS_INGEST_LANE};
@@ -326,7 +326,7 @@ fn url_authority(url: &str) -> &str {
 mod tests {
     use super::*;
     use crate::testing::FakeHost;
-    use world_engine_transport::atlas_event_router;
+    use ados_mapping_transport::atlas_event_router;
 
     #[test]
     fn a_base_url_reduces_to_its_address() {

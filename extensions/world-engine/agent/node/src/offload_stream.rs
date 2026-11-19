@@ -28,7 +28,7 @@ use anyhow::{anyhow, Result};
 use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, Command};
-use world_engine_protocol::offload::{Detection, FrameRef, OffloadDetectionBatch};
+use ados_mapping_protocol::offload::{Detection, FrameRef, OffloadDetectionBatch};
 
 use crate::offload::Detector;
 use crate::session_registry::SessionProgress;

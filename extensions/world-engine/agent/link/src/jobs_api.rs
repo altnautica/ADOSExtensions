@@ -21,8 +21,8 @@ use axum::Router;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use world_engine_capture::storage::safe_session_id;
-use world_engine_protocol::compute::{ComputeJobKind, ComputeJobState};
-use world_engine_transport::ComputeClient;
+use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
+use ados_mapping_transport::ComputeClient;
 
 use crate::api::DroneApi;
 use crate::credentials::JOB_SUBMIT_LANE;

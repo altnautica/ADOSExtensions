@@ -436,9 +436,9 @@ fn a_rig_without_the_planar_lidar_is_refused() {
 /// frame that covers it, with nothing else fed: no pose tick, no next scan.
 #[test]
 fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
-    use crate::mavlink_msg::{frame_v2, MSG_RAW_IMU};
+    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
     use crate::nav::fc_imu::{self, FeedState};
-    use crate::pose::fc_ekf::FcEkfPose;
+    use ados_mapping_pose::fc_ekf::FcEkfPose;
 
     /// `RAW_IMU` at 100 Hz.
     const STEP_NS: u64 = 10_000_000;
@@ -510,9 +510,9 @@ fn the_raw_imu_frame_that_covers_a_scan_releases_it() {
 /// holds the heading, and the turn is all there after the stall.
 #[test]
 fn a_mavlink_stall_through_a_turn_keeps_the_heading() {
-    use crate::mavlink_msg::{frame_v2, MSG_RAW_IMU};
+    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
     use crate::nav::fc_imu::{self, FeedState};
-    use crate::pose::fc_ekf::FcEkfPose;
+    use ados_mapping_pose::fc_ekf::FcEkfPose;
 
     const STEP_NS: u64 = 10_000_000;
     const STALL: (u64, u64) = (T0 + 3_000_000_000, T0 + 4_000_000_000);

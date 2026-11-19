@@ -1,10 +1,10 @@
 use std::f64::consts::PI;
 
-use world_engine_protocol::atlas::nav::OCCUPANCY_OCCUPIED;
-use world_engine_protocol::atlas::{ComputePlacement, NavPoseMode, PoseSource, VioHealth};
+use ados_mapping_protocol::atlas::nav::OCCUPANCY_OCCUPIED;
+use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseMode, PoseSource, VioHealth};
 
 use super::*;
-use crate::pose::se3;
+use ados_mapping_pose::se3;
 
 fn settings(nav_pose: NavPoseMode, placement: ComputePlacement) -> NavSettings {
     NavSettings {
@@ -140,7 +140,7 @@ fn a_restarted_map_latches_its_north_afresh_once() {
 /// with `moving` its EKF goes 3 m north and 4 m east from 0.1 s to 1.5 s,
 /// else it reports no position.
 fn fc_through_an_outage(moving: bool) -> (FcEkfPose, impl Fn(u32) -> f64) {
-    use crate::pose::fc_ekf::test_frames::{att_turning, pos};
+    use ados_mapping_pose::fc_ekf::test_frames::{att_turning, pos};
     let yaw = |ms: u32| (30.0 + 90.0 * ms.saturating_sub(1_000) as f64 / 1e3).to_radians();
     let fc = FcEkfPose::new();
     for ms in (0..=1_700u32).step_by(20) {
@@ -246,7 +246,7 @@ fn a_map_restarted_in_flight_is_placed_from_the_fc_over_the_outage() {
 /// until 40 s: heading 30° until 39 s, then a turn right at 90°/s for
 /// 0.5 s that the matcher's map misses.
 fn fc_down_a_corridor() -> FcEkfPose {
-    use crate::pose::fc_ekf::test_frames::att_turning;
+    use ados_mapping_pose::fc_ekf::test_frames::att_turning;
     let fc = FcEkfPose::new();
     for ms in (0..=40_000u32).step_by(20) {
         let turn = 90.0 * (ms.clamp(39_000, 39_500) - 39_000) as f64 / 1e3;
@@ -383,7 +383,7 @@ fn a_map_restarted_without_the_fc_position_keeps_the_pose() {
 /// The FC at rest, as [`FcEkfPose`] receives it at 50 Hz until 6 s: heading
 /// `heading` (radians), its EKF at the origin.
 fn fc_at_rest(heading: f64) -> FcEkfPose {
-    use crate::pose::fc_ekf::test_frames::{att, pos};
+    use ados_mapping_pose::fc_ekf::test_frames::{att, pos};
     let fc = FcEkfPose::new();
     let h = heading / 2.0;
     let q = [h.cos() as f32, 0.0, 0.0, h.sin() as f32];
@@ -744,7 +744,7 @@ fn streaming_keeps_the_coarse_cloud_and_waits_for_the_link() {
     let st = nav.tick(&TickInputs::default(), false).status;
     assert_eq!(
         st.stream.state,
-        world_engine_protocol::atlas::StreamPhase::Connecting
+        ados_mapping_protocol::atlas::StreamPhase::Connecting
     );
     assert_eq!(
         nav.map.sweep.voxel_m(),
@@ -1064,7 +1064,7 @@ fn a_3_degree_compass_error_stays_under_a_metre_137_m_past_gnss_loss() {
     };
     // FLU SLAM estimate of sample k: map_frd = Rz(-h0) · (ned − first scan).
     let slam = |k: usize| {
-        let frd = align::rot2(-h0, path[k]);
+        let frd = ados_mapping_pose::align::rot2(-h0, path[k]);
         estimate(frd[0], -frd[1], -(yaws[k] - h0))
     };
     let mut nav = NavMap::new(settings(NavPoseMode::Always, ComputePlacement::Onboard));
@@ -1110,7 +1110,7 @@ fn a_3_degree_compass_error_stays_under_a_metre_137_m_past_gnss_loss() {
     // this guards.
     let compass = err(
         k137,
-        align::rot2(h0 + compass_err, {
+        ados_mapping_pose::align::rot2(h0 + compass_err, {
             let e = slam(k137);
             [e.t[0], -e.t[1]]
         }),

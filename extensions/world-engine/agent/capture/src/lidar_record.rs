@@ -18,7 +18,7 @@ use ados_capture_contract::foxglove::{
     packed_element_field::NumericType, PackedElementField, PointCloud, Pose, Quaternion, Vector3,
 };
 
-use crate::lidar_scan::LidarScan;
+use ados_mapping_pose::lidar_scan::LidarScan;
 
 /// Bytes per packed point.
 pub const POINT_STRIDE: u32 = 17;

@@ -15,7 +15,7 @@ use std::borrow::Cow;
 
 use ados_protocol::framebus::FrameFormat;
 
-use crate::frame_source::CapturedFrame;
+use ados_mapping_pose::frame_source::CapturedFrame;
 
 /// Largest timestamp gap of an untriggered pair.
 pub const PAIR_TOLERANCE_NS: u64 = 1_000_000;

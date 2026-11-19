@@ -35,7 +35,7 @@
 //!
 //! Delivery: [`sink`] hands each `RAW_IMU` sample, flow velocity and EKF
 //! height to the pose provider on the MAVLink delivery thread as its frame
-//! arrives ([`crate::pose::fc_ekf::FcEkfPose::set_nav_sink`]), not on the
+//! arrives ([`ados_mapping_pose::fc_ekf::FcEkfPose::set_nav_sink`]), not on the
 //! capture loop's pose tick. The planar matcher holds a scan until the IMU
 //! covers its last point, so the scan is matched one `RAW_IMU` period after
 //! it ends rather than up to a tick later. [`FeedState`] keeps the count and
@@ -48,11 +48,11 @@ use std::sync::{Arc, Mutex};
 use ados_capture_contract::v1::{ImuBatch, ImuSample};
 use ados_scan2d::{HeightSample, VelocitySample};
 
-use crate::geodesy::{R_ENU_NED, R_FRD_FLU};
-use crate::mavlink_msg::RawImu;
-use crate::pose::fc_ekf::{NavSample, NavSink};
-use crate::pose::{se3, PoseProvider};
-use world_engine_protocol::atlas::{ImuFeedReason, ImuFeedState, VioHealth};
+use ados_mapping_pose::geodesy::{R_ENU_NED, R_FRD_FLU};
+use ados_mapping_pose::mavlink_msg::RawImu;
+use ados_mapping_pose::fc_ekf::{NavSample, NavSink};
+use ados_mapping_pose::{se3, PoseProvider};
+use ados_mapping_protocol::atlas::{ImuFeedReason, ImuFeedState, VioHealth};
 
 /// The `atlas.lidar.imu` id that selects this stream.
 pub const FC_IMU_ID: &str = "fc";
@@ -275,7 +275,7 @@ impl FeedState {
 ///   matcher starts a new map at that sample
 ///   ([`PoseProvider::heading_unmeasured`]).
 pub fn hold_poses_to_feed(
-    poses: &mut [crate::pose::PoseEstimate],
+    poses: &mut [ados_mapping_pose::pose::PoseEstimate],
     reason: Option<ImuFeedReason>,
     raw_since_ns: Option<u64>,
 ) {
@@ -475,8 +475,8 @@ mod tests {
     /// degrades a good one; a steady feed leaves them be.
     #[test]
     fn a_feed_without_a_yaw_rate_loses_the_pose_and_a_starved_one_degrades_it() {
-        use crate::pose::PoseEstimate;
-        use world_engine_protocol::atlas::{PoseSource, POSE_COV_LEN};
+        use ados_mapping_pose::pose::PoseEstimate;
+        use ados_mapping_protocol::atlas::{PoseSource, POSE_COV_LEN};
         let poses = || {
             [VioHealth::Good, VioHealth::Degraded, VioHealth::Lost].map(|health| PoseEstimate {
                 t_ns: 0,
@@ -551,15 +551,15 @@ mod tests {
 
     #[derive(Default)]
     struct Fed {
-        track: crate::pose::PoseTrack,
+        track: ados_mapping_pose::pose::PoseTrack,
         got: parking_lot::Mutex<Vec<Got>>,
     }
 
     impl PoseProvider for Fed {
-        fn source(&self) -> world_engine_protocol::atlas::PoseSource {
-            world_engine_protocol::atlas::PoseSource::Lidar
+        fn source(&self) -> ados_mapping_protocol::atlas::PoseSource {
+            ados_mapping_protocol::atlas::PoseSource::Lidar
         }
-        fn track(&self) -> &crate::pose::PoseTrack {
+        fn track(&self) -> &ados_mapping_pose::pose::PoseTrack {
             &self.track
         }
         fn feed_imu(&self, src: &str, batch: &ImuBatch) {

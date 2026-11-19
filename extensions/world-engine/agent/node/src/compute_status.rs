@@ -73,7 +73,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::Request;
     use tower::ServiceExt;
-    use world_engine_protocol::compute::ComputeHeartbeat;
+    use ados_mapping_protocol::compute::ComputeHeartbeat;
 
     async fn get(router: &Router) -> (StatusCode, serde_json::Value) {
         let resp = router

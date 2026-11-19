@@ -67,7 +67,7 @@ impl EsdfGrid {
     }
 
     /// The grid as little-endian `f32` bytes, the layout
-    /// [`OccupancyDescriptor::url`](world_engine_protocol::atlas::OccupancyDescriptor::url) promises.
+    /// [`OccupancyDescriptor::url`](ados_mapping_protocol::atlas::OccupancyDescriptor::url) promises.
     pub fn to_le_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.distances.len() * 4);
         for d in &self.distances {

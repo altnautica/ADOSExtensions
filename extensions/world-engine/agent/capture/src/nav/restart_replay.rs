@@ -14,12 +14,12 @@ use std::time::{Duration, Instant};
 use ados_capture_contract::v1::{ImuBatch, ImuSample as BusImu};
 use ados_capture_contract::Rig;
 use serde_json::json;
-use world_engine_protocol::atlas::{ComputePlacement, NavPoseMode};
+use ados_mapping_protocol::atlas::{ComputePlacement, NavPoseMode};
 
 use super::*;
-use crate::pose::fc_ekf::test_frames::{att_turning, pos};
+use ados_mapping_pose::fc_ekf::test_frames::{att_turning, pos};
 use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
-use crate::pose::PoseProvider;
+use ados_mapping_pose::pose::PoseProvider;
 
 /// Beams per revolution and revolution period of the recorded LiDAR.
 const BEAMS: u64 = 500;
@@ -450,7 +450,7 @@ fn apart(a: &Published, b: &Published, from_ns: u64) -> (f64, f64, usize) {
 /// within [`NUDGE_DEG`] and [`NUDGE_M`] of each other over the scored span.
 #[test]
 fn a_map_restarted_in_flight_is_published_where_the_drone_is() {
-    let f = flight(include_str!("../../../scan2d/tests/data/warehouse_return_leg.txt"));
+    let f = flight(include_str!("../../../../../../crates/scan2d/tests/data/warehouse_return_leg.txt"));
     let refs = reference(&f);
     let (s, ms) = (1_000_000_000u64, 1_000_000u64);
     let mut scored: Vec<_> = [

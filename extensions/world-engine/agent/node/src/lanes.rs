@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use axum::Router;
-use world_engine_protocol::node_credential::NodeLane;
+use ados_mapping_protocol::node_credential::NodeLane;
 
 use crate::auth::{require_lane, ComputeAuth};
 
@@ -71,7 +71,7 @@ mod host {
 
     use axum::Router;
     use tokio::sync::mpsc::Sender;
-    use world_engine_transport::{
+    use ados_mapping_transport::{
         atlas_event_router, world_ws_router, AtlasEvent, WorldBroadcaster,
     };
 
@@ -129,7 +129,7 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tokio::sync::mpsc::{channel, Receiver};
     use tower::ServiceExt;
-    use world_engine_transport::{AtlasEvent, WorldBroadcaster};
+    use ados_mapping_transport::{AtlasEvent, WorldBroadcaster};
 
     struct Fixture {
         router: Router,
@@ -250,7 +250,7 @@ mod tests {
             .body(Body::empty())
             .unwrap();
         req.extensions_mut()
-            .insert(world_engine_transport::UnixPeer);
+            .insert(ados_mapping_transport::UnixPeer);
         assert_eq!(
             f.router.clone().oneshot(req).await.unwrap().status(),
             StatusCode::OK

@@ -18,7 +18,7 @@ use ados_sdk::ClientError;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use world_engine_transport::{
+use ados_mapping_transport::{
     AtlasBearer, AtlasEvent, AuxLane, BearerKind, DetectionPublisher, DetectionTee, TransportError,
 };
 

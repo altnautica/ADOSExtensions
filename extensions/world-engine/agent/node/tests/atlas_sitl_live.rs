@@ -7,12 +7,12 @@ use ados_capture_contract::Placement;
 use world_engine_node::{
     submit_reconstruct_job, AtlasIngest, LiveReconstructConfig, RerunArchetype, RerunRecording,
 };
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     CaptureState, CaptureStatus, PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC,
     ATLAS_KEYFRAME_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC,
 };
-use world_engine_protocol::compute::ComputeJobState;
-use world_engine_transport::{AtlasEvent, BearerLadder, LoopbackBearer, WorldBroadcaster};
+use ados_mapping_protocol::compute::ComputeJobState;
+use ados_mapping_transport::{AtlasEvent, BearerLadder, LoopbackBearer, WorldBroadcaster};
 
 #[path = "support/atlas_sitl.rs"]
 mod atlas_support;
@@ -269,7 +269,7 @@ async fn g5_multi_cam_fuses_into_one_world() {
 #[tokio::test]
 async fn the_world_model_is_consumable_as_a_planning_input_over_the_shared_data_lane() {
     use world_engine_node::{derive_descriptors, derive_occupancy, Output};
-    use world_engine_protocol::atlas::{OccupancyDescriptor, OccupancyField};
+    use ados_mapping_protocol::atlas::{OccupancyDescriptor, OccupancyField};
 
     let dir = tempfile::tempdir().unwrap();
     // A real reconstruction artifact: three surface points in an L, as a .ply the

@@ -13,7 +13,7 @@ use ados_capture_contract::v1::ImuSample;
 use ados_capture_contract::{CameraModel, GeoAnchor};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     CaptureState, CaptureStatus, KeyframeEnvelope, KeyframeFlags, KeyframeImage, KeyframeTier,
     Pose, PoseSource, TimeAlignment, VioHealth,
 };
@@ -33,7 +33,7 @@ pub struct FrameInput {
     pub pose: Pose,
     /// Row-major 6x6 covariance of `pose`. Empty when the producer could state
     /// none, which makes the keyframe fail
-    /// [`KeyframeEnvelope::validate`](world_engine_protocol::atlas::KeyframeEnvelope::validate)
+    /// [`KeyframeEnvelope::validate`](ados_mapping_protocol::atlas::KeyframeEnvelope::validate)
     /// downstream rather than silently reconstructing without a prior sigma.
     pub pose_cov: Vec<f64>,
     pub pose_source: PoseSource,

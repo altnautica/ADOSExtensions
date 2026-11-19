@@ -19,12 +19,12 @@
 
 use std::collections::{HashMap, HashSet};
 
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     AtlasEvent, CaptureState, CaptureStatus, KeyframeBudget, KeyframeEnvelope, MapStatus,
     PoseSource, VioHealth, ATLAS_CAPTURE_STATE_TOPIC, ATLAS_KEYFRAME_TOPIC,
     PLUGIN_ATLAS_MAP_STATUS_TOPIC,
 };
-use world_engine_protocol::compute::{ComputeJobKind, ComputeJobState};
+use ados_mapping_protocol::compute::{ComputeJobKind, ComputeJobState};
 
 use crate::keyframe_persister::{dataset_id_for, KeyframePersister};
 use crate::session::LiveReconstructConfig;

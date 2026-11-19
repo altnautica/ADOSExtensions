@@ -31,12 +31,12 @@ use ados_protocol::frame::PLUGIN_MAX_FRAME;
 use ados_protocol::ipc::{connect_with_retry, read_length_prefixed};
 use parking_lot::Mutex;
 use tokio::sync::watch;
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     AtlasForwardStatus, ATLAS_FORWARD_STATUS_VERSION, ATLAS_KEYFRAME_TOPIC,
     PLUGIN_ATLAS_LIDAR_TOPIC, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
     PLUGIN_ATLAS_SCAN_TOPIC,
 };
-use world_engine_transport::{
+use ados_mapping_transport::{
     AtlasBearer, AtlasEvent, BearerKind, BearerLadder, LanHttpBearer, WfbRelayBearer,
 };
 
@@ -407,7 +407,7 @@ async fn forward_event(ladder: &BearerLadder, body: &[u8], device_id: &str) -> F
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_transport::LoopbackBearer;
+    use ados_mapping_transport::LoopbackBearer;
 
     fn carried_kind(f: &Forwarded) -> Option<BearerKind> {
         match f {

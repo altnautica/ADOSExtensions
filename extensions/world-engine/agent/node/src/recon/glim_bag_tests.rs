@@ -8,7 +8,7 @@ const T0: u64 = 1_000_000_000;
 
 fn tiny(name: &str) -> Vec<u8> {
     let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contract/fixtures/tiny-session/sim-1-20261019T000000Z-0001")
+        .join("../../../../crates/mapping-protocol/contract/fixtures/tiny-session/sim-1-20261019T000000Z-0001")
         .join(name);
     fs::read(p).unwrap()
 }

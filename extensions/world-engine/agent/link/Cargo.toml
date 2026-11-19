@@ -24,8 +24,8 @@ name = "world-engine-link"
 path = "src/main.rs"
 
 [dependencies]
-world-engine-protocol = { path = "../protocol" }
-world-engine-transport = { path = "../transport" }
+ados-mapping-protocol = { workspace = true }
+ados-mapping-transport = { workspace = true }
 world-engine-capture = { path = "../capture" }
 ados-capture-contract = { workspace = true }
 ados-sdk = { workspace = true }

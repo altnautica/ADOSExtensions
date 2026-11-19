@@ -27,8 +27,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::{watch, Notify};
 use world_engine_capture::storage::UPLOADED_MARKER;
-use world_engine_protocol::atlas::{CaptureState, ComputePlacement};
-use world_engine_transport::{BulkClient, BulkConfig, SessionPlan};
+use ados_mapping_protocol::atlas::{CaptureState, ComputePlacement};
+use ados_mapping_transport::{BulkClient, BulkConfig, SessionPlan};
 
 use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{CredentialGap, CredentialStore, SESSION_UPLOAD_LANE};

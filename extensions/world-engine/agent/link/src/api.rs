@@ -35,7 +35,7 @@ use axum::{Json, Router};
 use rmpv::Value as Mpv;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use world_engine_protocol::atlas::CaptureState;
+use ados_mapping_protocol::atlas::CaptureState;
 
 use crate::control::{ControlClient, LiveCapture};
 use crate::credentials::{self, CredentialStore};

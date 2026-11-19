@@ -22,7 +22,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use world_engine_protocol::atlas::{
+use ados_mapping_protocol::atlas::{
     ImageEncoding, KeyframeEnvelope, MeshDescriptor, OccupancyDescriptor, PointCloudDescriptor,
     SplatDescriptor,
 };

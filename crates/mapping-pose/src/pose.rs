@@ -1,0 +1,317 @@
+//! The pose provider interface: where a mapping process gets the rig's pose.
+//!
+//! Every provider implements [`PoseProvider`]. A provider owns a [`PoseTrack`]
+//! (a time-ordered buffer of [`PoseEstimate`]s on the host monotonic clock)
+//! and the trait's default methods answer from it:
+//!
+//! - [`PoseProvider::pose_at`] interpolates between the two estimates that
+//!   bracket `t_ns` (quaternion slerp + linear translation). A time before the
+//!   first or after the last estimate is answered only when it is within
+//!   [`MAX_EXTRAPOLATION_NS`] (50 ms) of that estimate, and then with that
+//!   estimate unchanged; anything further is refused (`None`), never
+//!   extrapolated.
+//! - [`PoseProvider::drain_new`] hands the recorder each estimate once.
+//!
+//! Implementations here: [`crate::fc_ekf::FcEkfPose`] (the flight
+//! controller's EKF, placed in the session ENU frame with exact WGS-84
+//! geodesy) and [`crate::replay::ReplayPose`] (a fixed estimate list, for
+//! tests and SITL). The LiDAR, planar and VIO providers live with the
+//! process that runs them.
+//!
+//! All times here are host `CLOCK_MONOTONIC` nanoseconds, the sensor bus and
+//! framebus timebase; the recorder maps them onto the session timebase.
+
+use std::collections::VecDeque;
+
+use ados_capture_contract::v1::ImuBatch;
+use ados_mapping_protocol::atlas::{PoseSource, VioHealth, POSE_COV_LEN};
+use ados_scan2d::{HeightSample, VelocitySample};
+use parking_lot::Mutex;
+
+use crate::frame_source::CapturedFrame;
+use crate::lidar_scan::LidarScan;
+use crate::se3;
+
+/// The furthest a pose is answered beyond the first or last estimate.
+pub const MAX_EXTRAPOLATION_NS: u64 = 50_000_000;
+
+/// How much history a [`PoseTrack`] keeps.
+pub const TRACK_HISTORY_NS: u64 = 30_000_000_000;
+
+/// One pose: `T_world_body` (world = session ENU, body = FLU) at `t_ns`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PoseEstimate {
+    /// Host monotonic nanoseconds.
+    pub t_ns: u64,
+    /// Row-major rotation world-from-body.
+    pub r: [f64; 9],
+    /// Body origin in the world frame, metres.
+    pub t: [f64; 3],
+    /// Row-major 6x6 covariance over (x, y, z, rot_x, rot_y, rot_z).
+    pub cov: [f64; POSE_COV_LEN],
+    pub source: PoseSource,
+    pub health: VioHealth,
+    /// The estimator's own horizontal one-sigma uncertainty, metres, where
+    /// it reports one (the planar scan matcher: it grows while the matcher
+    /// rides its motion prior). Published as the pose's `sigma_xy_m`.
+    pub sigma_xy_m: Option<f64>,
+    /// The heading was measured: false on a planar scan matcher pose whose
+    /// scan the IMU did not reach or whose heading left the integrated gyro
+    /// (`PoseOut::heading_ok`), its heading the matcher's guess on a stale
+    /// prior. True from estimators that measure their heading throughout.
+    pub heading_ok: bool,
+}
+
+/// Producer-side quality signals the HUD shows beside the pose.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PoseQuality {
+    /// Features tracked in the last frame (VIO).
+    pub tracked_features: Option<u32>,
+    /// Smallest / largest eigenvalue of the translational ICP Hessian (LiDAR)
+    /// or of the tracked-feature spread (VIO); small = degenerate.
+    pub degeneracy_ratio: Option<f64>,
+    /// Producer's own drift estimate, metres.
+    pub drift_hint_m: Option<f64>,
+    /// The heading went unmeasured (a gap in the IMU) and is not yet
+    /// re-confirmed against the map: the pose is lost until it is (the
+    /// planar scan matcher).
+    pub heading_unconfirmed: bool,
+    /// Maps the matcher started over in flight because a heading a gap
+    /// left unmeasured could not be re-confirmed in time: each one's north
+    /// is re-anchored (navigation's in-flight map restart).
+    pub map_restarts: u32,
+}
+
+/// A diagonal covariance from a position and an orientation sigma.
+pub fn diagonal_cov(position_sigma_m: f64, orientation_sigma_rad: f64) -> [f64; POSE_COV_LEN] {
+    let mut cov = [0.0; POSE_COV_LEN];
+    for i in 0..3 {
+        cov[i * 6 + i] = position_sigma_m * position_sigma_m;
+        cov[(i + 3) * 6 + i + 3] = orientation_sigma_rad * orientation_sigma_rad;
+    }
+    cov
+}
+
+/// The wire string of a pose source (`/pose/<source>`, `pose.source`).
+pub fn source_str(source: PoseSource) -> &'static str {
+    match source {
+        PoseSource::FcEkf => "fc_ekf",
+        PoseSource::Vio => "vio",
+        PoseSource::Lidar => "lidar",
+        PoseSource::Replay => "replay",
+    }
+}
+
+/// The `PoseCov.health` string.
+pub fn health_str(health: VioHealth) -> &'static str {
+    match health {
+        VioHealth::Good => "good",
+        VioHealth::Degraded => "degraded",
+        VioHealth::Lost => "lost",
+    }
+}
+
+/// A time-ordered estimate buffer with interpolation and a drain cursor.
+#[derive(Debug, Default)]
+pub struct PoseTrack {
+    inner: Mutex<TrackInner>,
+}
+
+#[derive(Debug, Default)]
+struct TrackInner {
+    poses: VecDeque<PoseEstimate>,
+    /// Estimates not yet drained, by count from the back.
+    undrained: usize,
+    quality: PoseQuality,
+    health: Option<VioHealth>,
+}
+
+impl PoseTrack {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Append an estimate. One older than the newest is dropped (producers
+    /// emit in time order; an out-of-order sample is a producer restart and
+    /// must not reorder history).
+    pub fn push(&self, est: PoseEstimate) {
+        let mut g = self.inner.lock();
+        if g.poses.back().is_some_and(|b| est.t_ns <= b.t_ns) {
+            return;
+        }
+        let horizon = est.t_ns.saturating_sub(TRACK_HISTORY_NS);
+        g.health = Some(est.health);
+        g.poses.push_back(est);
+        g.undrained = (g.undrained + 1).min(g.poses.len());
+        while g.poses.front().is_some_and(|p| p.t_ns < horizon) {
+            g.poses.pop_front();
+        }
+        g.undrained = g.undrained.min(g.poses.len());
+    }
+
+    /// Forget every estimate (a producer restart: its frame changed).
+    pub fn reset(&self) {
+        let mut g = self.inner.lock();
+        g.poses.clear();
+        g.undrained = 0;
+    }
+
+    pub fn set_quality(&self, q: PoseQuality) {
+        self.inner.lock().quality = q;
+    }
+
+    pub fn quality(&self) -> PoseQuality {
+        self.inner.lock().quality
+    }
+
+    /// Force the reported health (a dead producer is `Lost` whatever its last
+    /// estimate said).
+    pub fn set_health(&self, h: VioHealth) {
+        self.inner.lock().health = Some(h);
+    }
+
+    pub fn health(&self) -> VioHealth {
+        self.inner.lock().health.unwrap_or(VioHealth::Lost)
+    }
+
+    pub fn latest(&self) -> Option<PoseEstimate> {
+        self.inner.lock().poses.back().cloned()
+    }
+
+    /// Move every estimate not yet drained into `out`, oldest first.
+    pub fn drain_new(&self, out: &mut Vec<PoseEstimate>) {
+        let mut g = self.inner.lock();
+        let n = g.poses.len();
+        out.extend(g.poses.range(n - g.undrained..).cloned());
+        g.undrained = 0;
+    }
+
+    /// The pose at `t_ns`; see the module docs for the extrapolation rule.
+    pub fn pose_at(&self, t_ns: u64) -> Option<PoseEstimate> {
+        let g = self.inner.lock();
+        interpolate(&g.poses, t_ns)
+    }
+}
+
+/// Interpolate a time-ordered buffer at `t_ns`.
+pub fn interpolate(poses: &VecDeque<PoseEstimate>, t_ns: u64) -> Option<PoseEstimate> {
+    let first = poses.front()?;
+    let last = poses.back()?;
+    if t_ns <= first.t_ns {
+        return (first.t_ns - t_ns <= MAX_EXTRAPOLATION_NS).then(|| at(first, t_ns));
+    }
+    if t_ns >= last.t_ns {
+        return (t_ns - last.t_ns <= MAX_EXTRAPOLATION_NS).then(|| at(last, t_ns));
+    }
+    // First index whose time is >= t_ns; it has a predecessor (t > first).
+    let hi = poses.partition_point(|p| p.t_ns < t_ns);
+    let (a, b) = (&poses[hi - 1], &poses[hi]);
+    let span = (b.t_ns - a.t_ns) as f64;
+    let s = (t_ns - a.t_ns) as f64 / span;
+    let q = se3::slerp(se3::quat_from_matrix(&a.r), se3::quat_from_matrix(&b.r), s);
+    let mut cov = [0.0; POSE_COV_LEN];
+    for (i, c) in cov.iter_mut().enumerate() {
+        // The larger of the two: interpolation adds no information.
+        *c = if a.cov[i].abs() >= b.cov[i].abs() {
+            a.cov[i]
+        } else {
+            b.cov[i]
+        };
+    }
+    Some(PoseEstimate {
+        t_ns,
+        r: se3::matrix_from_quat(q),
+        t: [
+            a.t[0] + s * (b.t[0] - a.t[0]),
+            a.t[1] + s * (b.t[1] - a.t[1]),
+            a.t[2] + s * (b.t[2] - a.t[2]),
+        ],
+        cov,
+        source: b.source,
+        health: worse(a.health, b.health),
+        sigma_xy_m: match (a.sigma_xy_m, b.sigma_xy_m) {
+            (Some(x), Some(y)) => Some(x.max(y)),
+            (x, y) => x.or(y),
+        },
+        heading_ok: a.heading_ok && b.heading_ok,
+    })
+}
+
+fn at(p: &PoseEstimate, t_ns: u64) -> PoseEstimate {
+    PoseEstimate { t_ns, ..p.clone() }
+}
+
+fn worse(a: VioHealth, b: VioHealth) -> VioHealth {
+    let rank = |h| match h {
+        VioHealth::Good => 0,
+        VioHealth::Degraded => 1,
+        VioHealth::Lost => 2,
+    };
+    if rank(a) >= rank(b) {
+        a
+    } else {
+        b
+    }
+}
+
+/// Where the capture service gets the rig pose. Inputs are pushed in with the
+/// `feed_*` methods (a provider ignores what it does not use); outputs are
+/// read through the provider's [`PoseTrack`].
+pub trait PoseProvider: Send + Sync {
+    fn source(&self) -> PoseSource;
+    fn track(&self) -> &PoseTrack;
+
+    /// One camera frame (VIO consumes the stereo pair).
+    fn feed_frame(&self, _frame: &CapturedFrame) {}
+    /// One IMU batch from the sensor bus, host monotonic times, body FLU.
+    fn feed_imu(&self, _src: &str, _batch: &ImuBatch) {}
+    /// Ground velocities measured in the frame of IMU `src` (x and y, m/s;
+    /// the FC's optical flow over its downward range), host monotonic times.
+    fn feed_velocity(&self, _src: &str, _samples: &[VelocitySample]) {}
+    /// The vehicle's height and climb rate (the FC's EKF), host monotonic
+    /// times.
+    fn feed_height(&self, _samples: &[HeightSample]) {}
+    /// One LiDAR scan.
+    fn feed_lidar(&self, _scan: &LidarScan) {}
+    /// The heading went unmeasured for an unknown time, in order with the
+    /// IMU batches: the next one measures the turn again after samples that
+    /// carried no measured yaw rate (the FC attitude stand-in). The planar
+    /// matcher starts a new map there.
+    fn heading_unmeasured(&self) {}
+    /// The flight controller's heading of the IMU frame (ENU yaw of its
+    /// fused attitude, radians) at host `t_ns`, in order with the IMU
+    /// batches: the planar matcher takes its change across a gap in the IMU
+    /// as the turn the gap hid, never its value.
+    fn feed_fc_heading(&self, _t_ns: u64, _heading: f64) {}
+
+    /// The flight controller's horizontal position (its EKF's own local
+    /// north, east, m) at host `t_ns`: the planar matcher takes only how far
+    /// it moved over a gap in the IMU, to bound the re-confirmation, never
+    /// its value.
+    fn feed_fc_position(&self, _t_ns: u64, _ne_m: [f64; 2]) {}
+
+    /// The pose holds one floor only (a planar LiDAR cannot see a level
+    /// change); the capture HUD says so.
+    fn single_floor(&self) -> bool {
+        false
+    }
+
+    fn pose_at(&self, t_ns: u64) -> Option<PoseEstimate> {
+        self.track().pose_at(t_ns)
+    }
+    fn latest(&self) -> Option<PoseEstimate> {
+        self.track().latest()
+    }
+    fn health(&self) -> VioHealth {
+        self.track().health()
+    }
+    fn quality(&self) -> PoseQuality {
+        self.track().quality()
+    }
+    fn drain_new(&self, out: &mut Vec<PoseEstimate>) {
+        self.track().drain_new(out)
+    }
+}
+
+#[cfg(test)]
+mod tests;

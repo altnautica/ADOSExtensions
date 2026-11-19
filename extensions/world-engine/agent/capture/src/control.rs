@@ -1,5 +1,5 @@
 //! The capture control socket (`atlas-control.sock`, protocol v2, see
-//! [`world_engine_protocol::capture_ctl`]).
+//! [`ados_mapping_protocol::capture_ctl`]).
 //!
 //! Each connection carries one newline-delimited JSON [`CtlRequest`]; it is
 //! handed to the capture loop (the single owner of the session) with a
@@ -13,7 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use world_engine_protocol::capture_ctl::{codes, CtlReply, CtlRequest};
+use ados_mapping_protocol::capture_ctl::{codes, CtlReply, CtlRequest};
 
 /// A request for the capture loop and where its reply goes.
 pub struct ControlMsg {
@@ -95,7 +95,7 @@ async fn handle_conn(stream: UnixStream, tx: mpsc::Sender<ControlMsg>) -> io::Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_protocol::capture_ctl::MarkArgs;
+    use ados_mapping_protocol::capture_ctl::MarkArgs;
 
     async fn exchange(path: &std::path::Path, line: &str) -> CtlReply {
         let mut s = UnixStream::connect(path).await.unwrap();

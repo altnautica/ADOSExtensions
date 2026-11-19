@@ -23,7 +23,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use world_engine_capture::storage::{read_sidecar, sidecar_path};
-use world_engine_protocol::capture_ctl::{
+use ados_mapping_protocol::capture_ctl::{
     CaptureStateView, CoverageView, CtlRequest, ExposureView, MarkArgs, PoseView, StartArgs,
     StorageView,
 };

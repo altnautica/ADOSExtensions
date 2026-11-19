@@ -9,8 +9,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use world_engine_livemap::LiveMap;
-use world_engine_protocol::atlas::{
+use ados_livemap::LiveMap;
+use ados_mapping_protocol::atlas::{
     AtlasEvent, PolarScan, PLUGIN_ATLAS_OCCUPANCY_TOPIC, PLUGIN_ATLAS_POINTCLOUD_TOPIC,
 };
 
@@ -86,7 +86,7 @@ impl LiveStreams {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use world_engine_protocol::atlas::{
+    use ados_mapping_protocol::atlas::{
         LiveOccupancy, LivePointCloud, MapPayloadKind, VioHealth, ATLAS_SCAN_TOPIC,
     };
 

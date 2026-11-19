@@ -15,20 +15,26 @@
 #
 # To add a Rust extension: create `extensions/<name>/agent/Cargo.toml`, then add
 # `"extensions/<name>/agent"` to the members list below.
+#
+# `crates/` holds libraries more than one extension links (the mapping wire
+# contract, transport and pose, the planar SLAM and the live map). An
+# extension never links another extension's crate; what two extensions share
+# lives here.
 [workspace]
 resolver = "2"
 members = [
+  "crates/mapping-protocol",
+  "crates/mapping-protocol/contract-gen",
+  "crates/mapping-transport",
+  "crates/scan2d",
+  "crates/livemap",
+  "crates/mapping-pose",
   "extensions/vision-nav/agent",
-  "extensions/world-engine/agent/contract-gen",
-  "extensions/world-engine/agent/protocol",
-  "extensions/world-engine/agent/transport",
   "extensions/world-engine/agent/capture",
   "extensions/world-engine/agent/capture/livox",
   "extensions/world-engine/agent/capture/rplidar",
   "extensions/world-engine/agent/node",
   "extensions/world-engine/agent/link",
-  "extensions/world-engine/agent/scan2d",
-  "extensions/world-engine/agent/livemap",
 ]
 
 [workspace.package]
@@ -84,8 +90,13 @@ ados-vision-engine = { path = "../ADOSDroneAgent/crates/ados-vision-engine", def
 ados-config = { path = "../ADOSDroneAgent/crates/ados-config" }
 # The sensor bus client and frame codec (/run/ados/sensing/sensors.sock, seam J).
 ados-sensorbus = { path = "../ADOSDroneAgent/crates/ados-sensorbus" }
-# The capture contract crate (generated from the MIT schema files).
-ados-capture-contract = { path = "extensions/world-engine/agent/contract-gen" }
+# The shared mapping libraries.
+ados-capture-contract = { path = "crates/mapping-protocol/contract-gen" }
+ados-mapping-protocol = { path = "crates/mapping-protocol" }
+ados-mapping-transport = { path = "crates/mapping-transport" }
+ados-scan2d = { path = "crates/scan2d" }
+ados-livemap = { path = "crates/livemap" }
+ados-mapping-pose = { path = "crates/mapping-pose" }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "signal", "net", "io-util", "sync", "time", "process", "fs"] }
 rmpv = { version = "1.3", features = ["with-serde"] }
 async-trait = "0.1"

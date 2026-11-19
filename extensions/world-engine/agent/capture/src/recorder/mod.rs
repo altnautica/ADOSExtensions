@@ -37,7 +37,7 @@ use parking_lot::Mutex;
 
 use convert::{ImageEncoding, ImageMsg};
 use sidecars::{PolarWriter, Sidecars};
-use world_engine_protocol::atlas::PolarScan;
+use ados_mapping_protocol::atlas::PolarScan;
 
 /// Items the queue holds before new ones are dropped. Sensor records are
 /// small and must survive an image backlog, so images have their own bound.

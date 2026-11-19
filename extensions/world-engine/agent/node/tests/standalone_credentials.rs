@@ -17,14 +17,14 @@ use world_engine_node::recon::{StandInRunner, ToolRunner};
 use world_engine_node::{
     standalone, ApiState, Cluster, Engine, JobStore, MockDetector, MockReconstructor, Scheduler,
 };
-use world_engine_protocol::node_credential::NODE_CREDENTIAL_HEADER;
+use ados_mapping_protocol::node_credential::NODE_CREDENTIAL_HEADER;
 
 const TOKEN: &str = "standalone-owner-token";
 const SESSION: &str = "sim-1-20261019T000000Z-0001";
 
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../contract/fixtures/tiny-session")
+        .join("../../../../crates/mapping-protocol/contract/fixtures/tiny-session")
         .join(SESSION)
 }
 

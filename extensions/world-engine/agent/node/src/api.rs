@@ -17,7 +17,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use world_engine_protocol::compute::{
+use ados_mapping_protocol::compute::{
     CancelResponse, NodeIdentity, SubmitResponse, NODE_IDENTITY_PATH,
 };
 
