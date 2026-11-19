@@ -26,6 +26,11 @@ in one extension.
 
 ### Changed
 
+- The `lidar-slam` service declares the Livox data ports
+  (`udp_listen_ports` 56101, 56201, 56301, 56401, 56501) and the optional
+  `network.listen` permission, so a Livox LiDAR's UDP ports bind under the
+  plugin sandbox. Without the grant they stay closed.
+
 - The navigation state is published on the shared topic
   `plugin.navigation.state` (subscribe capability `telemetry.read`) instead
   of `nav.state`, so other plugins such as Follow-Me may read it and only
