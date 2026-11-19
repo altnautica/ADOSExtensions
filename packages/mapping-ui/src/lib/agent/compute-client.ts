@@ -22,6 +22,9 @@ import { coerceJobError, coerceJobPipeline, type JobError, type JobPipeline } fr
  * family string (e.g. "Metal 4") and a live `utilizationPct`.
  */
 export interface ComputeGpuInfo {
+  /** Whether the node found a hardware GPU: false = reconstruction runs on the
+   * CPU; null = the node has no probe for it. */
+  present: boolean | null;
   name: string | null;
   cores: number | null;
   unifiedMemoryMb: number | null;
@@ -40,7 +43,7 @@ export const COMPUTE_JOB_PORT = "8092";
  * camelCase {@link ComputeGpuInfo}. Returns null when the block is absent or not
  * an object; each field independently degrades to null when missing or the
  * wrong type, so a partial reading (e.g. name known, utilization not) still
- * surfaces what the node does report. Wire keys: `name` / `cores` /
+ * surfaces what the node does report. Wire keys: `present` / `name` / `cores` /
  * `unified_memory_mb` / `metal` / `utilization_pct`.
  */
 export function parseComputeGpu(raw: unknown): ComputeGpuInfo | null {
@@ -51,6 +54,7 @@ export function parseComputeGpu(raw: unknown): ComputeGpuInfo | null {
   const s = (v: unknown): string | null =>
     typeof v === "string" && v.length > 0 ? v : null;
   return {
+    present: typeof g.present === "boolean" ? g.present : null,
     name: s(g.name),
     cores: n(g.cores),
     unifiedMemoryMb: n(g.unified_memory_mb),
@@ -295,8 +299,11 @@ export class ComputeAgentClient {
     return body.flatMap((o) => {
       const out = coerceOutput(o);
       if (!out) return [];
+      // An edit lists versions it wrote beside the product it edits
+      // (`meta.job`), not in its own directory.
+      const owner = typeof out.meta?.job === "string" ? out.meta.job : out.jobId || id;
       out.source = out.file
-        ? this.fileSource(out.jobId || id, out.file)
+        ? this.fileSource(owner, out.file)
         : artifactSource(out.uri, { deviceId: this.deviceId, agent: this.agent });
       return [out];
     });
@@ -317,10 +324,12 @@ export class ComputeAgentClient {
     };
   }
 
-  /** A JSON file from a job's output directory, or null when it is absent. */
+  /** A JSON file from a job's output directory, or null when it is absent.
+   * Always revalidated: a job rewrites some of these in place (an edit's
+   * `edits.json`, a re-run's outputs). */
   async readJsonFile(jobId: string, rel: string): Promise<unknown | null> {
     try {
-      const res = await this.fileSource(jobId, rel).fetch(AbortSignal.timeout(15_000));
+      const res = await this.fileSource(jobId, rel).fetch(AbortSignal.timeout(15_000), { cache: "no-cache" });
       return res.ok ? await res.json() : null;
     } catch {
       return null;

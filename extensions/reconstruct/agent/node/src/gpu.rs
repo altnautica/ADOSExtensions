@@ -1,20 +1,24 @@
 //! Host-GPU reporting for the workstation profile.
 //!
-//! On a Mac the compute node runs on Apple-Silicon (or an Intel + discrete)
-//! GPU, so the compute status carries a `gpu` block: the GPU identity (name, core
-//! count, Metal support, unified-memory size) and a live utilisation sample. The
-//! identity is static (resolved once, cached); the utilisation is sampled with a
-//! short cache so a rapid poll never re-spawns `powermetrics`.
+//! The compute status carries a `gpu` block: whether the node has a hardware
+//! GPU, its identity (name, core count, Metal support, graphics memory) and a
+//! live utilisation sample. The identity is static (resolved once, cached); the
+//! utilisation is sampled with a short cache so a rapid poll never re-spawns
+//! `powermetrics` or `nvidia-smi`.
 //!
 //! Best-effort + honest: every field is `Option`, and any failure (a
 //! missing tool, no passwordless sudo for `powermetrics`, a parse miss) leaves
-//! that field `null` rather than fabricating a value. On a non-macOS host the
-//! whole block is all-`null`.
+//! that field `null` rather than fabricating a value. A platform with no probe
+//! (Windows) reports the whole block `null`, `present` included.
 //!
 //! Sources (macOS): `system_profiler SPDisplaysDataType -json` for name / cores /
 //! Metal, `sysinfo` for the unified-memory size, and
 //! `sudo -n powermetrics --samplers gpu_power -i 200 -n 1` for the live
 //! utilisation (the "GPU HW active residency" line).
+//!
+//! Sources (Linux): the DRM render nodes under `/sys/class/drm` and their
+//! kernel drivers decide `present` (a virtual or software device does not
+//! count); `nvidia-smi` names an NVIDIA GPU, its memory and its utilisation.
 
 #[cfg(target_os = "macos")]
 use std::sync::Mutex;
@@ -25,7 +29,7 @@ use std::time::{Duration, Instant};
 use ados_mapping_protocol::compute::ComputeGpu;
 
 /// Sample the host GPU: the cached static identity plus a freshly-sampled (short-
-/// cached) utilisation. On a non-macOS host this is all-`null`.
+/// cached) utilisation.
 pub fn sample() -> ComputeGpu {
     let mut gpu = identity();
     gpu.utilization_pct = utilization();
@@ -43,6 +47,7 @@ fn identity() -> ComputeGpu {
 #[cfg(target_os = "macos")]
 fn probe_identity() -> ComputeGpu {
     let mut gpu = ComputeGpu {
+        present: Some(true),
         unified_memory_mb: total_memory_mb(),
         ..ComputeGpu::default()
     };
@@ -66,11 +71,52 @@ fn probe_identity() -> ComputeGpu {
     gpu
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
 fn probe_identity() -> ComputeGpu {
-    // No portable GPU identity source off macOS; the block stays all-null until a
-    // platform-specific probe is added.
+    let nvidia = crate::worker::nvidia_gpu();
+    let hardware = render_node_drivers(std::path::Path::new("/sys/class/drm"))
+        .iter()
+        .any(|driver| !VIRTUAL_DRM_DRIVERS.contains(&driver.as_str()));
+    ComputeGpu {
+        present: Some(nvidia.is_some() || hardware),
+        name: nvidia.as_ref().map(|g| g.name.clone()),
+        unified_memory_mb: nvidia.and_then(|g| g.vram_total_mb),
+        ..ComputeGpu::default()
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn probe_identity() -> ComputeGpu {
+    // No GPU identity source on this platform: the block stays all-null.
     ComputeGpu::default()
+}
+
+/// Kernel drivers of render nodes that are not a GPU a reconstruction can use:
+/// virtual and software devices.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+const VIRTUAL_DRM_DRIVERS: &[&str] = &[
+    "vgem",
+    "vkms",
+    "virtio_gpu",
+    "virtio-pci",
+    "qxl",
+    "bochs-drm",
+    "simpledrm",
+];
+
+/// The kernel driver of every DRM render node (`renderD*`) under `drm_dir`,
+/// read from its `device/driver` link. Empty when the directory is missing.
+#[cfg(any(target_os = "linux", all(test, unix)))]
+fn render_node_drivers(drm_dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(drm_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("renderD"))
+        .filter_map(|e| std::fs::read_link(e.path().join("device/driver")).ok())
+        .filter_map(|link| link.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect()
 }
 
 /// Total physical memory in MB — the unified memory the Apple-Silicon GPU shares
@@ -154,7 +200,13 @@ fn utilization() -> Option<f32> {
     sampled
 }
 
-#[cfg(not(target_os = "macos"))]
+/// An NVIDIA GPU's utilisation from `nvidia-smi` (cached 5 s); `None` without one.
+#[cfg(target_os = "linux")]
+fn utilization() -> Option<f32> {
+    crate::worker::nvidia_gpu().and_then(|g| g.util_pct)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn utilization() -> Option<f32> {
     None
 }
@@ -250,13 +302,46 @@ GPU Power: 45 mW
 
     #[test]
     fn sample_never_panics_and_is_self_consistent() {
-        // Off macOS this is all-null; on macOS it is best-effort (util may be
-        // null when powermetrics needs sudo it lacks). Either way it must not panic
+        // Best-effort on every platform (util is null when powermetrics needs
+        // sudo it lacks, or with no NVIDIA GPU). Either way it must not panic
         // and a present utilisation is a sane percentage.
         let gpu = sample();
         if let Some(u) = gpu.utilization_pct {
             assert!((0.0..=100.0).contains(&u), "utilisation in range: {u}");
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_hardware_render_nodes_count_as_a_gpu() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let node = |name: &str, driver: &str| {
+            let dev = dir.path().join(format!("dev-{name}"));
+            std::fs::create_dir_all(&dev).unwrap();
+            symlink(
+                format!("../../bus/pci/drivers/{driver}"),
+                dev.join("driver"),
+            )
+            .unwrap();
+            std::fs::create_dir_all(dir.path().join(name)).unwrap();
+            symlink(&dev, dir.path().join(name).join("device")).unwrap();
+        };
+        node("card0", "amdgpu");
+        node("renderD128", "virtio_gpu");
+        let drivers = render_node_drivers(dir.path());
+        assert_eq!(drivers, ["virtio_gpu"], "only render nodes are read");
+        assert!(drivers
+            .iter()
+            .all(|d| VIRTUAL_DRM_DRIVERS.contains(&d.as_str())));
+        node("renderD129", "amdgpu");
+        let mut drivers = render_node_drivers(dir.path());
+        drivers.sort();
+        assert_eq!(drivers, ["amdgpu", "virtio_gpu"]);
+        assert!(drivers
+            .iter()
+            .any(|d| !VIRTUAL_DRM_DRIVERS.contains(&d.as_str())));
+        assert!(render_node_drivers(&dir.path().join("missing")).is_empty());
     }
 
     #[cfg(target_os = "macos")]

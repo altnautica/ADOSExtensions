@@ -1,14 +1,17 @@
-//! The staged reconstruction pipeline over an uploaded capture session.
+//! The staged pipelines over an uploaded capture session or a product.
 //!
-//! A `reconstruct` job with a `preset`, a `change` job and a `calibrate` job
-//! are *staged*: the worker runs them stage by stage ([`pipeline`]), each
-//! stage persisted in the job store so a restarted node resumes at the stage
-//! that was interrupted. Every third-party program runs through a
-//! [`ToolRunner`] resolved from the pinned tool set.
+//! A `reconstruct` job with a `preset`, a `change` job, a `calibrate` job and
+//! an `edit` job are *staged*: the worker runs them stage by stage
+//! ([`pipeline`]), each stage persisted in the job store so a restarted node
+//! resumes at the stage that was interrupted. Every third-party program runs
+//! through a [`ToolRunner`] resolved from the pinned tool set.
 
 pub mod chunks;
 pub mod chunks_merge;
 pub mod colmap;
+pub mod edit;
+pub mod edit_export;
+pub mod edit_ops;
 pub mod export;
 pub mod geom;
 pub mod glim;
@@ -80,13 +83,19 @@ pub enum StagedJob {
         session_dir: PathBuf,
         request: crate::calib::CalibRequest,
     },
+    Edit {
+        session_id: String,
+        /// The job whose `out/` holds the product being edited.
+        product_job: String,
+        params: ados_mapping_protocol::edit::EditParams,
+    },
 }
 
 /// Whether a job runs on the staged pipeline.
 pub fn is_staged(job: &JobRecord) -> bool {
     match job.kind {
         ComputeJobKind::Reconstruct => job.params.get("preset").is_some_and(|p| p.is_string()),
-        ComputeJobKind::Change | ComputeJobKind::Calibrate => true,
+        ComputeJobKind::Change | ComputeJobKind::Calibrate | ComputeJobKind::Edit => true,
         ComputeJobKind::PerceptionOffload => false,
     }
 }
@@ -230,6 +239,40 @@ pub fn prepare_staged(
                 session_id: request.session_id.clone(),
                 session_dir,
                 request,
+            })
+        }
+        ComputeJobKind::Edit => {
+            let session_id = job
+                .dataset_id
+                .clone()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| StageError::input("An edit names the session of its product."))?;
+            let params: ados_mapping_protocol::edit::EditParams =
+                serde_json::from_value(job.params.clone())
+                    .map_err(|e| StageError::input(format!("edit params: {e}")))?;
+            params
+                .validate()
+                .map_err(|e| StageError::input(e.to_string()))?;
+            let product_job = match &params.job {
+                Some(id) => {
+                    let owned = store.get_job(id).map_err(StageError::io)?.filter(|j| {
+                        j.dataset_id.as_deref() == Some(session_id.as_str())
+                            && j.state == crate::ComputeJobState::Completed
+                    });
+                    if owned.is_none() {
+                        return Err(StageError::new(
+                            "E_NOT_RECONSTRUCTED",
+                            format!("job {id} is not a finished product of session {session_id}"),
+                        ));
+                    }
+                    id.clone()
+                }
+                None => latest_reconstruction(store, &session_id)?,
+            };
+            Ok(StagedJob::Edit {
+                session_id,
+                product_job,
+                params,
             })
         }
         ComputeJobKind::PerceptionOffload => Err(StageError::input("not a staged job")),

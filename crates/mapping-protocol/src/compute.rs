@@ -37,6 +37,8 @@ pub enum ComputeJobKind {
     Change,
     /// Calibrate a rig from a calibration capture session.
     Calibrate,
+    /// Rewrite a cloud product with editor operations ([`crate::edit`]).
+    Edit,
 }
 
 /// Lifecycle of a compute job.
@@ -84,17 +86,20 @@ pub struct ComputeJobStatus {
     pub error: Option<String>,
 }
 
-/// The host GPU block carried on a compute node's status: identity (name, core
-/// count, Metal support, unified-memory size) plus a live utilisation sample.
+/// The host GPU block carried on a compute node's status: whether the node has
+/// a GPU at all, its identity (name, core count, Metal support, graphics memory)
+/// and a live utilisation sample.
 ///
 /// Every field is optional and honest: an unknown field is `null`,
-/// never fabricated. On a non-macOS host (or when a probe tool is missing / a
-/// `powermetrics` sample needs sudo it does not have) the relevant field is
-/// `null`, so the whole block degrades to all-`null` rather than reporting a
-/// guessed value. The field names are the snake_case wire keys the GCS compute
-/// card reads (`unified_memory_mb`, `utilization_pct`).
+/// never fabricated. When a probe tool is missing or a `powermetrics` sample
+/// needs sudo it does not have, the relevant field is `null`. The field names
+/// are the snake_case wire keys the GCS compute card reads
+/// (`unified_memory_mb`, `utilization_pct`).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ComputeGpu {
+    /// Whether the node found a hardware GPU: `false` means reconstruction runs
+    /// on the CPU, `null` that the platform has no probe.
+    pub present: Option<bool>,
     /// GPU model name, e.g. `Apple M1 Pro`.
     pub name: Option<String>,
     /// GPU core count.
@@ -278,6 +283,7 @@ mod tests {
             (ComputeJobKind::PerceptionOffload, "perception_offload"),
             (ComputeJobKind::Change, "change"),
             (ComputeJobKind::Calibrate, "calibrate"),
+            (ComputeJobKind::Edit, "edit"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), wire);
         }
@@ -288,6 +294,7 @@ mod tests {
     fn gpu_default_is_all_null_with_snake_case_keys() {
         let v = serde_json::to_value(ComputeGpu::default()).unwrap();
         for key in [
+            "present",
             "name",
             "cores",
             "unified_memory_mb",
@@ -302,6 +309,7 @@ mod tests {
     #[test]
     fn gpu_round_trips_a_populated_block() {
         let gpu = ComputeGpu {
+            present: Some(true),
             name: Some("Apple M1 Pro".into()),
             cores: Some(16),
             unified_memory_mb: Some(32768),
@@ -309,6 +317,7 @@ mod tests {
             utilization_pct: Some(12.5),
         };
         let v = serde_json::to_value(&gpu).unwrap();
+        assert_eq!(v["present"], true);
         assert_eq!(v["name"], "Apple M1 Pro");
         assert_eq!(v["cores"], 16);
         assert_eq!(v["unified_memory_mb"], 32768);

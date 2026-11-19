@@ -18,7 +18,7 @@ import { translator } from "../host/i18n";
 import { OffloadPage } from "./offload/OffloadPage";
 import { ComputeClusterCard } from "./workstation/ComputeClusterCard";
 import { DroneAccessPanel } from "./workstation/DroneAccessPanel";
-import { EditorView } from "./workstation/EditorView";
+import { EditorPage } from "./editor/EditorPage";
 import { GpuCard } from "./workstation/GpuCard";
 import { JobsPanel } from "./workstation/JobsPanel";
 import { JobsSummaryCard } from "./workstation/JobsSummaryCard";
@@ -68,7 +68,7 @@ export function ReconstructPage() {
             ),
           },
           { id: "products", label: t("products"), render: () => <Products deviceId={deviceId} /> },
-          { id: "editor", label: t("editor"), render: () => <EditorView deviceId={deviceId} /> },
+          { id: "editor", label: t("editor"), render: () => <EditorPage deviceId={deviceId} /> },
           { id: "access", label: t("access"), render: () => <DroneAccessPanel deviceId={deviceId} /> },
           { id: "serving", label: t("serving"), render: () => <OffloadPage /> },
         ]}

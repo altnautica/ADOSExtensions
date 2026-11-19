@@ -15,7 +15,7 @@ import {
 import type { ComputeGpuInfo } from "@altnautica/mapping-ui/lib/agent/compute-client";
 
 function gpu(utilizationPct: number | null): ComputeGpuInfo {
-  return { name: "GPU", cores: null, unifiedMemoryMb: null, metal: null, utilizationPct };
+  return { present: true, name: "GPU", cores: null, unifiedMemoryMb: null, metal: null, utilizationPct };
 }
 
 const node = (deviceId: string) => useComputeStore.getState().nodes[deviceId] ?? EMPTY_COMPUTE_NODE;

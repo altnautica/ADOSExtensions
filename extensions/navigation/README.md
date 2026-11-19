@@ -388,6 +388,8 @@ Agent:
   for kind `vio`)
 - `sensor.stream.read` (`lidar-slam`: the LiDAR and IMU from the sensor
   bus)
+- `network.outbound`, optional (`lidar-slam`: a network LiDAR, an RPLIDAR
+  over TCP or the Livox command channel)
 
 GCS:
 

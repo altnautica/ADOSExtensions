@@ -131,13 +131,15 @@ pub fn artifact_outputs(
     public_base: &str,
     now_ms: i64,
 ) -> Vec<Output> {
-    let Ok(out_dir) = recon::job_dir(work_root, job_id).map(|d| d.join("out")) else {
-        return Vec::new();
-    };
     arts.iter()
         .enumerate()
-        .map(|(i, a)| {
-            let path = out_dir.join(&a.file);
+        .filter_map(|(i, a)| {
+            // An artifact may live in another job's `out/` (an edit's versions).
+            let owner = a.job.as_deref().unwrap_or(job_id);
+            let path = recon::job_dir(work_root, owner)
+                .ok()?
+                .join("out")
+                .join(&a.file);
             let mut o = Output::new(
                 format!("{job_id}-o{i}"),
                 job_id.to_string(),
@@ -158,9 +160,10 @@ pub fn artifact_outputs(
                     .map(Into::into)
                     .unwrap_or(serde_json::Value::Null),
             );
+            meta.insert("job".into(), owner.into());
             o.meta = serde_json::Value::Object(meta);
             rewrite_output_to_artifact_url(&mut o, work_root, public_base);
-            o
+            Some(o)
         })
         .collect()
 }
@@ -367,6 +370,7 @@ mod tests {
             format: "spz".into(),
             place_json: Some("scene.spz.place.json".into()),
             meta: serde_json::json!({ "size_bytes": 1 }),
+            job: None,
         }];
         let outs = artifact_outputs("j1", &arts, dir.path(), "http://node:8092", 5);
         assert_eq!(outs[0].kind, "splat");

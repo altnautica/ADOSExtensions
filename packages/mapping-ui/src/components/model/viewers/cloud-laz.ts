@@ -41,7 +41,9 @@ export function rgbaToFloatRgb(rgba: Uint8Array): Float32Array {
   return out;
 }
 
-export async function decodeLaz(buffer: ArrayBuffer): Promise<DecodedCloud> {
+/** Decode a LAZ cloud keeping its local ENU coordinates (x east, y north,
+ * z up). */
+export async function decodeLazEnu(buffer: ArrayBuffer): Promise<DecodedCloud> {
   // On demand: the decoder and its wasm load only when a LAZ cloud is opened.
   const [{ LAZRsLoader }, lazRs, wasm] = await Promise.all([
     import("@loaders.gl/las"),
@@ -54,7 +56,12 @@ export async function decodeLaz(buffer: ArrayBuffer): Promise<DecodedCloud> {
   if (!(pos instanceof Float32Array) || pos.length === 0) throw new Error("LAZ cloud has no points");
   const rgba = mesh.attributes.COLOR_0?.value;
   return {
-    positions: enuCloudToViewer(pos),
+    positions: pos,
     colors: rgba instanceof Uint8Array ? rgbaToFloatRgb(rgba) : null,
   };
+}
+
+export async function decodeLaz(buffer: ArrayBuffer): Promise<DecodedCloud> {
+  const cloud = await decodeLazEnu(buffer);
+  return { positions: enuCloudToViewer(cloud.positions), colors: cloud.colors };
 }

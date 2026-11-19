@@ -28,6 +28,8 @@ pub mod calib;
 mod cluster;
 mod compute_status;
 mod credential_api;
+/// The point-cloud editor's size estimate and volume routes.
+pub mod edit_api;
 mod engine;
 /// Host-GPU reporting for the workstation profile (identity + live utilisation).
 /// Public so the node's heartbeat loop can sample it: `reconstruct_node::gpu::sample`.

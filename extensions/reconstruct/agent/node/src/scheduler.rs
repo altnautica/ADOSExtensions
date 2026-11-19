@@ -134,7 +134,10 @@ impl Scheduler {
         };
 
         match job.kind {
-            ComputeJobKind::Reconstruct | ComputeJobKind::Change | ComputeJobKind::Calibrate
+            ComputeJobKind::Reconstruct
+            | ComputeJobKind::Change
+            | ComputeJobKind::Calibrate
+            | ComputeJobKind::Edit
                 if crate::recon::is_staged(&job) =>
             {
                 match crate::recon::prepare_staged(&self.store, self.sessions_root(), &job) {
@@ -145,11 +148,13 @@ impl Scheduler {
                     Err(e) => Ok(Prepared::Failed(self.fail_staged(&job.id, &e, now_ms)?)),
                 }
             }
-            ComputeJobKind::Change | ComputeJobKind::Calibrate => Ok(Prepared::Failed(self.fail(
-                &job.id,
-                "job is missing its session parameters",
-                now_ms,
-            )?)),
+            ComputeJobKind::Change | ComputeJobKind::Calibrate | ComputeJobKind::Edit => {
+                Ok(Prepared::Failed(self.fail(
+                    &job.id,
+                    "job is missing its session parameters",
+                    now_ms,
+                )?))
+            }
             ComputeJobKind::Reconstruct => {
                 let dataset = match job.dataset_id.as_deref() {
                     Some(id) => self.store.get_dataset(id)?,

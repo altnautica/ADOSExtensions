@@ -38,6 +38,13 @@ pub fn enu_offset(a: &GeoAnchor, b: &GeoAnchor) -> [f64; 3] {
     std::array::from_fn(|i| r[3 * i] * d[0] + r[3 * i + 1] * d[1] + r[3 * i + 2] * d[2])
 }
 
+/// A point in `anchor`'s local ENU frame as WGS-84 ECEF metres (EPSG:4978).
+pub fn enu_to_ecef(anchor: &GeoAnchor, p: [f64; 3]) -> [f64; 3] {
+    let (o, r) = (ecef(anchor), enu_from_ecef(anchor));
+    // rᵀ · p + o
+    std::array::from_fn(|i| o[i] + r[i] * p[0] + r[3 + i] * p[1] + r[6 + i] * p[2])
+}
+
 /// Row-major rotation taking `b`-ENU vectors into `a`-ENU: its columns are
 /// `b`'s east, north and up axes expressed in `a`. Differs from identity by
 /// the meridian convergence and the change of vertical between the anchors.

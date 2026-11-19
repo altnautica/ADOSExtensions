@@ -49,6 +49,38 @@ const LAZ_SCALE: f64 = 0.001;
 /// Writes `cloud` as compressed LAS 1.4: point format 7 (with RGB) when the
 /// cloud has colours, else format 6. Scale 1 mm, offset at the minimum corner.
 pub fn write_laz(path: &Path, cloud: &PointCloud) -> Result<(), ProductError> {
+    write_laz_layers(path, cloud, None)
+}
+
+/// [`write_laz`] with each point's editor layer id in its LAS point source id
+/// (`None`: every point 0, the base layer).
+pub fn write_laz_layers(
+    path: &Path,
+    cloud: &PointCloud,
+    layers: Option<&[u16]>,
+) -> Result<(), ProductError> {
+    let mut file = write_laz_into(BufWriter::new(File::create(path)?), cloud, layers)?;
+    std::io::Write::flush(&mut file)?;
+    Ok(())
+}
+
+/// The compressed bytes [`write_laz_layers`] would write.
+pub fn laz_bytes(cloud: &PointCloud, layers: Option<&[u16]>) -> Result<Vec<u8>, ProductError> {
+    write_laz_into(std::io::Cursor::new(Vec::new()), cloud, layers).map(|c| c.into_inner())
+}
+
+fn write_laz_into<W: 'static + std::io::Write + std::io::Seek + Send + Sync + std::fmt::Debug>(
+    sink: W,
+    cloud: &PointCloud,
+    layers: Option<&[u16]>,
+) -> Result<W, ProductError> {
+    if layers.is_some_and(|l| l.len() != cloud.points.len()) {
+        return Err(ProductError::Format(format!(
+            "{} layer ids for {} points",
+            layers.map_or(0, <[u16]>::len),
+            cloud.points.len()
+        )));
+    }
     if let Some(c) = &cloud.colors {
         if c.len() != cloud.points.len() {
             return Err(ProductError::Format(format!(
@@ -74,7 +106,7 @@ pub fn write_laz(path: &Path, cloud: &PointCloud) -> Result<(), ProductError> {
         z: axis(min[2]),
     };
     let header = builder.into_header().map_err(las_err)?;
-    let mut writer = Writer::new(BufWriter::new(File::create(path)?), header).map_err(las_err)?;
+    let mut writer = Writer::new(sink, header).map_err(las_err)?;
     for (i, p) in cloud.points.iter().enumerate() {
         let color = cloud.colors.as_ref().map(|c| Color {
             red: c[i][0],
@@ -90,15 +122,21 @@ pub fn write_laz(path: &Path, cloud: &PointCloud) -> Result<(), ProductError> {
                 number_of_returns: 1,
                 gps_time: Some(0.0),
                 color,
+                point_source_id: layers.map_or(0, |l| l[i]),
                 ..Default::default()
             })
             .map_err(las_err)?;
     }
-    writer.close().map_err(las_err)
+    writer.into_inner().map_err(las_err)
 }
 
 /// Reads a LAS/LAZ file; colours are kept when the point format carries RGB.
 pub fn read_laz(path: &Path) -> Result<PointCloud, ProductError> {
+    read_laz_layers(path).map(|(cloud, _)| cloud)
+}
+
+/// [`read_laz`] plus each point's LAS point source id (the editor layer id).
+pub fn read_laz_layers(path: &Path) -> Result<(PointCloud, Vec<u16>), ProductError> {
     let mut reader = Reader::from_path(path).map_err(las_err)?;
     let data = reader.read_all().map_err(las_err)?;
     let points = data
@@ -108,7 +146,8 @@ pub fn read_laz(path: &Path) -> Result<PointCloud, ProductError> {
         .map(|((x, y), z)| [x, y, z])
         .collect();
     let colors = data.rgb().map(|it| it.map(|(r, g, b)| [r, g, b]).collect());
-    Ok(PointCloud { points, colors })
+    let layers = data.point_source_id().collect();
+    Ok((PointCloud { points, colors }, layers))
 }
 
 /// One point per occupied `voxel_m` cube: the centroid of its points, with the

@@ -47,19 +47,19 @@ pub struct RunCtx<'a> {
     pub person_model: Option<PathBuf>,
 }
 
-struct Stages<'a> {
+pub(super) struct Stages<'a> {
     sink: &'a dyn StageSink,
     rows: Vec<StageRow>,
-    order: Vec<&'static str>,
+    order: Vec<String>,
 }
 
 impl<'a> Stages<'a> {
-    fn new(sink: &'a dyn StageSink, order: &[&'static str]) -> Self {
+    pub(super) fn new(sink: &'a dyn StageSink, order: &[&str]) -> Self {
         sink.init(order);
         Self {
             rows: sink.stages(),
             sink,
-            order: order.to_vec(),
+            order: order.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -70,7 +70,7 @@ impl<'a> Stages<'a> {
             .order
             .iter()
             .zip(&weights)
-            .take_while(|(s, _)| **s != stage)
+            .take_while(|(s, _)| s.as_str() != stage)
             .map(|(_, w)| w)
             .sum();
         before / total
@@ -83,7 +83,7 @@ impl<'a> Stages<'a> {
 
     /// Run `f` as `stage`, or return the stored detail of a stage a resumed job
     /// already finished.
-    fn run(
+    pub(super) fn run(
         &self,
         stage: &str,
         f: impl FnOnce(&mut dyn FnMut(f32)) -> Result<serde_json::Value, StageError>,
@@ -163,6 +163,11 @@ pub fn run_staged(
             ctx,
         ),
         StagedJob::Change { a, b, a_job, b_job } => change_job(&dir, ctx, (a, a_job), (b, b_job)),
+        StagedJob::Edit {
+            product_job,
+            params,
+            ..
+        } => super::edit::edit_job(&dir, ctx, product_job, params),
         StagedJob::Calibrate {
             session_dir,
             request,
@@ -553,6 +558,7 @@ fn artifact(out: &Path, kind: &str, file: &str, format: &str) -> ArtifactOut {
         format: format.into(),
         place_json: None,
         meta: serde_json::json!({ "size_bytes": size }),
+        job: None,
     }
 }
 

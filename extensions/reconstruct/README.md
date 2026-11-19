@@ -51,7 +51,7 @@ device access view lists and revokes these credentials.
 
 | Contribution | Profiles | What it shows |
 |---|---|---|
-| `reconstruct` (node surface) | workstation, compute | A header with the GPU, the cluster and the queue; **Jobs** (queue, history, pipeline stages, cancel, retry); **Products** (each finished job's artifacts in the model viewers, change detection between two sessions); **Editor** (a finished cloud, read-only); device access; perception serving |
+| `reconstruct` (node surface) | workstation, compute | A header with the GPU, the cluster and the queue; **Jobs** (queue, history, pipeline stages, cancel, retry); **Products** (each finished job's artifacts in the model viewers, change detection between two sessions); **Editor** (crop, delete, patch layers, decimate, measure and export a finished cloud, each operation a new version with its provenance); device access; perception serving |
 | `offload` (Agent page) | drone | Where perception runs and which node it offloads to |
 
 The model viewers render splats with Spark (SPZ, PLY, or a streamed `.rad`

@@ -118,6 +118,7 @@ mod tests {
 
     fn sample_gpu() -> ComputeGpu {
         ComputeGpu {
+            present: Some(true),
             name: Some("Apple M1 Pro".into()),
             cores: Some(16),
             unified_memory_mb: Some(32768),

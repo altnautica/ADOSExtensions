@@ -5,6 +5,7 @@
 //!   and the navigation payloads).
 //! - [`capture_state`]: the `capture` member of Capture's `status` telemetry.
 //! - [`compute`]: the compute-node job, dataset and cluster types.
+//! - [`edit`]: the point-cloud editor's job params, operations and provenance.
 //! - [`node_credential`]: the scoped credential a compute node issues a drone
 //!   or ground station, its lanes, and the installed-credential store.
 //! - [`offload`]: the perception-offload frame reference and detection batch.
@@ -18,6 +19,7 @@ pub mod capture;
 pub mod capture_ctl;
 pub mod capture_state;
 pub mod compute;
+pub mod edit;
 pub mod node_credential;
 pub mod offload;
 pub mod paths;

@@ -1,6 +1,7 @@
 //! Owner routes over a staged job's deliverables: any file under its `out/`
-//! (Range requests honoured), the tour bundle, and point-to-point / ray
-//! measurement on its reconstructed mesh.
+//! (Range requests honoured), the tour bundle, point-to-point / ray
+//! measurement on its reconstructed mesh, and the editor's size estimate and
+//! volume over a cloud version ([`crate::edit_api`]).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -34,6 +35,8 @@ pub fn job_files_router(auth: Arc<ComputeAuth>, work_root: PathBuf) -> Router {
         .route("/api/compute/jobs/:id/files/*rel", get(job_file))
         .route("/api/compute/jobs/:id/tour.zip", get(tour_zip))
         .route("/api/compute/measure", post(measure_route))
+        .route("/api/compute/edit/estimate", post(edit_estimate))
+        .route("/api/compute/edit/volume", post(edit_volume))
         .layer(axum::middleware::from_fn_with_state(auth, require_job_api))
         .with_state(FilesState {
             work_root: Arc::new(work_root),
@@ -84,6 +87,20 @@ async fn tour_zip(
     req: Request,
 ) -> Response {
     serve(&state, &id, "tour.zip", req).await
+}
+
+async fn edit_estimate(
+    State(state): State<FilesState>,
+    Json(req): Json<crate::edit_api::EstimateRequest>,
+) -> Response {
+    crate::edit_api::estimate(&state.work_root, req).await
+}
+
+async fn edit_volume(
+    State(state): State<FilesState>,
+    Json(req): Json<crate::edit_api::VolumeRequest>,
+) -> Response {
+    crate::edit_api::volume(&state.work_root, req).await
 }
 
 async fn measure_route(
@@ -203,5 +220,85 @@ mod tests {
             r.oneshot(anon).await.unwrap().status(),
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    async fn post(
+        r: &Router,
+        uri: &str,
+        body: serde_json::Value,
+    ) -> (StatusCode, serde_json::Value) {
+        let req = HttpRequest::builder()
+            .method("POST")
+            .uri(uri)
+            .header("authorization", "Bearer t")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap();
+        let resp = r.clone().oneshot(req).await.unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or_default())
+    }
+
+    #[tokio::test]
+    async fn the_editor_routes_answer_from_the_product_and_stay_jailed() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("jobs/rec-1/out");
+        std::fs::create_dir_all(&out).unwrap();
+        let points: Vec<[f64; 3]> = (0..400)
+            .map(|i| {
+                [
+                    (i % 20) as f64 * 0.5 + 0.25,
+                    (i / 20) as f64 * 0.5 + 0.25,
+                    1.5,
+                ]
+            })
+            .collect();
+        crate::products::cloud::write_laz(
+            &out.join("cloud.laz"),
+            &crate::products::cloud::PointCloud {
+                points,
+                colors: None,
+            },
+        )
+        .unwrap();
+        let r = router(dir.path().to_path_buf());
+        let (st, body) = post(
+            &r,
+            "/api/compute/edit/estimate",
+            serde_json::json!({"job": "rec-1", "source": "out/cloud.laz", "format": "laz",
+                               "decimate": {"target_percent": 50.0}}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert_eq!(body["points"], 200);
+        assert!(body["bytes"].as_u64().unwrap() > 0);
+        let (st, body) = post(
+            &r,
+            "/api/compute/edit/volume",
+            serde_json::json!({"job": "rec-1", "source": "out/cloud.laz", "base_z": 0.5, "cell_m": 0.5,
+                               "polygon": [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{body}");
+        assert!(
+            (body["volume_m3"].as_f64().unwrap() - 100.0).abs() < 1e-9,
+            "{body}"
+        );
+        for (job, source) in [
+            ("rec-1", "out/../../creds.json"),
+            ("../x", "out/cloud.laz"),
+            ("rec-1", "out/cloud.v4.laz"),
+        ] {
+            let (st, _) = post(
+                &r,
+                "/api/compute/edit/estimate",
+                serde_json::json!({"job": job, "source": source, "format": "ply"}),
+            )
+            .await;
+            assert_ne!(st, StatusCode::OK, "{job} {source}");
+        }
     }
 }

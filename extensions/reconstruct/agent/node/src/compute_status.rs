@@ -120,6 +120,7 @@ mod tests {
         assert_eq!(body["computeClusterMasterId"], "node-a");
         assert!(body["gpu"].is_object());
         for key in [
+            "present",
             "name",
             "cores",
             "unified_memory_mb",

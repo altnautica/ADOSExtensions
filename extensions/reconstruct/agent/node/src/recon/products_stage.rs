@@ -37,6 +37,10 @@ pub struct ArtifactOut {
     pub place_json: Option<String>,
     #[serde(default)]
     pub meta: serde_json::Value,
+    /// The job whose `out/` holds the file, when it is not the job listing it
+    /// (an edit writes its versions beside the product it edits).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job: Option<String>,
 }
 
 /// Inputs of the stage.
@@ -506,6 +510,7 @@ pub(super) fn art(kind: &str, file: &str, format: &str, place_json: Option<Strin
         format: format.into(),
         place_json,
         meta: serde_json::Value::Null,
+        job: None,
     }
 }
 

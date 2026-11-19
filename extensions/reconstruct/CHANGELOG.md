@@ -14,8 +14,21 @@ extension (`com.altnautica.reconstruct`).
   the node as `reconstruct.live.scan` while the map is built there), the
   `reconstruct`, `job_status` and `tour_bundle` tools, and
   `/reconstruct/{status,config,node-credential}`.
-- The Reconstruct surface: Jobs, Products, Editor (a finished cloud,
-  read-only), device access and perception serving.
+- The Reconstruct surface: Jobs, Products, Editor, device access and
+  perception serving.
+- The point-cloud editor: box and polygon selection with a height band,
+  crop, delete, patch (a copy placed as its own layer), layer delete,
+  decimation to a point target with its deviation, measurement (distance,
+  area, height, volume, with an exact full-resolution volume) and export to
+  LAZ or PLY in the product's frame or WGS-84 ECEF with a manifest. Every
+  operation that rewrites points runs on the node as an `edit` job and
+  writes the next version (`cloud.v1.laz`, `cloud.v2.laz`, …) beside an
+  append-only provenance record (`edits.json`); undo opens the previous
+  version. A second tab on the same product opens read-only.
+- `POST /api/compute/edit/estimate` (predicted export size) and
+  `POST /api/compute/edit/volume` on the node.
+- The compute status `gpu` block carries `present`; a node with no hardware
+  GPU says once that reconstruction runs on the CPU.
 
 ### Changed
 

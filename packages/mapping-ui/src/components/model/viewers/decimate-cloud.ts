@@ -28,6 +28,9 @@ export interface DecimatedCloud {
   kept: number;
   /** Whether any points were dropped (total &gt; budget). */
   decimated: boolean;
+  /** The source index of each kept point, or null when every point was kept
+   * in order. */
+  indices: Uint32Array | null;
 }
 
 /** Largest grid resolution per axis; keeps the cell key well inside a safe int. */
@@ -59,7 +62,7 @@ export function decimateCloud(
       col = new Float32Array(n);
       for (let i = 0; i < n; i++) col[i] = colors[i]!;
     }
-    return { positions: pos, colors: col, total, kept: total, decimated: false };
+    return { positions: pos, colors: col, total, kept: total, decimated: false, indices: null };
   }
 
   // ── Voxel-grid pass: keep the first point seen in each occupied cell ──
@@ -123,7 +126,9 @@ export function decimateCloud(
 
   const outPos = new Float32Array(keptN * 3);
   const outCol = colors ? new Float32Array(keptN * 3) : null;
+  const outIdx = new Uint32Array(keptN);
   for (let k = 0; k < keptN; k++) {
+    outIdx[k] = kept[k * stride]!;
     const src = kept[k * stride]! * 3;
     const dst = k * 3;
     outPos[dst] = positions[src]!;
@@ -142,5 +147,6 @@ export function decimateCloud(
     total,
     kept: keptN,
     decimated: true,
+    indices: outIdx,
   };
 }

@@ -2,7 +2,8 @@
  * @module GpuCard
  * @description A workstation's GPU: identity (name, cores, unified memory,
  * Metal family) plus a live utilisation bar from the node's compute telemetry.
- * Renders "awaiting GPU telemetry" before the first report, drops the bar when
+ * Renders "awaiting GPU telemetry" before the first report, one sentence when
+ * the node reports no hardware GPU (reconstruction on the CPU), drops the bar when
  * the node reports no utilisation (never a fabricated 0%), and greys it once
  * reports stop arriving.
  */
@@ -78,6 +79,8 @@ export function GpuCard({ deviceId, className }: { deviceId: string | null; clas
 
       {gpu === null ? (
         <div className="rec:text-[10px] rec:text-text-tertiary rec:text-center rec:py-3">{t("gpuAwaiting")}</div>
+      ) : gpu.present === false ? (
+        <p className="rec:text-xs rec:text-text-secondary">{t("gpuNone")}</p>
       ) : (
         <>
           <div className="rec:flex rec:items-center rec:justify-between rec:gap-2">
