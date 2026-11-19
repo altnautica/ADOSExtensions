@@ -1,5 +1,4 @@
-//! The structured `atlas.*` settings: pose provider, VIO and LiDAR inputs,
-//! HUD buttons and the segment roll.
+//! The structured navigation settings: pose provider, VIO and LiDAR inputs.
 
 use serde::Deserialize;
 use ados_mapping_protocol::atlas::PoseSource;
@@ -89,7 +88,7 @@ impl Default for LidarSettings {
             lidar_id: "lidar0".into(),
             imu: "imu0".into(),
             uv: format!("bin/{}-linux/uv", std::env::consts::ARCH),
-            project_dir: "agent/capture/python/kiss_icp_live".into(),
+            project_dir: "lidar-slam/python/kiss_icp_live".into(),
             rplidar: RplidarSettings::default(),
             livox: LivoxSettings::default(),
         }
@@ -136,32 +135,6 @@ impl Default for LivoxSettings {
             ),
             host_ip: None,
             lidar_ips: Vec::new(),
-        }
-    }
-}
-
-/// Segment roll (`atlas.segment`); the contract default is 4 GiB or 10 min.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct SegmentSettings {
-    pub max_bytes: u64,
-    pub max_duration_s: u64,
-}
-
-impl Default for SegmentSettings {
-    fn default() -> Self {
-        Self {
-            max_bytes: 4 << 30,
-            max_duration_s: 600,
-        }
-    }
-}
-
-impl SegmentSettings {
-    pub fn limits(&self) -> ados_capture_contract::SegmentLimits {
-        ados_capture_contract::SegmentLimits {
-            max_bytes: self.max_bytes.max(1 << 20),
-            max_duration_ns: self.max_duration_s.max(1) * 1_000_000_000,
         }
     }
 }

@@ -1,4 +1,4 @@
-//! The capture loop's side of the navigation lanes ([`crate::nav`]): LiDAR
+//! The capture loop's side of the navigation lanes ([`navigation_lidar_slam::nav`]): LiDAR
 //! scans, the pose interval, and the 1 Hz live-map publish.
 
 use std::path::Path;
@@ -8,7 +8,7 @@ use ados_mapping_protocol::atlas::{ImuFeedReason, ImuFeedState, ImuFeedStatus, P
 
 use super::Engine;
 use ados_mapping_pose::lidar_scan::LidarScan;
-use crate::nav::{fc_imu, TickInputs};
+use navigation_lidar_slam::nav::{fc_imu, TickInputs};
 use ados_mapping_pose::{se3, PoseEstimate, PoseProvider};
 use crate::quality::lidar_depth::LidarDepth;
 use crate::recorder::Item;
@@ -170,7 +170,7 @@ impl Engine {
     }
 
     /// Place every waiting scan whose pose is settled (see
-    /// [`crate::nav::scan_wait`]), oldest first.
+    /// [`navigation_lidar_slam::nav::scan_wait`]), oldest first.
     pub(super) async fn place_scans(&mut self) {
         loop {
             let now = ados_mapping_pose::clock::mono_ns();
@@ -328,11 +328,11 @@ impl Engine {
             evict_dir: recorder
                 .map(|r| {
                     r.dir()
-                        .join(crate::nav::SESSION_MAP_DIR)
-                        .join(crate::nav::TILES_DIR)
+                        .join(navigation_lidar_slam::nav::SESSION_MAP_DIR)
+                        .join(navigation_lidar_slam::nav::TILES_DIR)
                 })
                 .or_else(|| self.nav_deps.scratch_dir.clone()),
-            rss_mb: crate::nav::read_vm_rss_mb(),
+            rss_mb: navigation_lidar_slam::nav::read_vm_rss_mb(),
             keyframes_dropped: recorder.map_or(0, |r| r.sidecars().keyframes.dropped()),
         };
         let open = self.session.is_some();
@@ -372,7 +372,7 @@ impl Engine {
 
     /// Why the pose is lost with the FC IMU feed measuring: the map was
     /// restarted without the FC's turn and has no north
-    /// ([`crate::nav::NavMap::north_unknown`]), or the matcher has yet to
+    /// ([`navigation_lidar_slam::nav::NavMap::north_unknown`]), or the matcher has yet to
     /// re-confirm a heading the feed's gap left unmeasured (`unconfirmed`).
     pub(super) fn nav_imu_reason(&self, unconfirmed: bool) -> Option<ImuFeedReason> {
         if self.nav.north_unknown() {

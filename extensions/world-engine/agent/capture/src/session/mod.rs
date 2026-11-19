@@ -5,7 +5,7 @@
 //! gets its own [`KeyframeSelector`]; a frame counts toward the ingest rate
 //! and, when its camera's selector fires, yields a full keyframe. The live
 //! shared pose stream is not the session's: the navigation publisher
-//! (`crate::nav`) owns it, so the pose keeps flowing with no session open.
+//! (`navigation_lidar_slam::nav`) owns it, so the pose keeps flowing with no session open.
 
 use crate::config::CaptureConfig;
 use crate::selector::KeyframeSelector;

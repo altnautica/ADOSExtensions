@@ -3893,6 +3893,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "navigation-lidar-slam"
+version = "1.0.0"
+dependencies = [
+ "ados-capture-contract",
+ "ados-livemap",
+ "ados-livox",
+ "ados-mapping-pose",
+ "ados-mapping-protocol",
+ "ados-protocol",
+ "ados-rplidar",
+ "ados-scan2d",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "ndarray"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8248,6 +8269,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "image",
+ "navigation-lidar-slam",
  "nix 0.29.0",
  "parking_lot",
  "prost",

@@ -153,7 +153,7 @@ agent:
       arch_os: x86_64-windows
       profiles: [workstation, compute]
     # Native capture helpers (x86_64-linux; aarch64-linux is a manual release
-    # step, see agent/capture/basalt/README.md) with their licence texts, and
+    # step, see extensions/navigation/lidar-slam/basalt/README.md) with their licence texts, and
     # uv for the on-device KISS-ICP environment sync.
     - path: bin/x86_64-linux/basalt-ados
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/world-engine-v2.1.0/world-engine-basalt-ados-x86_64-linux"

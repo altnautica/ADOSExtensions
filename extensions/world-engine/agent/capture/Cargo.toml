@@ -32,8 +32,11 @@ ados-protocol = { workspace = true }
 # The sensor bus client (seam J) and the capture storage admission rule.
 ados-sensorbus = { workspace = true }
 ados-config = { workspace = true }
-ados-livox = { path = "livox" }
-ados-rplidar = { path = "rplidar" }
+# The navigation lanes this service still runs in-process until it consumes
+# Navigation's pose and scan topics instead.
+navigation-lidar-slam = { path = "../../../navigation/lidar-slam", default-features = false }
+ados-livox = { path = "../../../navigation/lidar-slam/livox" }
+ados-rplidar = { path = "../../../navigation/lidar-slam/rplidar" }
 ados-scan2d = { workspace = true }
 ados-livemap = { workspace = true }
 prost = "0.14"
@@ -62,7 +65,7 @@ zstd = "0.13"
 [features]
 default = ["livox-sdk"]
 # Drive a Livox LiDAR through the SDK2 shared library (Linux).
-livox-sdk = ["ados-livox/sdk"]
+livox-sdk = ["navigation-lidar-slam/livox-sdk", "ados-livox/sdk"]
 
 [dev-dependencies]
 ados-mapping-pose = { workspace = true, features = ["testing"] }

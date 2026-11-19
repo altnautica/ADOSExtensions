@@ -35,7 +35,7 @@ use tokio::time::Instant;
 use ados_mapping_protocol::atlas::{LidarHealth, LidarStatus};
 
 use ados_mapping_pose::lidar_scan::LidarScan;
-use crate::runtime::LidarSettings;
+use crate::settings::LidarSettings;
 
 pub use livox::{scan_from_livox, LivoxSource, LivoxSourceConfig, SdkNetConfig, SDK_CONFIG_FILE};
 pub use rplidar::{scan_from_rplidar, RplidarSource};
@@ -199,7 +199,7 @@ pub fn start(
             let src = LivoxSource::start(
                 LivoxSourceConfig {
                     sensor_id: sensor_id.to_string(),
-                    sdk_library: crate::providers::install_path(&settings.livox.sdk_library),
+                    sdk_library: crate::install_path(&settings.livox.sdk_library),
                     net,
                     work_dir: work_dir.join("livox"),
                     period_ns: period_ns(model)?,

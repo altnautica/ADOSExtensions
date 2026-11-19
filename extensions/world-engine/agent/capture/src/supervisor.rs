@@ -36,7 +36,7 @@ use ados_mapping_protocol::paths::{ipc_dir, ATLAS_BUS_SOCKET, ATLAS_CONTROL_SOCK
 use crate::control::serve_control;
 use ados_mapping_pose::frame_source::{AtlasFrameSource, FrameRouter};
 use crate::hud::{button_action, HudAction};
-use crate::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
+use navigation_lidar_slam::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
 use ados_mapping_pose::fc_ekf::FcEkfPose;
 use crate::publish::AtlasPublisher;
 use crate::runtime::{AtlasRuntimeConfig, ConfigError, SharedSteps, CONFIG_KEYS};
@@ -51,7 +51,7 @@ pub const CONFIG_POLL: Duration = Duration::from_secs(5);
 /// there because the drone stream table carries it and not the quaternion
 /// outside a capture session ([`ados_mapping_pose::mavlink_msg`]); `GPS_RAW_INT` says when
 /// the EKF's position is GNSS-referenced ([`ados_mapping_pose::align`]); `RAW_IMU`
-/// is the gyro the planar matcher's `fc` IMU integrates ([`crate::nav::fc_imu`]);
+/// is the gyro the planar matcher's `fc` IMU integrates ([`navigation_lidar_slam::nav::fc_imu`]);
 /// `OPTICAL_FLOW` over the downward `DISTANCE_SENSOR` range is the ground
 /// velocity it follows along a corridor ([`ados_mapping_pose::fc_flow`]).
 const FC_MESSAGES: [&str; 8] = [
@@ -180,7 +180,7 @@ impl CaptureRun {
             lidar_planar: lidar_sensor.is_some_and(|(_, m)| {
                 m.pattern == ados_capture_contract::LidarModelPattern::Planar
             }),
-            scratch_dir: Some(work_dir.join("map").join(crate::nav::TILES_DIR)),
+            scratch_dir: Some(work_dir.join("map").join(navigation_lidar_slam::nav::TILES_DIR)),
         };
         let sensors = Arc::new(Mutex::new(SensorState::default()));
         let (bus_tx, bus_rx) = mpsc::channel(1024);

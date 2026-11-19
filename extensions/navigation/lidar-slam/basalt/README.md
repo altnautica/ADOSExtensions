@@ -30,8 +30,8 @@ Ubuntu 24.04.
 ## Build
 
 ```sh
-git submodule update --init extensions/world-engine/agent/capture/basalt/upstream
-cd extensions/world-engine/agent/capture/basalt
+git submodule update --init extensions/navigation/lidar-slam/basalt/upstream
+cd extensions/navigation/lidar-slam/basalt
 ./build.sh --arch x86_64 --jobs 2          # or --arch aarch64 on an aarch64 host
 # -> build/out/bin/x86_64-linux/basalt-ados
 ```
@@ -54,7 +54,7 @@ script inside an aarch64 container under QEMU user emulation (much slower),
 from the repository root:
 
 ```sh
-docker run --rm --platform linux/arm64 -v "$PWD":/src -w /src/extensions/world-engine/agent/capture/basalt \
+docker run --rm --platform linux/arm64 -v "$PWD":/src -w /src/extensions/navigation/lidar-slam/basalt \
   ubuntu:24.04 sh -c 'apt-get update && apt-get install -y build-essential cmake git curl zip unzip tar pkg-config ninja-build && ./build.sh --arch aarch64 --jobs 2'
 ```
 

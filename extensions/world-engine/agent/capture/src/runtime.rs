@@ -26,11 +26,36 @@ use ados_mapping_protocol::capture_ctl::{ExposureMode, ExposureView};
 use crate::config::{CameraConfig, CaptureConfig, CaptureProfile, SelectionParams};
 use crate::recorder::convert::ImageEncoding;
 
-mod settings;
-pub use settings::{
+pub use navigation_lidar_slam::settings::{
     resolve_pose_provider, LidarSettings, LivoxSettings, PoseProviderConfig, RplidarSettings,
-    SegmentSettings, VioSettings,
+    VioSettings,
 };
+
+/// Segment roll (`atlas.segment`); the contract default is 4 GiB or 10 min.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SegmentSettings {
+    pub max_bytes: u64,
+    pub max_duration_s: u64,
+}
+
+impl Default for SegmentSettings {
+    fn default() -> Self {
+        Self {
+            max_bytes: 4 << 30,
+            max_duration_s: 600,
+        }
+    }
+}
+
+impl SegmentSettings {
+    pub fn limits(&self) -> ados_capture_contract::SegmentLimits {
+        ados_capture_contract::SegmentLimits {
+            max_bytes: self.max_bytes.max(1 << 20),
+            max_duration_ns: self.max_duration_s.max(1) * 1_000_000_000,
+        }
+    }
+}
 
 /// The horizontal field of view assumed for a camera whose roster entry
 /// gives no `fov_deg`: the vision engine's own assumption for such a camera.
@@ -280,7 +305,7 @@ pub struct AtlasRuntimeConfig {
     /// `atlas.takeoff_heading_deg`: the heading the vehicle faces at its
     /// first pose, degrees clockwise from true north. When set, the map's
     /// north is latched from it once and never taken from the flight
-    /// controller ([`crate::nav`]).
+    /// controller ([`navigation_lidar_slam::nav`]).
     pub takeoff_heading_deg: Option<f64>,
 }
 

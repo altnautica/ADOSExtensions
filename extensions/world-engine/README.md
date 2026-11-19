@@ -56,7 +56,7 @@ node's Jobs & outputs page lists and revokes these credentials.
 Native helpers: basalt-ados (BSD-3) and the Livox SDK2 library (MIT) are
 release payloads with their licence texts. x86_64-linux builds in the
 release workflow; aarch64-linux is a manual release step
-(`agent/capture/basalt/README.md`, `agent/capture/livox/build-sdk2.sh`). The
+(`../navigation/lidar-slam/basalt/README.md`, `../navigation/lidar-slam/livox/build-sdk2.sh`). The
 KISS-ICP odometry environment is built on the device by `uv sync --frozen` on
 the first LiDAR start, which needs network once.
 

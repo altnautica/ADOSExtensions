@@ -29,7 +29,7 @@ endif()
 set(BASALT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/upstream")
 if(NOT EXISTS "${BASALT_DIR}/include/basalt/vi_estimator/vio_estimator.h")
   message(FATAL_ERROR "Basalt sources missing: git submodule update --init "
-                      "extensions/world-engine/agent/capture/basalt/upstream")
+                      "extensions/navigation/lidar-slam/basalt/upstream")
 endif()
 
 find_package(Threads REQUIRED)

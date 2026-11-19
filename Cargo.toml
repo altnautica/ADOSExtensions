@@ -30,9 +30,10 @@ members = [
   "crates/livemap",
   "crates/mapping-pose",
   "extensions/navigation/agent",
+  "extensions/navigation/lidar-slam",
+  "extensions/navigation/lidar-slam/livox",
+  "extensions/navigation/lidar-slam/rplidar",
   "extensions/world-engine/agent/capture",
-  "extensions/world-engine/agent/capture/livox",
-  "extensions/world-engine/agent/capture/rplidar",
   "extensions/world-engine/agent/node",
   "extensions/world-engine/agent/link",
 ]

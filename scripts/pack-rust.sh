@@ -197,10 +197,10 @@ else
   # (the host refuses a payload that would overwrite an archive file), so each
   # one is excluded by its anchored path. The Rust crate sources never ship;
   # agent/python/ holds helper scripts the binaries run,
-  # agent/capture/python/ the uv projects the capture service syncs on first
-  # start, and agent/node/{tools,python}/ the reconstruction node's tool pins,
-  # fetch scripts and training project (never the fetched tool cache), so
-  # they do.
+  # agent/capture/python/ and lidar-slam/python/ the uv projects a service
+  # syncs on first start, and agent/node/{tools,python}/ the reconstruction
+  # node's tool pins, fetch scripts and training project (never the fetched
+  # tool cache), so they do.
   payload_excludes=()
   while read -r payload_path; do
     payload_excludes+=(--exclude "/${payload_path}")
@@ -220,6 +220,11 @@ else
     --include '/agent/node/tools/***' \
     --include '/agent/node/python/***' \
     --exclude '/agent/***' \
+    --include '/lidar-slam/' \
+    --include '/lidar-slam/python/' \
+    --include '/lidar-slam/python/***' \
+    --exclude '/lidar-slam/python/**/.venv/***' \
+    --exclude '/lidar-slam/***' \
     "${ext_dir}/" "${stage}/"
 
   assert_entrypoint_in_stage "${stage}" "$(manifest_gcs_entrypoint "${manifest_src}")" "gcs.entrypoint"

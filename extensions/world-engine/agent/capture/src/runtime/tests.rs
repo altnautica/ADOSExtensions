@@ -3,7 +3,7 @@ use serde_json::json;
 use ados_mapping_protocol::atlas::CameraRole;
 use ados_mapping_protocol::atlas::PoseSource;
 
-use crate::pose::vio::pairing::VioScale;
+use navigation_lidar_slam::pose::vio::pairing::VioScale;
 
 fn values(pairs: &[(&str, Value)]) -> BTreeMap<String, Value> {
     pairs

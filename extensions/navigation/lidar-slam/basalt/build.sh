@@ -55,7 +55,7 @@ OUT="${OUT:-$HERE/build/out}"
 
 if [ ! -f "$UPSTREAM/CMakeLists.txt" ]; then
   echo "Basalt sources missing; from the repository root run:" >&2
-  echo "  git submodule update --init extensions/world-engine/agent/capture/basalt/upstream" >&2
+  echo "  git submodule update --init extensions/navigation/lidar-slam/basalt/upstream" >&2
   exit 2
 fi
 

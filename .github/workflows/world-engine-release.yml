@@ -168,7 +168,7 @@ jobs:
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y build-essential cmake git curl zip unzip tar pkg-config ninja-build
-          git submodule update --init extensions/world-engine/agent/capture/basalt/upstream
+          git submodule update --init extensions/navigation/lidar-slam/basalt/upstream
           C=extensions/world-engine/agent/capture
           out="${RUNNER_TEMP}/native"
           "$C/basalt/build.sh" --arch x86_64 --jobs 4 --out "$out"

@@ -37,7 +37,7 @@ use crate::control::ControlMsg;
 use ados_mapping_pose::frame_source::{AtlasFrameSource, CapturedFrame, FrameRouter};
 use crate::hud::HudAction;
 use ados_mapping_pose::lidar_scan::LidarScan;
-use crate::nav::{NavMap, NavSettings};
+use navigation_lidar_slam::nav::{NavMap, NavSettings};
 use ados_mapping_pose::fc_ekf::FcEkfPose;
 use ados_mapping_pose::pose::PoseProvider;
 use crate::publish::AtlasPublisher;
@@ -186,14 +186,14 @@ pub(crate) struct Engine {
     nav: NavMap,
     nav_deps: NavDeps,
     /// LiDAR scans waiting for their pose before they are placed.
-    scan_wait: crate::nav::scan_wait::ScanWait,
+    scan_wait: navigation_lidar_slam::nav::scan_wait::ScanWait,
     /// The last FC attitude turned into an IMU sample (`atlas.lidar.imu =
     /// "fc"`, before `RAW_IMU` arrives).
     fc_imu_prev: Option<(u64, [f64; 9])>,
     /// What the FC feed has handed the pose provider ([`nav_lane`]'s sink).
-    fc_nav: Arc<crate::nav::fc_imu::FeedState>,
+    fc_nav: Arc<navigation_lidar_slam::nav::fc_imu::FeedState>,
     /// Why the FC IMU feed last left the planar pose degraded, `None` while
-    /// it measures the heading ([`crate::nav::fc_imu::FeedState::degraded`]).
+    /// it measures the heading ([`navigation_lidar_slam::nav::fc_imu::FeedState::degraded`]).
     imu_feed_degraded: Option<ados_mapping_protocol::atlas::ImuFeedReason>,
     /// The planar matcher's in-flight map restarts the navigation map has
     /// re-anchored ([`ados_mapping_pose::pose::PoseQuality::map_restarts`]).
@@ -243,9 +243,9 @@ pub async fn run_capture_loop(deps: LoopDeps, cancel: Shutdown) {
     }
     let (exposure_tx, mut exposure_rx) = mpsc::unbounded_channel();
     let bus_timebase = ados_mapping_pose::clock::ClockSidecar::read(&paths.clock_sidecar).map(|c| c.timebase());
-    let budget = crate::nav::budget::resolve(
+    let budget = navigation_lidar_slam::nav::budget::resolve(
         cfg.memory_budget_mb,
-        std::env::var(crate::nav::budget::MEMORY_MAX_ENV)
+        std::env::var(navigation_lidar_slam::nav::budget::MEMORY_MAX_ENV)
             .ok()
             .as_deref(),
         std::path::Path::new("/"),

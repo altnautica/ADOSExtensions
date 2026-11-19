@@ -1,31 +1,23 @@
 //! Building a capture run's pose provider and LiDAR source from the config
 //! and the rig.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use ados_capture_contract::{LidarModelPattern, Rig};
 use ados_mapping_protocol::atlas::PoseSource;
 
 use ados_mapping_pose::lidar_scan::LidarScan;
-use crate::lidar_source::{self, LidarRunner};
+use navigation_lidar_slam::lidar_source::{self, LidarRunner};
 use ados_mapping_pose::fc_ekf::FcEkfPose;
-use crate::pose::lidar::{kiss_config, Launcher, LidarPose, LidarPoseConfig};
-use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
-use crate::pose::vio::{VioConfig, VioPose};
+use navigation_lidar_slam::pose::lidar::{kiss_config, Launcher, LidarPose, LidarPoseConfig};
+use navigation_lidar_slam::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
+use navigation_lidar_slam::pose::vio::{VioConfig, VioPose};
 use ados_mapping_pose::pose::PoseProvider;
 use crate::rig_source;
 use crate::runtime::{resolve_pose_provider, AtlasRuntimeConfig};
 
-/// A relative path against the plugin's install directory (the process cwd).
-pub fn install_path(p: &str) -> PathBuf {
-    let path = PathBuf::from(p);
-    if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir().unwrap_or_default().join(path)
-    }
-}
+pub use navigation_lidar_slam::install_path;
 
 /// The provider a run uses, and the FC EKF handle when that is the one.
 pub struct Chosen {
