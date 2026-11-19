@@ -1,0 +1,430 @@
+//! Which compute node a drone lane talks to.
+//!
+//! A pinned address (plugin config `offload.compute_node_addr`, `host:port` or a
+//! bare host) wins over mDNS, for segmented networks where multicast does not
+//! reach the node; the node at that address is asked its id
+//! ([`NODE_IDENTITY_PATH`](ados_mapping_protocol::compute::NODE_IDENTITY_PATH))
+//! so the lanes present only the credential it issued. Otherwise the node is a
+//! compute-node job-API advert ([`COMPUTE_SERVICE`]) found through the host's
+//! `mdns.browse`, preferring one that issued this drone a credential. The Atlas
+//! forwarder, the offload reconciler and the ground-station relay share this
+//! rule.
+
+use std::future::Future;
+use std::time::Duration;
+
+use crate::{node_identity, pick_compute_node, ResolvedComputeNode, COMPUTE_SERVICE};
+
+use crate::credentials::{CredentialGap, CredentialStore};
+use crate::host::{config_string, Host};
+use ados_mapping_protocol::node_credential::NodeLane;
+
+/// The compute node's default job-API port (used when a pinned addr omits one).
+pub const DEFAULT_JOB_API_PORT: u16 = 8092;
+/// One mDNS browse's window.
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// A compute node to reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComputeNode {
+    pub host: String,
+    pub port: u16,
+    /// The node's id: advertised over mDNS, or for a pinned address the one it
+    /// answers on its identity route; `None` when a pinned node did not say.
+    pub device_id: Option<String>,
+}
+
+impl ComputeNode {
+    /// `host:port`.
+    pub fn addr(&self) -> String {
+        // An IPv6 literal is bracketed so the port is not read as a group.
+        if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]:{}", self.host, self.port)
+        } else {
+            format!("{}:{}", self.host, self.port)
+        }
+    }
+
+    /// The job-API base URL.
+    pub fn base_url(&self) -> String {
+        format!("http://{}", self.addr())
+    }
+
+    /// The credential to present on `lane`: the one this node issued, or for a
+    /// pinned node that did not say its id, one installed for its address or
+    /// the sole one for the lane ([`CredentialStore::select`]).
+    pub fn credential(
+        &self,
+        stores: &CredentialStore,
+        lane: &NodeLane,
+    ) -> Result<String, CredentialGap> {
+        stores.select(self.device_id.as_deref(), Some(&self.addr()), lane)
+    }
+}
+
+/// Split a `host:port` (or bare `host`) into `(host, port)`, defaulting the port.
+/// An IPv6 literal in brackets keeps its colons.
+pub fn split_host_port(s: &str, default_port: u16) -> Option<(String, u16)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Some(rest) = s.strip_prefix('[') {
+        let (host, after) = rest.split_once(']')?;
+        let port = after
+            .strip_prefix(':')
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(default_port);
+        return Some((host.to_string(), port));
+    }
+    match s.rsplit_once(':') {
+        // A single colon = host:port; more than one and unbracketed = a bare IPv6.
+        Some((h, p)) if !h.contains(':') => {
+            let port = p.parse().ok().unwrap_or(default_port);
+            Some((h.to_string(), port))
+        }
+        _ => Some((s.to_string(), default_port)),
+    }
+}
+
+/// The node to use: the pinned address when one is configured (no browse),
+/// its id read by `identify` from its base URL, else the result of `browse`.
+async fn resolve_with<F, Fut, I, IFut>(
+    host: &dyn Host,
+    pin_key: &str,
+    browse: F,
+    identify: I,
+) -> Option<ComputeNode>
+where
+    F: FnOnce() -> Fut,
+    Fut: Future<Output = Option<ResolvedComputeNode>>,
+    I: FnOnce(String) -> IFut,
+    IFut: Future<Output = Option<String>>,
+{
+    if let Some(pinned) = config_string(host, pin_key).await {
+        let (h, p) = split_host_port(&pinned, DEFAULT_JOB_API_PORT)?;
+        let mut node = ComputeNode {
+            host: h,
+            port: p,
+            device_id: None,
+        };
+        node.device_id = identify(node.base_url()).await;
+        return Some(node);
+    }
+    browse().await.map(|n| ComputeNode {
+        host: n.host,
+        port: n.job_api_port,
+        device_id: Some(n.device_id),
+    })
+}
+
+/// The node to use on `lane`: pinned, else discovered over mDNS preferring a
+/// workstation that issued this drone a credential for the lane.
+pub async fn resolve(
+    host: &dyn Host,
+    stores: &CredentialStore,
+    lane: &NodeLane,
+) -> Option<ComputeNode> {
+    resolve_with(
+        host,
+        stores.pin_key,
+        || async { discover(host, &stores.issuers(lane), RESOLVE_TIMEOUT).await },
+        |base| async move { identify(&base).await },
+    )
+    .await
+}
+
+/// The id the node at `base_url` answers with; `None` when it gives none (a
+/// node that predates the identity route, or nothing listening).
+pub async fn identify(base_url: &str) -> Option<String> {
+    match node_identity(base_url).await {
+        Ok(n) => Some(n.node_id).filter(|id| !id.trim().is_empty()),
+        Err(e) => {
+            tracing::debug!(base = base_url, error = %e, "compute node identity not read");
+            None
+        }
+    }
+}
+
+/// A compute node on the LAN: one browse of [`COMPUTE_SERVICE`] through the
+/// host, lasting `window`, preferring a node in `preferred`. `None` when no
+/// node answered, or when the host could not browse (a missing
+/// `network.outbound` grant, or a host that predates `mdns.browse`), which is
+/// logged because it leaves discovery dead until it is fixed.
+pub async fn discover(
+    host: &dyn Host,
+    preferred: &[String],
+    window: Duration,
+) -> Option<ResolvedComputeNode> {
+    match host.mdns_browse(COMPUTE_SERVICE, window).await {
+        Ok(services) => pick_compute_node(&services, preferred),
+        Err(e) => {
+            tracing::warn!(error = %e, service = COMPUTE_SERVICE, "compute node browse failed");
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use crate::credentials::{ATLAS_INGEST_LANE, SESSION_UPLOAD_LANE, STORE_FILE};
+    use crate::testing::FakeHost;
+    use ados_mapping_protocol::node_credential::{InstalledCredential, WorkstationCredentials};
+    use serde_json::json;
+
+    /// The pin key these tests pair under.
+    pub(crate) const PIN_KEY: &str = "test.compute_node_addr";
+
+    fn discovered() -> Option<ResolvedComputeNode> {
+        Some(ResolvedComputeNode {
+            host: "192.0.2.9".into(),
+            job_api_port: 8092,
+            device_id: "ws-mdns".into(),
+        })
+    }
+
+    async fn unread(_base: String) -> Option<String> {
+        None
+    }
+
+    #[tokio::test]
+    async fn a_pinned_address_wins_over_mdns() {
+        let host = FakeHost::new();
+        host.set_config(PIN_KEY, json!("192.0.2.5:9000"));
+        let browsed = std::sync::atomic::AtomicBool::new(false);
+        let node = resolve_with(
+            host.as_ref(),
+            PIN_KEY,
+            || async {
+                browsed.store(true, std::sync::atomic::Ordering::SeqCst);
+                discovered()
+            },
+            unread,
+        )
+        .await
+        .unwrap();
+        assert!(!browsed.into_inner(), "a pinned node must not browse");
+        assert_eq!(node.base_url(), "http://192.0.2.5:9000");
+        assert_eq!(node.device_id, None);
+
+        // A bare host takes the default job-API port; its id is asked at its base.
+        host.set_config(PIN_KEY, json!("192.0.2.5"));
+        let node = resolve_with(
+            host.as_ref(),
+            PIN_KEY,
+            || async { discovered() },
+            |base| async move { (base == "http://192.0.2.5:8092").then(|| "ws-pin".to_string()) },
+        )
+        .await
+        .unwrap();
+        assert_eq!(node.addr(), "192.0.2.5:8092");
+        assert_eq!(node.device_id.as_deref(), Some("ws-pin"));
+    }
+
+    #[tokio::test]
+    async fn without_a_pin_the_mdns_node_is_used() {
+        let host = FakeHost::new();
+        // An empty pin is no pin.
+        host.set_config(PIN_KEY, json!("  "));
+        let node = resolve_with(host.as_ref(), PIN_KEY, || async { discovered() }, unread)
+            .await
+            .unwrap();
+        assert_eq!(node.base_url(), "http://192.0.2.9:8092");
+        assert_eq!(node.device_id.as_deref(), Some("ws-mdns"));
+        assert_eq!(
+            resolve_with(host.as_ref(), PIN_KEY, || async { None }, unread).await,
+            None
+        );
+    }
+
+    /// A node on loopback answering `identity` (or, for `None`, a node that
+    /// predates the route); its `host:port`.
+    async fn serve_identity(identity: Option<&'static str>) -> String {
+        use axum::routing::get;
+        let mut app = axum::Router::new();
+        if let Some(id) = identity {
+            app = app.route(
+                ados_mapping_protocol::compute::NODE_IDENTITY_PATH,
+                get(move || async move { axum::Json(json!({ "node_id": id })) }),
+            );
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        addr.to_string()
+    }
+
+    #[tokio::test]
+    async fn a_pinned_node_that_says_its_id_gets_only_the_credential_it_issued() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join(STORE_FILE);
+        let mut store = WorkstationCredentials::default();
+        // The node's own credential, then its owner token filed under another
+        // id and installed later.
+        for (node, secret, at) in [
+            ("standalone-1", "nc1.ID.SECRET", 1),
+            ("host-node", "owner-bearer-token", 2),
+        ] {
+            store.upsert(InstalledCredential {
+                workstation_node_id: node.into(),
+                credential: secret.into(),
+                lanes: vec![SESSION_UPLOAD_LANE],
+                installed_at_ms: at,
+                node_addr: None,
+            });
+        }
+        store.save(&ext).unwrap();
+        let stores = CredentialStore {
+            path: Some(ext),
+            pin_key: PIN_KEY,
+        };
+        let host = FakeHost::new();
+
+        host.set_config(PIN_KEY, json!(serve_identity(Some("standalone-1")).await));
+        let node = resolve(host.as_ref(), &stores, &SESSION_UPLOAD_LANE)
+            .await
+            .unwrap();
+        assert_eq!(node.device_id.as_deref(), Some("standalone-1"));
+        assert_eq!(
+            node.credential(&stores, &SESSION_UPLOAD_LANE).as_deref(),
+            Ok("nc1.ID.SECRET")
+        );
+
+        // A node that issued neither gets neither.
+        host.set_config(PIN_KEY, json!(serve_identity(Some("standalone-9")).await));
+        let node = resolve(host.as_ref(), &stores, &SESSION_UPLOAD_LANE)
+            .await
+            .unwrap();
+        assert_eq!(
+            node.credential(&stores, &SESSION_UPLOAD_LANE),
+            Err(CredentialGap::NoCredential)
+        );
+
+        // A node that does not say: two candidates, nothing presented.
+        host.set_config(PIN_KEY, json!(serve_identity(None).await));
+        let node = resolve(host.as_ref(), &stores, &SESSION_UPLOAD_LANE)
+            .await
+            .unwrap();
+        assert_eq!(node.device_id, None);
+        assert_eq!(
+            node.credential(&stores, &SESSION_UPLOAD_LANE),
+            Err(CredentialGap::Ambiguous)
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_pin_the_node_comes_from_the_hosts_browse() {
+        let host = FakeHost::new();
+        let stores = CredentialStore {
+            path: None,
+            pin_key: PIN_KEY,
+        };
+        // The host cannot browse: nothing resolves, and nothing is guessed.
+        assert_eq!(
+            resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE).await,
+            None
+        );
+
+        host.mdns.lock().insert(
+            COMPUTE_SERVICE.to_string(),
+            vec![ados_protocol::plugin_mdns::DiscoveredService {
+                fullname: format!("ws.{COMPUTE_SERVICE}.local."),
+                hostname: "ws.local".into(),
+                port: 8092,
+                addresses: vec!["192.0.2.9".into()],
+                txt: crate::compute_advert_txt("ws-mdns"),
+            }],
+        );
+        let node = resolve(host.as_ref(), &stores, &ATLAS_INGEST_LANE)
+            .await
+            .unwrap();
+        assert_eq!(node.base_url(), "http://192.0.2.9:8092");
+        assert_eq!(node.device_id.as_deref(), Some("ws-mdns"));
+    }
+
+    #[test]
+    fn a_pinned_node_without_an_id_presents_the_credential_installed_for_its_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join(STORE_FILE);
+        let mut store = WorkstationCredentials::default();
+        store.upsert(InstalledCredential {
+            workstation_node_id: "ws-a".into(),
+            credential: "nc1.A.SECRET".into(),
+            lanes: vec![ATLAS_INGEST_LANE],
+            installed_at_ms: 1,
+            node_addr: Some("192.0.2.5".into()),
+        });
+        store.save(&ext).unwrap();
+        let stores = CredentialStore {
+            pin_key: PIN_KEY,
+            path: Some(ext.clone()),
+        };
+        let pinned = ComputeNode {
+            host: "192.0.2.5".into(),
+            port: 8092,
+            device_id: None,
+        };
+        assert_eq!(
+            pinned.credential(&stores, &ATLAS_INGEST_LANE).as_deref(),
+            Ok("nc1.A.SECRET")
+        );
+        // Another one, minted at another address, does not displace it.
+        store.upsert(InstalledCredential {
+            workstation_node_id: "ws-b".into(),
+            credential: "nc1.B.SECRET".into(),
+            lanes: vec![ATLAS_INGEST_LANE],
+            installed_at_ms: 2,
+            node_addr: Some("192.0.2.6:8092".into()),
+        });
+        store.save(&ext).unwrap();
+        assert_eq!(
+            pinned.credential(&stores, &ATLAS_INGEST_LANE).as_deref(),
+            Ok("nc1.A.SECRET")
+        );
+        // An address neither was installed for: no guess between the two.
+        let elsewhere = ComputeNode {
+            host: "192.0.2.7".into(),
+            ..pinned
+        };
+        assert_eq!(
+            elsewhere.credential(&stores, &ATLAS_INGEST_LANE),
+            Err(CredentialGap::Ambiguous)
+        );
+    }
+
+    #[test]
+    fn split_host_port_defaults_and_parses() {
+        assert_eq!(
+            split_host_port("192.0.2.5:9000", 8092),
+            Some(("192.0.2.5".into(), 9000))
+        );
+        assert_eq!(
+            split_host_port("192.0.2.5", 8092),
+            Some(("192.0.2.5".into(), 8092))
+        );
+        assert_eq!(split_host_port("  ", 8092), None);
+        assert_eq!(
+            split_host_port("fe80::1", 8092),
+            Some(("fe80::1".into(), 8092))
+        );
+        assert_eq!(
+            split_host_port("[fe80::1]:9000", 8092),
+            Some(("fe80::1".into(), 9000))
+        );
+    }
+
+    #[test]
+    fn ipv6_hosts_are_bracketed() {
+        let n = |host: &str| ComputeNode {
+            host: host.into(),
+            port: 8092,
+            device_id: None,
+        };
+        assert_eq!(n("fd00::5").base_url(), "http://[fd00::5]:8092");
+        assert_eq!(n("[fd00::5]").addr(), "[fd00::5]:8092");
+        assert_eq!(n("192.168.1.50").addr(), "192.168.1.50:8092");
+    }
+}

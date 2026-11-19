@@ -32,16 +32,26 @@
 //! [`ComputeClient`] (the job API), [`BulkClient`] (the resumable session
 //! upload lane), [`mdns`] (the compute-node service type and the pick over a
 //! host browse), and the perception-offload orchestrator with its
-//! safety-gated return bridge.
+//! safety-gated return bridge. So do the pieces the capture and reconstruct
+//! processes both build on: the plugin-host facade they are tested through
+//! ([`host`]), its aux, cloud and detection adapters ([`sdk`]), the paired
+//! node's resolution ([`compute_node`], [`lan_node`]), the node-credential
+//! store and its route ([`credentials`]), and the error replies of their
+//! routes and tools ([`reply`]).
 
 mod bearer;
 mod bulk;
 mod bulk_plan;
 mod client;
+pub mod compute_node;
+pub mod credentials;
 mod error;
+pub mod host;
 mod job_status;
+pub mod jobs;
 mod ladder;
 mod lan_http;
+pub mod lan_node;
 mod loopback;
 /// The compute node's job-API service type and TXT record, and the pick of a
 /// node from the host's `mdns.browse` answer.
@@ -49,6 +59,12 @@ pub mod mdns;
 mod offload_bridge;
 mod offload_client;
 mod offload_orchestrator;
+pub mod reply;
+pub mod sdk;
+/// A recording [`host::Host`] for tests.
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+pub mod tools;
 mod unix_http;
 mod wfb_relay;
 mod world_stream;

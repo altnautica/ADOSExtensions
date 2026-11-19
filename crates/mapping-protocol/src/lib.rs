@@ -22,13 +22,6 @@ pub mod node_credential;
 pub mod offload;
 pub mod paths;
 
-/// The extension's plugin id, as installed by the plugin host.
-pub const PLUGIN_ID: &str = "com.altnautica.world-engine";
-
-/// The last segment of [`PLUGIN_ID`]: the namespace the extension's shared
-/// topics and declared capabilities live under (`plugin.world-engine.*`).
-pub const PLUGIN_LEAF: &str = "world-engine";
-
 /// The telemetry channel the extension publishes its merged state on
 /// (`telemetry.extend`), read by the GCS half as `ctx.telemetry.subscribe`.
 pub const STATUS_CHANNEL: &str = "status";

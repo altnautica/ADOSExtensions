@@ -1,18 +1,16 @@
-//! Where the World Engine processes find each other on one node.
+//! Where one extension's processes find each other on one node.
 //!
-//! The extension runs as several processes under one plugin identity: the main
-//! `world-engine-link` process plus the declared `capture` (drone) and `node`
-//! (workstation / compute) services. They meet on Unix sockets in one private
-//! directory: the per-plugin HTTP directory the plugin host creates and binds
-//! read-write into every unit of an `agent.http` plugin (main and services
-//! alike), announced through `ADOS_PLUGIN_HTTP_SOCKET`. No core socket is used.
+//! An extension may run as several processes under one plugin identity (a
+//! main process plus declared services). They meet on Unix sockets in one
+//! private directory: the per-plugin HTTP directory the plugin host creates
+//! and binds read-write into every unit of an `agent.http` plugin (main and
+//! services alike), announced through `ADOS_PLUGIN_HTTP_SOCKET`. No core
+//! socket is used.
 //!
 //! Pure path arithmetic over an injected environment lookup, so the resolution
 //! is unit-testable without touching the process environment.
 
 use std::path::{Path, PathBuf};
-
-use crate::PLUGIN_ID;
 
 /// The env var the host sets to the plugin's HTTP socket path.
 pub const HTTP_SOCKET_ENV: &str = "ADOS_PLUGIN_HTTP_SOCKET";
@@ -21,20 +19,16 @@ pub const RUN_DIR_ENV: &str = "ADOS_RUN_DIR";
 
 /// The HTTP socket file ados-control proxies `/api/plugins/<id>/x/*` to.
 pub const HTTP_SOCKET: &str = "http.sock";
-/// The capture service's publish bus (one framed `AtlasEvent` per broadcast).
-pub const ATLAS_BUS_SOCKET: &str = "atlas.sock";
-/// The capture service's control socket (start / stop / pause / resume / status).
-pub const ATLAS_CONTROL_SOCKET: &str = "atlas-control.sock";
 
-/// The private socket directory, from the process environment.
-pub fn ipc_dir() -> PathBuf {
-    ipc_dir_from(|k| std::env::var(k).ok())
+/// The private socket directory of `plugin_id`, from the process environment.
+pub fn ipc_dir(plugin_id: &str) -> PathBuf {
+    ipc_dir_from(plugin_id, |k| std::env::var(k).ok())
 }
 
 /// The private socket directory: the parent of `ADOS_PLUGIN_HTTP_SOCKET` when
 /// the host set it, else `<ADOS_RUN_DIR or /run/ados>/plugin-http/<plugin id>`
 /// (the same directory the host would have created).
-pub fn ipc_dir_from(env: impl Fn(&str) -> Option<String>) -> PathBuf {
+pub fn ipc_dir_from(plugin_id: &str, env: impl Fn(&str) -> Option<String>) -> PathBuf {
     if let Some(sock) = env(HTTP_SOCKET_ENV) {
         if let Some(parent) = Path::new(&sock).parent() {
             if !parent.as_os_str().is_empty() {
@@ -43,21 +37,21 @@ pub fn ipc_dir_from(env: impl Fn(&str) -> Option<String>) -> PathBuf {
         }
     }
     let run = env(RUN_DIR_ENV).unwrap_or_else(|| "/run/ados".to_string());
-    Path::new(&run).join("plugin-http").join(PLUGIN_ID)
+    Path::new(&run).join("plugin-http").join(plugin_id)
 }
 
 /// The HTTP socket path: `ADOS_PLUGIN_HTTP_SOCKET` verbatim when set, else
 /// [`HTTP_SOCKET`] inside [`ipc_dir_from`].
-pub fn http_socket_from(env: impl Fn(&str) -> Option<String>) -> PathBuf {
+pub fn http_socket_from(plugin_id: &str, env: impl Fn(&str) -> Option<String>) -> PathBuf {
     match env(HTTP_SOCKET_ENV) {
         Some(sock) if !sock.is_empty() => PathBuf::from(sock),
-        _ => ipc_dir_from(env).join(HTTP_SOCKET),
+        _ => ipc_dir_from(plugin_id, env).join(HTTP_SOCKET),
     }
 }
 
-/// The HTTP socket path from the process environment.
-pub fn http_socket() -> PathBuf {
-    http_socket_from(|k| std::env::var(k).ok())
+/// The HTTP socket path of `plugin_id` from the process environment.
+pub fn http_socket(plugin_id: &str) -> PathBuf {
+    http_socket_from(plugin_id, |k| std::env::var(k).ok())
 }
 
 #[cfg(test)]
@@ -70,11 +64,11 @@ mod tests {
             (k == HTTP_SOCKET_ENV).then(|| "/run/ados/plugin-http/com.x/http.sock".to_string())
         };
         assert_eq!(
-            ipc_dir_from(env),
+            ipc_dir_from("com.y", env),
             PathBuf::from("/run/ados/plugin-http/com.x")
         );
         assert_eq!(
-            http_socket_from(env),
+            http_socket_from("com.y", env),
             PathBuf::from("/run/ados/plugin-http/com.x/http.sock")
         );
     }
@@ -83,12 +77,12 @@ mod tests {
     fn without_the_host_env_the_run_dir_layout_is_derived() {
         let env = |k: &str| (k == RUN_DIR_ENV).then(|| "/tmp/run".to_string());
         assert_eq!(
-            ipc_dir_from(env),
-            PathBuf::from("/tmp/run/plugin-http/com.altnautica.world-engine")
+            ipc_dir_from("com.example.capture", env),
+            PathBuf::from("/tmp/run/plugin-http/com.example.capture")
         );
         assert_eq!(
-            ipc_dir_from(|_| None),
-            PathBuf::from("/run/ados/plugin-http/com.altnautica.world-engine")
+            ipc_dir_from("com.example.capture", |_| None),
+            PathBuf::from("/run/ados/plugin-http/com.example.capture")
         );
     }
 }

@@ -33,9 +33,10 @@ members = [
   "extensions/navigation/lidar-slam",
   "extensions/navigation/lidar-slam/livox",
   "extensions/navigation/lidar-slam/rplidar",
-  "extensions/world-engine/agent/capture",
-  "extensions/world-engine/agent/node",
-  "extensions/world-engine/agent/link",
+  "extensions/capture/agent/capture",
+  "extensions/capture/agent/link",
+  "extensions/reconstruct/agent/node",
+  "extensions/reconstruct/agent/offload",
 ]
 
 [workspace.package]

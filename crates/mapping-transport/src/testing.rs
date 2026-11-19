@@ -1,0 +1,338 @@
+//! An in-memory [`Host`] for the link's tests: records the calls the tests
+//! assert on and answers with configurable replies.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use ados_protocol::framebus::DetectionBatch;
+use ados_protocol::node_info::{BoardInfo, CameraInfo, GroundStationInfo, NodeInfo};
+use ados_protocol::plugin_mdns::DiscoveredService;
+use ados_sdk::{ClientError, OffloadAdvertisement};
+use parking_lot::Mutex;
+use rmpv::Value;
+use tokio::sync::Notify;
+
+use crate::host::{AuxCallback, Host, WhepAnswer};
+
+/// A host error from a reply string: `capability_denied: <cap>` is the typed
+/// denial, anything else an RPC error.
+fn host_err(s: &str) -> ClientError {
+    match s.strip_prefix("capability_denied:") {
+        Some(cap) => ClientError::CapabilityDenied(cap.trim().to_string()),
+        None => ClientError::Rpc(s.to_string()),
+    }
+}
+
+/// Every call the link made, plus the replies it gets.
+pub struct FakeHost {
+    pub config: Mutex<HashMap<String, Value>>,
+    pub telemetry: Mutex<Vec<(String, Value)>>,
+    pub events: Mutex<Vec<(String, Value)>>,
+    /// The event subscriptions, `(topic, callback)` in order.
+    pub event_callbacks: Mutex<Vec<(String, crate::host::EventCallback)>>,
+    pub cloud: Mutex<Vec<(String, Vec<u8>)>>,
+    pub cloud_reply: Mutex<Value>,
+    pub aux_open_reply: Mutex<Result<Value, String>>,
+    pub aux_sent: Mutex<Vec<(u8, Vec<u8>)>>,
+    pub aux_callback: Mutex<Option<AuxCallback>>,
+    /// The frame-descriptor subscriptions, `(camera, callback)` in order.
+    pub descriptor_callbacks: Mutex<Vec<(String, crate::host::DescriptorCallback)>>,
+    /// When set, `vision.subscribe_frames` is refused (a missing grant): no
+    /// callback is registered, as on the real host.
+    pub frames_refused: Mutex<bool>,
+    /// The vehicle-state callback the link subscribed.
+    pub state_callback: Mutex<Option<crate::host::StateCallback>>,
+    /// `None` answers `node.info` with an error.
+    pub node_info: Mutex<Option<NodeInfo>>,
+    /// The instances an `mdns.browse` answers with, by service type; a type
+    /// with no entry answers with an error.
+    pub mdns: Mutex<HashMap<String, Vec<DiscoveredService>>>,
+    /// Every service type browsed, in order.
+    pub mdns_browsed: Mutex<Vec<String>>,
+    /// The `video.whep.offer` reply; every offer `(camera, sdp)` is recorded.
+    pub whep_reply: Mutex<Result<WhepAnswer, String>>,
+    pub whep_offers: Mutex<Vec<(String, String)>>,
+    /// The `video.whep.close` reply; every closed location is recorded.
+    pub whep_close_reply: Mutex<Result<(), String>>,
+    pub whep_closed: Mutex<Vec<String>>,
+    /// The `sensors.rig.write` reply; every rig sent is recorded.
+    pub rig_reply: Mutex<Result<(u16, serde_json::Value), String>>,
+    pub rigs: Mutex<Vec<serde_json::Value>>,
+    changed: Notify,
+}
+
+impl FakeHost {
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            config: Mutex::default(),
+            telemetry: Mutex::default(),
+            events: Mutex::default(),
+            event_callbacks: Mutex::default(),
+            cloud: Mutex::default(),
+            cloud_reply: Mutex::new(Self::ok()),
+            aux_open_reply: Mutex::new(Ok(Self::map(&[
+                ("ok", Value::Boolean(true)),
+                ("active", Value::Boolean(true)),
+            ]))),
+            aux_sent: Mutex::default(),
+            aux_callback: Mutex::default(),
+            descriptor_callbacks: Mutex::default(),
+            frames_refused: Mutex::new(false),
+            state_callback: Mutex::default(),
+            node_info: Mutex::default(),
+            mdns: Mutex::default(),
+            mdns_browsed: Mutex::default(),
+            whep_reply: Mutex::new(Err("whep_unavailable: not configured".into())),
+            whep_offers: Mutex::default(),
+            whep_close_reply: Mutex::new(Ok(())),
+            whep_closed: Mutex::default(),
+            rig_reply: Mutex::new(Err("rig_unavailable: not configured".into())),
+            rigs: Mutex::default(),
+            changed: Notify::new(),
+        })
+    }
+
+    pub fn map(entries: &[(&str, Value)]) -> Value {
+        Value::Map(
+            entries
+                .iter()
+                .map(|(k, v)| (Value::from(*k), v.clone()))
+                .collect(),
+        )
+    }
+
+    pub fn ok() -> Value {
+        Self::map(&[("ok", Value::Boolean(true))])
+    }
+
+    pub fn not_available(method: &str) -> Value {
+        Self::map(&[
+            ("error", Value::from("not_available")),
+            ("method", Value::from(method)),
+        ])
+    }
+
+    /// Set a plugin config key from JSON.
+    pub fn set_config(&self, key: &str, value: serde_json::Value) {
+        self.config
+            .lock()
+            .insert(key.to_string(), rmpv::ext::to_value(&value).unwrap());
+    }
+
+    /// Deliver `payload` on `topic` to every subscription made on it.
+    pub fn deliver_event(&self, topic: &str, payload: Value) {
+        let callbacks: Vec<_> = self
+            .event_callbacks
+            .lock()
+            .iter()
+            .filter(|(t, _)| t == topic)
+            .map(|(_, cb)| cb.clone())
+            .collect();
+        for cb in callbacks {
+            cb(payload.clone());
+        }
+    }
+
+    /// A plugin config key as JSON (`null` when unset).
+    pub fn config_value(&self, key: &str) -> serde_json::Value {
+        self.config
+            .lock()
+            .get(key)
+            .cloned()
+            .map(crate::host::to_json)
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Wait (bounded) for a cloud publish, then take the oldest one.
+    pub async fn next_cloud_publish(&self) -> (String, Vec<u8>) {
+        self.wait_for(|h| !h.cloud.lock().is_empty()).await;
+        self.cloud.lock().remove(0)
+    }
+
+    /// Wait (bounded) until `pred` holds.
+    pub async fn wait_for(&self, pred: impl Fn(&Self) -> bool) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let changed = self.changed.notified();
+                if pred(self) {
+                    return;
+                }
+                changed.await;
+            }
+        })
+        .await
+        .expect("the fake host saw the expected call");
+    }
+
+    fn touch(&self) {
+        self.changed.notify_waiters();
+    }
+
+    /// Node facts: `has_npu` of `None` is an unprobed board.
+    pub fn info(
+        profile: &str,
+        has_npu: Option<bool>,
+        camera_ready: bool,
+        role: Option<&str>,
+    ) -> NodeInfo {
+        NodeInfo {
+            profile: profile.to_string(),
+            board: has_npu.map(|has_npu| BoardInfo {
+                id: "board".into(),
+                name: "Board".into(),
+                has_npu,
+                accelerators: if has_npu { vec!["npu".into()] } else { vec![] },
+            }),
+            ground_station: GroundStationInfo {
+                role: role.map(str::to_string),
+            },
+            camera: CameraInfo {
+                ready: camera_ready,
+                main: None,
+            },
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Host for FakeHost {
+    async fn config_get(&self, key: &str, default: Value) -> Result<Value, ClientError> {
+        Ok(self.config.lock().get(key).cloned().unwrap_or(default))
+    }
+
+    async fn config_set(&self, key: &str, value: Value) -> Result<(), ClientError> {
+        self.config.lock().insert(key.to_string(), value);
+        self.touch();
+        Ok(())
+    }
+
+    async fn telemetry_subscribe(
+        &self,
+        callback: crate::host::StateCallback,
+    ) -> Result<(), ClientError> {
+        *self.state_callback.lock() = Some(callback);
+        self.touch();
+        Ok(())
+    }
+
+    async fn telemetry_extend(&self, channel: &str, payload: Value) -> Result<(), ClientError> {
+        self.telemetry.lock().push((channel.to_string(), payload));
+        self.touch();
+        Ok(())
+    }
+
+    async fn event_publish(&self, topic: &str, payload: Value) -> Result<(), ClientError> {
+        self.events.lock().push((topic.to_string(), payload));
+        self.touch();
+        Ok(())
+    }
+
+    async fn event_subscribe(
+        &self,
+        topic: &str,
+        callback: crate::host::EventCallback,
+    ) -> Result<(), ClientError> {
+        self.event_callbacks
+            .lock()
+            .push((topic.to_string(), callback));
+        Ok(())
+    }
+
+    async fn cloud_publish(&self, stream: &str, payload: &[u8]) -> Result<Value, ClientError> {
+        self.cloud
+            .lock()
+            .push((stream.to_string(), payload.to_vec()));
+        self.touch();
+        Ok(self.cloud_reply.lock().clone())
+    }
+
+    async fn aux_open(&self) -> Result<Value, ClientError> {
+        self.aux_open_reply.lock().clone().map_err(ClientError::Rpc)
+    }
+
+    async fn aux_send(&self, channel: u8, payload: &[u8]) -> Result<Value, ClientError> {
+        self.aux_sent.lock().push((channel, payload.to_vec()));
+        self.touch();
+        Ok(Self::ok())
+    }
+
+    async fn aux_subscribe(&self, callback: AuxCallback) -> Result<(), ClientError> {
+        *self.aux_callback.lock() = Some(callback);
+        self.touch();
+        Ok(())
+    }
+
+    async fn publish_detection(&self, _batch: &DetectionBatch) -> Result<Value, ClientError> {
+        Ok(Self::ok())
+    }
+
+    async fn subscribe_frame_descriptors(
+        &self,
+        camera_id: &str,
+        callback: crate::host::DescriptorCallback,
+    ) -> Result<(), ClientError> {
+        if *self.frames_refused.lock() {
+            return Err(ClientError::CapabilityDenied("vision.frame.read".into()));
+        }
+        self.descriptor_callbacks
+            .lock()
+            .push((camera_id.to_string(), callback));
+        self.touch();
+        Ok(())
+    }
+
+    async fn advertise_offload(
+        &self,
+        _advert: &OffloadAdvertisement,
+    ) -> Result<Value, ClientError> {
+        Ok(Self::ok())
+    }
+
+    async fn node_info(&self) -> Result<NodeInfo, ClientError> {
+        self.node_info
+            .lock()
+            .clone()
+            .ok_or_else(|| ClientError::Rpc("not_available".into()))
+    }
+
+    async fn mdns_browse(
+        &self,
+        service_type: &str,
+        _window: Duration,
+    ) -> Result<Vec<DiscoveredService>, ClientError> {
+        self.mdns_browsed.lock().push(service_type.to_string());
+        self.mdns
+            .lock()
+            .get(service_type)
+            .cloned()
+            .ok_or_else(|| ClientError::Rpc("not_available".into()))
+    }
+
+    async fn whep_offer(
+        &self,
+        camera_id: &str,
+        offer_sdp: &str,
+    ) -> Result<WhepAnswer, ClientError> {
+        self.whep_offers
+            .lock()
+            .push((camera_id.to_string(), offer_sdp.to_string()));
+        self.whep_reply.lock().clone().map_err(|e| host_err(&e))
+    }
+
+    async fn whep_close(&self, location: &str) -> Result<(), ClientError> {
+        self.whep_closed.lock().push(location.to_string());
+        self.whep_close_reply
+            .lock()
+            .clone()
+            .map_err(|e| host_err(&e))
+    }
+
+    async fn put_rig(
+        &self,
+        rig: &serde_json::Value,
+    ) -> Result<(u16, serde_json::Value), ClientError> {
+        self.rigs.lock().push(rig.clone());
+        self.rig_reply.lock().clone().map_err(|e| host_err(&e))
+    }
+}

@@ -148,6 +148,7 @@ dependencies = [
  "ados-mapping-protocol",
  "ados-offload",
  "ados-protocol",
+ "ados-sdk",
  "anyhow",
  "async-trait",
  "axum",
@@ -155,8 +156,10 @@ dependencies = [
  "futures-util",
  "hyper",
  "hyper-util",
+ "parking_lot",
  "reqwest",
  "rmp-serde",
+ "rmpv",
  "serde",
  "serde_json",
  "tempfile",
@@ -1111,6 +1114,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f2d30e4173c4026932d51d31d6b0613b1fd3014bf3f9f8943d4ba139c437ba0"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "capture-link"
+version = "1.0.0"
+dependencies = [
+ "ados-capture-contract",
+ "ados-mapping-protocol",
+ "ados-mapping-transport",
+ "ados-protocol",
+ "ados-sdk",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "capture-service",
+ "parking_lot",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "capture-service"
+version = "1.0.0"
+dependencies = [
+ "ados-capture-contract",
+ "ados-config",
+ "ados-mapping-pose",
+ "ados-mapping-protocol",
+ "ados-protocol",
+ "ados-sdk",
+ "ados-sensorbus",
+ "anyhow",
+ "async-trait",
+ "image",
+ "nix 0.29.0",
+ "parking_lot",
+ "prost",
+ "prost-types",
+ "rmp-serde",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "zstd",
 ]
 
 [[package]]
@@ -5931,6 +5991,81 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03251193000f4bd3b042892be858ee50e8b3719f2b08e5833ac4353724632430"
 
 [[package]]
+name = "reconstruct-node"
+version = "1.0.0"
+dependencies = [
+ "ados-capture-contract",
+ "ados-livemap",
+ "ados-mapping-protocol",
+ "ados-mapping-transport",
+ "ados-offload",
+ "ados-protocol",
+ "ados-scan2d",
+ "ados-sdk",
+ "ados-vision-engine",
+ "anyhow",
+ "aprilgrid",
+ "async-trait",
+ "axum",
+ "blake3",
+ "futures-util",
+ "getrandom 0.3.4",
+ "hex",
+ "hyper",
+ "hyper-util",
+ "image",
+ "jsonschema 0.59.0",
+ "kiddo",
+ "las",
+ "mcap",
+ "nalgebra 0.33.3",
+ "reconstruct-node",
+ "reqwest",
+ "rerun",
+ "rmp-serde",
+ "rmpv",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
+ "sysinfo",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-tungstenite",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tracing",
+ "tracing-subscriber",
+ "windows-sys 0.61.2",
+ "zip",
+ "zstd",
+]
+
+[[package]]
+name = "reconstruct-offload"
+version = "1.0.0"
+dependencies = [
+ "ados-mapping-protocol",
+ "ados-mapping-transport",
+ "ados-protocol",
+ "ados-sdk",
+ "async-trait",
+ "axum",
+ "parking_lot",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tempfile",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8263,116 +8398,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "world-engine-capture"
-version = "2.2.7"
-dependencies = [
- "ados-capture-contract",
- "ados-config",
- "ados-mapping-pose",
- "ados-mapping-protocol",
- "ados-protocol",
- "ados-sdk",
- "ados-sensorbus",
- "anyhow",
- "async-trait",
- "image",
- "nix 0.29.0",
- "parking_lot",
- "prost",
- "prost-types",
- "rmp-serde",
- "rmpv",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "zstd",
-]
-
-[[package]]
-name = "world-engine-link"
-version = "2.2.7"
-dependencies = [
- "ados-capture-contract",
- "ados-mapping-protocol",
- "ados-mapping-transport",
- "ados-protocol",
- "ados-sdk",
- "anyhow",
- "async-trait",
- "axum",
- "parking_lot",
- "rmpv",
- "serde",
- "serde_json",
- "socket2",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tower 0.4.13",
- "tracing",
- "tracing-subscriber",
- "world-engine-capture",
-]
-
-[[package]]
-name = "world-engine-node"
-version = "2.2.7"
-dependencies = [
- "ados-capture-contract",
- "ados-livemap",
- "ados-mapping-protocol",
- "ados-mapping-transport",
- "ados-offload",
- "ados-protocol",
- "ados-scan2d",
- "ados-sdk",
- "ados-vision-engine",
- "anyhow",
- "aprilgrid",
- "async-trait",
- "axum",
- "blake3",
- "futures-util",
- "getrandom 0.3.4",
- "hex",
- "hyper",
- "hyper-util",
- "image",
- "jsonschema 0.59.0",
- "kiddo",
- "las",
- "mcap",
- "nalgebra 0.33.3",
- "reqwest",
- "rerun",
- "rmp-serde",
- "rmpv",
- "rusqlite",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2 0.10.9",
- "sysinfo",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-tungstenite",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tracing",
- "tracing-subscriber",
- "windows-sys 0.61.2",
- "world-engine-node",
- "zip",
- "zstd",
 ]
 
 [[package]]

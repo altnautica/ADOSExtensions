@@ -10,7 +10,8 @@ on:
     paths:
       - "extensions/navigation/agent/**"
       - "extensions/navigation/lidar-slam/**"
-      - "extensions/world-engine/agent/**"
+      - "extensions/capture/agent/**"
+      - "extensions/reconstruct/agent/**"
       - "crates/**"
       - "Cargo.toml"
       - "ADOS_AGENT_REV"
@@ -20,7 +21,8 @@ on:
     paths:
       - "extensions/navigation/agent/**"
       - "extensions/navigation/lidar-slam/**"
-      - "extensions/world-engine/agent/**"
+      - "extensions/capture/agent/**"
+      - "extensions/reconstruct/agent/**"
       - "crates/**"
       - "Cargo.toml"
       - "ADOS_AGENT_REV"
@@ -55,11 +57,12 @@ jobs:
       - name: Check the release target compiles
         run: cargo check -p navigation --target aarch64-unknown-linux-musl
 
-  # The shared mapping crates and the World Engine crates. The node links
+  # The shared mapping crates and the Capture, Reconstruct and Navigation
+  # LiDAR crates. The node links
   # rerun and bundled SQLite, and the transport links rustls/ring, so the musl
   # cross-check needs a C cross-compiler: zig via cargo-zigbuild, the same
   # toolchain the release workflow builds the shipped binaries with.
-  world-engine-crates:
+  mapping-crates:
     runs-on: ubuntu-24.04-arm
     env:
       WE_CRATES: >-
@@ -72,9 +75,10 @@ jobs:
         -p ados-rplidar
         -p ados-livox
         -p navigation-lidar-slam
-        -p world-engine-capture
-        -p world-engine-node
-        -p world-engine-link
+        -p capture-service
+        -p capture-link
+        -p reconstruct-node
+        -p reconstruct-offload
     steps:
       - uses: actions/checkout@v4
 
@@ -104,8 +108,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: arm64-world-engine-${{ hashFiles('Cargo.lock') }}
-          restore-keys: arm64-world-engine-
+          key: arm64-mapping-${{ hashFiles('Cargo.lock') }}
+          restore-keys: arm64-mapping-
 
       - name: Clippy (deny warnings)
         run: cargo clippy ${WE_CRATES} --all-targets -- -D warnings

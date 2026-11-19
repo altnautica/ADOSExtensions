@@ -25,6 +25,10 @@ ados-mapping-protocol = { workspace = true }
 ados-protocol = { workspace = true, features = ["tls"] }
 # The offload safety gates (freshness + lock state) the return bridge drives.
 ados-offload = { workspace = true }
+# The plugin-host facade (`host`) the capture and reconstruct processes call.
+ados-sdk = { workspace = true }
+parking_lot = { workspace = true }
+rmpv = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
@@ -45,3 +49,7 @@ tokio-tungstenite = { workspace = true }
 [dev-dependencies]
 ados-capture-contract = { workspace = true }
 tempfile = { workspace = true }
+
+[features]
+# The recording `Host` (`testing`) for dependents' tests.
+testing = []

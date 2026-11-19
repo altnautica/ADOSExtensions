@@ -1,0 +1,639 @@
+//! The drone-side perception offload reconciler.
+//!
+//! An NPU-less drone runs its detection on a workstation instead of on board.
+//! Each tick, when the node facts (`node.info`) and plugin config
+//! `reconstruct.offload.enabled` call for offload, the camera is publishing its main
+//! stream, and a compute node is reachable on the LAN, this loop starts and
+//! supervises the offload orchestrator: the drone streams its RTSP camera to the
+//! node, the node runs the detector, and detections return onto the drone's own
+//! `vision.detection` bus (transparent to every consumer). While a session is
+//! live it re-advertises the offload link to the host (`offload.advertise`) so
+//! the node's perception tier reads `offload`; when the session stops it
+//! advertises `paired: false` once.
+//!
+//! `reconstruct.offload.enabled`: `auto` offloads only when the board has no NPU, `on`
+//! always, `off` never. A board the node has not probed (`board: None`) counts
+//! as NPU-less, the same reading the agent's own perception-tier decision makes
+//! of an absent board fingerprint (`npu_tops` 0), so `auto` offloads there too.
+//! Either way the camera must report ready: the node can only pull frames the
+//! drone is actually publishing. With no node facts at all (an older host, or
+//! the read failed) nothing is known about the camera, so nothing is offloaded.
+//!
+//! Local-first: the node is the pinned `reconstruct.offload.compute_node_addr` or an mDNS
+//! advert (see [`ados_mapping_transport::compute_node`]), reached by its LAN job-API address; no cloud
+//! round-trip. The drone presents the credential that node issued it; discovery
+//! prefers a workstation that issued one. The RTSP URL handed to the node is the
+//! drone's LAN egress IP (never `localhost`: the node pulls the feed).
+
+use std::collections::{HashMap, HashSet};
+use std::net::{IpAddr, ToSocketAddrs};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use ados_mapping_transport::{
+    run_offload_orchestrator, CameraGeometry, DetectionTee, NodeEndpoint, OrchestratorConfig,
+};
+use ados_sdk::OffloadAdvertisement;
+use tokio::sync::{watch, Notify};
+use tokio::task::JoinHandle;
+
+use ados_mapping_transport::compute_node;
+use ados_mapping_transport::credentials::{CredentialStore, OFFLOAD_STREAM_LANE};
+use ados_mapping_transport::host::{config_json, config_string, node_info, Host};
+
+use crate::{CAMERA_KEY, ENABLED_KEY};
+use ados_mapping_transport::sdk::{CloudDetectionTee, SdkDetectionPublisher};
+use ados_protocol::node_info::NodeInfo;
+
+/// The reconcile cadence, which is also the re-advertise cadence: comfortably
+/// under the host's 20 s offload-link staleness window.
+const TICK: Duration = Duration::from_secs(5);
+/// While searching (no live session), do not re-browse more often than this.
+const SEARCH_BACKOFF: Duration = Duration::from_secs(15);
+/// The RTSP port + main path the drone's encoder publishes to.
+const RTSP_PORT: u16 = 8554;
+const RTSP_PATH: &str = "main";
+/// The camera the offloaded detections are attributed to (the drone's primary).
+const CAMERA_ID: &str = "front";
+/// The id the vision engine gives the primary camera it does not capture
+/// itself (its tap on the `main` leg the offload session streams).
+const MAIN_LEG_CAMERA: &str = "main";
+/// The fixed frame size the node decodes the feed at (the node scales the
+/// camera's own size to it).
+const FRAME_WIDTH: u32 = 1280;
+const FRAME_HEIGHT: u32 = 720;
+/// The freshness budget (ms) for the returned detection stream: past this with
+/// no new batch, the safety gate trips the lock to Lost.
+const TARGET_BUDGET_MS: i64 = 700;
+/// The model id advertised for the offload session.
+const OFFLOAD_MODEL_ID: &str = "offload";
+
+/// The live offload session the reconciler owns.
+struct RunningSession {
+    cancel: Arc<Notify>,
+    handle: JoinHandle<()>,
+    /// The node address this session offloads to (`host:port`).
+    target: String,
+    /// The node's device id (from discovery).
+    device_id: Option<String>,
+}
+
+/// A resolved node to offload to.
+struct Target {
+    base_url: String,
+    target: String,
+    node_device_id: Option<String>,
+    credential: Option<String>,
+    rtsp_url: String,
+}
+
+/// The operator's `offload.enabled` setting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OffloadMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl OffloadMode {
+    /// `off` / `false` and `on` / `true`; anything else (absent included) is
+    /// `auto`.
+    fn parse(value: &serde_json::Value) -> Self {
+        match value {
+            serde_json::Value::Bool(false) => Self::Off,
+            serde_json::Value::Bool(true) => Self::On,
+            v => match v.as_str().map(str::trim) {
+                Some("off") => Self::Off,
+                Some("on") => Self::On,
+                _ => Self::Auto,
+            },
+        }
+    }
+}
+
+/// Whether the drone should offload (start, or keep a live session): the camera
+/// is ready, and the mode is `on`, or `auto` on a board with no NPU. Unknown node
+/// facts (`None`) keep it off, since camera readiness is not known; an unprobed
+/// board (no board facts) counts as NPU-less.
+fn wants_offload(mode: OffloadMode, info: Option<&NodeInfo>) -> bool {
+    let Some(info) = info else {
+        return false;
+    };
+    if !info.camera.ready {
+        return false;
+    }
+    match mode {
+        OffloadMode::Off => false,
+        OffloadMode::On => true,
+        OffloadMode::Auto => !info.board.as_ref().is_some_and(|b| b.has_npu),
+    }
+}
+
+/// The drone's egress IP toward `host:port`: the source address a connection to
+/// the node would use, i.e. the address the node reaches the RTSP feed on. A
+/// UDP "connect" picks the source IP without sending a packet.
+///
+/// The socket is never explicitly bound. The plugin unit carries
+/// `SocketBindDeny=any`, and systemd's bind filter matches every port under
+/// `any`, the ephemeral port 0 included, so a `bind("0.0.0.0:0")` here fails
+/// with EPERM and no session can ever start. The kernel's implicit bind on
+/// `connect()` is not a `bind()` call, so it passes the filter.
+fn local_ip_towards(host: &str, port: u16) -> Result<IpAddr, String> {
+    use socket2::{Domain, Socket, Type};
+    let addr = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("{host} does not resolve: {e}"))?
+        .next()
+        .ok_or_else(|| format!("{host} resolves to no address"))?;
+    let sock = Socket::new(Domain::for_address(addr), Type::DGRAM, None)
+        .map_err(|e| format!("socket: {e}"))?;
+    sock.connect(&addr.into())
+        .map_err(|e| format!("no route to {addr}: {e}"))?;
+    sock.local_addr()
+        .map_err(|e| format!("source address: {e}"))?
+        .as_socket()
+        .map(|a| a.ip())
+        .ok_or_else(|| "source address is not an IP address".to_string())
+}
+
+/// Everything the reconciler needs.
+pub struct Reconciler {
+    pub host: Arc<dyn Host>,
+    /// Names the offload session (`offload-<agent id>`).
+    pub agent_id: String,
+    pub credentials: CredentialStore,
+}
+
+impl Reconciler {
+    /// Run until `shutdown` flips.
+    pub async fn run(self, mut shutdown: watch::Receiver<bool>) {
+        tracing::info!("offload reconciler armed");
+        let mut ticker = tokio::time::interval(TICK);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut running: Option<RunningSession> = None;
+        let mut last_search: Option<Instant> = None;
+        // Built on the first session and reused: one drain task for the process.
+        let mut tee: Option<Arc<CloudDetectionTee>> = None;
+        // The geometry of the camera the `main` leg streams, from its frame
+        // descriptors, applied only while a session runs.
+        let mut geometry = MainLegGeometry::new();
+
+        loop {
+            tokio::select! {
+                r = shutdown.changed() => {
+                    if r.is_err() || *shutdown.borrow() { break; }
+                    continue;
+                }
+                _ = ticker.tick() => {}
+            }
+            // A finished orchestrator (the node went away, the stream ended)
+            // frees the slot so the next search re-resolves.
+            if running.as_ref().is_some_and(|s| s.handle.is_finished()) {
+                if let Some(sess) = running.take() {
+                    tracing::info!(target = %sess.target, "offload session ended");
+                }
+                self.advertise(None).await;
+                geometry.stop();
+            }
+            let mode = OffloadMode::parse(&config_json(self.host.as_ref(), ENABLED_KEY).await);
+            let info = node_info(self.host.as_ref()).await;
+            let enabled = wants_offload(mode, info.as_ref());
+
+            if let Some(sess) = running.as_ref() {
+                // A live session is kept on the cheap gate alone, never a
+                // re-resolve: a transient mDNS miss must not tear it down.
+                if enabled {
+                    self.advertise(Some(sess)).await;
+                } else if let Some(sess) = running.take() {
+                    tracing::info!(target = %sess.target, "offload reconciler: stopping the session");
+                    // notify_one stores a permit, so the stop is observed even
+                    // while the orchestrator is still submitting / opening the
+                    // WebSocket and not yet parked on the cancel.
+                    sess.cancel.notify_one();
+                    geometry.stop();
+                    self.advertise(None).await;
+                }
+                continue;
+            }
+            if !enabled || !last_search.is_none_or(|t| t.elapsed() >= SEARCH_BACKOFF) {
+                continue;
+            }
+            last_search = Some(Instant::now());
+            let Some(target) = self.resolve_target().await else {
+                continue;
+            };
+            let tee = tee
+                .get_or_insert_with(|| Arc::new(CloudDetectionTee::spawn(self.host.clone())))
+                .clone();
+            let cfg = OrchestratorConfig::vision_only(
+                format!("offload-{}", self.agent_id),
+                CAMERA_ID,
+                target.rtsp_url,
+                FRAME_WIDTH,
+                FRAME_HEIGHT,
+                TARGET_BUDGET_MS,
+                Arc::new(SdkDetectionPublisher::new(self.host.clone())),
+            )
+            .with_detection_tee(Some(tee as Arc<dyn DetectionTee>));
+            let primary = config_string(self.host.as_ref(), CAMERA_KEY).await;
+            let cameras = main_leg_cameras(primary.as_deref());
+            let cfg = match geometry.start(self.host.as_ref(), cameras).await {
+                Some(rx) => cfg.with_camera_geometry(rx),
+                None => {
+                    tracing::warn!(
+                        "offload: no frame descriptors for the main leg's camera; batches carry no geometry"
+                    );
+                    cfg
+                }
+            };
+            let endpoint = NodeEndpoint {
+                base_url: target.base_url,
+                credential: target.credential,
+            };
+            let cancel = Arc::new(Notify::new());
+            let cancel_task = cancel.clone();
+            tracing::info!(
+                target = %target.target,
+                camera = ?info.as_ref().and_then(|i| i.camera.main),
+                "offload reconciler: starting a session"
+            );
+            let handle = tokio::spawn(async move {
+                if let Err(e) = run_offload_orchestrator(cfg, endpoint, cancel_task).await {
+                    tracing::warn!(error = %e, "offload orchestrator ended");
+                }
+            });
+            let sess = RunningSession {
+                cancel,
+                handle,
+                target: target.target,
+                device_id: target.node_device_id,
+            };
+            self.advertise(Some(&sess)).await;
+            running = Some(sess);
+        }
+
+        if let Some(sess) = running.take() {
+            sess.cancel.notify_one();
+            geometry.stop();
+            self.advertise(None).await;
+        }
+    }
+
+    /// Resolve the node to offload to (a pinned address, else mDNS) and the
+    /// drone's egress IP toward it.
+    async fn resolve_target(&self) -> Option<Target> {
+        let node =
+            compute_node::resolve(self.host.as_ref(), &self.credentials, &OFFLOAD_STREAM_LANE)
+                .await?;
+        let local_ip = match local_ip_towards(&node.host, node.port) {
+            Ok(ip) => ip,
+            Err(e) => {
+                tracing::warn!(node = %node.addr(), error = %e, "offload reconciler: no egress address toward the compute node");
+                return None;
+            }
+        };
+        // The credential THIS node issued, or the best one for a pinned address.
+        let credential = match node.credential(&self.credentials, &OFFLOAD_STREAM_LANE) {
+            Ok(c) => Some(c),
+            Err(gap) => {
+                tracing::info!(node = %node.addr(), reason = %gap, "offload reconciler: no usable credential for this workstation; a paired workstation will refuse the session");
+                None
+            }
+        };
+        Some(Target {
+            base_url: node.base_url(),
+            target: node.addr(),
+            node_device_id: node.device_id,
+            credential,
+            rtsp_url: format!("rtsp://{local_ip}:{RTSP_PORT}/{RTSP_PATH}"),
+        })
+    }
+
+    /// Advertise the live session's link, or `paired: false` for none. A
+    /// resolved, reachable node is treated as an acceptable LAN bearer.
+    async fn advertise(&self, session: Option<&RunningSession>) {
+        let advert = match session {
+            Some(s) => OffloadAdvertisement {
+                paired: true,
+                bearer_acceptable: true,
+                target: Some(s.target.clone()),
+                device_id: s.device_id.clone().filter(|d| !d.is_empty()),
+                model_id: Some(OFFLOAD_MODEL_ID.to_string()),
+            },
+            None => OffloadAdvertisement::default(),
+        };
+        if let Err(e) = self.host.advertise_offload(&advert).await {
+            tracing::debug!(error = %e, "offload advertise failed");
+        }
+    }
+}
+
+/// The cameras whose frames are the `main` leg the offload session streams,
+/// best first: the vision engine's tap on `main` (a primary it does not
+/// capture), then the primary camera `reconstruct.offload.camera` names (the
+/// id the vision engine captures it under). Nothing else is a candidate:
+/// another camera's geometry (a down camera, say) would mis-place every
+/// detection.
+fn main_leg_cameras(primary: Option<&str>) -> Vec<String> {
+    let mut out = vec![MAIN_LEG_CAMERA.to_string()];
+    if let Some(id) = primary.map(str::trim) {
+        if !id.is_empty() && id != MAIN_LEG_CAMERA {
+            out.push(id.to_string());
+        }
+    }
+    out
+}
+
+/// What the descriptor callbacks share.
+struct LegState {
+    /// A session runs: descriptors apply. Off, the callbacks drop them.
+    active: bool,
+    /// The current candidates, best first ([`main_leg_cameras`]).
+    order: Vec<String>,
+    /// The newest geometry each camera's frames carried this session.
+    latest: HashMap<String, CameraGeometry>,
+    tx: watch::Sender<CameraGeometry>,
+}
+
+impl LegState {
+    /// Publish the best candidate's geometry, or none.
+    fn publish(&mut self) {
+        let g = self
+            .order
+            .iter()
+            .find_map(|c| {
+                self.latest
+                    .get(c)
+                    .filter(|g| **g != CameraGeometry::default())
+            })
+            .copied()
+            .unwrap_or_default();
+        self.tx.send_if_modified(|cur| {
+            let changed = *cur != g;
+            *cur = g;
+            changed
+        });
+    }
+}
+
+/// The geometry (roster field of view and mount pitch) of the camera the
+/// `main` leg streams, from the vision engine's frame descriptors.
+///
+/// Each candidate camera is subscribed once, after which the host forwards
+/// its descriptors for the connection's life: the agent has no
+/// `vision.unsubscribe_frames` route, so stopping a session cannot release
+/// the IPC stream. Between sessions the callbacks drop every descriptor and
+/// the receiver reads no geometry.
+struct MainLegGeometry {
+    state: Arc<parking_lot::Mutex<LegState>>,
+    subscribed: HashSet<String>,
+}
+
+impl MainLegGeometry {
+    fn new() -> Self {
+        let (tx, _) = watch::channel(CameraGeometry::default());
+        Self {
+            state: Arc::new(parking_lot::Mutex::new(LegState {
+                active: false,
+                order: Vec::new(),
+                latest: HashMap::new(),
+                tx,
+            })),
+            subscribed: HashSet::new(),
+        }
+    }
+
+    /// Start applying descriptors for a session over `cameras` (best
+    /// first), subscribing any not yet subscribed. `None` when no candidate
+    /// has a subscription.
+    async fn start(
+        &mut self,
+        host: &dyn Host,
+        cameras: Vec<String>,
+    ) -> Option<watch::Receiver<CameraGeometry>> {
+        for camera in &cameras {
+            if self.subscribed.contains(camera) {
+                continue;
+            }
+            let state = self.state.clone();
+            let id = camera.clone();
+            let callback = Arc::new(move |d: ados_protocol::framebus::FrameDescriptor| {
+                let mut s = state.lock();
+                // The gate: no session, no geometry (see the type's doc).
+                if !s.active {
+                    return;
+                }
+                s.latest.insert(id.clone(), CameraGeometry::of_frame(&d));
+                s.publish();
+            });
+            match host.subscribe_frame_descriptors(camera, callback).await {
+                Ok(()) => {
+                    self.subscribed.insert(camera.clone());
+                }
+                Err(e) => {
+                    tracing::debug!(camera = %camera, error = %e, "offload: no frame descriptors")
+                }
+            }
+        }
+        let mut s = self.state.lock();
+        s.active = true;
+        s.order = cameras;
+        s.latest.clear();
+        s.publish();
+        let any = s.order.iter().any(|c| self.subscribed.contains(c));
+        any.then(|| s.tx.subscribe())
+    }
+
+    /// Stop applying descriptors: the session ended.
+    fn stop(&self) {
+        let mut s = self.state.lock();
+        s.active = false;
+        s.latest.clear();
+        s.publish();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ados_mapping_transport::testing::FakeHost;
+    use serde_json::json;
+
+    #[test]
+    fn auto_offloads_only_when_npu_less() {
+        let npu = FakeHost::info("drone", Some(true), true, None);
+        let npu_less = FakeHost::info("drone", Some(false), true, None);
+        let unprobed = FakeHost::info("drone", None, true, None);
+        // auto + an accelerator: run local.
+        assert!(!wants_offload(OffloadMode::Auto, Some(&npu)));
+        // auto + no accelerator (or none declared): offload.
+        assert!(wants_offload(OffloadMode::Auto, Some(&npu_less)));
+        assert!(wants_offload(OffloadMode::Auto, Some(&unprobed)));
+        // on forces offload even with an accelerator; off never offloads.
+        assert!(wants_offload(OffloadMode::On, Some(&npu)));
+        assert!(!wants_offload(OffloadMode::Off, Some(&npu_less)));
+    }
+
+    #[test]
+    fn offload_waits_for_a_ready_camera() {
+        let not_ready = FakeHost::info("drone", Some(false), false, None);
+        assert!(!wants_offload(OffloadMode::On, Some(&not_ready)));
+        assert!(!wants_offload(OffloadMode::Auto, Some(&not_ready)));
+        // No node facts at all: readiness is unknown, so no offload.
+        assert!(!wants_offload(OffloadMode::On, None));
+    }
+
+    #[test]
+    fn the_mode_reads_off_on_and_defaults_to_auto() {
+        assert_eq!(OffloadMode::parse(&json!("off")), OffloadMode::Off);
+        assert_eq!(OffloadMode::parse(&json!(false)), OffloadMode::Off);
+        assert_eq!(OffloadMode::parse(&json!("on")), OffloadMode::On);
+        assert_eq!(OffloadMode::parse(&json!("auto")), OffloadMode::Auto);
+        assert_eq!(OffloadMode::parse(&json!(null)), OffloadMode::Auto);
+    }
+
+    #[test]
+    fn local_ip_towards_a_loopback_node_is_loopback() {
+        // No packet is sent; the call only picks the source address.
+        assert_eq!(
+            local_ip_towards("127.0.0.1", 8092),
+            Ok(IpAddr::from([127, 0, 0, 1]))
+        );
+        // An unresolvable host is an error (never a fabricated reach).
+        assert!(local_ip_towards("not a host", 80).is_err());
+    }
+
+    fn frame(camera: &str, hfov: f32, pitch: f32) -> ados_protocol::framebus::FrameDescriptor {
+        use ados_protocol::framebus::{
+            FrameDescriptor, FrameFormat, FRAMEBUS_DESCRIPTOR_VERSION, TIMEBASE_HOST,
+        };
+        FrameDescriptor {
+            v: FRAMEBUS_DESCRIPTOR_VERSION,
+            camera_id: camera.into(),
+            frame_id: 1,
+            ts_ns: 0,
+            ts_sensor_ns: None,
+            exposure_ns: None,
+            trigger_seq: None,
+            timebase: TIMEBASE_HOST,
+            width: 1280,
+            height: 720,
+            format: FrameFormat::Rgb24,
+            shm_name: format!("ados-vision-{camera}"),
+            slot: 0,
+            seq: 1,
+            byte_len: 0,
+            hfov_deg: Some(hfov),
+            mount_pitch_deg: Some(pitch),
+        }
+    }
+
+    fn geo(hfov: f32, pitch: f32) -> CameraGeometry {
+        CameraGeometry {
+            hfov_deg: Some(hfov),
+            mount_pitch_deg: Some(pitch),
+        }
+    }
+
+    /// Deliver `d` to every callback subscribed for its camera.
+    fn deliver(host: &FakeHost, d: ados_protocol::framebus::FrameDescriptor) {
+        let cbs = host.descriptor_callbacks.lock().clone();
+        for (camera, cb) in cbs {
+            if camera == d.camera_id {
+                cb(d.clone());
+            }
+        }
+    }
+
+    fn subscribed(host: &FakeHost) -> Vec<String> {
+        host.descriptor_callbacks
+            .lock()
+            .iter()
+            .map(|(c, _)| c.clone())
+            .collect()
+    }
+
+    #[test]
+    fn the_main_leg_is_the_tap_then_the_configured_primary() {
+        assert_eq!(main_leg_cameras(None), vec!["main"]);
+        assert_eq!(main_leg_cameras(Some(" nose ")), vec!["main", "nose"]);
+        assert_eq!(main_leg_cameras(Some("")), vec!["main"]);
+        assert_eq!(main_leg_cameras(Some("main")), vec!["main"]);
+    }
+
+    #[tokio::test]
+    async fn the_main_tap_sets_the_batch_geometry() {
+        let host = FakeHost::new();
+        let mut g = MainLegGeometry::new();
+        let rx = g
+            .start(host.as_ref(), main_leg_cameras(None))
+            .await
+            .unwrap();
+        assert_eq!(subscribed(&host), vec!["main"]);
+        assert_eq!(*rx.borrow(), CameraGeometry::default());
+        deliver(&host, frame("main", 87.0, -15.0));
+        assert_eq!(*rx.borrow(), geo(87.0, -15.0));
+    }
+
+    #[tokio::test]
+    async fn a_primary_captured_under_another_id_sets_it_and_the_tap_wins() {
+        let host = FakeHost::new();
+        let mut g = MainLegGeometry::new();
+        let rx = g
+            .start(host.as_ref(), main_leg_cameras(Some("nose")))
+            .await
+            .unwrap();
+        assert_eq!(subscribed(&host), vec!["main", "nose"]);
+        deliver(&host, frame("nose", 70.0, -30.0));
+        assert_eq!(*rx.borrow(), geo(70.0, -30.0));
+        deliver(&host, frame("main", 87.0, -15.0));
+        assert_eq!(
+            *rx.borrow(),
+            geo(87.0, -15.0),
+            "the main leg's own tap is preferred"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unconfigured_front_camera_never_sets_the_geometry() {
+        let host = FakeHost::new();
+        let mut g = MainLegGeometry::new();
+        let rx = g
+            .start(host.as_ref(), main_leg_cameras(None))
+            .await
+            .unwrap();
+        assert!(!subscribed(&host).contains(&"front".to_string()));
+        deliver(&host, frame("front", 120.0, -90.0));
+        assert_eq!(*rx.borrow(), CameraGeometry::default());
+    }
+
+    #[tokio::test]
+    async fn descriptors_stop_applying_when_the_session_stops_and_a_refusal_registers_nothing() {
+        let host = FakeHost::new();
+        *host.frames_refused.lock() = true;
+        let mut g = MainLegGeometry::new();
+        assert!(g.start(host.as_ref(), vec!["main".into()]).await.is_none());
+        assert!(
+            subscribed(&host).is_empty(),
+            "a refused subscription leaves no callback"
+        );
+        *host.frames_refused.lock() = false;
+        let rx = g.start(host.as_ref(), vec!["main".into()]).await.unwrap();
+        let rx2 = g.start(host.as_ref(), vec!["main".into()]).await.unwrap();
+        assert_eq!(
+            subscribed(&host),
+            vec!["main"],
+            "one subscription for the process"
+        );
+        deliver(&host, frame("main", 87.0, -15.0));
+        assert_eq!(*rx.borrow(), geo(87.0, -15.0));
+        g.stop();
+        assert_eq!(*rx2.borrow(), CameraGeometry::default());
+        deliver(&host, frame("main", 60.0, 0.0));
+        assert_eq!(
+            *rx2.borrow(),
+            CameraGeometry::default(),
+            "no session, no geometry"
+        );
+    }
+}

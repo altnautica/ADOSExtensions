@@ -4,7 +4,7 @@ Stereo-inertial visual odometry for the capture service's `vio` pose
 provider (`agent/capture/src/pose/vio/`). `basalt-ados` wraps
 [Basalt](https://gitlab.com/VladyslavUsenko/basalt) (frame-to-frame optical
 flow + square-root keypoint VIO) behind a Unix-socket input and a JSON-lines
-output, and runs as a supervised child of `world-engine-capture`.
+output, and runs as a supervised child of `capture-service`.
 
 | Path | What | Licence |
 |---|---|---|
@@ -61,7 +61,7 @@ docker run --rm --platform linux/arm64 -v "$PWD":/src -w /src/extensions/navigat
 ## Release payloads
 
 The extension payload installs the binary at `bin/<arch>-linux/basalt-ados`
-(`x86_64-linux`, `aarch64-linux`), beside `world-engine-capture`, with its
+(`x86_64-linux`, `aarch64-linux`), beside `capture-service`, with its
 licence texts at `bin/<arch>-linux/LICENSE-basalt-ados.txt` (this
 directory's `LICENSE`, `upstream/LICENSE` and every vcpkg port's
 `copyright` file). The asset rows are in `scripts/world-engine-payloads.tsv`.
