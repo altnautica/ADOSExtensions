@@ -8,6 +8,10 @@ uses independent semantic versioning per extension.
 
 ### Changed
 
+- The navigation state is read from the shared topic
+  `plugin.navigation.state` (Navigation 1.0.0 publishes it there), which
+  the plugin host lets Follow-Me subscribe to with `telemetry.read`.
+
 - The optional planar scan is read from `plugin.navigation.scan`: the
   Navigation extension publishes it now.
 

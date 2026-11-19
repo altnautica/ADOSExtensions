@@ -5,7 +5,7 @@ pilot's cap without GNSS (2 m/s). The pilot's own cap is not forwarded to
 plugins, so it is rebuilt here with the pilot's rule for an EKF whose source
 parameters it does not know: uncapped while the active EKF source set is 1-3
 and a 3-D fix from GPS_RAW_INT is fresh. The active set is the last one the
-navigation extension's ``nav.state`` named (``active_set``), and the boot set
+navigation extension's ``plugin.navigation.state`` named (``active_set``), and the boot set
 1 before any. Its external-navigation mode alone says nothing: navigation
 runs it beside GPS on set 1.
 
@@ -26,7 +26,7 @@ from collections import deque
 from typing import Any
 
 # The navigation extension's navigation state event.
-NAV_STATE_TOPIC = "nav.state"
+NAV_STATE_TOPIC = "plugin.navigation.state"
 # The pilot's horizontal speed cap while the position source is not GNSS.
 GNSS_DENIED_MAX_SPEED_MPS = 2.0
 # A GPS fix older than this says nothing (the pilot's rule).

@@ -1,4 +1,4 @@
-//! The `nav.state` event: what the navigation feed is doing right now.
+//! The `plugin.navigation.state` event: what the navigation feed is doing right now.
 //!
 //! Payload (snake_case, the shared wire shape the agent host's nav
 //! stream and every operator surface read):
@@ -16,7 +16,7 @@ use rmpv::Value;
 use crate::external_nav::ExtnavHealth;
 
 /// The event topic.
-pub const NAV_STATE_TOPIC: &str = "nav.state";
+pub const NAV_STATE_TOPIC: &str = "plugin.navigation.state";
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct NavState {

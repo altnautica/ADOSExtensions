@@ -12,7 +12,7 @@
 //!    ([`subscriptions`]) and to the shared pose and scan topics
 //!    ([`nav_shared`]),
 //! 4. starts the TIMESYNC, companion-HEARTBEAT, health, stream-rate and
-//!    `nav.state` ticks ([`ticks`], [`extnav`]),
+//!    `plugin.navigation.state` ticks ([`ticks`], [`extnav`]),
 //! 5. in the optical-flow modes, runs the estimator on every frame pair
 //!    from the shared vision frame bus and emits the flow sample on
 //!    component 198; in `external_nav`, runs the external-nav tick

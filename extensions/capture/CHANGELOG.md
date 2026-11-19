@@ -25,6 +25,9 @@ own extension (`com.altnautica.capture`).
 
 ### Changed
 
+- Needs ADOS Drone Agent 0.122.0 or later (`compatibility.ados_version`):
+  it relies on that release's topic and route layout.
+
 - Routes are `/capture/*`, the configuration keys `capture.*` (the relay's
   `capture.relay.*`), the node pin `capture.compute_node_addr`, the status
   telemetry `{"capture": …}`, and the private bus `capture.sock` /

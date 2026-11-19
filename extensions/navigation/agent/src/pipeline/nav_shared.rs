@@ -1,6 +1,6 @@
 //! State the external-nav and obstacle runtime shares: the latest pose
 //! and scan from the topic callbacks, the subscription outcome, and the
-//! `nav.state` being published. Plus the pure decisions the ticks make
+//! `plugin.navigation.state` being published. Plus the pure decisions the ticks make
 //! from it.
 
 use std::sync::atomic::{AtomicBool, Ordering};

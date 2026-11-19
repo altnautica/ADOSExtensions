@@ -32,6 +32,9 @@ extension (`com.altnautica.reconstruct`).
 
 ### Changed
 
+- Needs ADOS Drone Agent 0.122.0 or later (`compatibility.ados_version`):
+  it relies on that release's topic and route layout.
+
 - The node's capture ingest is `POST /api/capture/event` (probe
   `GET /api/capture/health`), its world stream `GET /ws/live/:device_id` with
   topics `reconstruct.{splat,pointcloud,mesh,occupancy}` and

@@ -9,7 +9,7 @@ import type { ExtnavHealth, NavState } from "../types";
 interface Props {
   ctx: PluginContext;
   state: NavState;
-  /** How current the `nav.state` event is. */
+  /** How current the `plugin.navigation.state` event is. */
   freshness: Freshness;
   /** `navigation.poseAgeMs`: median age of a pose when its ODOMETRY is
    * sent, or null before the first one (or while the block is stale). */
@@ -30,7 +30,7 @@ const MAX_FIX_TYPE = 8;
  * The live navigation feed: which EKF source set is active, how the
  * external pose is tracking, the odometry rate and pose age, the obstacle
  * rate, the nearest obstacle and the GPS fix, in the words and units the
- * agent cockpit and the TUI use for the same `nav.state` fields. Past the
+ * agent cockpit and the TUI use for the same `plugin.navigation.state` fields. Past the
  * shared stale period the rows dim and the tracking health reads
  * "No data" with the age.
  */

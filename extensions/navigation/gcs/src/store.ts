@@ -151,7 +151,7 @@ function useEventFeed<R, T>(
 }
 
 /**
- * Subscribe to the agent's `nav.state` event (active EKF source set,
+ * Subscribe to the agent's `plugin.navigation.state` event (active EKF source set,
  * external-nav health, ODOMETRY and obstacle rates, nearest obstacle,
  * GPS fix).
  */

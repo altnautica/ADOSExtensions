@@ -52,13 +52,13 @@ def test_external_nav_on_the_gps_source_set_is_uncapped_as_the_pilot_flies_it() 
 def test_the_source_set_is_the_last_one_named_and_a_set_outside_1_to_3_is_capped() -> None:
     feed = NavFeed()
     feed.on_gps_fix(3, 10.0)
-    # Before any nav.state, the boot set 1.
+    # Before any plugin.navigation.state, the boot set 1.
     assert effective_limit(6.0, feed, 10.0) == 6.0
     feed.on_nav_state({"mode": "external_nav", "active_set": 2}, 10.0)
     assert effective_limit(6.0, feed, 10.0) == 6.0
     feed.on_nav_state({"mode": "external_nav", "active_set": 4}, 10.5)
     assert effective_limit(6.0, feed, 10.5) == 2.0
-    # A nav.state without a set keeps the last one named, even once it is old.
+    # A plugin.navigation.state without a set keeps the last one named, even once it is old.
     feed.on_nav_state({"mode": "off", "active_set": None}, 11.0)
     feed.on_gps_fix(3, 20.0)
     assert effective_limit(6.0, feed, 20.0) == 2.0

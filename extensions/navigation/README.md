@@ -119,7 +119,9 @@ The plugin asks for the origin every 5 s until the flight controller
 reports one. It sends `SET_GPS_GLOBAL_ORIGIN` from
 `external_nav.origin_lla` only as a last resort: when the flight
 controller has none 5 s after it boots (a heartbeat after 3 s of silence
-is a new boot), is disarmed, and GPS is not primary.
+is a new boot), is disarmed, GPS is not primary, and the flight
+controller's `EK3_SRC{extnav_set}_POSXY` reads 6 (ExternalNav); while
+that parameter is unread no origin is sent.
 
 ### Pre-arm checks
 
@@ -172,9 +174,9 @@ scan lists as `blocked_bins`, and, with the flight controller's fresh
 takes off the floor (within 0.25 m of the ground). Set `PRX1_TYPE 2` and
 `AVOID_ENABLE` on the flight controller.
 
-## `nav.state`
+## `plugin.navigation.state`
 
-The agent publishes a `nav.state` event (5 Hz in `external_nav`, 1 Hz
+The agent publishes a `plugin.navigation.state` event (5 Hz in `external_nav`, 1 Hz
 otherwise):
 
 ```json
@@ -346,7 +348,7 @@ native helpers (`scripts/navigation-payloads.tsv`).
 
 | Slot | Purpose |
 |------|---------|
-| `cockpit.panel` | "Navigation" panel: the mode, the EKF source set, tracking health, odometry rate and pose age, the obstacle feed, the nearest obstacle and GPS; one line "No navigation state" when `nav.state` is stale |
+| `cockpit.panel` | "Navigation" panel: the mode, the EKF source set, tracking health, odometry rate and pose age, the obstacle feed, the nearest obstacle and GPS; one line "No navigation state" when `plugin.navigation.state` is stale |
 | `node.agent.page` | "Navigation" page in the drone's Agent tab, under Video and vision |
 | `flight.skill` | "Engage" cockpit toggle that engages / disengages the estimator |
 
@@ -362,7 +364,7 @@ mounted as (`ctx.mount.panelId`). The Agent page hosts:
   offset)
 - Flow health card (live OF metrics)
 - Pre-arm status (mode-aware check rows)
-- Navigation feed (the live `nav.state`: active EKF source set,
+- Navigation feed (the live `plugin.navigation.state`: active EKF source set,
   external-nav tracking, ODOMETRY and obstacle rates, nearest obstacle,
   GPS fix)
 - Fallback banner (fires when the estimator is degraded or failed

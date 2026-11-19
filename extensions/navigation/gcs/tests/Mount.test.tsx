@@ -20,17 +20,17 @@ describe("the bundle routes on the contribution it was mounted as", () => {
     const h = harness({ panelId: HEALTH_PANEL_ID });
     render(<Page ctx={h.ctx} firmware="ardupilot" />);
     expect(screen.getByTestId("vn-health-none").textContent).toBe("No navigation state");
-    act(() => h.emitEvent("nav.state", { ...NAV, ts_ms: T0 }));
+    act(() => h.emitEvent("plugin.navigation.state", { ...NAV, ts_ms: T0 }));
     expect(screen.queryByTestId("vn-health-none")).toBeNull();
     expect(screen.getByTestId("vn-nav-state").textContent).toContain("Set 3");
   });
 
-  it("the cockpit panel drops old numbers once nav.state goes stale", () => {
+  it("the cockpit panel drops old numbers once plugin.navigation.state goes stale", () => {
     vi.useFakeTimers();
     vi.setSystemTime(T0);
     const h = harness({ panelId: HEALTH_PANEL_ID });
     render(<Page ctx={h.ctx} firmware="ardupilot" />);
-    act(() => h.emitEvent("nav.state", { ...NAV, ts_ms: T0 }));
+    act(() => h.emitEvent("plugin.navigation.state", { ...NAV, ts_ms: T0 }));
     act(() => {
       vi.advanceTimersByTime(4000);
     });

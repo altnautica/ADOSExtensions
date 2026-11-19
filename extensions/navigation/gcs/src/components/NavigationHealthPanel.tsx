@@ -18,9 +18,9 @@ export interface NavigationHealthPanelProps {
 
 /**
  * The cockpit panel: what the aircraft holds position on, and how well.
- * The mode in use, then the `nav.state` rows (EKF source set, tracking,
+ * The mode in use, then the `plugin.navigation.state` rows (EKF source set, tracking,
  * odometry rate and pose age, obstacle feed, nearest obstacle, GPS). A
- * stale `nav.state` reads as one line instead of old numbers, because a
+ * stale `plugin.navigation.state` reads as one line instead of old numbers, because a
  * pilot glances at this panel in flight.
  */
 export function NavigationHealthPanel(props: NavigationHealthPanelProps): JSX.Element {

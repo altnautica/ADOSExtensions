@@ -26,6 +26,13 @@ in one extension.
 
 ### Changed
 
+- The navigation state is published on the shared topic
+  `plugin.navigation.state` (subscribe capability `telemetry.read`) instead
+  of `nav.state`, so other plugins such as Follow-Me may read it and only
+  Navigation may publish it. Needs ADOS Drone Agent 0.122.0 or later.
+- `SET_GPS_GLOBAL_ORIGIN` is sent only while the flight controller's
+  `EK3_SRC{extnav_set}_POSXY` reads 6 (ExternalNav); while that parameter is
+  unread no origin is sent.
 - The extension is `com.altnautica.navigation`, "ADOS Navigation"
   (`extensions/navigation`, binary `navigation`, release tags
   `navigation-v*`). An installed `com.altnautica.vision-nav` is uninstalled

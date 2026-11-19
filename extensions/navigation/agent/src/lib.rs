@@ -35,7 +35,7 @@
 //!   reads; [`source_set`] — EKF source-set switching;
 //!   [`nav_commands`] — the commands it sends.
 //! - [`obstacle`] — planar scan to `OBSTACLE_DISTANCE`.
-//! - [`nav_state`] — the `nav.state` event.
+//! - [`nav_state`] — the `plugin.navigation.state` event.
 //! - [`pre_arm`] — the mode-aware pre-arm gate ([`pre_arm_extnav`] for
 //!   `external_nav`).
 //! - [`health`] — the `navigation` heartbeat snapshot.

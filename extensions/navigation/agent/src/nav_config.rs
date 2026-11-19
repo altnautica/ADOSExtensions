@@ -23,7 +23,8 @@ pub struct ExternalNavConfig {
     pub pose_topic: String,
     /// EKF origin `[lat_deg, lon_deg, alt_m_amsl]`, sent as
     /// `SET_GPS_GLOBAL_ORIGIN` when the flight controller has none, is
-    /// disarmed, and GPS is not primary ([`crate::origin`]). Required in
+    /// disarmed, GPS is not primary, and `EK3_SRC{extnav_set}_POSXY` is 6
+    /// (ExternalNav) ([`crate::origin`]). Required in
     /// `external_nav` mode unless `gps_primary`.
     pub origin_lla: Option<[f64; 3]>,
     /// `ODOMETRY` rate cap in Hz.

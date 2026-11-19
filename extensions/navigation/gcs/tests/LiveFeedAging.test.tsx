@@ -41,9 +41,9 @@ describe("a payload carrying an old agent timestamp", () => {
     expect(screen.getByTestId("vn-companion-pill").textContent).not.toContain("Active");
   });
 
-  it("shows nav.state stale on first paint", () => {
+  it("shows plugin.navigation.state stale on first paint", () => {
     const h = mount();
-    act(() => h.emitEvent("nav.state", { ...NAV, ts_ms: T0 - 5000 }));
+    act(() => h.emitEvent("plugin.navigation.state", { ...NAV, ts_ms: T0 - 5000 }));
     expect(navStale()).toBe("true");
   });
 
@@ -85,7 +85,7 @@ describe("the host's delivery cadence", () => {
       const ts = Date.now() - 1000 - skewMs;
       act(() => {
         h.emitTelemetry("navigation", { ...SNAPSHOT, ts_ms: ts });
-        h.emitEvent("nav.state", { ...NAV, ts_ms: ts });
+        h.emitEvent("plugin.navigation.state", { ...NAV, ts_ms: ts });
         h.emitEvent("navigation.engage", { state: "idle", ts_ms: ts });
       });
     };
@@ -116,7 +116,7 @@ describe("the host's delivery cadence", () => {
     const h = mount();
     act(() => {
       h.emitTelemetry("navigation", { ...SNAPSHOT, ts_ms: T0 - 5000 });
-      h.emitEvent("nav.state", { ...NAV, ts_ms: T0 - 5000 });
+      h.emitEvent("plugin.navigation.state", { ...NAV, ts_ms: T0 - 5000 });
       h.emitEvent("navigation.engage", { state: "idle", ts_ms: T0 - 5000 });
     });
     expect(screen.getByTestId("vn-feed-stale")).toBeTruthy();
@@ -133,7 +133,7 @@ describe("the host's delivery cadence", () => {
           companionState: older ? "offline" : "active",
           ts_ms: ts,
         });
-        h.emitEvent("nav.state", { ...NAV, active_set: older ? 2 : 1, ts_ms: ts });
+        h.emitEvent("plugin.navigation.state", { ...NAV, active_set: older ? 2 : 1, ts_ms: ts });
         h.emitEvent("navigation.engage", { state: older ? "engaged" : "idle", ts_ms: ts });
       });
     };
@@ -162,7 +162,7 @@ describe("the host's delivery cadence", () => {
       const ts = Date.now() - 1000 - 2000;
       act(() => {
         h.emitTelemetry("navigation", { ...SNAPSHOT, ts_ms: ts });
-        h.emitEvent("nav.state", { ...NAV, ts_ms: ts });
+        h.emitEvent("plugin.navigation.state", { ...NAV, ts_ms: ts });
       });
     };
     deliver();

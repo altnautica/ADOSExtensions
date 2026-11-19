@@ -31,7 +31,7 @@ export interface NavigationTabProps {
    * pumping the telemetry transport. An override counts as live.
    */
   telemetryOverride?: NavigationTelemetry;
-  /** Optional `nav.state` override for tests. An override counts as live. */
+  /** Optional `plugin.navigation.state` override for tests. An override counts as live. */
   navStateOverride?: NavState;
 }
 

@@ -74,7 +74,7 @@ describe("live feed freshness", () => {
     render(<NavigationTab ctx={h.ctx} firmware="ardupilot" />);
     act(() => {
       h.emitTelemetry("navigation", LIVE_SNAPSHOT);
-      h.emitEvent("nav.state", LIVE_NAV);
+      h.emitEvent("plugin.navigation.state", LIVE_NAV);
     });
     const pill = screen.getByTestId("vn-companion-pill");
     expect(pill.textContent).toContain("Active");
@@ -108,7 +108,7 @@ describe("live feed freshness", () => {
 
     act(() => {
       h.emitTelemetry("navigation", LIVE_SNAPSHOT);
-      h.emitEvent("nav.state", LIVE_NAV);
+      h.emitEvent("plugin.navigation.state", LIVE_NAV);
     });
     expect(pill.textContent).toContain("Active");
     expect(screen.getByTestId("vn-telemetry-body").dataset.stale).toBe("false");

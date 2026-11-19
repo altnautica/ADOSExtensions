@@ -105,11 +105,11 @@ export interface PreArmReport {
 export type FirmwareType = "ardupilot" | "px4" | "betaflight" | "inav";
 
 /** The event topic the agent publishes the navigation feed state on. */
-export const NAV_STATE_TOPIC = "nav.state";
+export const NAV_STATE_TOPIC = "plugin.navigation.state";
 
 export type ExtnavHealth = "good" | "degraded" | "lost";
 
-/** The `nav.state` payload as the agent sends it (snake_case). */
+/** The `plugin.navigation.state` payload as the agent sends it (snake_case). */
 export interface RawNavState {
   mode?: string;
   active_set?: number | null;

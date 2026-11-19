@@ -9,7 +9,7 @@
 //!   and keeps the `navigation` health block and pre-arm report current.
 //! * The obstacle tick (at `obstacle.rate_hz`) sends `OBSTACLE_DISTANCE`
 //!   for each new scan.
-//! * The `nav.state` publisher reports both.
+//! * The `plugin.navigation.state` publisher reports both.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -163,17 +163,6 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                 }
             }
 
-            let origin_act = origin.tick(now, &fc, &task.cfg);
-            if origin_act.request {
-                task.send_msg(&build_request_origin(target)).await;
-            }
-            if let Some(lla) = origin_act.set {
-                eprintln!(
-                    "navigation: no EKF origin from the flight controller; sending origin_lla"
-                );
-                task.send_msg(&build_set_global_origin(target.0, lla)).await;
-            }
-
             if fc.boot_epoch != param_epoch {
                 param_epoch = fc.boot_epoch;
                 task.sinks
@@ -189,6 +178,17 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                 .lock()
                 .expect("fc param values lock")
                 .clone();
+
+            let origin_act = origin.tick(now, &fc, &task.cfg, &params);
+            if origin_act.request {
+                task.send_msg(&build_request_origin(target)).await;
+            }
+            if let Some(lla) = origin_act.set {
+                eprintln!(
+                    "navigation: no EKF origin from the flight controller; sending origin_lla"
+                );
+                task.send_msg(&build_set_global_origin(target.0, lla)).await;
+            }
             if last_param_request.is_none_or(|t| now - t >= PARAM_RETRY_NS) {
                 let missing: Vec<&String> = param_ids
                     .iter()
@@ -317,7 +317,7 @@ pub fn spawn_obstacle(
     })
 }
 
-/// Publish `nav.state`: 5 Hz in `external_nav`, 1 Hz otherwise.
+/// Publish `plugin.navigation.state`: 5 Hz in `external_nav`, 1 Hz otherwise.
 pub fn spawn_nav_state(
     ctx: &PluginContext,
     mode: Mode,

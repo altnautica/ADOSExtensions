@@ -297,7 +297,7 @@ describe("NavigationTab", () => {
     expect(screen.queryByTestId("vn-ardupilot-params")).toBeNull();
   });
 
-  it("renders the nav.state feed with symbol and word for tracking", () => {
+  it("renders the plugin.navigation.state feed with symbol and word for tracking", () => {
     const navState = normalizeNavState({
       mode: "external_nav",
       active_set: 1,
@@ -368,7 +368,7 @@ describe("NavigationTab", () => {
     expect(screen.getByTestId("vn-nav-pose-age").textContent).toBe("—");
   });
 
-  it("shows a waiting line before the first nav.state and drops junk fields", () => {
+  it("shows a waiting line before the first plugin.navigation.state and drops junk fields", () => {
     render(
       <NavigationTab
         ctx={fakeCtx()}
