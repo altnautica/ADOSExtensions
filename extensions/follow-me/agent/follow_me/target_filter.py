@@ -14,6 +14,8 @@ of a heavy dependency on small companion boards.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from typing import Any
 
 Mat = list[list[float]]
 
@@ -42,6 +44,25 @@ HUBER_CHI2 = 4.0
 # 3 Hz the third fix, 0.7 s on. Scattered outliers (range errors either side
 # of the subject) never agree and stay out.
 GATE_FORCE_AFTER = 3
+# A fix that comes REACQUIRE_GAP_S or more after the last one fused is a
+# re-acquisition: the tracker missed the subject for a while, or locked onto
+# it again. Over such a gap the filter's own spread admits a jump that only
+# a velocity the track never measured explains. A recorded forest follow
+# re-locked onto a tree 4 m short of a walker after a 0.95 s gap; the fix
+# passed the gate on the velocity spread four fixes had left, the estimate
+# came out walking toward the vehicle at 2.4 m/s, and the gate then kept
+# the walker's own next fix out. Such a fix is therefore measured against
+# what it may move the estimate by on its own: its noise, the estimate's
+# position spread and the subject's acceleration (ACCEL_SIGMA_MPS2) over
+# the gap, whatever velocity spread the track has. Beyond REACQUIRE_CHI2 of
+# that it jumped and is held out; the estimate predicts on. A fix that
+# agrees with the estimate again is fused (the jumped one was a false
+# lock); REACQUIRE_CONFIRM_FIXES jumped fixes in a row that agree with each
+# other start the estimate over on them (the subject is there, and the
+# estimate's velocity was wrong).
+REACQUIRE_GAP_S = 0.5
+REACQUIRE_CHI2 = GATE_CHI2
+REACQUIRE_CONFIRM_FIXES = 2
 # Rejected fixes agree when each lies within this many of its own sigmas of
 # the one before, plus the distance the subject can cover in between.
 _AGREE_SIGMAS = 3.0
@@ -160,6 +181,9 @@ class TargetFilter:
         self._sigma_meas: float = 0.0
         # The measurements gated out in a row (t, n, e, sigma), newest last.
         self._rejected: list[tuple[float, float, float, float]] = []
+        # The fixes held out in a row as jumped (t, n, e, sigma, covariance),
+        # newest last.
+        self._jumps: list[tuple[float, float, float, float, Cov2]] = []
         # The running means of the squared innovation along the line of
         # sight and of its predicted variance, over the fixes fused, and how
         # many fixes they average (see :attr:`scatter_ratio`).
@@ -240,6 +264,7 @@ class TargetFilter:
         self._t_meas = 0.0
         self._sigma_meas = 0.0
         self._rejected.clear()
+        self._jumps.clear()
         self._scatter_y2 = 0.0
         self._scatter_s = 0.0
         self._scatter_n = 0
@@ -268,13 +293,16 @@ class TargetFilter:
     def _rejected_agree(self) -> bool:
         """Whether the last GATE_FORCE_AFTER gated-out fixes agree with each
         other: a subject that moved, not scattered range errors."""
-        rej = self._rejected
-        if len(rej) < GATE_FORCE_AFTER:
-            return False
+        return len(self._rejected) >= GATE_FORCE_AFTER and self._agree(self._rejected)
+
+    def _agree(self, fixes: Sequence[tuple[Any, ...]]) -> bool:
+        """Whether each of ``fixes`` (t, n, e, sigma, ...) lies within
+        _AGREE_SIGMAS of the two fixes' sigmas of the one before, plus the
+        distance the subject can cover in between."""
         reach = self.max_speed_mps or _UNCAPPED_REACH_MPS
-        for (t0, n0, e0, s0), (t1, n1, e1, s1) in zip(rej, rej[1:]):
-            bound = _AGREE_SIGMAS * math.hypot(s0, s1) + reach * max(0.0, t1 - t0)
-            if math.hypot(n1 - n0, e1 - e0) > bound:
+        for a, b in zip(fixes, fixes[1:]):
+            bound = _AGREE_SIGMAS * math.hypot(a[3], b[3]) + reach * max(0.0, b[0] - a[0])
+            if math.hypot(b[1] - a[1], b[2] - a[2]) > bound:
                 return False
         return True
 
@@ -397,24 +425,19 @@ class TargetFilter:
         must never lock a real manoeuvre out: once :data:`GATE_FORCE_AFTER`
         outliers in a row agree with each other, the newest is fused with
         the position spread widened by the innovation, which pulls the
-        estimate onto the measurements again. ``gated=False`` fuses a
-        measurement already checked elsewhere (a re-acquire) as it is."""
+        estimate onto the measurements again. A fix after a gap (see
+        :data:`REACQUIRE_GAP_S`) that jumped is held out until the next
+        ones show which was right. ``gated=False`` fuses a measurement
+        already checked elsewhere (a re-acquire) as it is, or starts the
+        estimate over on it when it jumped."""
         if self._x is None:
-            self._x = [north, east, 0.0, 0.0]
-            v = _INIT_VEL_SIGMA_MPS * _INIT_VEL_SIGMA_MPS
-            self._p = [
-                [r[0][0], r[0][1], 0.0, 0.0],
-                [r[1][0], r[1][1], 0.0, 0.0],
-                [0.0, 0.0, v, 0.0],
-                [0.0, 0.0, 0.0, v],
-            ]
-            self._t = t
-            self._t_meas = t
-            self._sigma_meas = position_sigma(self._p)
-            self._rejected.clear()
+            self._restart(t, north, east, r)
             return True
         x, p = self._propagate(t)
         y = [north - x[0], east - x[1]]
+        surprise = self._reacquire_chi2(t, y, r)
+        if surprise is not None and surprise > REACQUIRE_CHI2:
+            return self._on_jump(t, north, east, r, gated=gated)
         s_inv = _innovation_inverse(p, r)
         if s_inv is None:
             return False
@@ -446,6 +469,7 @@ class TargetFilter:
             # (a re-acquire) is not range noise.
             self._note_scatter(p, r, y)
         self._rejected.clear()
+        self._jumps.clear()
         k = _mul(_mul(p, _HT), s_inv)
         self._x = [x[i] + k[i][0] * y[0] + k[i][1] * y[1] for i in range(4)]
         # Joseph-free form; P stays symmetric enough at this size, and is
@@ -458,6 +482,68 @@ class TargetFilter:
         self._t = max(self._t, t)
         self._t_meas = max(self._t_meas, t)
         self._sigma_meas = position_sigma(self._p)
+        return True
+
+    def _restart(self, t: float, north: float, east: float, r: Cov2) -> None:
+        """Start the estimate on one fix taken at ``t``, with no velocity and
+        a fresh track's velocity spread. The speed cap and the range scatter
+        measured so far are kept: they belong to the subject's class and to
+        the range cues, not to the track."""
+        v = _INIT_VEL_SIGMA_MPS * _INIT_VEL_SIGMA_MPS
+        self._x = [north, east, 0.0, 0.0]
+        self._p = [
+            [r[0][0], r[0][1], 0.0, 0.0],
+            [r[1][0], r[1][1], 0.0, 0.0],
+            [0.0, 0.0, v, 0.0],
+            [0.0, 0.0, 0.0, v],
+        ]
+        self._t = t
+        self._t_meas = t
+        self._sigma_meas = position_sigma(self._p)
+        self._rejected.clear()
+        self._jumps.clear()
+
+    def _reacquire_chi2(self, t: float, y: list[float], r: Cov2) -> float | None:
+        """For a fix at ``t``, ``y`` off the prediction, REACQUIRE_GAP_S or
+        more after the last fix fused: its squared Mahalanobis distance
+        against the fix's own covariance ``r``, the estimate's position
+        spread and the subject's acceleration over the gap, the velocity
+        spread left out (a jump only it explains is a velocity no fix has
+        shown yet). ``None`` for a fix with no gap before it."""
+        if t - self._t_meas < REACQUIRE_GAP_S:
+            return None
+        a = _process_noise(max(0.0, t - self._t))[0][0]
+        p = self._p
+        s_inv = _inv2(
+            [
+                [p[0][0] + a + r[0][0], p[0][1] + r[0][1]],
+                [p[1][0] + r[1][0], p[1][1] + a + r[1][1]],
+            ]
+        )
+        if s_inv is None:
+            return None
+        return y[0] * (s_inv[0][0] * y[0] + s_inv[0][1] * y[1]) + y[1] * (
+            s_inv[1][0] * y[0] + s_inv[1][1] * y[1]
+        )
+
+    def _on_jump(self, t: float, north: float, east: float, r: Cov2, *, gated: bool) -> bool:
+        """A fix that jumped; whether it was fused. It is held out until
+        REACQUIRE_CONFIRM_FIXES jumped fixes in a row agree, which then
+        start the estimate over (the oldest) and are fused in turn. A
+        re-acquire checked elsewhere (``gated=False``) starts the estimate
+        over on its own."""
+        if not gated:
+            self._restart(t, north, east, r)
+            return True
+        self._jumps.append((t, north, east, position_sigma([list(r[0]), list(r[1])]), r))
+        del self._jumps[:-REACQUIRE_CONFIRM_FIXES]
+        if len(self._jumps) < REACQUIRE_CONFIRM_FIXES or not self._agree(self._jumps):
+            return False
+        held = list(self._jumps)
+        t0, n0, e0, _s0, r0 = held[0]
+        self._restart(t0, n0, e0, r0)
+        for tk, nk, ek, _sk, rk in held[1:]:
+            self.update(tk, nk, ek, rk, gated=False)
         return True
 
     def _note_scatter(self, p: Mat, r: Cov2, y: list[float]) -> None:

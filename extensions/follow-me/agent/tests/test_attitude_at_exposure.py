@@ -100,12 +100,13 @@ def test_a_box_is_projected_through_the_attitude_at_its_exposure(
     assert at_exposure.range_m == pytest.approx(level.range_m, abs=1e-6)
 
     # Through the newer attitude the feet's ground intersection is off by
-    # metres, and the fused range by a metre.
+    # metres, and the fused range (the box-height cue holds it) by most of a
+    # metre.
     def ground(fix: Any) -> float:
         return next(c.range_m for c in fix.cues if c.kind == "ground")
 
     assert abs(ground(stale) - ground(level)) > 2.0, (ground(stale), ground(level))
-    assert abs(stale.range_m - level.range_m) > 0.8, (stale.range_m, level.range_m)
+    assert abs(stale.range_m - level.range_m) > 0.6, (stale.range_m, level.range_m)
 
 
 def test_a_sighting_is_measured_at_its_frames_exposure(monkeypatch: Any) -> None:

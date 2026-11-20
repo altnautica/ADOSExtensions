@@ -102,16 +102,19 @@ GOAL_DEADBAND_M = 0.5
 HOLD_DEADBAND_M = 0.2
 
 # The speed law. The pilot shapes every goal velocity within its profile's
-# limits (Normal: 1.0 m/s², 2.0 m/s³, a 0.5 s jerk ramp) and is the
-# authority on them: the plugin is not told the profile, and a Cine profile
-# simply shapes the command more slowly. The command slews at the Normal
-# profile's acceleration, so a catch-up or a stop is never slower than the
-# vehicle allows; the approach decelerates at 0.6 of it, looking ahead by
-# the shaper's lag, so the vehicle follows the ramp into the standoff
-# without overshooting it.
+# limits (Normal: 1.0 m/s², 2.0 m/s³, a 0.5 s jerk ramp; Sport 2.5 m/s²)
+# and is the authority on them: the plugin is not told the profile, and a
+# Cine profile simply shapes the command more slowly. The command slews at
+# the flight controller's own guided acceleration (ArduCopter WP_ACC
+# 2.5 m/s²), the most any profile flies, so the follow is never the slower
+# link in a catch-up or a stop: slewed at Normal's 1.0 m/s² it asked 0.4 m/s
+# 0.6 s and 0.8 m/s 1.1 s after engaging 4 m short of a walker, and a
+# faster profile still waited on it. The approach decelerates at 0.6 m/s²,
+# looking ahead by the shaper's lag, so the vehicle follows the ramp into
+# the standoff without overshooting it.
 APPROACH_GAIN_PER_S = 0.6
 APPROACH_DECEL_MPS2 = 0.6
-COMMAND_ACCEL_MPS2 = 1.0
+COMMAND_ACCEL_MPS2 = 2.5
 # The lag from a command to the vehicle's motion: the shaper's 0.5 s jerk
 # ramp and the command's own slew.
 APPROACH_LEAD_S = 0.7

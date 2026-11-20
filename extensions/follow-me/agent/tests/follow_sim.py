@@ -17,7 +17,11 @@ the pilot, its fixes drawn from a scripted subject with recorded noise.
   jitter a recorded forest follow measured with a standing subject) and,
   on 5 % of fixes, an outlier 2-6 m long or short (that run's 95th
   percentile was 3.5 m). The fix claims the 0.4 m sigma the range cues
-  claim.
+  claim. With ``box_jitter`` the range error is a monocular camera's
+  instead: the range read from the subject's box height, the box's height
+  off by that share (1 sigma), so the error grows with the range.
+* **Lag.** ``lag_s`` delays every goal before the pilot flies it (the
+  pilot's and the flight controller's response together).
 * **Detector.** Batches at ``fix_hz``; a fraction ``miss`` of them carry
   the subject as ``uncertain`` with no fresh box (the engine's tracker on a
   missed frame).
@@ -30,6 +34,7 @@ from __future__ import annotations
 import dataclasses
 import math
 import random
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -328,12 +333,24 @@ class _Pilot:
 
 
 def _fix(
-    rnd: random.Random, drone: Point, subject: Point, sigma: float, outliers: float, height: float
+    rnd: random.Random,
+    drone: Point,
+    subject: Point,
+    sigma: float,
+    outliers: float,
+    height: float,
+    box_jitter: float | None = None,
 ) -> projection.TargetFix:
     dn, de = subject[0] - drone[0], subject[1] - drone[1]
     r = math.hypot(dn, de)
     b = math.atan2(de, dn)
-    err = rnd.gauss(0.0, sigma)
+    if box_jitter is not None:
+        # The slant range is the subject's height over the box's angular
+        # height: a box off by a share k puts the slant range off by 1/(1+k).
+        slant = math.hypot(r, height) / max(0.2, 1.0 + rnd.gauss(0.0, box_jitter))
+        err = math.sqrt(max(0.0, slant * slant - height * height)) - r
+    else:
+        err = rnd.gauss(0.0, sigma)
     if rnd.random() < outliers:
         err += rnd.choice((-1.0, 1.0)) * rnd.uniform(2.0, 6.0)
     r_meas = max(0.5, r + err)
@@ -369,13 +386,23 @@ async def fly(
     miss_frames: tuple[int, ...] = (),
     profile: Profile = NORMAL,
     subject_brake: bool = False,
+    box_jitter: float | None = None,
+    lag_s: float = 0.0,
+    range_errors: dict[int, float] | None = None,
 ) -> Flight:
     """Fly the plugin for ``duration_s`` from ``start``, facing the subject,
     at the follow height. ``miss`` is the share of batches that miss the
     subject at random; ``miss_frames`` the batch numbers (from 1) that miss
     it besides. ``profile`` is the pilot's (Normal by default);
-    ``subject_brake`` flies the pilot's subject brake on the goals."""
+    ``subject_brake`` flies the pilot's subject brake on the goals;
+    ``box_jitter`` ranges the subject from its box height instead (see
+    :func:`_fix`); ``lag_s`` delays every goal before the pilot flies it;
+    ``range_errors`` maps batch numbers to the range error their fix
+    carries instead of a drawn one (metres along the line of sight,
+    negative nearer the vehicle; a false lock's box is a large one)."""
     rnd = random.Random(seed)
+    lagged: deque[dict[str, Any] | None] = deque()
+    lag_ticks = int(round(lag_s / DT))
     clock = _install_clock(monkeypatch)
     cfg = {
         "active": True,
@@ -421,9 +448,15 @@ async def fly(
         if t + 1e-9 >= next_fix:
             next_fix += 1.0 / fix_hz
             frame += 1
-            missed = frame > 1 and (rnd.random() < miss or frame in miss_frames)
-            if not missed:
-                pending[:] = [_fix(rnd, pilot.pos, here, range_sigma_m, outlier_share, pilot.z)]
+            fixed = (range_errors or {}).get(frame)
+            missed = fixed is None and frame > 1 and (rnd.random() < miss or frame in miss_frames)
+            if fixed is not None:
+                dn, de = here[0] - pilot.pos[0], here[1] - pilot.pos[1]
+                k = (math.hypot(dn, de) + fixed) / max(1e-6, math.hypot(dn, de))
+                seen = (pilot.pos[0] + dn * k, pilot.pos[1] + de * k)
+                pending[:] = [_fix(rnd, pilot.pos, seen, 0.0, 0.0, pilot.z)]
+            elif not missed:
+                pending[:] = [_fix(rnd, pilot.pos, here, range_sigma_m, outlier_share, pilot.z, box_jitter)]
             plugin._on_batch(
                 DetectionBatch(
                     model_id="coco-person",
@@ -448,7 +481,8 @@ async def fly(
         await plugin._tick()
         goal = ctx.flight.setpoints[-1] if len(ctx.flight.setpoints) > sent else None
         sent = len(ctx.flight.setpoints)
-        pilot.fly(goal)
+        lagged.append(goal)
+        pilot.fly(lagged.popleft() if len(lagged) > lag_ticks else None)
         states = _state_events(ctx)
         flight.t.append(t)
         flight.pos.append(pilot.pos)

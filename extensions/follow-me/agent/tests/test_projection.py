@@ -125,7 +125,7 @@ def test_box_height_cue_skips_a_clipped_box() -> None:
     )
     assert inside is not None
     assert abs(inside.range_m - intr.fy * 1.70 / 100.0) < 1e-9
-    assert abs(inside.sigma_m - 0.15 * inside.range_m) < 1e-9
+    assert abs(inside.sigma_m - 0.08 * inside.range_m) < 1e-9
     clipped = projection.box_height_cue(
         bbox_x=300, bbox_y=380, bbox_w=40, bbox_h=100, frame_width=640,
         frame_height=480, intr=intr, depression_rad=0.0,

@@ -4,7 +4,7 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
-## [Unreleased]
+## [0.6.0] (unreleased)
 
 ### Added
 
@@ -16,6 +16,41 @@ uses independent semantic versioning per extension.
   times `ts_ms` and `ts_sensor_ms`) and `predicted_ned` (the predicted
   subject position every 0.5 s over the next 5 s while there is an
   estimate), so a replay draws the lock box and the prediction from the run.
+
+### Fixed
+
+- A false re-lock after a detection gap is no longer fused into the
+  subject's velocity. A rendered forest walk re-locked onto a tree 4 m
+  short of the walker after 0.95 s without a box; the fix passed the outlier
+  gate on the velocity spread four earlier fixes had left, the estimate came
+  out walking toward the vehicle at 2.4 m/s, and the gate then kept the
+  walker's own next box out while the follow flew the phantom until the goal
+  sat by the vehicle. A fix 0.5 s or more after the last one fused is now
+  held out when it lies beyond 3 sigma of what its noise, the estimate's
+  position spread and a walker's acceleration over the gap explain (the
+  velocity spread left out). The estimate predicts on; the next fix that
+  agrees with it is fused, and two held-out fixes that agree with each other
+  start it over on them. A recovery's checked re-acquire that jumped starts
+  the estimate over on it instead of fusing the jump into a velocity.
+  Replayed closed-loop, the recorded boxes keep the walker inside 10.4 m,
+  named never more than 0.62 m nearer than it is (before: up to 17 m off,
+  named 8-9 m nearer).
+
+- A walker engaged from behind is closed on within 5 s. The command slewed
+  at the Normal profile's 1 m/s² and asked 0.4 m/s 0.6 s and 0.8 m/s 1.1 s
+  after engaging 4 m short of a walker; it now slews at the flight
+  controller's guided 2.5 m/s² and the pilot shapes it to its profile.
+  Flown 10 m behind a 1.4 m/s walker at the 6 m default, with box-height
+  range 5 % off, 30 % of frames missed and the pilot at 2.5-3 m/s²
+  answering 0.8 s late, the follow reaches the ±2 m band in 3.8-4.9 s
+  (5.6-6.4 s before), never closer than 5.1 m, and holds it.
+
+- The box-height range cue is fused at 8 % of the range, the error a
+  detector's boxes measured on that walk (7-8 % overall, 4.6-4.9 % frame to
+  frame), not 15 %: claimed twice as noisy as it is, a walker's speed came
+  out 18 % short a second into the track. A second of 10 Hz box-height fixes
+  now puts a 1.4 m/s walk at 1.34 m/s on average (0.52 m/s spread, what a
+  straight line through the fixes gets).
 
 ## [0.5.2] - 2026-11-20
 

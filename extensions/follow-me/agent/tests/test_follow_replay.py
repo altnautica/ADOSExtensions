@@ -13,7 +13,10 @@ checked is what the plugin asks for while the subject walks across the frame
 and the lock turns uncertain (frames 1063 to 1131):
 
 * every goal's yaw keeps the subject inside the camera's half field of view;
-* the subject's estimated speed stays at or under the person cap.
+* the subject's estimated speed stays at or under the person cap, and no
+  goal asks more than that cap plus what the speed law closes the true
+  range error at (the recorded vehicle trailed the subject by up to 5.7 m
+  past the standoff, which the follow catches up on).
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from follow_fakes import (
     _local_position,
     _make_plugin,
 )
+from follow_me.standoff import APPROACH_DECEL_MPS2, APPROACH_GAIN_PER_S, sqrt_law
 from follow_me.state import FOLLOW_STATE_TOPIC
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "follow_replay_mine_drift.json"
@@ -59,9 +63,15 @@ class _Replay:
         self.states: list[tuple[int, dict[str, Any]]] = []
         self._truth_t = [row[0] for row in data["truth"]]
 
-    def truth_bearing(self, t: float) -> float:
+    def _truth_row(self, t: float) -> list[float]:
         i = min(len(self._truth_t) - 1, bisect.bisect_left(self._truth_t, t))
-        return float(self.data["truth"][i][1])
+        return self.data["truth"][i]
+
+    def truth_bearing(self, t: float) -> float:
+        return float(self._truth_row(t)[1])
+
+    def truth_range(self, t: float) -> float:
+        return float(self._truth_row(t)[2])
 
     def window_goals(self) -> list[tuple[float, int, dict[str, Any]]]:
         return [g for g in self.goals if _FIRST_FRAME <= g[1] <= _LAST_FRAME]
@@ -169,5 +179,7 @@ async def test_the_subject_speed_stays_under_the_person_cap(monkeypatch: Any) ->
     ]
     assert speeds
     assert all(v <= cap + 1e-6 for _f, v in speeds), speeds
-    for _t, _frame, g in replay.window_goals():
-        assert math.hypot(g["vn"], g["ve"]) <= cap + 1e-6, g
+    standoff = float(replay.data["config"]["follow_distance_m"])
+    for t, _frame, g in replay.window_goals():
+        closing = sqrt_law(replay.truth_range(t) - standoff, APPROACH_GAIN_PER_S, APPROACH_DECEL_MPS2)
+        assert math.hypot(g["vn"], g["ve"]) <= cap + closing + 1e-6, (round(t, 2), closing, g)

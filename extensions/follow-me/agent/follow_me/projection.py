@@ -64,7 +64,12 @@ _AGL_SIGMA_BARO_M = 1.5
 # Proportional floor on the ground cue: pixel quantisation, lens distortion
 # and attitude error grow with range.
 _GROUND_SIGMA_FRAC = 0.05
-_BOX_SIGMA_FRAC = 0.15
+# The box-height cue's error, a share of the range: a rendered forest walk's
+# detector boxes were 7-8 % off the walker's true box height (1 sigma),
+# 4.6-4.9 % from one frame to the next. Claimed at 15 % the cue was fused
+# as twice as noisy as it is, and a walker's speed came out 18 % short a
+# second into the track (the velocity prior outweighed the fixes).
+_BOX_SIGMA_FRAC = 0.08
 _LIDAR_SIGMA_M = 0.05
 # A lidar return is accepted only within this fraction of the other cues.
 _LIDAR_GATE_FRAC = 0.25

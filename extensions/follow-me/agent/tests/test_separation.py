@@ -251,7 +251,7 @@ def test_newest_fixes_farther_than_the_estimate_do_not_relax_the_limit() -> None
 def test_a_cut_steps_only_along_the_line_of_sight() -> None:
     # Flying 2 m/s north toward a goal far ahead, the subject comes into
     # view 3.5 m ahead: the closing speed is cut in one tick (not at the
-    # 1 m/s² slew), the sideways part of the sidestep is still slewed.
+    # command's slew), the sideways part of the sidestep is still slewed.
     c = StandoffController()
     kw: dict[str, Any] = {
         "goal_ne": (30.0, 0.5),
@@ -271,8 +271,8 @@ def test_a_cut_steps_only_along_the_line_of_sight() -> None:
     dt = 0.05
     after = c.command(now=dt, subject_ne=(3.5, 0.0), **kw)
     assert c.limited
-    # Along the line of sight: down by 20 slew steps or more.
-    assert before.vn_mps - after.vn_mps >= 20.0 * COMMAND_ACCEL_MPS2 * dt
+    # Along the line of sight: down by 8 slew steps or more.
+    assert before.vn_mps - after.vn_mps >= 8.0 * COMMAND_ACCEL_MPS2 * dt
     # Its path no longer reaches the safe distance, ahead or beside.
     assert after.vn_mps <= 1.0
     # Sideways: one slew step at most.
@@ -462,11 +462,12 @@ async def test_the_named_range_error_does_not_set_the_pilot_brake_off_at_a_short
 
 
 # A jogger (2.5 m/s) followed at the default 6 m under the pilot's Sport
-# profile (2.5 m/s²), who stops dead. The speed law alone slews its
-# command at 1 m/s² and the vehicle comes over the subject; the guard cuts
-# the closing speed at once, which the pilot flies at Sport's limits. The
-# follow's own guard is flown alone, without the pilot's subject brake (a
-# pilot older than agent 0.118.0 has none).
+# profile (2.5 m/s²), who stops dead. The guard cuts the closing speed at
+# once, which the pilot flies at Sport's limits. The control is the speed
+# law alone with its command slewed at 1 m/s², as it was before it slewed
+# at the flight controller's 2.5 m/s²: the vehicle comes over the subject.
+# The follow's own guard is flown alone, without the pilot's subject brake
+# (a pilot older than agent 0.118.0 has none).
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fix_hz", [10.0, 6.0])
 async def test_a_jogger_stopping_dead_is_not_overflown_under_the_sport_profile(
@@ -496,6 +497,7 @@ async def test_a_jogger_stopping_dead_is_not_overflown_under_the_sport_profile(
 
     guarded = await least_ranges()
     monkeypatch.setattr(standoff, "keep_clear", lambda **kw: (kw["want_ne"], 0, False))
+    monkeypatch.setattr(standoff, "COMMAND_ACCEL_MPS2", 1.0)
     unguarded = await least_ranges()
     print(
         f"{fix_hz:g} Hz least range: guarded {[round(r, 2) for r in guarded]},"

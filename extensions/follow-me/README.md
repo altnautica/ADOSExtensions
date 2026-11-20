@@ -44,8 +44,8 @@ then on the agent runs a 20 Hz loop:
      orientation 25) while that reading is fresh, inside its own range and
      the vehicle is tilted under 30 degrees. Otherwise it uses the barometric
      height;
-   - **box height**: the slant range to a 1.70 m subject. It is used only
-     when the box clears every frame edge;
+   - **box height**: the slant range to a 1.70 m subject, its error taken as
+     8 % of the range. It is used only when the box clears every frame edge;
    - **lidar**: the planar scan return at the subject's bearing, from the
      optional `plugin.navigation.scan` topic. It is accepted only within
      25 % of the other cues.
@@ -55,7 +55,12 @@ then on the agent runs a 20 Hz loop:
    `person` at 5 m/s, a run on a trail; faster readings are range noise.
    Fixes beyond 3 sigma of the prediction are gated out, unless three in a
    row agree with each other (a real move). Other classes are not capped
-   there.
+   there. A fix 0.5 s or more after the last one fused (a re-acquired box)
+   is held out when it lies beyond 3 sigma of what its noise, the estimate's
+   position spread and the subject's acceleration over the gap explain, the
+   velocity spread left out: a false re-lock is not fused into a velocity.
+   The estimate predicts on; the next fix that agrees with it is fused, and
+   two such held-out fixes that agree with each other start it over there.
 5. It holds the agent pilot's motion lease and sends it a goal every tick
    (20 Hz). The goal carries the follow's complete desired velocity
    (`vel_mode` `command`); the pilot shapes it within the vehicle's
@@ -75,14 +80,15 @@ then on the agent runs a 20 Hz loop:
    - the velocity from a speed law: the subject's velocity (plus the orbit's
      tangential velocity) and a closing speed toward the point, full when
      far, ramping down at no more than 0.6 m/s² into the standoff and
-     nothing at it, changing by at most 1.0 m/s² per second and never above
-     `max_speed_mps`. Under range noise the subject's velocity, the range
-     error and the command are smoothed and the range error is corrected
-     only past a deadband, each scaled by the error the subject estimate
-     really carries (next to none on clean ranges, where the command is
-     still smoothed over 0.1 s), so noise does not swing the speed. A
-     standing subject is followed round a fixed centre with no velocity,
-     the point moving only past a 0.5 m deadband;
+     nothing at it, changing by at most 2.5 m/s² per second (the flight
+     controller's guided acceleration; the pilot shapes it to its own
+     profile) and never above `max_speed_mps`. Under range noise the
+     subject's velocity, the range error and the command are smoothed and
+     the range error is corrected only past a deadband, each scaled by the
+     error the subject estimate really carries (next to none on clean
+     ranges, where the command is still smoothed over 0.1 s), so noise does
+     not swing the speed. A standing subject is followed round a fixed
+     centre with no velocity, the point moving only past a 0.5 m deadband;
    - a yaw that turns toward the latest sighting's measured bearing (the
      estimate's bearing once no sighting is newer than 3 s) at no more than
      30°/s, with a deadband (6° round a standing subject, 2° otherwise), and
