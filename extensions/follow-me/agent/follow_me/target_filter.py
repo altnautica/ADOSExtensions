@@ -68,20 +68,28 @@ GATE_FORCE_AFTER = 3
 # passed the gate on the velocity spread four fixes had left, the estimate
 # came out walking toward the vehicle at 2.4 m/s, and the gate then kept
 # the walker's own next fix out. Such a fix is therefore measured against
-# what it may move the estimate by on its own: its noise, the estimate's
-# position spread and the subject's acceleration (ACCEL_SIGMA_MPS2) over
-# the gap, whatever velocity spread the track has. Beyond REACQUIRE_CHI2 of
-# that it jumped and is held out; the estimate predicts on. A fix that
-# agrees with the estimate again is fused (the jumped one was a false
-# lock); REACQUIRE_CONFIRM_FIXES jumped fixes in a row that agree with each
+# what it may move the estimate by on its own: what the subject can reach
+# off the prediction over the gap, accelerating at SUBJECT_ACCEL_MAX_MPS2
+# (½·a·gap²; a brisk walker's start or stop), plus the fix's noise and the
+# estimate's position spread, whatever velocity spread the track has.
+# Beyond REACQUIRE_CHI2 of that it jumped and is held out; the estimate
+# predicts on. A fix that agrees with the estimate again is fused (the
+# jumped one was a false lock); REACQUIRE_CONFIRM_FIXES jumped fixes in a
+# row, each within _AGREE_WITHIN_S of the one before, that agree with each
 # other start the estimate over on them (the subject is there, and the
-# estimate's velocity was wrong).
+# estimate's velocity was wrong). A bound that grew with the gap's fourth
+# power (a Gaussian acceleration) let a box 8 m beyond the walker through
+# after 1.9 s; the estimate ran on at the speed cap and the follow chased it.
 REACQUIRE_GAP_S = 0.5
 REACQUIRE_CHI2 = GATE_CHI2
 REACQUIRE_CONFIRM_FIXES = 2
+SUBJECT_ACCEL_MAX_MPS2 = 1.5
 # Rejected fixes agree when each lies within this many of its own sigmas of
-# the one before, plus the distance the subject can cover in between.
+# the one before, plus the distance the subject can cover in between, and
+# comes at most _AGREE_WITHIN_S after it (a fix held out seconds ago says
+# nothing about the newest).
 _AGREE_SIGMAS = 3.0
+_AGREE_WITHIN_S = 1.0
 # The reach used for a subject class with no speed cap, m/s.
 _UNCAPPED_REACH_MPS = 5.0
 # The range scatter (see :attr:`TargetFilter.scatter_ratio`) averages about
@@ -200,6 +208,10 @@ class TargetFilter:
         # The fixes held out in a row as jumped (t, n, e, sigma, covariance),
         # newest last.
         self._jumps: list[tuple[float, float, float, float, Cov2]] = []
+        # How many times the estimate started over (a first fix, a jump the
+        # fixes after it confirmed, a re-acquire that jumped): what the
+        # follow smoothed from the old estimate no longer applies.
+        self.restarts = 0
         # The running means of the squared innovation along the line of
         # sight and of its predicted variance, over the fixes fused, and how
         # many fixes they average (see :attr:`scatter_ratio`).
@@ -309,6 +321,9 @@ class TargetFilter:
             [0.0, 0.0, 0.0, v],
         ]
         self._t = max(self._t, t)
+        # A hold is a break: fixes held out before it confirm nothing after.
+        self._rejected.clear()
+        self._jumps.clear()
 
     def _rejected_agree(self) -> bool:
         """Whether the last GATE_FORCE_AFTER gated-out fixes agree with each
@@ -321,7 +336,10 @@ class TargetFilter:
         distance the subject can cover in between."""
         reach = self.max_speed_mps or _UNCAPPED_REACH_MPS
         for a, b in zip(fixes, fixes[1:]):
-            bound = _AGREE_SIGMAS * math.hypot(a[3], b[3]) + reach * max(0.0, b[0] - a[0])
+            dt = b[0] - a[0]
+            if dt > _AGREE_WITHIN_S:
+                return False
+            bound = _AGREE_SIGMAS * math.hypot(a[3], b[3]) + reach * max(0.0, dt)
             if math.hypot(b[1] - a[1], b[2] - a[2]) > bound:
                 return False
         return True
@@ -574,28 +592,35 @@ class TargetFilter:
         self._sigma_meas = position_sigma(self._p)
         self._rejected.clear()
         self._jumps.clear()
+        self.restarts += 1
 
     def _reacquire_chi2(self, t: float, y: list[float], r: Cov2) -> float | None:
         """For a fix at ``t``, ``y`` off the prediction, REACQUIRE_GAP_S or
-        more after the last fix fused: its squared Mahalanobis distance
-        against the fix's own covariance ``r``, the estimate's position
-        spread and the subject's acceleration over the gap, the velocity
-        spread left out (a jump only it explains is a velocity no fix has
-        shown yet). ``None`` for a fix with no gap before it."""
-        if t - self._t_meas < REACQUIRE_GAP_S:
+        more after the last fix fused: the squared Mahalanobis distance of
+        what lies beyond the subject's reach over the gap (½·a·gap² at
+        SUBJECT_ACCEL_MAX_MPS2), against the fix's own covariance ``r`` and
+        the estimate's position spread, the velocity spread left out (a jump
+        only it explains is a velocity no fix has shown yet). ``None`` for a
+        fix with no gap before it."""
+        gap = t - self._t_meas
+        if gap < REACQUIRE_GAP_S:
             return None
-        a = _process_noise(max(0.0, t - self._t))[0][0]
+        n = math.hypot(y[0], y[1])
+        if n <= 1e-9:
+            return 0.0
+        k = max(0.0, n - 0.5 * SUBJECT_ACCEL_MAX_MPS2 * gap * gap) / n
+        ex = (y[0] * k, y[1] * k)
         p = self._p
         s_inv = _inv2(
             [
-                [p[0][0] + a + r[0][0], p[0][1] + r[0][1]],
-                [p[1][0] + r[1][0], p[1][1] + a + r[1][1]],
+                [p[0][0] + r[0][0], p[0][1] + r[0][1]],
+                [p[1][0] + r[1][0], p[1][1] + r[1][1]],
             ]
         )
         if s_inv is None:
             return None
-        return y[0] * (s_inv[0][0] * y[0] + s_inv[0][1] * y[1]) + y[1] * (
-            s_inv[1][0] * y[0] + s_inv[1][1] * y[1]
+        return ex[0] * (s_inv[0][0] * ex[0] + s_inv[0][1] * ex[1]) + ex[1] * (
+            s_inv[1][0] * ex[0] + s_inv[1][1] * ex[1]
         )
 
     def _on_jump(self, t: float, north: float, east: float, r: Cov2, *, gated: bool) -> bool:

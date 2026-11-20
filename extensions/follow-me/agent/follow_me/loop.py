@@ -616,6 +616,11 @@ class FollowLoopMixin:
     ) -> dict[str, Any]:
         agl, _src = self._agl(now)
         dt = self._geometry_dt(cfg, now)
+        if self._filter.restarts != self._restarts_seen:
+            # The estimate started over: the pace and the command smoothed
+            # from the old one (a phantom's speed) no longer apply.
+            self._restarts_seen = self._filter.restarts
+            self._standoff.reset()
         # A standing subject is followed round a fixed centre, with no
         # velocity: range noise no longer moves the goal.
         ref = self._still.reference((x[0], x[1], x[2], x[3]))
@@ -701,13 +706,43 @@ class FollowLoopMixin:
         # fixes' range in for a moment does not move it, and a step toward
         # the vehicle ends standing within STILL_STEP_FIXES fixes); a moving
         # one's estimate and the newest fixes' range.
+        # The worst case the hard guard keeps the safe distance from: the
+        # nearer of the estimate flown on and its undecayed prediction (on a
+        # coast a subject coming toward the vehicle keeps coming), or a
+        # standing subject's centre. (The newest fixes' range, which a run
+        # of range outliers drags in, is the soft guard's.)
+        standoff_m = cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m
+        raw = self._filter.predicted(now)
+        if ref.still:
+            # A standing subject's centre: its estimate swings a metre on
+            # range noise, and a step toward the vehicle shows in the newest
+            # fixes' range first.
+            cands = [((tn, te), (0.0, 0.0))]
+        else:
+            cands = [((x[0], x[1]), (x[2], x[3]))]
+            if raw is not None:
+                cands.append(((raw[0][0], raw[0][1]), (raw[0][2], raw[0][3])))
+        guard_ne, guard_v = min(cands, key=lambda c: math.hypot(c[0][0] - dn, c[0][1] - de))
+        nearest_v = guard_v
+        guard_near = self._subject_motion.near_range(now)
+        guard_pace: tuple[float, float] = (tvn, tve)
+        # On a coast, also a sigma of the velocity's own error faster toward
+        # the vehicle (a walk the estimate puts 10 % slow closes a metre in
+        # five seconds), and no credit for the pace fed forward, which
+        # decays with the coast.
+        coast_sigma = 0.0 if ref.still else self._filter.coast_spread_m(now)
+        gr = math.hypot(guard_ne[0] - dn, guard_ne[1] - de)
+        if coast_sigma > 0.0 and raw is not None and gr > 1e-6:
+            un, ue = (guard_ne[0] - dn) / gr, (guard_ne[1] - de) / gr
+            toward = math.sqrt(max(0.0, 0.5 * (raw[1][2][2] + raw[1][3][3])))
+            guard_v = (guard_v[0] - toward * un, guard_v[1] - toward * ue)
+            guard_pace = guard_v
         if ref.still:
             near = None
             keep_ne, keep_v = (tn, te), (0.0, 0.0)
         else:
-            near = self._subject_motion.near_range(now)
-            keep_ne, keep_v = (x[0], x[1]), (x[2], x[3])
-        standoff_m = cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m
+            near = guard_near
+            keep_ne, keep_v = guard_ne, nearest_v
         cmd = self._standoff.command(
             now=now,
             goal_ne=(g.north_m, g.east_m),
@@ -725,13 +760,16 @@ class FollowLoopMixin:
             near_m=near,
             range_sigma_m=range_sigma,
             scatter_weight=self._filter.scatter_weight,
-            coast_sigma_m=0.0 if ref.still else self._filter.coast_spread_m(now),
+            coast_sigma_m=coast_sigma,
+            guard_ne=guard_ne,
+            guard_v_ne=guard_v,
+            guard_pace_v_ne=guard_pace,
         )
         # The pilot keeps the subject's body clear by the goal's subject
         # point and this error: the estimate's own, or what the newest fixes
         # put it short by when they put the subject nearer, bounded so the
         # distance the pilot keeps stays inside the standoff.
-        short = 0.0 if near is None else math.hypot(tn - dn, te - de) - near
+        short = 0.0 if near is None else math.hypot(keep_ne[0] - dn, keep_ne[1] - de) - near
         subject_sigma = pilot_subject_sigma(standoff_m, max(range_sigma, short / SEPARATION_SIGMAS))
         return {
             "kind": kind,
@@ -744,7 +782,7 @@ class FollowLoopMixin:
             "vel_mode": VEL_MODE_COMMAND,
             "yaw": cmd.yaw_rad,
             "yaw_rate": None,
-            "subject_ne": [tn, te],
+            "subject_ne": [keep_ne[0], keep_ne[1]],
             "subject_sigma_m": subject_sigma,
             "max_speed_mps": cfg.max_speed_mps,
             "candidates": ring,

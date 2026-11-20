@@ -174,10 +174,14 @@ SMOOTH_MAX_S = 2.0
 #   the subject whatever the horizontal distance.
 # * The closing speed toward the subject (relative to the subject's own
 #   motion) is limited so the vehicle can still stop, decelerating at
-#   SEPARATION_DECEL_MPS2 after the shaper's lag, short of the clear
+#   SEPARATION_DECEL_MPS2 after SEPARATION_LAG_S, short of the clear
 #   distance, and so it does not reach it inside SEPARATION_HORIZON_S
 #   (the predicted conflict); within it the vehicle backs away at
-#   SEPARATION_PUSH_PER_S per metre.
+#   SEPARATION_PUSH_PER_S per metre. The brake is the slowest any pilot
+#   profile flies a goal at (Cine's 0.6 m/s²; Normal 1.0, Sport 2.5) and
+#   the lag the pilot's and the flight controller's response (0.8 s) and
+#   its jerk ramp; the closing speed is the faster of the command's and
+#   the vehicle's own, which trails the command by that lag.
 # * Only velocities whose path past the subject reaches the clear distance
 #   are limited: of the closest admissible ones, a sidestep that passes
 #   the subject on one side is taken when it asks less change than
@@ -187,7 +191,8 @@ SAFE_DISTANCE_M = 2.5
 SAFE_STANDOFF_MARGIN_M = 2.0
 SEPARATION_SIGMAS = 2.0
 SEPARATION_MARGIN_MAX_M = 1.5
-SEPARATION_DECEL_MPS2 = 0.8
+SEPARATION_DECEL_MPS2 = 0.6
+SEPARATION_LAG_S = 1.0
 SEPARATION_GAIN_PER_S = 1.0
 SEPARATION_HORIZON_S = 3.0
 SEPARATION_PUSH_PER_S = 1.0
@@ -307,6 +312,7 @@ def keep_clear(
     side: int,
     near_m: float | None = None,
     coast_sigma_m: float = 0.0,
+    vehicle_v_ne: tuple[float, float] | None = None,
 ) -> tuple[tuple[float, float], int, bool]:
     """The velocity nearest ``want_ne`` that keeps the vehicle clear of the
     subject, the side it passes on (0: none) and whether it was limited.
@@ -321,7 +327,8 @@ def keep_clear(
     :meth:`follow_me.speed_limit.SubjectMotion.near_range`), kept clear in
     place of the estimate's when it is nearer. ``coast_sigma_m`` is the
     spread the estimate gained since its last fix, which widens the clear
-    distance further."""
+    distance further, and ``vehicle_v_ne`` the vehicle's own velocity: it
+    closes on the subject at the faster of that and the command."""
     r = math.hypot(rel_ne[0], rel_ne[1])
     sn, se = subject_v_ne
     if r > 1e-6:
@@ -354,7 +361,9 @@ def keep_clear(
         half = 0.5 * math.pi
     else:
         closing = (command_v_ne[0] - sn) * un + (command_v_ne[1] - se) * ue
-        ahead = r - clear - max(0.0, closing) * APPROACH_LEAD_S
+        if vehicle_v_ne is not None:
+            closing = max(closing, (vehicle_v_ne[0] - sn) * un + (vehicle_v_ne[1] - se) * ue)
+        ahead = r - clear - max(0.0, closing) * SEPARATION_LAG_S
         cap = min(
             sqrt_law(ahead, SEPARATION_GAIN_PER_S, SEPARATION_DECEL_MPS2),
             (r - clear) / SEPARATION_HORIZON_S,
@@ -643,6 +652,9 @@ class StandoffController:
         range_sigma_m: float = 0.0,
         scatter_weight: float = 0.0,
         coast_sigma_m: float = 0.0,
+        guard_ne: tuple[float, float] | None = None,
+        guard_v_ne: tuple[float, float] = (0.0, 0.0),
+        guard_pace_v_ne: tuple[float, float] | None = None,
     ) -> Command:
         """``latch_goal``: hold the goal through moves inside the deadband (a
         standing subject followed at a fixed angle; an orbit's goal moves on
@@ -716,8 +728,31 @@ class StandoffController:
             near_m=near_m,
             coast_sigma_m=coast_sigma_m,
         )
-        want = _clamp_len(want[0], want[1], max_speed_mps)
         rel = (subject_ne[0] - drone_ne[0], subject_ne[1] - drone_ne[1])
+        if guard_ne is not None:
+            # The hard guard: whatever the follow's own smoothing and
+            # standing-subject logic make of the subject, the vehicle stops
+            # short of the safe distance (keep_clear with no range-noise
+            # margin, widened on a coast) from the subject's worst case: the nearest of the estimate as
+            # flown, its undecayed prediction and a standing subject's
+            # centre, at that one's velocity (credited the pace fed forward,
+            # ``guard_pace_v_ne``, only while that is not in doubt).
+            want, side, hard = keep_clear(
+                rel_ne=(guard_ne[0] - drone_ne[0], guard_ne[1] - drone_ne[1]),
+                subject_v_ne=guard_v_ne,
+                pace_v_ne=guard_v_ne if guard_pace_v_ne is None else guard_pace_v_ne,
+                want_ne=want,
+                command_v_ne=self._v,
+                range_sigma_m=0.0,
+                standoff_m=standoff_m,
+                side=self._side,
+                coast_sigma_m=coast_sigma_m,
+                vehicle_v_ne=drone_v_ne,
+            )
+            if hard:
+                self._side, limited = side, True
+                rel = (guard_ne[0] - drone_ne[0], guard_ne[1] - drone_ne[1])
+        want = _clamp_len(want[0], want[1], max_speed_mps)
         r = math.hypot(rel[0], rel[1])
         un, ue = (rel[0] / r, rel[1] / r) if r > 1e-6 else (0.0, 0.0)
         if self._cut and not limited:

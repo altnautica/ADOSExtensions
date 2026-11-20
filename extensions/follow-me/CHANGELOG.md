@@ -19,55 +19,70 @@ uses independent semantic versioning per extension.
 
 ### Fixed
 
-- A false re-lock after a detection gap is no longer fused into the
-  subject's velocity. A rendered forest walk re-locked onto a tree 4 m
-  short of the walker after 0.95 s without a box; the fix passed the outlier
-  gate on the velocity spread four earlier fixes had left, the estimate came
-  out walking toward the vehicle at 2.4 m/s, and the gate then kept the
-  walker's own next box out while the follow flew the phantom until the goal
-  sat by the vehicle. A fix 0.5 s or more after the last one fused is now
-  held out when it lies beyond 3 sigma of what its noise, the estimate's
-  position spread and a walker's acceleration over the gap explain (the
-  velocity spread left out). The estimate predicts on; the next fix that
-  agrees with it is fused, and two held-out fixes that agree with each other
-  start it over on them. A recovery's checked re-acquire that jumped starts
-  the estimate over on it instead of fusing the jump into a velocity.
-  Replayed closed-loop, the recorded boxes keep the walker inside 10.4 m,
-  named never more than 0.62 m nearer than it is (before: up to 17 m off,
-  named 8-9 m nearer).
+Against 0.5.2, flown in simulation with box-height range (5 % off), the
+pilot at the flight controller's guided 2.5 m/s² answering 0.8 s late and
+its own subject brake off (the follow's guard alone), at a 6 m set
+distance, the least true horizontal separation over 20-200 noise draws:
 
-- A walker engaged from behind is closed on within 5 s. The command slewed
-  at the Normal profile's 1 m/s² and asked 0.4 m/s 0.6 s and 0.8 m/s 1.1 s
-  after engaging 4 m short of a walker; it now slews at the flight
-  controller's guided 2.5 m/s² and the pilot shapes it to its profile.
-  Flown 10 m behind a 1.4 m/s walker at the 6 m default, with box-height
-  range 5 % off, 30 % of frames missed and the pilot at 2.5-3 m/s²
-  answering 0.8 s late, the follow reaches the ±2 m band in 3.8-4.9 s
-  (5.6-6.4 s before), never closer than 5.1 m, and holds it.
+| Case | 0.5.2 | 0.6.0 |
+| --- | --- | --- |
+| Two boxes 8 m beyond the walker after a 1.7 s gap, 3 Hz | 0.04 m | 4.7 m |
+| The same after 1.9 s, 6 Hz / 10 Hz | 0.60 / 1.59 m | 5.4 / 5.6 m |
+| Lead, jogger 2.5 m/s, 2.9 s unsure, 3 Hz / 10 Hz | 0.86 / 1.58 m | 3.1 / 4.4 m |
+| Lead, walker, 5 s unsure (lost), 10 Hz | 0.02 m | 3.7 m |
+| Side, jogger, 2.9 s unsure, 3 Hz | 4.0 m | 5.1 m |
+| A box 4 m short on a five-fix track, then 3 s unsure | 2.73 m | 5.2 m |
+| A walker turning straight back (1.5 m/s²), 10 Hz | 0.00 m | 0.01 m |
 
-- The box-height range cue is fused at 8 % of the range, the error a
-  detector's boxes measured on that walk (7-8 % overall, 4.6-4.9 % frame to
-  frame), not 15 %: claimed twice as noisy as it is, a walker's speed came
-  out 18 % short a second into the track. A second of 10 Hz box-height fixes
-  now puts a 1.4 m/s walk at 1.34 m/s on average (0.52 m/s spread, what a
-  straight line through the fixes gets).
+A walker who turns straight back at the vehicle from the standoff still
+passes under it, as in 0.5.2: no follow at a 6 m standoff keeps the
+horizontal range open against that with monocular range and the pilot's
+lag. The 3.4 m follow height floor keeps the rotors a metre over the head.
 
-- A coast no longer carries the vehicle onto the subject. Through an
-  unsure spell the follow flew the prediction at full speed: on a walk five
-  fixes had measured (to 1.5-2 m/s), a correct box ranged 2.8 m long and
-  three unsure seconds sent the vehicle 0.3 m from the walker. With no fix
-  fused for three of the track's usual fix intervals (at least 0.5 s: a
-  few missed frames still ride on the prediction), the velocity flown on
-  now decays, on 2 s for a velocity known to 0.5 m/s and the sooner the
-  less it is known (1.5 s on a long track, 0.23 s on five fixes), the
-  estimate running on by that decaying velocity; and the distance kept
-  clear of the subject widens by two sigmas of the spread the estimate
-  gained over the coast, up to 1 m inside the set distance, every closing
-  speed let through stopping short of it at the flight controller's
-  2.5 m/s² after 0.8 s. Over 200 noise draws of that sequence the vehicle
-  keeps at least 4.18 m from the walker at a 6 m set distance with a false
-  re-lock in it and 4.75 m without (before: 0.31 m, three draws under 3 m),
-  and the catch-up above is unchanged.
+- A box after a detection gap that lies beyond where the subject can be is
+  held out, not fused into a velocity: a fix 0.5 s or more after the last
+  one fused counts as jumped when it lies three sigmas of its noise and the
+  estimate's position spread past what the subject reaches from the
+  prediction at 1.5 m/s² (a tree locked 4 m short of a forest walker after
+  0.95 s had turned the estimate toward the vehicle at 2.4 m/s; boxes 8 m
+  beyond, after 1.9 s, ran it on at the 5 m/s cap). The next fix that
+  agrees with the estimate is fused; two jumped fixes under a second apart
+  that agree start the estimate over on them; held-out fixes do not outlast
+  a hold. Three outliers in a row that agree, and a recovery's re-acquire
+  that jumped, start the estimate over too, so a phantom's velocity is not
+  kept, and the follow drops the pace it smoothed from the old estimate.
+  Replayed closed-loop, the recorded forest boxes never name the walker
+  more than 0.8 m nearer than it is (8-9 m before).
+
+- A coast (no fix for three of the track's usual fix intervals, at least
+  0.5 s) lets the velocity flown on decay, on 2 s for a velocity known to
+  0.5 m/s and sooner the less it is known (0.23 s on five fixes).
+
+- A hard guard keeps the 2.5 m safe distance from the subject's worst
+  case: the nearer of the estimate flown on and its undecayed prediction (a
+  subject coming toward the vehicle keeps coming through a coast), or a
+  standing subject's centre; on a coast widened by two sigmas of the
+  spread gained (up to 1 m inside the set distance) and taking the subject
+  a sigma of its velocity's error faster toward the vehicle. Both guards
+  take the faster of the command's closing speed and the vehicle's own,
+  and brake at 0.6 m/s² (the slowest profile's goal brake; 0.8 before)
+  after 1.0 s (0.7 before). The goal point never lies nearer that worst
+  case than the set distance less 1 m, and a recovery that loses a subject
+  coming toward the vehicle backs away from its prediction instead of
+  holding for a vantage.
+
+- A walker engaged from behind is closed on within 5 s: the command slews
+  at the flight controller's guided 2.5 m/s² (the Normal profile's 1 m/s²
+  before; the pilot shapes it to its profile). 10 m behind a 1.4 m/s
+  walker with 30 % of frames missed: the ±2 m band in 3.8-4.9 s (5.6-6.4 s
+  before), never nearer than 5.1 m.
+
+- The box-height cue is weighed at 14 % of the range against the ground
+  cue (the detector's 8 % and a real person's 12 % height and posture
+  spread round the 1.70 m it assumes; 15 % before), and the subject filter
+  fuses each fix with the frame-to-frame part only, so a second of 10 Hz
+  box-height fixes puts a 1.4 m/s walk at 1.34 m/s on average (it came out
+  18 % short).
 
 ## [0.5.2] - 2026-11-20
 

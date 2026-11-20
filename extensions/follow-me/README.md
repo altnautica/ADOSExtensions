@@ -54,17 +54,19 @@ then on the agent runs a 20 Hz loop:
    The velocity estimate is capped by the subject's detector class: a
    `person` at 5 m/s, a run on a trail; faster readings are range noise.
    Fixes beyond 3 sigma of the prediction are gated out, unless three in a
-   row agree with each other (a real move). Other classes are not capped
-   there. A fix 0.5 s or more after the last one fused (a re-acquired box)
-   is held out when it lies beyond 3 sigma of what its noise, the estimate's
-   position spread and the subject's acceleration over the gap explain, the
-   velocity spread left out: a false re-lock is not fused into a velocity.
-   The estimate predicts on; the next fix that agrees with it is fused, and
-   two such held-out fixes that agree with each other start it over there.
-   With no fix fused for three of the track's usual fix intervals (at
-   least 0.5 s: a coast), the velocity the follow flies on decays: on 2 s
-   for a velocity known to 0.5 m/s, the sooner the less the fixes have
-   pinned it.
+   row agree with each other (a real move): the estimate then starts over
+   on them, its velocity theirs. Other classes are not capped there. A fix
+   0.5 s or more after the last one fused (a re-acquired box) is held out
+   when it lies beyond three sigmas of the fix's noise and the estimate's
+   position spread past what the subject can reach over the gap (1.5 m/s²
+   from the prediction): a false re-lock, short of the subject or beyond
+   it, is not fused into a velocity. The estimate predicts on; the next fix
+   that agrees with it is fused, and two such held-out fixes, under a
+   second apart, that agree with each other start it over there. Held-out
+   fixes do not outlast a hold. With no fix fused for three of the track's
+   usual fix intervals (at least 0.5 s: a coast), the velocity the follow
+   flies on decays: on 2 s for a velocity known to 0.5 m/s, the sooner the
+   less the fixes have pinned it.
 5. It holds the agent pilot's motion lease and sends it a goal every tick
    (20 Hz). The goal carries the follow's complete desired velocity
    (`vel_mode` `command`); the pilot shapes it within the vehicle's
@@ -114,13 +116,23 @@ then on the agent runs a 20 Hz loop:
    On a coast it widens by two sigmas of the spread the estimate gained,
    up to 1 m inside the standoff.
    Toward the subject the velocity is held to what still stops short of
-   the clear distance, a path that passes it on one side is kept, and
-   within it the vehicle backs away; the cut in the closing speed is not
-   slewed, the rest of the change is, and once the cut ends the command
+   the clear distance, braking at 0.6 m/s² (the slowest profile's goal
+   brake) a second after the cut, at the faster of the command's closing
+   speed and the vehicle's own; a path that passes it on one side is kept,
+   and within it the vehicle backs away; the cut in the closing speed is
+   not slewed, the rest of the change is, and once the cut ends the command
    goes on from the vehicle's own velocity away from the subject. The
-   newest fixes' range is kept clear of when it is nearer
-   than the estimate's, which trails a subject that turns back. A subject
-   who turns straight back at the vehicle from the standoff can still pass
+   newest fixes' range is kept clear of when it is nearer than the
+   estimate's, which trails a subject that turns back. On top, a hard guard
+   keeps the 2.5 m safe distance (widened on a coast) from the subject's
+   worst case: the nearer of the estimate flown on and its undecayed
+   prediction (a coasting subject coming toward the vehicle keeps coming),
+   or a standing subject's centre, with the newest fixes' range, and on a
+   coast a sigma of its velocity's error faster toward the vehicle. The
+   goal point never lies nearer that worst case than the standoff less
+   1 m, and a recovery that loses a subject coming toward the vehicle backs
+   away from its prediction rather than hold for a vantage. A subject who
+   turns straight back at the vehicle from the standoff can still pass
    under it: range noise takes half a second to a second of fixes to show
    the turn, and the vehicle about as long to stop at the pilot's profile.
    The follow height keeps the rotors at least 1 m above the subject then.

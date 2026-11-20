@@ -140,6 +140,11 @@ async def test_the_recorded_false_relock_does_not_bring_the_goal_onto_the_vehicl
     # more than 1 m nearer than it is and the walker stays inside 10.5 m,
     # the detector's reach there; fused as any other fix, the tree had it
     # 4 m and more nearer, and the vehicle hung back 12-17 m behind.
+    # more than 1 m nearer than it is and the walker stays inside 11 m
+    # (about the detector's 10.5 m reach there; the coast's guard holds the
+    # vehicle a little back while the walker is unseen); fused as any other
+    # fix, the tree had it 4 m and more nearer, and the vehicle hung back
+    # 12-25 m behind.
     errors, unsure = _recorded_frames(ranging)
 
     async def flights() -> list[tuple[float, float]]:
@@ -176,6 +181,7 @@ async def test_the_recorded_false_relock_does_not_bring_the_goal_onto_the_vehicl
     print(f"{ranging} with the rule: (named short, farthest) {[(round(a, 2), round(b, 2)) for a, b in held]}")
     print(f"{ranging} without it: {[(round(a, 2), round(b, 2)) for a, b in fused]}")
     assert all(short <= 1.0 and far <= 10.5 for short, far in held)
+    assert all(short <= 1.0 and far <= 11.0 for short, far in held)
     # The control (the box-height ranging also had the outlier gate catch
     # the tree on some flights).
     assert sum(short >= 4.0 and far >= 12.0 for short, far in fused) >= 3
