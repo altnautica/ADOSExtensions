@@ -761,7 +761,9 @@ class FollowLoopMixin:
         lock_state: str,
         predicted_bbox: dict[str, object] | None = None,
     ) -> None:
-        pred = self._filter.predicted(now)
+        # Flown on the coast: a velocity no fix has confirmed for a while
+        # decays (see TargetFilter.coasted).
+        pred = self._filter.coasted(now)
         if pred is None:
             await self._hold(
                 cfg, now, phase=PHASE_HOLDING, hold_reason=HOLD_NO_RANGE, lock_state=lock_state
