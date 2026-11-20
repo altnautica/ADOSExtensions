@@ -16,22 +16,31 @@
 //!   horizontal accuracy (`h_acc`, when the receiver sends it) is within
 //!   [`GPS_MAX_H_ACC_MM`]. A jammed or spoofed receiver often keeps its 3D
 //!   fix while its accuracy collapses, so the fix type alone is not enough.
-//!   Once the GPS has been usable, no usable GPS for 2 s with a good pose
-//!   switches to the external-nav set; usable GPS for 10 s switches back.
-//!   A GPS that has not yet reported a usable fix since boot (a receiver
-//!   still starting) is not a lost one: the flight controller stays on its
-//!   boot GPS set and its pre-arm checks wait for the fix. Armed, the
-//!   switch back to GPS also waits until the flight controller has an EKF
-//!   origin, or the external pose is lost for 1 s: the first GPS fusion
-//!   sets the origin in flight, and the flight controller then flew to its
-//!   held guided target displaced by the change of frame (21 m at up to
-//!   7.8 m/s through trees, past a trunk at 0.32 m).
+//!   The external-nav set takes over after no usable GPS for 2 s with a
+//!   good pose, and only when the flight controller has reported an EKF
+//!   origin: EKF3 sets its origin from the GPS (`readGpsData` on every
+//!   fusion step, whichever set is active), so an origin first set after
+//!   the takeover leaves the external-nav position in a frame of its own,
+//!   and the switch back resets the EKF position by the whole offset. A
+//!   receiver still starting at boot (or a fix that flickers for a tick)
+//!   sets no origin, so nothing takes over then and the flight controller
+//!   arms on its GPS set. Usable GPS for 10 s switches back, and so does
+//!   any usable GPS once the pose has been lost for 1 s. Armed, a switch
+//!   to GPS happens only when the origin already existed at the takeover,
+//!   and the first command after a start (the flight controller's set is
+//!   then unknown) waits for the vehicle to be disarmed. In Guided with a
+//!   position target ArduPilot slews the target through an EKF position
+//!   reset (`ModeGuided::move_vehicle_on_ekf_reset`), so the vehicle flies
+//!   the offset: a boot takeover without an origin and a return in flight
+//!   flew 21 m at up to 7.8 m/s past a trunk at 0.32 m.
+//!   When a switch is withheld the machine says why ([`SourceHold`]).
 //!
 //! Pure: the caller feeds time, health, whether the GPS is usable
 //! ([`gps_usable`]) and the flight controller's state ([`Fc`]) each tick
 //! and sends the command the machine returns. Nothing is commanded before
 //! the first decision, so the flight controller keeps its boot source set
-//! until the inputs say otherwise.
+//! until the inputs say otherwise. A new flight-controller boot starts the
+//! machine over.
 
 use crate::external_nav::ExtnavHealth;
 use crate::nav_config::ExternalNavConfig;
@@ -56,8 +65,40 @@ pub fn gps_usable(fix_type: u8, h_acc_mm: Option<u32>) -> bool {
 pub struct Fc {
     /// The last heartbeat reported the vehicle armed.
     pub armed: bool,
-    /// The flight controller has reported an EKF origin.
+    /// The flight controller has reported an EKF origin this boot.
     pub origin: bool,
+    /// The flight-controller boot the reports belong to.
+    pub boot_epoch: u64,
+}
+
+impl Fc {
+    pub fn of(s: &crate::fc_nav::FcNavSnapshot) -> Self {
+        Self {
+            armed: s.armed,
+            origin: s.origin_seen,
+            boot_epoch: s.boot_epoch,
+        }
+    }
+}
+
+/// Why the GPS-primary machine holds the set it is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceHold {
+    /// The GPS is lost and the pose is good, but the flight controller has
+    /// no EKF origin: the external-nav set does not take over.
+    NoOrigin,
+    /// On the external-nav set with the pose lost and no usable GPS: no
+    /// source to switch to; the flight controller's EKF failsafe acts.
+    NoPosition,
+}
+
+impl SourceHold {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NoOrigin => "no_origin",
+            Self::NoPosition => "no_position",
+        }
+    }
 }
 
 /// The state machine.
@@ -65,9 +106,12 @@ pub struct SourceSwitch {
     extnav_set: u8,
     fallback_set: u8,
     gps_primary: bool,
+    epoch: Option<u64>,
     active: Option<u8>,
-    /// The GPS has been usable since boot (GPS primary).
-    gps_seen: bool,
+    /// The flight controller had an EKF origin when the external-nav set
+    /// took over (GPS primary).
+    takeover_origin: bool,
+    hold: Option<SourceHold>,
     tracked_since: Option<i64>,
     good_since: Option<i64>,
     lost_since: Option<i64>,
@@ -81,8 +125,10 @@ impl SourceSwitch {
             extnav_set: cfg.extnav_set,
             fallback_set: cfg.fallback_set,
             gps_primary: cfg.gps_primary,
+            epoch: None,
             active: None,
-            gps_seen: false,
+            takeover_origin: false,
+            hold: None,
             tracked_since: None,
             good_since: None,
             lost_since: None,
@@ -96,6 +142,11 @@ impl SourceSwitch {
         self.active
     }
 
+    /// Why the current set is held although a switch was wanted.
+    pub fn hold(&self) -> Option<SourceHold> {
+        self.hold
+    }
+
     /// Advance one tick. `health` is `None` when no fresh pose exists
     /// (treated as lost); `gps_ok` is [`gps_usable`] for this tick. Returns
     /// the set to command on a change.
@@ -106,6 +157,18 @@ impl SourceSwitch {
         gps_ok: bool,
         fc: Fc,
     ) -> Option<u8> {
+        if self.epoch != Some(fc.boot_epoch) {
+            // A new boot: the flight controller is back on its boot set
+            // with no origin, so what the machine knew no longer holds.
+            self.epoch = Some(fc.boot_epoch);
+            self.active = None;
+            self.takeover_origin = false;
+            self.tracked_since = None;
+            self.good_since = None;
+            self.lost_since = None;
+            self.fix_since = None;
+            self.no_fix_since = None;
+        }
         let health = health.unwrap_or(ExtnavHealth::Lost);
         since(&mut self.good_since, health == ExtnavHealth::Good, now_ns);
         since(
@@ -117,19 +180,29 @@ impl SourceSwitch {
         since(&mut self.fix_since, gps_ok, now_ns);
         since(&mut self.no_fix_since, !gps_ok, now_ns);
         let held = |s: Option<i64>, d: i64| s.is_some_and(|t| now_ns - t >= d);
-        self.gps_seen |= gps_ok;
+        let lost = held(self.lost_since, EXTNAV_LOST_NS);
+        self.hold = None;
 
         let want = if self.gps_primary {
             let on_extnav = self.active == Some(self.extnav_set);
+            // A switch to GPS while armed moves the vehicle by the EKF
+            // reset unless the external-nav frame was aligned to an origin.
+            let gps_safe = !fc.armed || (on_extnav && self.takeover_origin);
             if on_extnav {
-                let in_frame = !fc.armed || fc.origin || held(self.lost_since, EXTNAV_LOST_NS);
-                (held(self.fix_since, GPS_BACK_NS) && in_frame).then_some(self.fallback_set)
-            } else if self.gps_seen
-                && health == ExtnavHealth::Good
-                && held(self.no_fix_since, GPS_LOST_NS)
-            {
-                Some(self.extnav_set)
-            } else if self.active.is_none() && gps_ok {
+                let back = held(self.fix_since, GPS_BACK_NS) || (lost && gps_ok);
+                if lost && !gps_ok {
+                    self.hold = Some(SourceHold::NoPosition);
+                }
+                (back && gps_safe).then_some(self.fallback_set)
+            } else if health == ExtnavHealth::Good && held(self.no_fix_since, GPS_LOST_NS) {
+                if fc.origin {
+                    self.takeover_origin = true;
+                    Some(self.extnav_set)
+                } else {
+                    self.hold = Some(SourceHold::NoOrigin);
+                    None
+                }
+            } else if self.active.is_none() && gps_ok && gps_safe {
                 Some(self.fallback_set)
             } else {
                 None
@@ -137,10 +210,10 @@ impl SourceSwitch {
         } else {
             let on_extnav = self.active == Some(self.extnav_set);
             if on_extnav {
-                held(self.lost_since, EXTNAV_LOST_NS).then_some(self.fallback_set)
+                lost.then_some(self.fallback_set)
             } else if held(self.tracked_since, EXTNAV_TRACKED_NS) {
                 Some(self.extnav_set)
-            } else if self.active.is_none() && held(self.lost_since, EXTNAV_LOST_NS) {
+            } else if self.active.is_none() && lost {
                 Some(self.fallback_set)
             } else {
                 None
@@ -193,6 +266,17 @@ mod tests {
     const GROUND: Fc = Fc {
         armed: false,
         origin: true,
+        boot_epoch: 1,
+    };
+    /// Disarmed, no EKF origin yet.
+    const BOOTING: Fc = Fc {
+        origin: false,
+        ..GROUND
+    };
+    /// Armed, with an EKF origin.
+    const FLYING: Fc = Fc {
+        armed: true,
+        ..GROUND
     };
 
     fn run_gps(
@@ -316,56 +400,119 @@ mod tests {
         })
     }
 
+    const GOOD: Option<ExtnavHealth> = Some(ExtnavHealth::Good);
+
     /// The logged forest follow take: a good lidar pose from boot, the GPS
-    /// receiver fixing only later (here 6 s in), then armed. The receiver
-    /// still starting is not a lost fix: nothing but the GPS set is
-    /// commanded, so the flight controller never arms on external nav
-    /// without an EKF origin. (The take switched to set 2 before the fix
-    /// and back to set 1 in flight 19.6 s into the run; the flight
-    /// controller then flew 21 m to its displaced guided target.)
+    /// receiver fixing only later (here 6 s in) and the EKF origin after
+    /// that, then armed. No origin, no takeover: nothing but the GPS set is
+    /// commanded. (The take switched to set 2 before the fix and back to
+    /// set 1 in flight 19.6 s into the run; the flight controller then
+    /// flew 21 m to its displaced guided target.)
     #[test]
     fn gps_primary_waits_for_the_receiver_to_start_before_external_nav_takes_over() {
         let mut s = bench_switch();
-        let good = Some(ExtnavHealth::Good);
-        assert!(run(&mut s, 0, 6 * S, good, 0).is_empty());
-        assert_eq!(run(&mut s, 6 * S, 16 * S, good, 6), vec![(6 * S, 1)]);
-        let armed = Fc {
-            armed: true,
-            origin: true,
-        };
-        assert!(run_fc(&mut s, 16 * S, 30 * S, good, 6, None, armed).is_empty());
+        assert!(run_fc(&mut s, 0, 6 * S, GOOD, 0, None, BOOTING).is_empty());
+        assert_eq!(s.hold(), Some(SourceHold::NoOrigin));
+        let fixed = run_fc(&mut s, 6 * S, 12 * S, GOOD, 6, None, BOOTING);
+        assert_eq!(fixed, vec![(6 * S, 1)]);
+        assert!(run_fc(&mut s, 12 * S, 16 * S, GOOD, 6, None, GROUND).is_empty());
+        assert!(run_fc(&mut s, 16 * S, 30 * S, GOOD, 6, None, FLYING).is_empty());
+        assert_eq!(s.hold(), None);
     }
 
-    /// On external nav while armed and without an EKF origin, the GPS
-    /// returning does not switch back in flight; landed (disarmed) it does,
-    /// and so does losing the pose, the external set's only position.
+    /// A 3D fix for one 100 ms tick at boot, then none: no origin, so the
+    /// external-nav set never takes over.
     #[test]
-    fn armed_without_an_origin_the_return_to_gps_waits_for_the_ground() {
-        let good = Some(ExtnavHealth::Good);
-        let flying = Fc {
-            armed: true,
+    fn a_one_tick_fix_flicker_at_boot_does_not_hand_over_to_external_nav() {
+        let mut s = bench_switch();
+        assert_eq!(run_fc(&mut s, 0, S / 10, GOOD, 3, None, BOOTING), vec![(0, 1)]);
+        assert!(run_fc(&mut s, S / 10, 10 * S, GOOD, 0, None, BOOTING).is_empty());
+        assert_eq!(s.active(), Some(1));
+        assert_eq!(s.hold(), Some(SourceHold::NoOrigin));
+    }
+
+    /// Armed without an origin (the machine never takes over then) the GPS
+    /// lost keeps the GPS set and says why; once the origin is there the
+    /// external-nav set takes over aligned to it, and the GPS back for 10 s
+    /// returns in flight: an origin first seen after a takeover cannot
+    /// happen.
+    #[test]
+    fn the_takeover_waits_for_the_origin_and_the_return_follows_it() {
+        let mut s = bench_switch();
+        let armed_no_origin = Fc {
             origin: false,
+            ..FLYING
         };
-        let taken_over = || {
-            let mut s = bench_switch();
-            assert_eq!(
-                run_fc(&mut s, 0, S / 2, good, 6, None, flying),
-                vec![(0, 1)]
-            );
-            let take = run_fc(&mut s, S / 2, 3 * S, good, 0, None, flying);
-            assert_eq!(take, vec![(5 * S / 2, 2)]);
-            s
+        run_fc(&mut s, 0, S, GOOD, 6, None, GROUND);
+        assert!(run_fc(&mut s, S, 5 * S, GOOD, 0, None, armed_no_origin).is_empty());
+        assert_eq!(s.hold(), Some(SourceHold::NoOrigin));
+        let take = run_fc(&mut s, 5 * S, 6 * S, GOOD, 0, None, FLYING);
+        assert_eq!(take, vec![(5 * S, 2)]);
+        let back = run_fc(&mut s, 6 * S, 17 * S, GOOD, 6, None, FLYING);
+        assert_eq!(back, vec![(16 * S, 1)]);
+    }
+
+    /// On external nav in flight with a degraded pose: it stays until the
+    /// GPS has been back for 10 s, then returns; it is never stranded.
+    #[test]
+    fn a_degraded_pose_in_flight_returns_to_gps_once_it_is_back() {
+        let mut s = bench_switch();
+        run_fc(&mut s, 0, S, GOOD, 6, None, FLYING);
+        assert_eq!(s.active(), None, "a start while armed commands nothing");
+        assert_eq!(run_fc(&mut s, S, 4 * S, GOOD, 0, None, FLYING), vec![(3 * S, 2)]);
+        let degraded = Some(ExtnavHealth::Degraded);
+        assert!(run_fc(&mut s, 4 * S, 30 * S, degraded, 0, None, FLYING).is_empty());
+        let back = run_fc(&mut s, 30 * S, 41 * S, degraded, 6, None, FLYING);
+        assert_eq!(back, vec![(40 * S, 1)]);
+    }
+
+    /// On external nav in flight, the pose lost with no usable GPS: nothing
+    /// to switch to (the flight controller's EKF failsafe acts), and the
+    /// machine says so; a usable GPS then returns at once.
+    #[test]
+    fn a_pose_lost_in_flight_without_gps_holds_and_says_no_position() {
+        let mut s = bench_switch();
+        run_fc(&mut s, 0, S, GOOD, 6, None, GROUND);
+        assert_eq!(run_fc(&mut s, S, 4 * S, GOOD, 0, None, FLYING), vec![(3 * S, 2)]);
+        assert!(run_fc(&mut s, 4 * S, 8 * S, None, 0, None, FLYING).is_empty());
+        assert_eq!(s.hold(), Some(SourceHold::NoPosition));
+        let back = run_fc(&mut s, 8 * S, 9 * S, None, 6, None, FLYING);
+        assert_eq!(back, vec![(8 * S, 1)]);
+    }
+
+    /// A new flight-controller boot (it comes back on its GPS set with no
+    /// origin) starts the machine over.
+    #[test]
+    fn a_flight_controller_reboot_starts_the_machine_over() {
+        let mut s = bench_switch();
+        run_fc(&mut s, 0, S, GOOD, 6, None, GROUND);
+        assert_eq!(run_fc(&mut s, S, 4 * S, GOOD, 0, None, GROUND), vec![(3 * S, 2)]);
+        let rebooted = Fc {
+            boot_epoch: 2,
+            ..BOOTING
         };
-        let mut s = taken_over();
-        assert!(run_fc(&mut s, 3 * S, 30 * S, good, 6, None, flying).is_empty());
-        assert_eq!(
-            run_fc(&mut s, 30 * S, 31 * S, good, 6, None, GROUND),
-            vec![(30 * S, 1)]
-        );
-        let mut s = taken_over();
-        assert!(run_fc(&mut s, 3 * S, 20 * S, good, 6, None, flying).is_empty());
-        let lost = run_fc(&mut s, 20 * S, 22 * S, None, 6, None, flying);
-        assert_eq!(lost, vec![(21 * S, 1)]);
+        assert!(run_fc(&mut s, 4 * S, 10 * S, GOOD, 0, None, rebooted).is_empty());
+        assert_eq!(s.active(), None);
+        assert_eq!(s.hold(), Some(SourceHold::NoOrigin));
+        let fixed = run_fc(&mut s, 10 * S, 11 * S, GOOD, 6, None, rebooted);
+        assert_eq!(fixed, vec![(10 * S, 1)]);
+    }
+
+    /// The pipeline feeds the machine the flight controller's armed state,
+    /// origin and boot from its sink.
+    #[test]
+    fn the_flight_controller_state_comes_from_its_sink() {
+        let sink = crate::fc_nav::FcNavSink::default();
+        sink.on_heartbeat(false, 0);
+        let booting = Fc::of(&sink.snapshot(0));
+        assert_eq!(booting, Fc { boot_epoch: 1, ..BOOTING });
+        sink.on_origin();
+        sink.on_heartbeat(true, S);
+        assert_eq!(Fc::of(&sink.snapshot(S)), FLYING);
+        // Silence long enough for a reboot: a new boot, no origin.
+        sink.on_heartbeat(false, 60 * S);
+        let rebooted = Fc::of(&sink.snapshot(60 * S));
+        assert_eq!(rebooted, Fc { boot_epoch: 2, ..BOOTING });
     }
 
     #[test]

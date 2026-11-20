@@ -6,10 +6,12 @@
 //! ```json
 //! {"mode": "external_nav", "active_set": 1, "extnav_health": "good",
 //!  "odom_rate_hz": 30.0, "last_reset_counter": 0, "obstacle_rate_hz": 10.0,
-//!  "min_obstacle_m": 3.2, "gps_fix": 0}
+//!  "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null}
 //! ```
 //!
-//! Fields a mode does not produce are `null`.
+//! Fields a mode does not produce are `null`. `source_hold` names why the
+//! GPS-primary source-set machine holds its set (`no_origin`,
+//! `no_position`; [`crate::source_set::SourceHold`]).
 
 use rmpv::Value;
 
@@ -28,6 +30,7 @@ pub struct NavState {
     pub obstacle_rate_hz: Option<f32>,
     pub min_obstacle_m: Option<f32>,
     pub gps_fix: u8,
+    pub source_hold: Option<&'static str>,
 }
 
 impl NavState {
@@ -50,6 +53,10 @@ impl NavState {
             (Value::from("obstacle_rate_hz"), f(self.obstacle_rate_hz)),
             (Value::from("min_obstacle_m"), f(self.min_obstacle_m)),
             (Value::from("gps_fix"), Value::from(self.gps_fix)),
+            (
+                Value::from("source_hold"),
+                self.source_hold.map_or(Value::Nil, Value::from),
+            ),
         ])
     }
 }
@@ -150,6 +157,7 @@ mod tests {
             obstacle_rate_hz: Some(10.0),
             min_obstacle_m: Some(3.25),
             gps_fix: 0,
+            source_hold: Some("no_origin"),
         };
         let v = s.to_value();
         assert_eq!(field(&v, "mode").as_str(), Some("external_nav"));
@@ -159,8 +167,9 @@ mod tests {
         assert_eq!(field(&v, "last_reset_counter").as_u64(), Some(2));
         assert_eq!(field(&v, "min_obstacle_m").as_f64(), Some(3.25));
         assert_eq!(field(&v, "gps_fix").as_u64(), Some(0));
+        assert_eq!(field(&v, "source_hold").as_str(), Some("no_origin"));
         let Value::Map(e) = &v else { unreachable!() };
-        assert_eq!(e.len(), 8);
+        assert_eq!(e.len(), 9);
     }
 
     #[test]

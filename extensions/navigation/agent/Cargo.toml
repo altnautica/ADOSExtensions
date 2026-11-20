@@ -10,7 +10,7 @@
 # of the hot path; this crate only reads the camchain.yaml it produces.
 [package]
 name = "navigation"
-version = "1.0.0"
+version = "1.0.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

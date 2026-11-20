@@ -101,14 +101,17 @@ until accepted):
   1 s switches to `fallback_set` (the flight controller's optical-flow
   set); tracked (good or degraded) for 3 s switches back.
 - `gps_primary: true`: `fallback_set` (GPS) while the GPS is usable (a 3D
-  fix whose reported horizontal accuracy, when sent, is within 5 m). Once
-  the GPS has been usable, no usable GPS for 2 s with a good pose switches
-  to `extnav_set`; a receiver that has not reported a usable fix since
-  boot is still starting, not lost, so nothing switches before it. Usable
-  for 10 s switches back; armed, only once the flight controller reports
-  an EKF origin (or the pose is lost for 1 s), because the first GPS
-  fusion sets the origin in flight and the flight controller then flies to
-  its held target in the new frame.
+  fix whose reported horizontal accuracy, when sent, is within 5 m). No
+  usable GPS for 2 s with a good pose switches to `extnav_set`, but only
+  once the flight controller reports an EKF origin: EKF3 sets its origin
+  from the GPS whichever set is active, and an origin first set after the
+  takeover would leave the external position in a frame of its own (a
+  receiver still starting, or a one-tick fix, sets none). Usable for 10 s
+  switches back, and with the pose lost for 1 s any usable GPS does.
+  Armed, a switch to GPS happens only when the origin existed at the
+  takeover, and the first command after a start waits for the vehicle to
+  be disarmed: in Guided a position reset moves the vehicle by the offset.
+  A new flight-controller boot starts the machine over.
 
 ### EKF origin
 
@@ -187,11 +190,16 @@ otherwise):
 ```json
 {"mode": "external_nav", "active_set": 1, "extnav_health": "good",
  "odom_rate_hz": 30.0, "last_reset_counter": 0, "obstacle_rate_hz": 10.0,
- "min_obstacle_m": 3.2, "gps_fix": 0}
+ "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null}
 ```
 
-Fields a mode does not produce are `null`. The Navigation page shows it
-as the navigation feed card, and the cockpit panel shows it in flight.
+Fields a mode does not produce are `null`. `source_hold` says why the
+GPS-primary source set is held: `no_origin` (a lost GPS is not handed to
+external navigation without an EKF origin) or `no_position` (on external
+navigation with the pose lost and no usable GPS; nothing to switch to, the
+flight controller's EKF failsafe acts). The Navigation page shows the
+state as the navigation feed card, and the cockpit panel shows it in
+flight.
 
 ## LiDAR SLAM and the live map
 

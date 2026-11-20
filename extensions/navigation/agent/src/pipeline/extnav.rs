@@ -35,7 +35,7 @@ use crate::nav_state::{AgeWindow, RateMeter, NAV_STATE_TOPIC};
 use crate::obstacle::{sectorise, Ground, ObstacleFilter};
 use crate::origin::OriginRule;
 use crate::pre_arm::{ExtnavPreArmInputs, PreArmGate, PreArmInputs};
-use crate::source_set::{gps_usable, Fc, SourceSwitch};
+use crate::source_set::{gps_usable, Fc, SourceHold, SourceSwitch};
 
 const SECOND: i64 = 1_000_000_000;
 const ACK_WAIT_NS: i64 = SECOND;
@@ -94,6 +94,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
         let gate = PreArmGate::default();
         let mut builder = OdometryBuilder::default();
         let mut switch = SourceSwitch::new(&task.cfg);
+        let mut last_hold: Option<SourceHold> = None;
         let mut odom_rate = RateMeter::new(RATE_WINDOW_NS);
         let mut pose_age = AgeWindow::default();
         let mut last_seq = 0u64;
@@ -137,11 +138,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
             }
 
             let gps_ok = gps_usable(fc.gps_fix, fc.gps_h_acc_mm);
-            let fc_state = Fc {
-                armed: fc.armed,
-                origin: fc.origin_seen,
-            };
-            if let Some(set) = switch.update(now, health, gps_ok, fc_state) {
+            if let Some(set) = switch.update(now, health, gps_ok, Fc::of(&fc)) {
                 eprintln!("navigation: EKF source set -> {set}");
                 task.sinks.fc_nav.clear_source_set_ack();
                 pending = Some(PendingSet {
@@ -149,6 +146,12 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                     sent_at: None,
                     tries: 0,
                 });
+            }
+            if switch.hold() != last_hold {
+                last_hold = switch.hold();
+                if let Some(h) = last_hold {
+                    eprintln!("navigation: EKF source set held: {}", h.as_str());
+                }
             }
             if let Some(p) = pending.as_mut() {
                 let due = p.sent_at.is_none_or(|t| now - t >= ACK_WAIT_NS);
@@ -254,6 +257,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
             let rate = odom_rate.rate_hz(now);
             task.shared.update_state(|s| {
                 s.active_set = switch.active();
+                s.source_hold = switch.hold().map(SourceHold::as_str);
                 s.extnav_health = health;
                 s.odom_rate_hz = Some(rate);
                 s.last_reset_counter = Some(builder.reset_counter());

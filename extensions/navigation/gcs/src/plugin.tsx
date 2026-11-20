@@ -46,7 +46,7 @@ function renderTree(ctx: PluginContext): void {
 
 definePlugin({
   id: "com.altnautica.navigation",
-  version: "1.0.0",
+  version: "1.0.1",
   locale: FLAT_LOCALE,
   async mount(ctx) {
     const host = ensureRootEl();
