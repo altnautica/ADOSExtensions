@@ -16,13 +16,22 @@
 //!   horizontal accuracy (`h_acc`, when the receiver sends it) is within
 //!   [`GPS_MAX_H_ACC_MM`]. A jammed or spoofed receiver often keeps its 3D
 //!   fix while its accuracy collapses, so the fix type alone is not enough.
-//!   No usable GPS for 2 s with a good pose switches to the external-nav
-//!   set; usable GPS for 10 s switches back.
+//!   Once the GPS has been usable, no usable GPS for 2 s with a good pose
+//!   switches to the external-nav set; usable GPS for 10 s switches back.
+//!   A GPS that has not yet reported a usable fix since boot (a receiver
+//!   still starting) is not a lost one: the flight controller stays on its
+//!   boot GPS set and its pre-arm checks wait for the fix. Armed, the
+//!   switch back to GPS also waits until the flight controller has an EKF
+//!   origin, or the external pose is lost for 1 s: the first GPS fusion
+//!   sets the origin in flight, and the flight controller then flew to its
+//!   held guided target displaced by the change of frame (21 m at up to
+//!   7.8 m/s through trees, past a trunk at 0.32 m).
 //!
-//! Pure: the caller feeds time, health and whether the GPS is usable
-//! ([`gps_usable`]) each tick and sends the command the machine returns.
-//! Nothing is commanded before the first decision, so the flight controller
-//! keeps its boot source set until the inputs say otherwise.
+//! Pure: the caller feeds time, health, whether the GPS is usable
+//! ([`gps_usable`]) and the flight controller's state ([`Fc`]) each tick
+//! and sends the command the machine returns. Nothing is commanded before
+//! the first decision, so the flight controller keeps its boot source set
+//! until the inputs say otherwise.
 
 use crate::external_nav::ExtnavHealth;
 use crate::nav_config::ExternalNavConfig;
@@ -42,12 +51,23 @@ pub fn gps_usable(fix_type: u8, h_acc_mm: Option<u32>) -> bool {
     fix_type >= FIX_3D && h_acc_mm.is_none_or(|a| a <= GPS_MAX_H_ACC_MM)
 }
 
+/// What the flight controller reports that the switch waits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Fc {
+    /// The last heartbeat reported the vehicle armed.
+    pub armed: bool,
+    /// The flight controller has reported an EKF origin.
+    pub origin: bool,
+}
+
 /// The state machine.
 pub struct SourceSwitch {
     extnav_set: u8,
     fallback_set: u8,
     gps_primary: bool,
     active: Option<u8>,
+    /// The GPS has been usable since boot (GPS primary).
+    gps_seen: bool,
     tracked_since: Option<i64>,
     good_since: Option<i64>,
     lost_since: Option<i64>,
@@ -62,6 +82,7 @@ impl SourceSwitch {
             fallback_set: cfg.fallback_set,
             gps_primary: cfg.gps_primary,
             active: None,
+            gps_seen: false,
             tracked_since: None,
             good_since: None,
             lost_since: None,
@@ -83,6 +104,7 @@ impl SourceSwitch {
         now_ns: i64,
         health: Option<ExtnavHealth>,
         gps_ok: bool,
+        fc: Fc,
     ) -> Option<u8> {
         let health = health.unwrap_or(ExtnavHealth::Lost);
         since(&mut self.good_since, health == ExtnavHealth::Good, now_ns);
@@ -95,12 +117,17 @@ impl SourceSwitch {
         since(&mut self.fix_since, gps_ok, now_ns);
         since(&mut self.no_fix_since, !gps_ok, now_ns);
         let held = |s: Option<i64>, d: i64| s.is_some_and(|t| now_ns - t >= d);
+        self.gps_seen |= gps_ok;
 
         let want = if self.gps_primary {
             let on_extnav = self.active == Some(self.extnav_set);
             if on_extnav {
-                held(self.fix_since, GPS_BACK_NS).then_some(self.fallback_set)
-            } else if health == ExtnavHealth::Good && held(self.no_fix_since, GPS_LOST_NS) {
+                let in_frame = !fc.armed || fc.origin || held(self.lost_since, EXTNAV_LOST_NS);
+                (held(self.fix_since, GPS_BACK_NS) && in_frame).then_some(self.fallback_set)
+            } else if self.gps_seen
+                && health == ExtnavHealth::Good
+                && held(self.no_fix_since, GPS_LOST_NS)
+            {
                 Some(self.extnav_set)
             } else if self.active.is_none() && gps_ok {
                 Some(self.fallback_set)
@@ -162,6 +189,12 @@ mod tests {
         run_gps(s, from, to, h, fix, None)
     }
 
+    /// Disarmed, with an EKF origin.
+    const GROUND: Fc = Fc {
+        armed: false,
+        origin: true,
+    };
+
     fn run_gps(
         s: &mut SourceSwitch,
         from: i64,
@@ -170,10 +203,22 @@ mod tests {
         fix: u8,
         h_acc_mm: Option<u32>,
     ) -> Vec<(i64, u8)> {
+        run_fc(s, from, to, h, fix, h_acc_mm, GROUND)
+    }
+
+    fn run_fc(
+        s: &mut SourceSwitch,
+        from: i64,
+        to: i64,
+        h: Option<ExtnavHealth>,
+        fix: u8,
+        h_acc_mm: Option<u32>,
+        fc: Fc,
+    ) -> Vec<(i64, u8)> {
         let mut out = Vec::new();
         let mut t = from;
         while t < to {
-            if let Some(set) = s.update(t, h, gps_usable(fix, h_acc_mm)) {
+            if let Some(set) = s.update(t, h, gps_usable(fix, h_acc_mm), fc) {
                 out.push((t, set));
             }
             t += S / 10;
@@ -258,6 +303,69 @@ mod tests {
         // Accuracy back within 5 m for 10 s: back to GPS.
         let back = run_gps(&mut s, 4 * S, 15 * S, good, 3, Some(5000));
         assert_eq!(back, vec![(14 * S, 2)]);
+    }
+
+    /// The bench's GPS-primary configuration (external nav on set 2, GPS on
+    /// set 1).
+    fn bench_switch() -> SourceSwitch {
+        SourceSwitch::new(&ExternalNavConfig {
+            gps_primary: true,
+            extnav_set: 2,
+            fallback_set: 1,
+            ..ExternalNavConfig::default()
+        })
+    }
+
+    /// The logged forest follow take: a good lidar pose from boot, the GPS
+    /// receiver fixing only later (here 6 s in), then armed. The receiver
+    /// still starting is not a lost fix: nothing but the GPS set is
+    /// commanded, so the flight controller never arms on external nav
+    /// without an EKF origin. (The take switched to set 2 before the fix
+    /// and back to set 1 in flight 19.6 s into the run; the flight
+    /// controller then flew 21 m to its displaced guided target.)
+    #[test]
+    fn gps_primary_waits_for_the_receiver_to_start_before_external_nav_takes_over() {
+        let mut s = bench_switch();
+        let good = Some(ExtnavHealth::Good);
+        assert!(run(&mut s, 0, 6 * S, good, 0).is_empty());
+        assert_eq!(run(&mut s, 6 * S, 16 * S, good, 6), vec![(6 * S, 1)]);
+        let armed = Fc {
+            armed: true,
+            origin: true,
+        };
+        assert!(run_fc(&mut s, 16 * S, 30 * S, good, 6, None, armed).is_empty());
+    }
+
+    /// On external nav while armed and without an EKF origin, the GPS
+    /// returning does not switch back in flight; landed (disarmed) it does,
+    /// and so does losing the pose, the external set's only position.
+    #[test]
+    fn armed_without_an_origin_the_return_to_gps_waits_for_the_ground() {
+        let good = Some(ExtnavHealth::Good);
+        let flying = Fc {
+            armed: true,
+            origin: false,
+        };
+        let taken_over = || {
+            let mut s = bench_switch();
+            assert_eq!(
+                run_fc(&mut s, 0, S / 2, good, 6, None, flying),
+                vec![(0, 1)]
+            );
+            let take = run_fc(&mut s, S / 2, 3 * S, good, 0, None, flying);
+            assert_eq!(take, vec![(5 * S / 2, 2)]);
+            s
+        };
+        let mut s = taken_over();
+        assert!(run_fc(&mut s, 3 * S, 30 * S, good, 6, None, flying).is_empty());
+        assert_eq!(
+            run_fc(&mut s, 30 * S, 31 * S, good, 6, None, GROUND),
+            vec![(30 * S, 1)]
+        );
+        let mut s = taken_over();
+        assert!(run_fc(&mut s, 3 * S, 20 * S, good, 6, None, flying).is_empty());
+        let lost = run_fc(&mut s, 20 * S, 22 * S, None, 6, None, flying);
+        assert_eq!(lost, vec![(21 * S, 1)]);
     }
 
     #[test]

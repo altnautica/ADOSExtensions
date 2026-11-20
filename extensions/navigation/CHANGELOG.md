@@ -7,6 +7,7 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 ### Fixed
 
+- GPS primary: external navigation takes over only after the GPS has been usable and then lost, never while the receiver is still starting at boot, so the flight controller does not arm and take off on the external-nav set without an EKF origin. Armed, the switch back to GPS waits until the flight controller reports an EKF origin (or the pose is lost for 1 s). In a simulated forest follow, the boot switch to external nav followed by the switch back to GPS about 2.6 s after take-off set the origin in flight; the flight controller flew 21 m to its displaced guided target at up to 7.8 m/s and passed a trunk at 0.32 m.
 - Navigation runs on ADOS time (`ados_sdk::clock`): the external-nav, obstacle and state loops and every freshness and rate tick in sim time on a node following a simulator's clock. A pose's wall-clock age is scaled by the simulator's speed before it dates an `ODOMETRY` (a scan at 3× read three times fresher than it was); running as fast as the simulator can, a pose is dated at its receipt. Needs agent 0.124.0.
 
 ## [1.0.0] - 2026-11-20

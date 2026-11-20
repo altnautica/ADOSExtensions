@@ -101,9 +101,14 @@ until accepted):
   1 s switches to `fallback_set` (the flight controller's optical-flow
   set); tracked (good or degraded) for 3 s switches back.
 - `gps_primary: true`: `fallback_set` (GPS) while the GPS is usable (a 3D
-  fix whose reported horizontal accuracy, when sent, is within 5 m); no
-  usable GPS for 2 s with a good pose switches to `extnav_set`; usable
-  for 10 s switches back.
+  fix whose reported horizontal accuracy, when sent, is within 5 m). Once
+  the GPS has been usable, no usable GPS for 2 s with a good pose switches
+  to `extnav_set`; a receiver that has not reported a usable fix since
+  boot is still starting, not lost, so nothing switches before it. Usable
+  for 10 s switches back; armed, only once the flight controller reports
+  an EKF origin (or the pose is lost for 1 s), because the first GPS
+  fusion sets the origin in flight and the flight controller then flies to
+  its held target in the new frame.
 
 ### EKF origin
 

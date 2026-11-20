@@ -35,7 +35,7 @@ use crate::nav_state::{AgeWindow, RateMeter, NAV_STATE_TOPIC};
 use crate::obstacle::{sectorise, Ground, ObstacleFilter};
 use crate::origin::OriginRule;
 use crate::pre_arm::{ExtnavPreArmInputs, PreArmGate, PreArmInputs};
-use crate::source_set::{gps_usable, SourceSwitch};
+use crate::source_set::{gps_usable, Fc, SourceSwitch};
 
 const SECOND: i64 = 1_000_000_000;
 const ACK_WAIT_NS: i64 = SECOND;
@@ -137,7 +137,11 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
             }
 
             let gps_ok = gps_usable(fc.gps_fix, fc.gps_h_acc_mm);
-            if let Some(set) = switch.update(now, health, gps_ok) {
+            let fc_state = Fc {
+                armed: fc.armed,
+                origin: fc.origin_seen,
+            };
+            if let Some(set) = switch.update(now, health, gps_ok, fc_state) {
                 eprintln!("navigation: EKF source set -> {set}");
                 task.sinks.fc_nav.clear_source_set_ack();
                 pending = Some(PendingSet {
