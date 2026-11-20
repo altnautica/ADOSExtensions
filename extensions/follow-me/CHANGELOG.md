@@ -37,7 +37,9 @@ distance, the least true horizontal separation over 20-200 noise draws:
 A walker who turns straight back at the vehicle from the standoff still
 passes under it, as in 0.5.2: no follow at a 6 m standoff keeps the
 horizontal range open against that with monocular range and the pilot's
-lag. The 3.4 m follow height floor keeps the rotors a metre over the head.
+lag. The 3.4 m follow height floor keeps the rotors a metre over the head;
+the floor is height above the ground under the vehicle, so barometer error
+or ground rising toward the subject can use that metre up.
 
 - A box after a detection gap that lies beyond where the subject can be is
   held out, not fused into a velocity: a fix 0.5 s or more after the last

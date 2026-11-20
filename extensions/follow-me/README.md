@@ -136,6 +136,15 @@ then on the agent runs a 20 Hz loop:
    under it: range noise takes half a second to a second of fixes to show
    the turn, and the vehicle about as long to stop at the pilot's profile.
    The follow height keeps the rotors at least 1 m above the subject then.
+   That floor is height above the ground under the vehicle: on barometer
+   height alone (about 1.5 m of error) or with ground rising toward the
+   subject, the metre can be used up, and the turn-back case is proven only
+   over flat ground with a rangefinder.
+
+   Every margin above is built from the detector's frame-to-frame box noise
+   (8 % of range). The subject's own height is assumed to be 1.70 m: a
+   1.5 m adult ranges about 13 % long and a 1.2 m child about 42 % long, so
+   the 2.5 m hard guard is then about 2.2 m and 1.8 m in truth.
 
    The shortest standoff (`follow_distance_m` or `orbit_radius_m`) flown
    depends on the range the follow has, read from how far the fixes really
