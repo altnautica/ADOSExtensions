@@ -193,6 +193,12 @@ SEPARATION_HORIZON_S = 3.0
 SEPARATION_PUSH_PER_S = 1.0
 SEPARATION_SIDE_HOLD_MPS = 0.5
 SEPARATION_STALE_M = 2.5
+# On a coast (no fix for a while) the estimate drifts off the subject by
+# what its velocity and the subject's manoeuvres can add: the clear
+# distance widens by SEPARATION_SIGMAS of the spread gained since the last
+# fix, up to COAST_CLEAR_INSIDE_M inside the standoff. Range noise alone
+# stops 2 m inside it (SAFE_STANDOFF_MARGIN_M); a coast is not noise.
+COAST_CLEAR_INSIDE_M = 1.0
 
 # The pilot's own subject brake keeps the subject's body this far clear,
 # centre to the vehicle's (a 0.4 m body radius, the default 0.4 m vehicle
@@ -260,14 +266,17 @@ def safe_distance(standoff_m: float) -> float:
     return max(0.0, min(SAFE_DISTANCE_M, standoff_m - SAFE_STANDOFF_MARGIN_M))
 
 
-def clear_distance(standoff_m: float, range_sigma_m: float) -> float:
+def clear_distance(standoff_m: float, range_sigma_m: float, coast_sigma_m: float = 0.0) -> float:
     """The horizontal distance kept clear of the subject: the safe distance
     plus SEPARATION_SIGMAS of the range error, the margin held
     SAFE_STANDOFF_MARGIN_M inside the standoff (the safe distance itself
-    is)."""
+    is); then SEPARATION_SIGMAS of the spread the estimate gained since its
+    last fix (``coast_sigma_m``), held COAST_CLEAR_INSIDE_M inside it."""
     safe = safe_distance(standoff_m)
     margin = min(SEPARATION_MARGIN_MAX_M, SEPARATION_SIGMAS * max(0.0, range_sigma_m))
-    return min(safe + margin, max(safe, standoff_m - SAFE_STANDOFF_MARGIN_M))
+    clear = min(safe + margin, max(safe, standoff_m - SAFE_STANDOFF_MARGIN_M))
+    coast = SEPARATION_SIGMAS * max(0.0, coast_sigma_m)
+    return min(clear + coast, max(clear, standoff_m - COAST_CLEAR_INSIDE_M))
 
 
 def pilot_subject_sigma(standoff_m: float, sigma_m: float) -> float:
@@ -297,6 +306,7 @@ def keep_clear(
     standoff_m: float,
     side: int,
     near_m: float | None = None,
+    coast_sigma_m: float = 0.0,
 ) -> tuple[tuple[float, float], int, bool]:
     """The velocity nearest ``want_ne`` that keeps the vehicle clear of the
     subject, the side it passes on (0: none) and whether it was limited.
@@ -309,7 +319,9 @@ def keep_clear(
     distance comes from (:func:`clear_distance`), ``side`` the side
     returned last tick and ``near_m`` the range of the newest fixes (see
     :meth:`follow_me.speed_limit.SubjectMotion.near_range`), kept clear in
-    place of the estimate's when it is nearer."""
+    place of the estimate's when it is nearer. ``coast_sigma_m`` is the
+    spread the estimate gained since its last fix, which widens the clear
+    distance further."""
     r = math.hypot(rel_ne[0], rel_ne[1])
     sn, se = subject_v_ne
     if r > 1e-6:
@@ -332,7 +344,7 @@ def keep_clear(
         r = min(r, near_m)
     sn, se = sn + (credit - away) * un, se + (credit - away) * ue
     qn, qe = want_ne[0] - sn, want_ne[1] - se
-    clear = clear_distance(standoff_m, range_sigma_m)
+    clear = clear_distance(standoff_m, range_sigma_m, coast_sigma_m)
     q_u = qn * un + qe * ue
     if r <= clear:
         # Inside: every velocity that does not back away is refused.
@@ -630,6 +642,7 @@ class StandoffController:
         near_m: float | None = None,
         range_sigma_m: float = 0.0,
         scatter_weight: float = 0.0,
+        coast_sigma_m: float = 0.0,
     ) -> Command:
         """``latch_goal``: hold the goal through moves inside the deadband (a
         standing subject followed at a fixed angle; an orbit's goal moves on
@@ -641,8 +654,8 @@ class StandoffController:
         ``subject_ne`` and ``subject_v_ne`` are the subject estimate's own
         position and velocity, unsmoothed, which the vehicle keeps clear of
         by the distance ``standoff_m`` (the follow standoff or orbit radius)
-        sets, with ``near_m`` the newest fixes' range (see
-        :func:`keep_clear`)."""
+        sets, with ``near_m`` the newest fixes' range and ``coast_sigma_m``
+        the spread gained since the last fix (see :func:`keep_clear`)."""
         resume = self._t is None or now - self._t > _RESUME_AFTER_S
         if resume:
             self._v = drone_v_ne
@@ -701,6 +714,7 @@ class StandoffController:
             standoff_m=standoff_m,
             side=self._side,
             near_m=near_m,
+            coast_sigma_m=coast_sigma_m,
         )
         want = _clamp_len(want[0], want[1], max_speed_mps)
         rel = (subject_ne[0] - drone_ne[0], subject_ne[1] - drone_ne[1])

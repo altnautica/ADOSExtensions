@@ -61,6 +61,10 @@ then on the agent runs a 20 Hz loop:
    velocity spread left out: a false re-lock is not fused into a velocity.
    The estimate predicts on; the next fix that agrees with it is fused, and
    two such held-out fixes that agree with each other start it over there.
+   With no fix fused for three of the track's usual fix intervals (at
+   least 0.5 s: a coast), the velocity the follow flies on decays: on 2 s
+   for a velocity known to 0.5 m/s, the sooner the less the fixes have
+   pinned it.
 5. It holds the agent pilot's motion lease and sends it a goal every tick
    (20 Hz). The goal carries the follow's complete desired velocity
    (`vel_mode` `command`); the pilot shapes it within the vehicle's
@@ -107,6 +111,8 @@ then on the agent runs a 20 Hz loop:
    standoff or orbit radius so range noise at a short standoff does not
    set it off. At a 4 m standoff that is 2 m, at 3 m only 1 m; there the
    3.4 m height floor is what keeps the rotors a metre above the subject.
+   On a coast it widens by two sigmas of the spread the estimate gained,
+   up to 1 m inside the standoff.
    Toward the subject the velocity is held to what still stops short of
    the clear distance, a path that passes it on one side is kept, and
    within it the vehicle backs away; the cut in the closing speed is not

@@ -52,6 +52,23 @@ uses independent semantic versioning per extension.
   now puts a 1.4 m/s walk at 1.34 m/s on average (0.52 m/s spread, what a
   straight line through the fixes gets).
 
+- A coast no longer carries the vehicle onto the subject. Through an
+  unsure spell the follow flew the prediction at full speed: on a walk five
+  fixes had measured (to 1.5-2 m/s), a correct box ranged 2.8 m long and
+  three unsure seconds sent the vehicle 0.3 m from the walker. With no fix
+  fused for three of the track's usual fix intervals (at least 0.5 s: a
+  few missed frames still ride on the prediction), the velocity flown on
+  now decays, on 2 s for a velocity known to 0.5 m/s and the sooner the
+  less it is known (1.5 s on a long track, 0.23 s on five fixes), the
+  estimate running on by that decaying velocity; and the distance kept
+  clear of the subject widens by two sigmas of the spread the estimate
+  gained over the coast, up to 1 m inside the set distance, every closing
+  speed let through stopping short of it at the flight controller's
+  2.5 m/s² after 0.8 s. Over 200 noise draws of that sequence the vehicle
+  keeps at least 4.18 m from the walker at a 6 m set distance with a false
+  re-lock in it and 4.75 m without (before: 0.31 m, three draws under 3 m),
+  and the catch-up above is unchanged.
+
 ## [0.5.2] - 2026-11-20
 
 ### Changed

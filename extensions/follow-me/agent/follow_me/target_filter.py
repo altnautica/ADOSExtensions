@@ -32,6 +32,22 @@ _INIT_VEL_SIGMA_MPS = 3.0
 # estimate with a spread bounded by how far the subject can have gone (see
 # :meth:`TargetFilter.search_predicted`).
 MAX_PREDICT_S = 70.0
+# A coast: with no fix fused for COAST_GRACE_FIXES of the track's usual
+# intervals between fixes, and at least COAST_GRACE_S (a few missed frames
+# ride on the prediction as they are: 0.5 s at 10 Hz, about 1.3 s at 3 Hz
+# missing half its frames), the velocity the follow flies on decays, on
+# COAST_TAU_S for a velocity known to COAST_VEL_SIGMA_MPS and shorter the
+# less it is known (see :meth:`TargetFilter.coasted`). A walk measured by
+# five fixes is known to 1.5-2 m/s; flown on for three unsure seconds it
+# carried the estimate 7 m past the walker and the vehicle over it.
+COAST_GRACE_S = 0.5
+COAST_GRACE_FIXES = 3.0
+COAST_TAU_S = 2.0
+COAST_VEL_SIGMA_MPS = 0.5
+# The usual interval is a running mean over this many intervals of up to
+# _INTERVAL_MAX_S (longer ones are gaps, not the cadence).
+_INTERVAL_FIXES = 10
+_INTERVAL_MAX_S = 1.0
 # The innovation gate: χ² with two degrees of freedom at 99.73 % (3 sigma).
 # A recorded forest follow put 5 % of its range fixes 3.5-7.6 m off the
 # subject, outliers no constant-velocity person makes.
@@ -191,6 +207,9 @@ class TargetFilter:
         self._scatter_s = 0.0
         self._scatter_n = 0
         self.max_speed_mps: float | None = None
+        # The running mean interval between consecutive fixes fused (the
+        # detector's cadence, misses included), or None before two.
+        self._interval_s: float | None = None
 
     @property
     def initialized(self) -> bool:
@@ -268,6 +287,7 @@ class TargetFilter:
         self._scatter_y2 = 0.0
         self._scatter_s = 0.0
         self._scatter_n = 0
+        self._interval_s = None
 
     def stop(self, t: float) -> None:
         """Stop the estimate where it is predicted at ``t``, with no velocity.
@@ -356,6 +376,54 @@ class TargetFilter:
             return None
         x, p = self._propagate(t)
         return x, self._bounded(t, p)
+
+    def coasted(self, t: float) -> tuple[list[float], Mat] | None:
+        """What the follow flies on at ``t``: :meth:`predicted`, its velocity
+        decaying once the coast starts (:meth:`coast_start_s`), on
+        :meth:`coast_tau_s`. The position runs on by the decaying velocity's
+        integral, so a coast on a velocity few fixes measured does not carry
+        the estimate (and the goal) metres past the subject. The covariance
+        is the prediction's."""
+        pred = self.predicted(t)
+        if pred is None or self._x is None:
+            return pred
+        x, p = pred
+        age = t - self.coast_start_s()
+        if age <= 0.0:
+            return pred
+        tau = self.coast_tau_s()
+        decay = math.exp(-age / tau)
+        # The prediction ran the last velocity on for ``age``; it runs on
+        # for tau·(1 − decay) instead.
+        run = tau * (1.0 - decay) - age
+        vn, ve = self._x[2], self._x[3]
+        return [x[0] + vn * run, x[1] + ve * run, vn * decay, ve * decay], p
+
+    def coast_start_s(self) -> float:
+        """When a coast starts: COAST_GRACE_FIXES usual fix intervals, and at
+        least COAST_GRACE_S, after the last fix fused."""
+        grace = COAST_GRACE_S
+        if self._interval_s is not None:
+            grace = max(grace, COAST_GRACE_FIXES * self._interval_s)
+        return max(self._t, self._t_meas + grace)
+
+    def coast_tau_s(self) -> float:
+        """How fast a coast lets the velocity go: COAST_TAU_S on a velocity
+        known to COAST_VEL_SIGMA_MPS, shorter the less the fixes so far have
+        pinned it (a fresh track's few fixes leave it metres a second out)."""
+        sv2 = 0.5 * (self._p[2][2] + self._p[3][3])
+        return COAST_TAU_S / (1.0 + sv2 / (COAST_VEL_SIGMA_MPS * COAST_VEL_SIGMA_MPS))
+
+    def coast_spread_m(self, t: float) -> float:
+        """The position spread the prediction at ``t`` gained over the coast
+        (since :meth:`coast_start_s`): 0 while fixes keep coming."""
+        if self._x is None:
+            return 0.0
+        start = self.coast_start_s()
+        now, then = self.predicted(t), self.predicted(start)
+        if t <= start or now is None or then is None:
+            return 0.0
+        return math.sqrt(max(0.0, position_sigma(now[1]) ** 2 - position_sigma(then[1]) ** 2))
 
     def search_predicted(self, t: float) -> tuple[list[float], Mat] | None:
         """What a search uses at ``t``: the prediction while there is one;
@@ -480,6 +548,10 @@ class TargetFilter:
         self._p = [[(p_new[i][j] + p_new[j][i]) / 2.0 for j in range(4)] for i in range(4)]
         self._cap_speed()
         self._t = max(self._t, t)
+        gap = t - self._t_meas
+        if 0.0 < gap <= _INTERVAL_MAX_S:
+            prev = gap if self._interval_s is None else self._interval_s
+            self._interval_s = prev + (gap - prev) / _INTERVAL_FIXES
         self._t_meas = max(self._t_meas, t)
         self._sigma_meas = position_sigma(self._p)
         return True

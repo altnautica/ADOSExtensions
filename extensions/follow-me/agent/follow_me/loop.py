@@ -725,6 +725,7 @@ class FollowLoopMixin:
             near_m=near,
             range_sigma_m=range_sigma,
             scatter_weight=self._filter.scatter_weight,
+            coast_sigma_m=0.0 if ref.still else self._filter.coast_spread_m(now),
         )
         # The pilot keeps the subject's body clear by the goal's subject
         # point and this error: the estimate's own, or what the newest fixes
