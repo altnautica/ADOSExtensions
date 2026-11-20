@@ -4,7 +4,7 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
-## [0.6.0] (unreleased)
+## [0.6.0] - 2026-11-21
 
 ### Added
 
