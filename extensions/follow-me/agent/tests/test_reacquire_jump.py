@@ -137,9 +137,6 @@ async def test_the_recorded_false_relock_does_not_bring_the_goal_onto_the_vehicl
     # then from 4.6 s the walker seen again (box height 5 % off). The pilot
     # flies at the flight controller's guided 2.5 m/s² and answers 0.8 s
     # late. Through the three unsure seconds the goal names the walker no
-    # more than 1 m nearer than it is and the walker stays inside 10.5 m,
-    # the detector's reach there; fused as any other fix, the tree had it
-    # 4 m and more nearer, and the vehicle hung back 12-17 m behind.
     # more than 1 m nearer than it is and the walker stays inside 11 m
     # (about the detector's 10.5 m reach there; the coast's guard holds the
     # vehicle a little back while the walker is unseen); fused as any other
@@ -180,7 +177,6 @@ async def test_the_recorded_false_relock_does_not_bring_the_goal_onto_the_vehicl
     fused = await flights()
     print(f"{ranging} with the rule: (named short, farthest) {[(round(a, 2), round(b, 2)) for a, b in held]}")
     print(f"{ranging} without it: {[(round(a, 2), round(b, 2)) for a, b in fused]}")
-    assert all(short <= 1.0 and far <= 10.5 for short, far in held)
     assert all(short <= 1.0 and far <= 11.0 for short, far in held)
     # The control (the box-height ranging also had the outlier gate catch
     # the tree on some flights).

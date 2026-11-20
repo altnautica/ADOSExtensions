@@ -43,6 +43,7 @@ from follow_me.ranging import (
     RangeCue,
     Scan,
     fuse,
+    fused_noise,
     lidar_range_at,
     range_bearing_covariance,
 )
@@ -156,6 +157,9 @@ class TargetFix:
     agl_m: float
     agl_source: str
     cross_sigma_m: float
+    # The part of the range error that changes from frame to frame (what the
+    # subject filter fuses each fix with); the whole when ``None``.
+    range_noise_m: float | None = None
 
     def covariance(self) -> tuple[tuple[float, float], tuple[float, float]]:
         """2x2 north/east measurement covariance: the range sigma along the
@@ -352,7 +356,7 @@ def box_height_cue(
         return None
     slant = intr.fy * SUBJECT_HEIGHT_M / bbox_h
     r = slant * math.cos(depression_rad)
-    return RangeCue(CUE_BOX_HEIGHT, r, _BOX_SIGMA_FRAC * r)
+    return RangeCue(CUE_BOX_HEIGHT, r, _BOX_SIGMA_FRAC * r, noise_m=_BOX_DETECTOR_FRAC * r)
 
 
 def measure_target(
@@ -419,6 +423,7 @@ def measure_target(
         agl_m=agl_m,
         agl_source=agl_source,
         cross_sigma_m=max(r * bearing_sigma, _MIN_CROSS_SIGMA_M),
+        range_noise_m=fused_noise(cues),
     )
 
 

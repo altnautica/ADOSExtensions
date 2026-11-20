@@ -62,6 +62,7 @@ def _box_fix(rnd: random.Random, r: float, height: float) -> TargetFix:
         offset_east_m=0.0,
         range_m=cue.range_m,
         range_sigma_m=cue.sigma_m,
+        range_noise_m=cue.noise_m,
         bearing_rad=0.0,
         depression_rad=depression,
         cues=(cue,),

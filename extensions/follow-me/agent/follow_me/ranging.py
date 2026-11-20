@@ -12,11 +12,16 @@ _LIDAR_HALF_WIDTH_RAD = math.radians(2.0)
 
 @dataclass(frozen=True)
 class RangeCue:
-    """One horizontal-range estimate to the subject with its 1-sigma error."""
+    """One horizontal-range estimate to the subject with its 1-sigma error,
+    and the part of it that changes from frame to frame (``noise_m``; the
+    whole error when ``None``). The rest stays with the subject: a person
+    taller or shorter than the box-height cue assumes is ranged off by the
+    same share in every frame."""
 
     kind: str
     range_m: float
     sigma_m: float
+    noise_m: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -70,6 +75,21 @@ def fuse(cues: list[RangeCue]) -> tuple[float, float] | None:
     return (acc / weight, math.sqrt(1.0 / weight))
 
 
+def fused_noise(cues: list[RangeCue]) -> float | None:
+    """The frame-to-frame part of the error of :func:`fuse`'s range, the
+    cues weighed as it weighs them, or ``None`` with no cue."""
+    weight = 0.0
+    acc = 0.0
+    for c in cues:
+        w = 1.0 / max(c.sigma_m, 1e-3) ** 2
+        n = c.sigma_m if c.noise_m is None else c.noise_m
+        weight += w
+        acc += (w * n) ** 2
+    if weight <= 0.0:
+        return None
+    return math.sqrt(acc) / weight
+
+
 def range_bearing_covariance(
     bearing_rad: float, sigma_range_m: float, sigma_cross_m: float
 ) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -83,4 +103,4 @@ def range_bearing_covariance(
     )
 
 
-__all__ = ["RangeCue", "Scan", "fuse", "lidar_range_at", "range_bearing_covariance"]
+__all__ = ["RangeCue", "Scan", "fuse", "fused_noise", "lidar_range_at", "range_bearing_covariance"]

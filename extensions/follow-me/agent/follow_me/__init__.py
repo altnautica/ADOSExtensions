@@ -196,6 +196,7 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         # began.
         self._still = StillSubject()
         self._standoff = StandoffController()
+        self._restarts_seen = 0
         self._hold_point: tuple[float, float, float, float] | None = None
         # What says which speed limit is in force, and the subject's measured
         # motion (see follow_me.speed_limit).

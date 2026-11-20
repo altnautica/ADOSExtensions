@@ -59,6 +59,7 @@ from follow_me.state import (
     REACQUIRE_SMART,
     FollowConfig,
 )
+from follow_me.standoff import keep_clear
 from follow_me.target_filter import position_sigma
 
 # The prediction phase lasts at most this long, and ends early once the
@@ -487,6 +488,8 @@ class RecoveryMixin:
         assert rec.step_index is not None
         step = rec.steps[rec.step_index]
         pn, pe = x[0], x[1]
+        if await self._keep_clear_of_prediction(cfg, now, x):
+            return
         yaw: float | None = None
         if rec.phase == PHASE_SEARCHING:
             t = now - rec.step_started_s
@@ -628,6 +631,51 @@ class RecoveryMixin:
             similarity=round(cand.similarity, 3),
             phase=rec.phase,
         )
+
+    async def _keep_clear_of_prediction(self, cfg: FollowConfig, now: float, x: list[float]) -> bool:
+        """While the search's prediction of the lost subject (the undecayed
+        one: a subject the follow led or flew beside keeps coming toward the
+        vehicle) would bring it inside the clear distance, back away from it
+        rather than hold for a vantage: whether a goal went out."""
+        dn, de = self._pose.north_m, self._pose.east_m
+        own_v = (self._pose.vn_mps, self._pose.ve_mps)
+        vel, _side, limited = keep_clear(
+            rel_ne=(x[0] - dn, x[1] - de),
+            subject_v_ne=(x[2], x[3]),
+            pace_v_ne=(x[2], x[3]),
+            want_ne=(0.0, 0.0),
+            command_v_ne=own_v,
+            range_sigma_m=0.0,
+            standoff_m=cfg.follow_distance_m,
+            side=0,
+            coast_sigma_m=self._filter.coast_spread_m(now),
+            vehicle_v_ne=own_v,
+        )
+        if not limited:
+            return False
+        speed = math.hypot(vel[0], vel[1])
+        k = min(1.0, cfg.max_speed_mps / speed) if speed > 1e-9 else 0.0
+        agl, _src = self._agl(now)
+        await self._send_goal(
+            {
+                "kind": "position",
+                "n": dn,
+                "e": de,
+                "d": setpoint.height_down(self._pose.down_m, agl, cfg.follow_height_m),
+                "vn": vel[0] * k,
+                "ve": vel[1] * k,
+                "vd": 0.0,
+                "vel_mode": "command",
+                "yaw": math.atan2(x[1] - de, x[0] - dn),
+                "yaw_rate": None,
+                "subject_ne": [x[0], x[1]],
+                "max_speed_mps": cfg.max_speed_mps,
+                "candidates": None,
+                "margin_m": cfg.obstacle_margin_m,
+            },
+            now,
+        )
+        return True
 
     @staticmethod
     def _mark_designated(rec: Recovery, track: int | None, cand: Any, now: float) -> None:

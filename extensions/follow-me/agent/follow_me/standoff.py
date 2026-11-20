@@ -727,6 +727,7 @@ class StandoffController:
             side=self._side,
             near_m=near_m,
             coast_sigma_m=coast_sigma_m,
+            vehicle_v_ne=drone_v_ne,
         )
         rel = (subject_ne[0] - drone_ne[0], subject_ne[1] - drone_ne[1])
         if guard_ne is not None:
@@ -817,6 +818,7 @@ __all__ = [
     "RANGE_DEADBAND_SIGMAS",
     "SAFE_DISTANCE_M",
     "SAFE_STANDOFF_MARGIN_M",
+    "SEPARATION_LAG_S",
     "SEPARATION_SIGMAS",
     "SMOOTH_MAX_S",
     "STILL_ENTER_DRIFT_M",

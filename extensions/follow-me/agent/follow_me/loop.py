@@ -124,12 +124,17 @@ _MIN_RANGE_SIGMA_FRAC = 0.06
 # (pilot.v1 ``vel_mode``). A zero velocity stops on the pilot's profile and
 # holds where the vehicle stops.
 VEL_MODE_COMMAND = "command"
+# A goal point lies at least the standoff (or orbit radius) less this from
+# the subject's worst case (the nearest of its estimate as flown, its
+# undecayed prediction and a standing subject's centre).
+_GOAL_INSIDE_M = 1.0
 
 
 def fix_range_sigma(fix: TargetFix) -> float:
-    """The range sigma a fix is fused with: its own, held to the measured
-    floor."""
-    return max(fix.range_sigma_m, _MIN_RANGE_SIGMA_M, _MIN_RANGE_SIGMA_FRAC * fix.range_m)
+    """The range sigma a fix is fused with: the part of its own that changes
+    from frame to frame, held to the measured floor."""
+    own = fix.range_sigma_m if fix.range_noise_m is None else fix.range_noise_m
+    return max(own, _MIN_RANGE_SIGMA_M, _MIN_RANGE_SIGMA_FRAC * fix.range_m)
 
 
 def fix_covariance(fix: TargetFix) -> Cov2:
@@ -226,6 +231,8 @@ class FollowLoopMixin:
     _hold_point: tuple[float, float, float, float] | None
     # When the last fix was fused (its arrival on the loop's clock).
     _fused_s: float
+    # The filter's restart count the follow last smoothed from.
+    _restarts_seen: int
 
     async def _follow_loop(self) -> None:
         while True:
@@ -771,10 +778,21 @@ class FollowLoopMixin:
         # distance the pilot keeps stays inside the standoff.
         short = 0.0 if near is None else math.hypot(keep_ne[0] - dn, keep_ne[1] - de) - near
         subject_sigma = pilot_subject_sigma(standoff_m, max(range_sigma, short / SEPARATION_SIGMAS))
+        # The goal point never lies nearer the subject's worst case than the
+        # standoff less _GOAL_INSIDE_M: the pilot's planner flies detours to it.
+        gn, ge = cmd.north_m, cmd.east_m
+        least = max(0.0, standoff_m - _GOAL_INSIDE_M)
+        on, oe = gn - guard_ne[0], ge - guard_ne[1]
+        gd = math.hypot(on, oe)
+        if gd < least:
+            if gd <= 1e-6:
+                on, oe = dn - guard_ne[0], de - guard_ne[1]
+                gd = max(1e-6, math.hypot(on, oe))
+            gn, ge = guard_ne[0] + on / gd * least, guard_ne[1] + oe / gd * least
         return {
             "kind": kind,
-            "n": cmd.north_m,
-            "e": cmd.east_m,
+            "n": gn,
+            "e": ge,
             "d": setpoint.height_down(self._pose.down_m, agl, cfg.follow_height_m),
             "vn": cmd.vn_mps,
             "ve": cmd.ve_mps,

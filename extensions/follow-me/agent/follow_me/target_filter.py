@@ -55,8 +55,9 @@ GATE_CHI2 = 11.83
 # Inside the gate, a fix beyond 2 sigma (χ² 4.0) is fused with its noise
 # scaled by how far out it lies.
 HUBER_CHI2 = 4.0
-# The outlier in a row that is fused anyway when it and the ones before it
-# agree (a subject that really did turn or sprint is never gated out): at
+# The outlier in a row that starts the estimate over on it and the ones
+# before it when they agree (a subject that really did turn or sprint is
+# never gated out, and the velocity the old estimate had is not kept): at
 # 3 Hz the third fix, 0.7 s on. Scattered outliers (range errors either side
 # of the subject) never agree and stay out.
 GATE_FORCE_AFTER = 3
@@ -81,7 +82,12 @@ GATE_FORCE_AFTER = 3
 # power (a Gaussian acceleration) let a box 8 m beyond the walker through
 # after 1.9 s; the estimate ran on at the speed cap and the follow chased it.
 REACQUIRE_GAP_S = 0.5
-REACQUIRE_CHI2 = GATE_CHI2
+# Three sigmas past the reach (along one axis: the jump is along the line
+# of sight): the reach is the subject's worst case already, and a box 4 m
+# short of a walker on a five-fix track (its velocity known to 1.5 m/s)
+# lay 3.3 sigmas past it a second on. Two sigmas held true fixes out on
+# noise every few seconds at 3 Hz.
+REACQUIRE_CHI2 = 9.0
 REACQUIRE_CONFIRM_FIXES = 2
 SUBJECT_ACCEL_MAX_MPS2 = 1.5
 # Rejected fixes agree when each lies within this many of its own sigmas of
@@ -203,8 +209,9 @@ class TargetFilter:
         self._t_meas: float = 0.0
         # The 1-sigma position spread just after the last measurement.
         self._sigma_meas: float = 0.0
-        # The measurements gated out in a row (t, n, e, sigma), newest last.
-        self._rejected: list[tuple[float, float, float, float]] = []
+        # The measurements gated out in a row (t, n, e, sigma, covariance),
+        # newest last.
+        self._rejected: list[tuple[float, float, float, float, Cov2]] = []
         # The fixes held out in a row as jumped (t, n, e, sigma, covariance),
         # newest last.
         self._jumps: list[tuple[float, float, float, float, Cov2]] = []
@@ -509,9 +516,9 @@ class TargetFilter:
         range cues (a lidar return off a trunk, a box cut by foliage) and is
         dropped, so a single bad fix cannot move the estimate metres. Gating
         must never lock a real manoeuvre out: once :data:`GATE_FORCE_AFTER`
-        outliers in a row agree with each other, the newest is fused with
-        the position spread widened by the innovation, which pulls the
-        estimate onto the measurements again. A fix after a gap (see
+        outliers in a row agree with each other, the estimate starts over
+        on them (its velocity theirs, not the old estimate's). A fix after a
+        gap (see
         :data:`REACQUIRE_GAP_S`) that jumped is held out until the next
         ones show which was right. ``gated=False`` fuses a measurement
         already checked elsewhere (a re-acquire) as it is, or starts the
@@ -531,28 +538,25 @@ class TargetFilter:
             s_inv[1][0] * y[0] + s_inv[1][1] * y[1]
         )
         if gated and d2 > GATE_CHI2:
-            self._rejected.append((t, north, east, position_sigma([list(r[0]), list(r[1])])))
+            self._rejected.append((t, north, east, position_sigma([list(r[0]), list(r[1])]), r))
             del self._rejected[:-GATE_FORCE_AFTER]
             if not self._rejected_agree():
                 return False
-            p = [list(row) for row in p]
-            p[0][0] += y[0] * y[0]
-            p[0][1] += y[0] * y[1]
-            p[1][0] += y[1] * y[0]
-            p[1][1] += y[1] * y[1]
-            s_inv = _innovation_inverse(p, r)
-            if s_inv is None:
-                return False
-        elif gated and d2 > HUBER_CHI2:
+            # The subject really moved (a turn, a sprint, a stop), or the
+            # estimate was on a false lock: it starts over on the agreeing
+            # fixes, so its velocity is theirs, not the old estimate's.
+            self._start_over(list(self._rejected))
+            return True
+        if gated and d2 > HUBER_CHI2:
             # Inside the gate but far out: weighed down (a Huber update), so
             # a fix the gate lets through cannot swing the velocity.
             w = d2 / HUBER_CHI2
             s_inv = _innovation_inverse(p, ((r[0][0] * w, r[0][1] * w), (r[1][0] * w, r[1][1] * w)))
             if s_inv is None:
                 return False
-        if gated and d2 <= GATE_CHI2:
-            # A fix forced through the gate (a manoeuvre) or fused unchecked
-            # (a re-acquire) is not range noise.
+        if gated:
+            # A fix fused unchecked (a re-acquire, a start over) is not
+            # range noise.
             self._note_scatter(p, r, y)
         self._rejected.clear()
         self._jumps.clear()
@@ -636,12 +640,16 @@ class TargetFilter:
         del self._jumps[:-REACQUIRE_CONFIRM_FIXES]
         if len(self._jumps) < REACQUIRE_CONFIRM_FIXES or not self._agree(self._jumps):
             return False
-        held = list(self._jumps)
+        self._start_over(list(self._jumps))
+        return True
+
+    def _start_over(self, held: list[tuple[float, float, float, float, Cov2]]) -> None:
+        """Start the estimate over on the oldest of ``held`` and fuse the
+        rest in turn."""
         t0, n0, e0, _s0, r0 = held[0]
         self._restart(t0, n0, e0, r0)
         for tk, nk, ek, _sk, rk in held[1:]:
             self.update(tk, nk, ek, rk, gated=False)
-        return True
 
     def _note_scatter(self, p: Mat, r: Cov2, y: list[float]) -> None:
         """Add one innovation ``y`` along the line of sight (the major axis
