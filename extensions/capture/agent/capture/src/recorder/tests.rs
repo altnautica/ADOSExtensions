@@ -198,6 +198,20 @@ fn every_channel_is_recorded_and_segments_roll() {
 
     let r = SessionReader::open(&sdir).unwrap();
     r.verify().unwrap();
+    let library = format!(
+        "{RECORDER_LIBRARY} {}",
+        ados_capture_contract::CONTRACT_LIBRARY
+    );
+    for seg in &m.segments {
+        let bytes = fs::read(sdir.join(&seg.file)).unwrap();
+        assert!(
+            bytes
+                .windows(library.len())
+                .any(|w| w == library.as_bytes()),
+            "{} header names `{library}`",
+            seg.file
+        );
+    }
     let mut topics_seen = BTreeSet::new();
     let mut imu = 0;
     r.for_each_message(|msg| {
@@ -478,5 +492,20 @@ fn a_full_disk_ends_the_recording_and_the_writer_answers_the_close() {
     assert!(
         !err.to_string().contains("recorder thread ended"),
         "the writer thread died: {err}"
+    );
+}
+
+#[test]
+fn the_recorder_library_names_the_released_capture_version() {
+    let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../manifest.yaml"));
+    let version = manifest
+        .lines()
+        .find_map(|l| l.strip_prefix("version:"))
+        .map(|v| v.trim().trim_matches('"'))
+        .expect("manifest.yaml has a version");
+    assert_eq!(
+        RECORDER_LIBRARY,
+        format!("com.altnautica.capture/{version}"),
+        "capture-service's crate version must equal the extension's manifest version"
     );
 }

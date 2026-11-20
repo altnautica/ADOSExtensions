@@ -10,6 +10,9 @@
 //! Every segment carries `rig.json` and a snapshot of the manifest taken when
 //! the segment opened as attachments; `manifest.json` in the directory,
 //! written by [`SessionWriter::finish`], is the authoritative copy.
+//! The MCAP header's library string is [`CONTRACT_LIBRARY`], preceded by the
+//! recording program and its version when [`SessionWriter::with_recorder`]
+//! names it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -21,7 +24,9 @@ use std::sync::{Arc, OnceLock};
 use mcap::records::MessageHeader;
 
 use crate::schema::{Manifest, Rig, Segment};
-use crate::{topics, write_checksums, Error, Result, FILE_DESCRIPTOR_SET, MCAP_PROFILE};
+use crate::{
+    topics, write_checksums, Error, Result, CONTRACT_LIBRARY, FILE_DESCRIPTOR_SET, MCAP_PROFILE,
+};
 
 /// When a segment is rolled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -178,6 +183,7 @@ pub struct SessionWriter {
     next_index: u32,
     buf: Vec<u8>,
     open_sink: OpenSink,
+    library: String,
     fault: Fault,
 }
 
@@ -214,6 +220,7 @@ impl SessionWriter {
             manifest,
             rig_json,
             limits: SegmentLimits::default(),
+            library: CONTRACT_LIBRARY.to_string(),
             segment: None,
             next_index: 0,
             buf: Vec::new(),
@@ -226,6 +233,19 @@ impl SessionWriter {
     pub fn with_limits(mut self, limits: SegmentLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Name the program recording the session (`<name>/<version>`, its own
+    /// build version) in every segment's MCAP library string, ahead of
+    /// [`CONTRACT_LIBRARY`].
+    pub fn with_recorder(mut self, recorder: &str) -> Self {
+        self.library = format!("{recorder} {CONTRACT_LIBRARY}");
+        self
+    }
+
+    /// The MCAP library string written in every segment header.
+    pub fn library(&self) -> &str {
+        &self.library
     }
 
     /// Send segment bytes to the sinks `open` returns instead of files.
@@ -349,7 +369,7 @@ impl SessionWriter {
         let mut writer = mcap::WriteOptions::new()
             .compression(Some(mcap::Compression::Lz4))
             .profile(MCAP_PROFILE)
-            .library(concat!("ados-capture-contract/", env!("CARGO_PKG_VERSION")))
+            .library(self.library.as_str())
             .create(out)?;
         let manifest_json = serde_json::to_vec_pretty(&self.manifest)?;
         for (name, data) in [

@@ -39,6 +39,10 @@ use ados_mapping_protocol::capture::PolarScan;
 use convert::{ImageEncoding, ImageMsg};
 use sidecars::{PolarWriter, Sidecars};
 
+/// The recorder named in every segment's MCAP library string: the Capture
+/// extension id and this build's version (kept equal to `manifest.yaml`'s
+/// `version` by a test).
+pub const RECORDER_LIBRARY: &str = concat!("com.altnautica.capture/", env!("CARGO_PKG_VERSION"));
 /// Items the queue holds before new ones are dropped. Sensor records are
 /// small and must survive an image backlog, so images have their own bound.
 pub const QUEUE: usize = 4096;
@@ -179,8 +183,9 @@ pub struct Recorder {
 impl Recorder {
     /// Create the session directory, `.recording`, and the writer thread.
     pub fn start(cfg: RecorderConfig) -> anyhow::Result<Self> {
-        let mut writer =
-            SessionWriter::create(&cfg.root, cfg.manifest, &cfg.rig)?.with_limits(cfg.limits);
+        let mut writer = SessionWriter::create(&cfg.root, cfg.manifest, &cfg.rig)?
+            .with_limits(cfg.limits)
+            .with_recorder(RECORDER_LIBRARY);
         if let Some(open) = cfg.sink {
             writer = writer.with_sink(open);
         }

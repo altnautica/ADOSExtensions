@@ -248,6 +248,46 @@ fn a_tampered_segment_fails_checksum_verification() {
     assert!(SessionReader::open(&dir).unwrap().verify().is_err());
 }
 
+/// The MCAP header of `segment`: (profile, library).
+fn mcap_header(segment: &Path) -> (String, String) {
+    let bytes = std::fs::read(segment).unwrap();
+    for record in mcap::read::LinearReader::new(&bytes).unwrap() {
+        if let mcap::records::Record::Header(h) = record.unwrap() {
+            return (h.profile, h.library);
+        }
+    }
+    panic!("{} has no header record", segment.display());
+}
+
+#[test]
+fn segment_headers_name_the_recorder_and_this_crate_version() {
+    let crate_library = concat!("ados-capture-contract/", env!("CARGO_PKG_VERSION"));
+    assert_eq!(ados_capture_contract::CONTRACT_LIBRARY, crate_library);
+    for recorder in [None, Some("com.example.recorder/3.4.5")] {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut w = SessionWriter::create(tmp.path(), manifest(), &rig()).unwrap();
+        if let Some(r) = recorder {
+            w = w.with_recorder(r);
+        }
+        let expected = match recorder {
+            Some(r) => format!("{r} {crate_library}"),
+            None => crate_library.to_string(),
+        };
+        assert_eq!(w.library(), expected);
+        let clock = ClockSample {
+            t_ns: T0,
+            ..Default::default()
+        };
+        w.write_proto(topics::CLOCK, T0, &clock).unwrap();
+        let m = w.finish().unwrap();
+        let seg = tmp.path().join(&m.session_id).join(&m.segments[0].file);
+        assert_eq!(
+            mcap_header(&seg),
+            (ados_capture_contract::MCAP_PROFILE.to_string(), expected)
+        );
+    }
+}
+
 #[test]
 fn segments_roll_on_duration_and_size() {
     let tmp = tempfile::tempdir().unwrap();

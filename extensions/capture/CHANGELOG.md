@@ -2,6 +2,15 @@
 
 All notable changes to the Capture extension.
 
+## [Unreleased]
+
+### Changed
+
+- Every session segment's MCAP header names the recorder as well as the
+  contract writer: `com.altnautica.capture/<version> ados-capture-contract/<version>`,
+  both taken from the build. A test keeps the Capture crate version equal to
+  the extension's manifest version.
+
 ## [1.0.0] - 2026-11-20
 
 Capture: session recording, keyframe selection and session upload, as its

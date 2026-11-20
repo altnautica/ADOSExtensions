@@ -57,6 +57,10 @@ pub const CONTRACT_VERSION: &str = "1.0.0";
 /// MCAP profile name written in every segment header.
 pub const MCAP_PROFILE: &str = "ados.capture/1";
 
+/// This crate's name and build version, the tail of every segment's MCAP
+/// library string (see [`SessionWriter::with_recorder`]).
+pub const CONTRACT_LIBRARY: &str = concat!("ados-capture-contract/", env!("CARGO_PKG_VERSION"));
+
 /// Encoded `google.protobuf.FileDescriptorSet` covering every contract and
 /// Foxglove message, the schema data of every protobuf MCAP channel.
 pub const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/capture_fds.bin"));
