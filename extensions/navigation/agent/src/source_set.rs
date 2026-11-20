@@ -438,7 +438,10 @@ mod tests {
     #[test]
     fn a_one_tick_fix_flicker_at_boot_does_not_hand_over_to_external_nav() {
         let mut s = bench_switch();
-        assert_eq!(run_fc(&mut s, 0, S / 10, GOOD, 3, None, BOOTING), vec![(0, 1)]);
+        assert_eq!(
+            run_fc(&mut s, 0, S / 10, GOOD, 3, None, BOOTING),
+            vec![(0, 1)]
+        );
         assert!(run_fc(&mut s, S / 10, 10 * S, GOOD, 0, None, BOOTING).is_empty());
         assert_eq!(s.active(), Some(1));
         assert_eq!(s.hold(), Some(SourceHold::NoOrigin));
@@ -472,7 +475,10 @@ mod tests {
         let mut s = bench_switch();
         run_fc(&mut s, 0, S, GOOD, 6, None, FLYING);
         assert_eq!(s.active(), None, "a start while armed commands nothing");
-        assert_eq!(run_fc(&mut s, S, 4 * S, GOOD, 0, None, FLYING), vec![(3 * S, 2)]);
+        assert_eq!(
+            run_fc(&mut s, S, 4 * S, GOOD, 0, None, FLYING),
+            vec![(3 * S, 2)]
+        );
         let degraded = Some(ExtnavHealth::Degraded);
         assert!(run_fc(&mut s, 4 * S, 30 * S, degraded, 0, None, FLYING).is_empty());
         let back = run_fc(&mut s, 30 * S, 41 * S, degraded, 6, None, FLYING);
@@ -505,7 +511,10 @@ mod tests {
     fn a_pose_lost_in_flight_without_gps_holds_and_says_no_position() {
         let mut s = bench_switch();
         run_fc(&mut s, 0, S, GOOD, 6, None, GROUND);
-        assert_eq!(run_fc(&mut s, S, 4 * S, GOOD, 0, None, FLYING), vec![(3 * S, 2)]);
+        assert_eq!(
+            run_fc(&mut s, S, 4 * S, GOOD, 0, None, FLYING),
+            vec![(3 * S, 2)]
+        );
         assert!(run_fc(&mut s, 4 * S, 8 * S, None, 0, None, FLYING).is_empty());
         assert_eq!(s.hold(), Some(SourceHold::NoPosition));
         let back = run_fc(&mut s, 8 * S, 9 * S, None, 6, None, FLYING);
@@ -518,7 +527,10 @@ mod tests {
     fn a_flight_controller_reboot_starts_the_machine_over() {
         let mut s = bench_switch();
         run_fc(&mut s, 0, S, GOOD, 6, None, GROUND);
-        assert_eq!(run_fc(&mut s, S, 4 * S, GOOD, 0, None, GROUND), vec![(3 * S, 2)]);
+        assert_eq!(
+            run_fc(&mut s, S, 4 * S, GOOD, 0, None, GROUND),
+            vec![(3 * S, 2)]
+        );
         let rebooted = Fc {
             boot_epoch: 2,
             ..BOOTING
@@ -537,14 +549,26 @@ mod tests {
         let sink = crate::fc_nav::FcNavSink::default();
         sink.on_heartbeat(false, 0);
         let booting = Fc::of(&sink.snapshot(0));
-        assert_eq!(booting, Fc { boot_epoch: 1, ..BOOTING });
+        assert_eq!(
+            booting,
+            Fc {
+                boot_epoch: 1,
+                ..BOOTING
+            }
+        );
         sink.on_origin();
         sink.on_heartbeat(true, S);
         assert_eq!(Fc::of(&sink.snapshot(S)), FLYING);
         // Silence long enough for a reboot: a new boot, no origin.
         sink.on_heartbeat(false, 60 * S);
         let rebooted = Fc::of(&sink.snapshot(60 * S));
-        assert_eq!(rebooted, Fc { boot_epoch: 2, ..BOOTING });
+        assert_eq!(
+            rebooted,
+            Fc {
+                boot_epoch: 2,
+                ..BOOTING
+            }
+        );
     }
 
     #[test]
