@@ -90,6 +90,11 @@ pub enum SourceHold {
     /// On the external-nav set with the pose lost and no usable GPS: no
     /// source to switch to; the flight controller's EKF failsafe acts.
     NoPosition,
+    /// Started while armed: the flight controller's set is unknown (a
+    /// previous instance may have left it on external nav), so nothing is
+    /// commanded until it is disarmed, or until the pose is lost with a
+    /// usable GPS and an EKF origin, when the switch to GPS is the safe one.
+    UnknownSet,
 }
 
 impl SourceHold {
@@ -97,6 +102,7 @@ impl SourceHold {
         match self {
             Self::NoOrigin => "no_origin",
             Self::NoPosition => "no_position",
+            Self::UnknownSet => "unknown_set",
         }
     }
 }
@@ -204,6 +210,13 @@ impl SourceSwitch {
                 }
             } else if self.active.is_none() && gps_ok && gps_safe {
                 Some(self.fallback_set)
+            } else if self.active.is_none() && fc.armed {
+                if lost && gps_ok && fc.origin {
+                    Some(self.fallback_set)
+                } else {
+                    self.hold = Some(SourceHold::UnknownSet);
+                    None
+                }
             } else {
                 None
             }
@@ -464,6 +477,25 @@ mod tests {
         assert!(run_fc(&mut s, 4 * S, 30 * S, degraded, 0, None, FLYING).is_empty());
         let back = run_fc(&mut s, 30 * S, 41 * S, degraded, 6, None, FLYING);
         assert_eq!(back, vec![(40 * S, 1)]);
+    }
+
+    /// Started while armed (the flight controller's set unknown) with a
+    /// usable GPS: nothing is commanded and the machine says why. The pose
+    /// lost switches to GPS only with an EKF origin present.
+    #[test]
+    fn a_start_while_armed_says_unknown_set_and_a_lost_pose_returns_to_gps() {
+        let no_origin = Fc {
+            origin: false,
+            ..FLYING
+        };
+        let mut s = bench_switch();
+        assert!(run_fc(&mut s, 0, 3 * S, GOOD, 6, None, FLYING).is_empty());
+        assert_eq!(s.hold(), Some(SourceHold::UnknownSet));
+        assert!(run_fc(&mut s, 3 * S, 6 * S, None, 6, None, no_origin).is_empty());
+        assert_eq!(s.hold(), Some(SourceHold::UnknownSet));
+        let back = run_fc(&mut s, 6 * S, 7 * S, None, 6, None, FLYING);
+        assert_eq!(back, vec![(6 * S, 1)]);
+        assert_eq!(s.hold(), None);
     }
 
     /// On external nav in flight, the pose lost with no usable GPS: nothing

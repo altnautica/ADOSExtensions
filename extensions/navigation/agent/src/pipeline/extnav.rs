@@ -51,6 +51,16 @@ struct PendingSet {
     set: u8,
     sent_at: Option<i64>,
     tries: u8,
+    /// The flight-controller boot it was meant for.
+    boot_epoch: u64,
+}
+
+impl PendingSet {
+    /// The command and its retries belong to the boot they were decided
+    /// for: a rebooted flight controller starts the machine over.
+    fn outlived(&self, boot_epoch: u64) -> bool {
+        self.boot_epoch != boot_epoch
+    }
 }
 
 /// Unix milliseconds now.
@@ -145,7 +155,14 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                     set,
                     sent_at: None,
                     tries: 0,
+                    boot_epoch: fc.boot_epoch,
                 });
+            }
+            if pending.as_ref().is_some_and(|p| p.outlived(fc.boot_epoch)) {
+                eprintln!(
+                    "navigation: EKF source set command dropped: the flight controller rebooted"
+                );
+                pending = None;
             }
             if switch.hold() != last_hold {
                 last_hold = switch.hold();
@@ -351,4 +368,23 @@ pub fn spawn_nav_state(
                 .await;
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A source-set command still being retried when the flight controller
+    /// reboots is dropped, not resent to the new boot.
+    #[test]
+    fn a_pending_source_set_does_not_outlive_its_boot() {
+        let p = PendingSet {
+            set: 2,
+            sent_at: Some(0),
+            tries: 1,
+            boot_epoch: 3,
+        };
+        assert!(!p.outlived(3));
+        assert!(p.outlived(4));
+    }
 }

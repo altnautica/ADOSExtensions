@@ -7,10 +7,12 @@
 //! [`FcNavSnapshot`] with every stale field already dropped (the flow keeps
 //! its age, so a stale flow reads differently from one never heard).
 //!
-//! A heartbeat after [`FC_SILENCE_NS`] of silence (or the first one ever)
-//! starts a new flight-controller boot: the boot time and epoch move on and
-//! the origin the previous boot reported is forgotten, since a rebooted
-//! flight controller has none until it sets or receives one again.
+//! A heartbeat after [`FC_SILENCE_NS`] of silence (or the first one ever),
+//! or a `time_boot_ms` that goes back by more than
+//! [`BOOT_TIME_BACK_TOLERANCE_MS`] (a flight controller back within the
+//! silence), starts a new flight-controller boot: the boot time and epoch
+//! move on and the origin the previous boot reported is forgotten, since a
+//! rebooted flight controller has none until it sets or receives one again.
 
 use std::sync::Mutex;
 
@@ -22,6 +24,9 @@ pub const ATTITUDE_STALE_NS: i64 = 500_000_000;
 pub const GPS_STALE_NS: i64 = 2_000_000_000;
 /// A heartbeat after this much silence starts a new flight-controller boot.
 pub const FC_SILENCE_NS: i64 = 3_000_000_000;
+/// A `time_boot_ms` this far behind the latest is a reordered message, not
+/// a reboot.
+pub const BOOT_TIME_BACK_TOLERANCE_MS: u32 = 500;
 /// `MAV_MODE_FLAG_SAFETY_ARMED` in `HEARTBEAT.base_mode`.
 pub const MODE_FLAG_ARMED: u8 = 128;
 
@@ -87,8 +92,22 @@ struct Inner {
     source_set_ack: Option<u8>,
     armed: bool,
     last_heartbeat: Option<i64>,
+    /// The latest `time_boot_ms` the flight controller reported.
+    last_boot_ms: Option<u32>,
     boot_ns: Option<i64>,
     boot_epoch: u64,
+}
+
+impl Inner {
+    /// A new flight-controller boot: it has no origin, is disarmed and
+    /// re-sends its flow from scratch.
+    fn start_boot(&mut self, now_ns: i64) {
+        self.boot_ns = Some(now_ns);
+        self.boot_epoch += 1;
+        self.origin_seen = false;
+        self.armed = false;
+        self.flow = None;
+    }
 }
 
 /// The shared sink.
@@ -120,13 +139,30 @@ impl FcNavSink {
     pub fn on_heartbeat(&self, armed: bool, now_ns: i64) {
         let mut g = self.lock();
         if g.last_heartbeat.is_none_or(|t| now_ns - t >= FC_SILENCE_NS) {
-            g.boot_ns = Some(now_ns);
-            g.boot_epoch += 1;
-            g.origin_seen = false;
-            g.flow = None;
+            g.start_boot(now_ns);
+            g.last_boot_ms = None;
         }
         g.last_heartbeat = Some(now_ns);
         g.armed = armed;
+    }
+
+    /// A `time_boot_ms` the flight controller reported (`ATTITUDE`,
+    /// `LOCAL_POSITION_NED`). One more than [`BOOT_TIME_BACK_TOLERANCE_MS`]
+    /// before the latest starts a new boot: a flight controller back within
+    /// [`FC_SILENCE_NS`] leaves no heartbeat gap to tell it by.
+    pub fn on_boot_time(&self, time_boot_ms: u32, now_ns: i64) {
+        let mut g = self.lock();
+        let back = g
+            .last_boot_ms
+            .is_some_and(|last| time_boot_ms.saturating_add(BOOT_TIME_BACK_TOLERANCE_MS) < last);
+        if back {
+            g.start_boot(now_ns);
+            // Heard: the heartbeat that follows is no silence.
+            g.last_heartbeat = Some(now_ns);
+        }
+        if back || g.last_boot_ms.is_none_or(|last| time_boot_ms > last) {
+            g.last_boot_ms = Some(time_boot_ms);
+        }
     }
 
     pub fn on_origin(&self) {
@@ -233,6 +269,32 @@ mod tests {
         let c = s.snapshot(15 * S);
         assert_eq!((c.boot_ns, c.boot_epoch, c.armed), (Some(15 * S), 2, false));
         assert!(!c.origin_seen);
+    }
+
+    /// A flight controller back after a 1 s heartbeat gap leaves no
+    /// silence to tell the reboot by; its `time_boot_ms` going back does.
+    /// A message reordered by under the tolerance is no reboot, and the
+    /// heartbeat after a reboot told this way is not a second one.
+    #[test]
+    fn a_reboot_inside_the_heartbeat_silence_is_told_by_its_boot_time() {
+        const S: i64 = 1_000_000_000;
+        let s = FcNavSink::default();
+        s.on_heartbeat(true, 10 * S);
+        s.on_origin();
+        s.on_boot_time(300_000, 10 * S);
+        s.on_boot_time(299_700, 10 * S + S / 10);
+        s.on_boot_time(300_200, 10 * S + S / 5);
+        let a = s.snapshot(11 * S);
+        assert_eq!((a.boot_epoch, a.armed), (1, true));
+        assert!(a.origin_seen);
+        // Rebooted: 1 s without a heartbeat, then the new boot's clock.
+        s.on_boot_time(1_500, 12 * S);
+        s.on_heartbeat(false, 12 * S + S / 10);
+        let b = s.snapshot(12 * S + S / 10);
+        assert_eq!((b.boot_ns, b.boot_epoch, b.armed), (Some(12 * S), 2, false));
+        assert!(!b.origin_seen);
+        s.on_boot_time(1_700, 12 * S + S / 5);
+        assert_eq!(s.snapshot(13 * S).boot_epoch, 2);
     }
 
     #[test]

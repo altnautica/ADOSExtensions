@@ -110,8 +110,11 @@ until accepted):
   switches back, and with the pose lost for 1 s any usable GPS does.
   Armed, a switch to GPS happens only when the origin existed at the
   takeover, and the first command after a start waits for the vehicle to
-  be disarmed: in Guided a position reset moves the vehicle by the offset.
-  A new flight-controller boot starts the machine over.
+  be disarmed (or for the pose to be lost for 1 s with a usable GPS and an
+  EKF origin): in Guided a position reset moves the vehicle by the offset.
+  A new flight-controller boot (3 s of heartbeat silence, or its
+  `time_boot_ms` going back by more than 0.5 s) starts the machine over and
+  drops a command still being retried.
 
 ### EKF origin
 
@@ -195,9 +198,10 @@ otherwise):
 
 Fields a mode does not produce are `null`. `source_hold` says why the
 GPS-primary source set is held: `no_origin` (a lost GPS is not handed to
-external navigation without an EKF origin) or `no_position` (on external
+external navigation without an EKF origin), `no_position` (on external
 navigation with the pose lost and no usable GPS; nothing to switch to, the
-flight controller's EKF failsafe acts). The Navigation page shows the
+flight controller's EKF failsafe acts) or `unknown_set` (started while
+armed, the flight controller's set unknown). The Navigation page shows the
 state as the navigation feed card, and the cockpit panel shows it in
 flight.
 

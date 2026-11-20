@@ -207,18 +207,22 @@ pub fn apply(
         // The external-nav inputs come from the flight controller only, so
         // a gimbal or camera reporting its own ATTITUDE is never mixed in.
         MavMessage::LOCAL_POSITION_NED(d) if is_fc(sinks, system, component) => {
+            sinks.fc_nav.on_boot_time(d.time_boot_ms, now_ns);
             sinks.fc_nav.on_local_position(d.z, d.vz, now_ns)
         }
-        MavMessage::ATTITUDE(d) if is_fc(sinks, system, component) => sinks.fc_nav.on_attitude(
-            Attitude {
-                roll: d.roll,
-                pitch: d.pitch,
-                rollspeed: d.rollspeed,
-                pitchspeed: d.pitchspeed,
-                yawspeed: d.yawspeed,
-            },
-            now_ns,
-        ),
+        MavMessage::ATTITUDE(d) if is_fc(sinks, system, component) => {
+            sinks.fc_nav.on_boot_time(d.time_boot_ms, now_ns);
+            sinks.fc_nav.on_attitude(
+                Attitude {
+                    roll: d.roll,
+                    pitch: d.pitch,
+                    rollspeed: d.rollspeed,
+                    pitchspeed: d.pitchspeed,
+                    yawspeed: d.yawspeed,
+                },
+                now_ns,
+            )
+        }
         MavMessage::GPS_GLOBAL_ORIGIN(_) if is_fc(sinks, system, component) => {
             sinks.fc_nav.on_origin()
         }
@@ -515,6 +519,24 @@ mod tests {
         });
         deliver(&s, &delivery(1, 1, &pos), 0);
         assert_eq!(s.fc_nav.snapshot(0).local.unwrap().z, -4.0);
+    }
+
+    /// The flight controller's `time_boot_ms` going back (a reboot within
+    /// the heartbeat silence) starts a new boot in the nav sink.
+    #[test]
+    fn an_fc_boot_time_going_back_starts_a_new_boot() {
+        use ados_protocol::mavlink::ardupilotmega::ATTITUDE_DATA;
+        let s = sinks();
+        let att = |ms: u32| {
+            MavMessage::ATTITUDE(ATTITUDE_DATA {
+                time_boot_ms: ms,
+                ..ATTITUDE_DATA::DEFAULT
+            })
+        };
+        deliver(&s, &delivery(1, 1, &att(600_000)), 0);
+        let before = s.fc_nav.snapshot(0).boot_epoch;
+        deliver(&s, &delivery(1, 1, &att(2_000)), 1_000_000_000);
+        assert_eq!(s.fc_nav.snapshot(1_000_000_000).boot_epoch, before + 1);
     }
 
     #[test]
