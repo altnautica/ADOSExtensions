@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use ados_mapping_pose::pose::PoseProvider;
 
-use super::runtime::{check_tree, resolve, RuntimeError, RUNTIME_PYTHON};
+use super::runtime::{check_tree, resolve, RuntimeError, Sources, RUNTIME_PYTHON};
 use super::tests::{config, scan, FAKE_MAIN};
 use super::*;
 
@@ -34,7 +34,31 @@ fn runtime_in(dir: &Path) -> PathBuf {
     ] {
         chmod(&d, 0o755);
     }
+    // The project, beside the runtime in the same install dir.
+    let pkg = dir.join("proj/kiss_icp_live");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("__init__.py"), "").unwrap();
+    std::fs::write(pkg.join("__main__.py"), FAKE_MAIN).unwrap();
+    for f in ["__init__.py", "__main__.py"] {
+        chmod(&pkg.join(f), 0o644);
+    }
+    chmod(&dir.join("proj"), 0o755);
+    chmod(&pkg, 0o755);
     rt
+}
+
+/// `resolve` for a runtime at `<install>/lib/kiss-icp-runtime` with its
+/// project at `<install>/proj`.
+fn res(rt: &Path, uv: &Path) -> Result<runtime::Resolved, RuntimeError> {
+    let install = rt.parent().unwrap().parent().unwrap();
+    resolve(
+        Sources {
+            runtime: rt,
+            project: &install.join("proj"),
+            install,
+        },
+        uv,
+    )
 }
 
 fn no_uv(dir: &Path) -> PathBuf {
@@ -42,17 +66,45 @@ fn no_uv(dir: &Path) -> PathBuf {
 }
 
 #[test]
+fn a_runtime_or_project_outside_the_install_dir_or_behind_a_symlink_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime_in(dir.path());
+    let elsewhere = tempfile::tempdir().unwrap();
+    let src = |runtime: &Path, project: &Path| match resolve(
+        Sources {
+            runtime,
+            project,
+            install: dir.path(),
+        },
+        Path::new("sh"),
+    ) {
+        Err(RuntimeError::Unsafe { why, .. }) => why,
+        other => panic!("{other:?}"),
+    };
+    let proj = dir.path().join("proj");
+    assert!(src(elsewhere.path(), &proj).contains("outside the install dir"));
+    assert!(src(&rt, elsewhere.path()).contains("outside the install dir"));
+    // An ancestor that is a symlink, even one pointing back inside.
+    std::os::unix::fs::symlink(dir.path().join("lib"), dir.path().join("alias")).unwrap();
+    let via = dir.path().join("alias/kiss-icp-runtime");
+    assert!(src(&via, &proj).contains("reached through a symlink"));
+    // The project is held to the tree rules too.
+    chmod(&proj.join("kiss_icp_live/__main__.py"), 0o666);
+    assert!(src(&rt, &proj).contains("writable by group or others"));
+}
+
+#[test]
 fn the_install_tree_runtime_is_picked_with_no_note() {
     let dir = tempfile::tempdir().unwrap();
     let rt = runtime_in(dir.path());
-    let got = resolve(&rt, &no_uv(dir.path())).unwrap();
+    let got = res(&rt, &no_uv(dir.path())).unwrap();
     assert_eq!(got.launcher, Launcher::Python(rt.join(RUNTIME_PYTHON)));
     assert_eq!(got.note, None);
 }
 
 #[test]
 fn a_runtime_writable_by_others_is_refused() {
-    let unsafe_path = |rt: &Path| match resolve(rt, Path::new("sh")) {
+    let unsafe_path = |rt: &Path| match res(rt, Path::new("sh")) {
         Err(RuntimeError::Unsafe { path, why }) => (path, why),
         other => panic!("{other:?}"),
     };
@@ -112,13 +164,13 @@ fn only_root_or_this_user_may_own_the_tree() {
 fn without_a_runtime_the_uv_fallback_is_reported() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("lib/kiss-icp-runtime");
-    let got = resolve(&missing, Path::new("sh")).unwrap();
+    let got = res(&missing, Path::new("sh")).unwrap();
     assert!(matches!(&got.launcher, Launcher::Uv(p) if p.is_absolute() && p.ends_with("sh")));
     let note = got.note.unwrap();
     assert!(note.contains("no prebuilt KISS-ICP runtime"), "{note}");
     assert!(note.contains("developer fallback"), "{note}");
     assert_eq!(
-        resolve(&missing, &no_uv(dir.path())),
+        res(&missing, &no_uv(dir.path())),
         Err(RuntimeError::Missing {
             runtime: missing.clone(),
             uv: no_uv(dir.path()).display().to_string(),
@@ -140,14 +192,11 @@ async fn the_resolved_runtime_runs_the_child() {
     }
     let dir = tempfile::tempdir().unwrap();
     let rt = runtime_in(dir.path());
-    let pkg = dir.path().join("kiss_icp_live");
-    std::fs::create_dir_all(&pkg).unwrap();
-    std::fs::write(pkg.join("__init__.py"), "").unwrap();
-    std::fs::write(pkg.join("__main__.py"), FAKE_MAIN).unwrap();
     let before = listing(&rt);
-    let resolved = resolve(&rt, &no_uv(dir.path())).unwrap();
+    let resolved = res(&rt, &no_uv(dir.path())).unwrap();
     let pose = LidarPose::spawn(LidarPoseConfig {
         launcher: resolved.launcher,
+        project_dir: dir.path().join("proj"),
         ..config(dir.path(), "mid360")
     })
     .unwrap();

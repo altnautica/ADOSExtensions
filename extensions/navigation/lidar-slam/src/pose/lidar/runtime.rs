@@ -46,13 +46,55 @@ pub struct Resolved {
     pub note: Option<String>,
 }
 
-/// The prebuilt runtime at `runtime` when it is there and safe; the uv
-/// fallback (`uv`: a path, or a bare name looked up on `PATH`) when there is
-/// no runtime at all.
-pub fn resolve(runtime: &Path, uv: &Path) -> Result<Resolved, RuntimeError> {
+/// Where the child's code comes from.
+#[derive(Debug, Clone, Copy)]
+pub struct Sources<'a> {
+    /// The prebuilt runtime dir.
+    pub runtime: &'a Path,
+    /// The `kiss_icp_live` project the child runs (its cwd).
+    pub project: &'a Path,
+    /// The plugin's install dir, which both must lie inside.
+    pub install: &'a Path,
+}
+
+/// `path` itself, refused unless it resolves inside `install` without
+/// passing through a symlink (its canonical form equals its absolute form).
+fn contained(path: &Path, install: &Path) -> Result<PathBuf, RuntimeError> {
+    let refuse = |why: String| RuntimeError::Unsafe {
+        path: path.to_path_buf(),
+        why,
+    };
+    let abs = std::path::absolute(path).map_err(|e| refuse(e.to_string()))?;
+    let canon = abs.canonicalize().map_err(|e| refuse(e.to_string()))?;
+    if canon != abs {
+        return Err(refuse(format!(
+            "reached through a symlink (resolves to {})",
+            canon.display()
+        )));
+    }
+    let install = install.canonicalize().map_err(|e| refuse(e.to_string()))?;
+    if !canon.starts_with(&install) {
+        return Err(refuse(format!(
+            "outside the install dir {}",
+            install.display()
+        )));
+    }
+    Ok(canon)
+}
+
+/// The prebuilt runtime when it is there and safe, its project with it; the
+/// uv fallback (`uv`: a path, or a bare name looked up on `PATH`) when there
+/// is no runtime at all.
+pub fn resolve(src: Sources<'_>, uv: &Path) -> Result<Resolved, RuntimeError> {
+    let runtime = src.runtime;
     if runtime.symlink_metadata().is_ok() {
         let unsafe_at = |(path, why): (PathBuf, String)| RuntimeError::Unsafe { path, why };
-        check_tree(runtime, euid()).map_err(unsafe_at)?;
+        let runtime = contained(runtime, src.install)?;
+        check_tree(&runtime, euid()).map_err(unsafe_at)?;
+        // The project's code runs in the same child, so it is held to the
+        // same rules.
+        let project = contained(src.project, src.install)?;
+        check_tree(&project, euid()).map_err(unsafe_at)?;
         let python = runtime.join(RUNTIME_PYTHON);
         let meta = python
             .symlink_metadata()

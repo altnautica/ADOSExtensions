@@ -6,7 +6,7 @@
 # odometry runs offline from the install tree with no `uv sync` on the node.
 #
 # Usage: build-runtime.sh --arch x86_64|aarch64 [--out DIR] [--uv UV]
-#                         [--cache DIR] [--python PY]
+#                         [--cache DIR]
 #
 # Output, under DIR (default ./payload):
 #   kiss-icp-runtime-<arch>-linux/       the runtime tree (bin/python3, lib/...)
@@ -25,10 +25,12 @@
 # Wheels are resolved for `<arch>-manylinux_2_28` and binary only, so nothing
 # in the tree needs a glibc newer than 2.28 (the floor of the release's other
 # native payloads); the build checks every ELF file's GLIBC_ symbol versions
-# against that floor with objdump. Bytecode is compiled with unchecked hashes
-# so the read-only tree never needs a .pyc rewrite; `--python` names an
-# interpreter of the same CPython minor version to compile with when the
-# runtime's own cannot run on this host (a cross-arch build).
+# against that floor with objdump. The tree ships no bytecode: CPython's
+# marshal writes back-references by the compiling process's reference counts,
+# so .pyc files differ from build to build even for identical code, and a
+# timestamped .pyc would go stale against the unpacked mtimes anyway. The
+# child runs with -B and compiles what it imports in memory at start, so two
+# builds of the same pins give the same zip.
 #
 # Release: each leg of .github/workflows/navigation-release.yml runs
 # `build-runtime.sh --arch <leg arch>` natively and stages the zip as the
@@ -51,7 +53,6 @@ ARCH=""
 OUT="$(pwd)/payload"
 UV="uv"
 CACHE=""
-PY_BUILD=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -59,7 +60,6 @@ while [ $# -gt 0 ]; do
     --out) shift; OUT="${1:?--out needs a directory}" ;;
     --uv) shift; UV="${1:?--uv needs a path}" ;;
     --cache) shift; CACHE="${1:?--cache needs a directory}" ;;
-    --python) shift; PY_BUILD="${1:?--python needs an interpreter}" ;;
     -h|--help) sed -n '2,34p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -130,16 +130,9 @@ find "$SITE/numpy" -depth -type d -name tests -exec rm -rf {} +
 find "$SITE" -type f \( -name '*.pyi' -o -name '*.pxd' -o -name '*.pyx' \) -delete
 find "$ROOT" -type l -delete
 
-# 4. Bytecode for the read-only tree: unchecked hashes, so no import ever
-#    revalidates (or tries to rewrite) a .pyc against the unpacked mtimes.
+# 4. No bytecode (see the header): every __pycache__ goes, so the zip holds
+#    sources only and two builds of the same pins are byte-identical.
 find "$ROOT" -type d -name __pycache__ -prune -exec rm -rf {} +
-if [ -z "$PY_BUILD" ]; then
-  PY_BUILD="$ROOT/bin/python3"
-fi
-"$PY_BUILD" -c "import sys; assert sys.version_info[:2] == tuple(map(int, '$PY_MINOR'.split('.'))), sys.version" \
-  || { echo "--python must be CPython $PY_MINOR" >&2; exit 1; }
-"$PY_BUILD" -E -s -m compileall -q -j 0 --invalidation-mode unchecked-hash \
-  -s "$ROOT/" -p / "$STDLIB" >/dev/null
 
 # 5. Licences: CPython's, then every installed distribution's licence files.
 {

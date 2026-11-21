@@ -41,6 +41,10 @@ env:
   # The oldest glibc navigation-lidar-slam and the Livox SDK2 library run on
   # (manylinux_2_28: Debian 10, Ubuntu 18.10 and newer).
   GLIBC_FLOOR: "2.28"
+  # The manylinux_2_28 build images, pinned by digest so a re-run of a tag
+  # builds the native libraries in the same image.
+  MANYLINUX_x86_64: quay.io/pypa/manylinux_2_28_x86_64@sha256:55a36963bc0504cdf004011001c1072306402f0b8b83be5a5eba7068f93eec53
+  MANYLINUX_aarch64: quay.io/pypa/manylinux_2_28_aarch64@sha256:126d9eea9d6b1717f3e17b2b3ac51da04ef159a5f935dac36fe92d621dc8f246
 
 jobs:
   checks:
@@ -82,7 +86,7 @@ jobs:
       fail-fast: true
       matrix: ${{ fromJSON(needs.legs.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check out the agent SDK at the pinned revision
         run: |
@@ -93,25 +97,26 @@ jobs:
           echo "agent SDK pinned at ADOSDroneAgent@$(git -C "${dest}" rev-parse --short HEAD)"
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           targets: ${{ matrix.target }},${{ matrix.slam_target }}
 
       - name: Install zig
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
 
       - name: Install cargo-zigbuild
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@25f51f6b1bf4e18876107cece836f4f77ac17c8c # v2
         with:
           tool: cargo-zigbuild
 
-      - name: Cache cargo
-        uses: actions/cache@v4
+      - name: Cache the cargo registry
+        # Downloaded sources only: a release never starts from a cached
+        # `target/` another run could have written.
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: navigation-release-${{ matrix.arch_os }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: navigation-release-${{ matrix.arch_os }}-
 
@@ -152,10 +157,11 @@ jobs:
         run: |
           set -euo pipefail
           arch="${ARCH_OS%-linux}"
+          image_var="MANYLINUX_${arch}"
           out="${RUNNER_TEMP}/livox"
           mkdir -p "${out}"
           docker run --rm -v "${GITHUB_WORKSPACE}:/src:ro" -v "${out}:/out" \
-            "quay.io/pypa/manylinux_${GLIBC_FLOOR/./_}_${arch}" \
+            "${!image_var}" \
             bash /src/extensions/navigation/lidar-slam/livox/build-sdk2.sh --arch "${arch}" --jobs 4 --out /out
           sudo chown -R "$(id -u):$(id -g)" "${out}"
           lib="${out}/lib/${ARCH_OS}/liblivox_lidar_sdk_shared.so"
@@ -177,10 +183,11 @@ jobs:
         run: |
           set -euo pipefail
           arch="${ARCH_OS%-linux}"
+          image_var="MANYLINUX_${arch}"
           out="${RUNNER_TEMP}/librealsense2"
           mkdir -p "${out}"
           docker run --rm -v "${GITHUB_WORKSPACE}:/src:ro" -v "${out}:/out" \
-            "quay.io/pypa/manylinux_${GLIBC_FLOOR/./_}_${arch}" \
+            "${!image_var}" \
             bash /src/extensions/navigation/lidar-slam/realsense/build-librealsense2.sh --arch "${arch}" --jobs 4 --out /out
           sudo chown -R "$(id -u):$(id -g)" "${out}"
           lib="${out}/lib/${ARCH_OS}/librealsense2.so"
@@ -243,7 +250,7 @@ jobs:
           cp "$out/kiss-icp-runtime-${ARCH_OS}.zip" "payloads/navigation-kiss-icp-runtime-${ARCH_OS}.zip"
 
       - name: Hand the binaries to the release job
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: payload-${{ matrix.arch_os }}
           path: payloads/
@@ -258,7 +265,7 @@ jobs:
     env:
       EXT_DIR: extensions/navigation
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
@@ -278,16 +285,16 @@ jobs:
           echo "SIGNED=${archive%.adosplug}.signed.adosplug" >> "$GITHUB_ENV"
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
           cache: "pnpm"
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
 
@@ -300,7 +307,7 @@ jobs:
         run: pnpm build:navigation
 
       - name: Collect the binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: payload-*
           path: payloads
@@ -384,7 +391,7 @@ jobs:
           cat "${SIGNED}.sha256"
 
       - name: Upload to GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           fail_on_unmatched_files: true
           files: |

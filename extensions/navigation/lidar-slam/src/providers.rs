@@ -90,8 +90,17 @@ fn lidar_pose(cfg: &NavConfig, rig: &Rig, work_dir: &Path) -> Result<Started, St
             } else {
                 PathBuf::from(&cfg.lidar.uv)
             };
-            let resolved = runtime::resolve(&install_path(&cfg.lidar.runtime), &uv)
-                .map_err(|e| e.to_string())?;
+            let (rt, project) = (
+                install_path(&cfg.lidar.runtime),
+                install_path(&cfg.lidar.project_dir),
+            );
+            let install = std::env::current_dir().unwrap_or_default();
+            let src = runtime::Sources {
+                runtime: &rt,
+                project: &project,
+                install: &install,
+            };
+            let resolved = runtime::resolve(src, &uv).map_err(|e| e.to_string())?;
             LidarPose::spawn(LidarPoseConfig {
                 launcher: resolved.launcher,
                 project_dir: install_path(&cfg.lidar.project_dir),
