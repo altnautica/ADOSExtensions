@@ -422,6 +422,23 @@ fn health_and_frames_follow_the_matcher() {
         ..unmeasured
     };
     assert_eq!(health_of(&wide, 30, 0.05), VioHealth::Lost);
+    // Measured, yet the matcher's filter puts it past a metre along the
+    // corridor: degraded, never good, and its covariance (which external
+    // navigation sends the flight controller with the sigma) says so.
+    let uncertain = PoseOut {
+        sigma_xy_m: 1.2,
+        ..p
+    };
+    assert_eq!(health_of(&uncertain, 30, 0.05), VioHealth::Degraded);
+    let cov = pose_cov(VioHealth::Degraded, uncertain.sigma_xy_m);
+    assert!(
+        (cov[0] - 1.44).abs() < 1e-12 && (cov[7] - 1.44).abs() < 1e-12,
+        "{cov:?}"
+    );
+    assert_eq!(
+        pose_cov(VioHealth::Good, 0.01),
+        nominal_cov(VioHealth::Good)
+    );
     // A match that slid against the flow is never good.
     let slid = PoseOut {
         flow_disagrees: true,

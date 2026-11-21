@@ -127,6 +127,8 @@ enum Input {
     FcPosition(u64, [f64; 2]),
     /// `(t_ns, force)`: [`PoseProvider::feed_specific_force`].
     Force(u64, [f64; 3]),
+    /// `t_ns`: [`PoseProvider::feed_at_rest`].
+    Rest(u64),
     Scan(ScanInput),
 }
 
@@ -179,18 +181,37 @@ pub const UNMEASURED_FREE_MAX_SIGMA_M: f64 = 1.0;
 /// [`UNMEASURED_FREE_MAX_SIGMA_M`]) still count from the stretch's start.
 pub const CORRIDOR_REASON_AFTER_S: f64 = 0.3;
 
-/// Health of one matcher pose, `inserted` scans into the first submap.
+/// Health of one matcher pose, `inserted` scans into the first submap. A
+/// pose whose own sigma is past [`UNMEASURED_FREE_MAX_SIGMA_M`] is degraded
+/// at best (the matcher's filter along a corridor reports it, measured or
+/// not), lost when the direction also goes unmeasured.
 pub fn health_of(p: &PoseOut, inserted: usize, degenerate_ratio: f64) -> VioHealth {
-    let unmeasured = p.unmeasured_free_s >= UNMEASURED_FREE_LOST_S
-        || (p.unmeasured_free_s > 0.0 && p.sigma_xy_m > UNMEASURED_FREE_MAX_SIGMA_M);
+    let wide = p.sigma_xy_m > UNMEASURED_FREE_MAX_SIGMA_M;
+    let unmeasured =
+        p.unmeasured_free_s >= UNMEASURED_FREE_LOST_S || (p.unmeasured_free_s > 0.0 && wide);
     if inserted < MIN_SUBMAP_SCANS || p.heading_unconfirmed || unmeasured {
         VioHealth::Lost
-    } else if p.score <= 0.0 || p.degeneracy < degenerate_ratio || !p.heading_ok || p.flow_disagrees
+    } else if p.score <= 0.0
+        || p.degeneracy < degenerate_ratio
+        || !p.heading_ok
+        || p.flow_disagrees
+        || wide
     {
         VioHealth::Degraded
     } else {
         VioHealth::Good
     }
+}
+
+/// The covariance of a pose of `health` whose horizontal sigma is
+/// `sigma_xy_m`: the health's nominal one, its horizontal position widened
+/// to that sigma where it is larger.
+pub fn pose_cov(health: VioHealth, sigma_xy_m: f64) -> [f64; 36] {
+    let mut cov = nominal_cov(health);
+    for i in 0..2 {
+        cov[i * 6 + i] = cov[i * 6 + i].max(sigma_xy_m * sigma_xy_m);
+    }
+    cov
 }
 
 /// Why a matcher pose is not good beyond the matcher's routine states
@@ -337,7 +358,7 @@ fn run(
             t_ns: out.t_ns,
             r,
             t,
-            cov: nominal_cov(health),
+            cov: pose_cov(health, out.sigma_xy_m),
             source: PoseSource::Lidar,
             health,
             sigma_xy_m: Some(out.sigma_xy_m),
@@ -371,6 +392,7 @@ fn run(
             Input::FcHeading(t_ns, heading) => slam.feed_fc_heading(t_ns, heading),
             Input::FcPosition(t_ns, ne_m) => slam.feed_fc_position(t_ns, ne_m),
             Input::Force(t_ns, force) => slam.feed_specific_force(t_ns, force),
+            Input::Rest(t_ns) => slam.feed_at_rest(t_ns),
             Input::Scan(scan) => {
                 if let Some(p) = pending.take() {
                     process(&mut slam, p);
@@ -458,6 +480,13 @@ impl PoseProvider for PlanarLidarPose {
     fn feed_specific_force(&self, t_ns: u64, force: [f64; 3]) {
         let Some(tx) = &self.tx else { return };
         if tx.try_send(Input::Force(t_ns, force)).is_err() {
+            self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn feed_at_rest(&self, t_ns: u64) {
+        let Some(tx) = &self.tx else { return };
+        if tx.try_send(Input::Rest(t_ns)).is_err() {
             self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
         }
     }

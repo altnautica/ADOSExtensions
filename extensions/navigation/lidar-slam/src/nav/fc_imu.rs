@@ -369,6 +369,7 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
             arrival_ns,
             imu,
             attitude,
+            armed,
         } if fc_is_imu => {
             if !state.raw_imu() {
                 pose.heading_unmeasured();
@@ -385,6 +386,9 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
             if attitude.is_some_and(|(t, _)| t.abs_diff(t_ns) <= MAX_GAP_NS) {
                 let a = imu.accel;
                 pose.feed_specific_force(t_ns, [a[0], -a[1], -a[2]]);
+                if armed == Some(false) && at_rest(&imu) {
+                    pose.feed_at_rest(t_ns);
+                }
             }
             state.note_raw_imu(t_ns, arrival_ns);
         }
@@ -410,6 +414,18 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
         }
         NavSample::Imu { .. } | NavSample::Velocity { .. } => {}
     })
+}
+
+/// Turning under this, rad/s, ...
+const REST_GYRO_RAD_S: f64 = 0.05;
+/// ... and reading gravity to within this, m/s², a disarmed FC is standing
+/// on the ground (not carried by hand to the take-off).
+const REST_ACCEL_MPS2: f64 = 0.2;
+
+/// Whether a disarmed FC's `RAW_IMU` sample reads it standing still.
+fn at_rest(s: &RawImu) -> bool {
+    let norm = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    norm(s.gyro) < REST_GYRO_RAD_S && (norm(s.accel) - G).abs() < REST_ACCEL_MPS2
 }
 
 #[cfg(test)]
@@ -493,6 +509,7 @@ mod tests {
                 accel: [0.0, 0.0, -9.8],
             },
             attitude: None,
+            armed: None,
         };
         state.note_imu(5_000_000_000);
         assert_eq!(
@@ -535,6 +552,7 @@ mod tests {
                 accel: [0.0, 0.0, -9.8],
             },
             attitude: None,
+            armed: None,
         };
         // 5 s at 80 a second, the stamps falling behind by 15 % of the time.
         for k in 0..400u64 {
@@ -591,6 +609,7 @@ mod tests {
                 accel: [0.0, 0.0, -9.8],
             },
             attitude: None,
+            armed: None,
         };
         // Two seconds of sim time at 100 Hz, at a third of real time (host
         // arrivals over the last six seconds).
@@ -657,6 +676,7 @@ mod tests {
                         accel: [0.0, 0.0, -9.8],
                     },
                     attitude: None,
+                    armed: None,
                 });
             }
             assert!(feed.check_stale(Instant::now()), "no tick for over 500 ms");
@@ -821,6 +841,7 @@ mod tests {
                     accel: [3.0, 0.0, -9.8],
                 },
                 attitude: Some((90_000_000, r_ned_frd)),
+                armed: Some(true),
             },
             NavSample::Velocity {
                 t_ns: 105_000_000,

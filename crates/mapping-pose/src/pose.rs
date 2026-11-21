@@ -303,6 +303,11 @@ pub trait PoseProvider: Send + Sync {
     /// a measured velocity along a corridor against it.
     fn feed_specific_force(&self, _t_ns: u64, _force: [f64; 3]) {}
 
+    /// The vehicle stands still on the ground at host `t_ns` (disarmed, its
+    /// IMU quiet), in order with the IMU: the planar matcher learns the
+    /// accelerometer's bias from it.
+    fn feed_at_rest(&self, _t_ns: u64) {}
+
     /// The pose holds one floor only (a planar LiDAR cannot see a level
     /// change); the capture HUD says so.
     fn single_floor(&self) -> bool {

@@ -68,6 +68,7 @@
 pub mod attitude;
 pub mod backend;
 pub mod config;
+pub mod flowkf;
 pub mod frontend;
 mod graph;
 pub mod grid;

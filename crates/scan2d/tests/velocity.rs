@@ -27,19 +27,22 @@ fn replay_forced(
     force: &[[f64; 3]],
     vel: &[VelocitySample],
 ) -> Vec<PoseOut> {
-    replay_counted(scans, imu, force, vel)
+    replay_counted(scans, imu, force, vel, 0)
         .into_iter()
         .map(|(p, _)| p)
         .collect()
 }
 
-/// [`replay_forced`], with the scans the matcher's map holds after each one
-/// (`LocalSlam::inserted_scans`, from which the capture counts a new map).
+/// [`replay_forced`], the vehicle declared at rest (on the ground before
+/// take-off) at every IMU sample before `rest_until_ns`, with the scans the
+/// matcher's map holds after each one (`LocalSlam::inserted_scans`, from
+/// which the capture counts a new map).
 fn replay_counted(
     scans: &[ScanInput],
     imu: &[ImuSample],
     force: &[[f64; 3]],
     vel: &[VelocitySample],
+    rest_until_ns: u64,
 ) -> Vec<(PoseOut, usize)> {
     let mut slam = LocalSlam::new(cfg());
     let (mut i, mut v) = (imu.iter().enumerate().peekable(), vel.iter().peekable());
@@ -47,6 +50,9 @@ fn replay_counted(
         slam.feed_imu(s);
         if let Some(f) = force.get(k) {
             slam.feed_specific_force(s.t_ns, *f);
+        }
+        if s.t_ns < rest_until_ns {
+            slam.feed_at_rest(s.t_ns);
         }
     };
     scans
@@ -263,7 +269,7 @@ fn local_truth(rec: &Recording) -> Vec<[f64; 2]> {
 fn mine_drift_without_flow_is_never_good_far_off() {
     let rec = recorded(include_str!("data/mine_drift_flow.txt"));
     let scans: Vec<ScanInput> = rec.scans.iter().map(|s| s.0.clone()).collect();
-    let est = replay_counted(&scans, &rec.imu, &[], &[]);
+    let est = replay_counted(&scans, &rec.imu, &[], &[], 0);
     let truth = local_truth(&rec);
     let ratio = cfg().degenerate_ratio;
     let lost_s = ados_scan2d::UNMEASURED_FREE_LOST_S;
@@ -760,63 +766,117 @@ fn time_at_x(path: &Path, x: f64) -> f64 {
         .expect("unbounded")
 }
 
-/// The walk on flow read at 0.85 m/s noise a sample, its forward part
-/// scaled by `fwd(t)`, and an accelerometer `bias` (m/s² along the walk):
-/// after `from_s`, each pose's time, whether it is lost and how far off it
-/// is along the corridor.
+/// A corridor open at both ends far beyond the LiDAR's reach: no stretch
+/// ever pins every direction (a take-off inside a corridor).
+fn open_corridor() -> Vec<common::Seg> {
+    vec![
+        ([-300.0, -1.0], [400.0, -1.0]),
+        ([-300.0, 1.0], [400.0, 1.0]),
+    ]
+}
+
+/// A bare corridor closed 2 m behind the take-off.
+fn closed_corridor() -> Vec<common::Seg> {
+    vec![
+        ([-2.0, -1.0], [400.0, -1.0]),
+        ([-2.0, 1.0], [400.0, 1.0]),
+        ([-2.0, -1.0], [-2.0, 1.0]),
+    ]
+}
+
+/// A take-off inside a corridor: 6 s on the ground, then at `speed` for
+/// `len` m and to a stop.
+fn take_off(speed: f64, len: f64) -> Path {
+    Path::new(0.0, 0.0, 0.0)
+        .wait(6.0)
+        .speed_to(speed, 1.0)
+        .line(len)
+        .speed_to(0.0, 1.0)
+        .wait(3.0)
+}
+
+/// A named flow scale over time.
+type FlowCase = (String, Box<dyn Fn(f64) -> f64>);
+
+/// One pose of a walk: its time, whether it is lost, how far off it is
+/// along the corridor, and its reported sigma.
+#[derive(Debug, Clone, Copy)]
+struct Row {
+    t: f64,
+    lost: bool,
+    off: f64,
+    sigma: f64,
+}
+
+/// The walk `path` through `world` on flow read at 0.85 m/s noise a
+/// sample, its forward part scaled by `fwd(t)`, an accelerometer bias of
+/// `bias(t)` (m/s² along the walk), standing (declared at rest) for the
+/// walk's first 6 s: the poses after `from_s`.
 fn noisy_walk(
+    world: &[common::Seg],
     path: &Path,
-    bias: f64,
+    bias: impl Fn(f64) -> f64,
     fwd: impl Fn(f64) -> f64,
     from_s: f64,
-) -> Vec<(f64, bool, f64)> {
-    let (scans, imu, truth, force) = walk_forced(&room_and_corridor(), path, C1, 11);
-    let force: Vec<[f64; 3]> = force.iter().map(|f| [f[0] + bias, f[1], f[2]]).collect();
+) -> Vec<Row> {
+    let (scans, imu, truth, force) = walk_forced(world, path, C1, 11);
+    let force: Vec<[f64; 3]> = imu
+        .iter()
+        .zip(&force)
+        .map(|(s, f)| [f[0] + bias(s.t_ns as f64 * 1e-9), f[1], f[2]])
+        .collect();
     let mut rng = Rng::new(17);
     let mut vel = flow(path, 1.0, 0.0, 5);
     for s in vel.iter_mut() {
         let k = fwd(s.t_ns as f64 * 1e-9);
         s.v = [s.v[0] * k + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
     }
-    replay_forced(&scans, &imu, &force, &vel)
+    replay_counted(&scans, &imu, &force, &vel, 6_000_000_000)
         .iter()
         .zip(&truth)
-        .map(|(p, tr)| {
-            (
-                p.t_ns as f64 * 1e-9,
-                p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S,
-                // The matcher's frame starts at the walk's first pose.
-                (p.x - (tr.x - truth[0].x)).abs(),
-            )
+        .map(|((p, _), tr)| Row {
+            t: p.t_ns as f64 * 1e-9,
+            lost: p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S,
+            // The matcher's frame starts at the walk's first pose.
+            off: (p.x - (tr.x - truth[0].x)).abs(),
+            sigma: p.sigma_xy_m,
         })
-        .filter(|&(t, _, _)| t > from_s)
+        .filter(|r| r.t > from_s)
         .collect()
 }
 
 /// The first lost pose's time, after which every pose stays lost, and the
 /// worst lengthwise error of a pose not lost.
-fn lost_for_good(after: &[(f64, bool, f64)]) -> (Option<f64>, f64) {
+fn lost_for_good(after: &[Row]) -> (Option<f64>, f64) {
     let unflagged = after
         .iter()
-        .filter(|e| !e.1)
-        .map(|e| e.2)
+        .filter(|r| !r.lost)
+        .map(|r| r.off)
         .fold(0.0, f64::max);
-    let first = after.iter().position(|e| e.1);
-    let lost = first.and_then(|i| after[i..].iter().all(|e| e.1).then_some(after[i].0));
+    let first = after.iter().position(|r| r.lost);
+    let lost = first.and_then(|i| after[i..].iter().all(|r| r.lost).then_some(after[i].t));
     (lost, unflagged)
 }
 
+fn stall_at(at: f64) -> impl Fn(f64) -> f64 {
+    move |t| if t > at { 0.0 } else { 1.0 }
+}
+
+fn fade_from(at: f64, ramp: f64) -> impl Fn(f64) -> f64 {
+    move |t| (1.0 - (t - at).max(0.0) / ramp).max(0.0)
+}
+
 /// A dead flow sensor (15 m into the corridor) is lost and stays lost
-/// however the accelerometer is biased (up to 0.2 m/s², learnt in the
-/// room), through the stop at the corridor's end: agreeing with a velocity
-/// the accelerometer carries is no sign of life. A sound one with the same
-/// bias is never lost.
+/// however the accelerometer is biased (up to 0.2 m/s², learnt standing in
+/// the room), through the stop at the corridor's end: agreeing with a
+/// velocity the accelerometer carries is no sign of life. A sound one with
+/// the same bias is never lost.
 #[test]
 fn a_biased_accelerometer_neither_revives_a_dead_flow_nor_kills_a_live_one() {
-    let path = cruise(1.5, 50.0);
+    let (world, path) = (room_and_corridor(), cruise(1.5, 50.0));
     let stall = time_at_x(&path, 15.0);
     for bias in [0.1, -0.1, 0.2, -0.2] {
-        let after = noisy_walk(&path, bias, |t| if t > stall { 0.0 } else { 1.0 }, stall);
+        let after = noisy_walk(&world, &path, |_| bias, stall_at(stall), stall);
         let (lost, off) = lost_for_good(&after);
         eprintln!(
             "bias {bias:+}: dead flow lost {lost:?} (stall {stall:.1} s), {off:.2} m off unflagged"
@@ -828,22 +888,21 @@ fn a_biased_accelerometer_neither_revives_a_dead_flow_nor_kills_a_live_one() {
         assert!(off <= 2.0, "bias {bias:+}: {off:.2} m");
     }
     for bias in [0.2, -0.2] {
-        let after = noisy_walk(&path, bias, |_| 1.0, 0.0);
-        let lost = after.iter().filter(|e| e.1).count();
+        let after = noisy_walk(&world, &path, |_| bias, |_| 1.0, 0.0);
+        let lost = after.iter().filter(|r| r.lost).count();
         eprintln!("bias {bias:+}: sound flow {lost} of {} lost", after.len());
         assert_eq!(lost, 0, "bias {bias:+}");
     }
 }
 
-/// Slow walks whose flow dies 15 m into the corridor: 0.8 and 0.5 m/s are
-/// under the short windows' threshold; the long ones catch them within
-/// 2 m of error.
+/// Slow walks whose flow dies 15 m into the corridor, at 0.8 and 0.5 m/s:
+/// lost within 2 m of error.
 #[test]
 fn a_dead_flow_on_a_slow_walk_is_lost() {
     for (speed, len) in [(0.8, 35.0), (0.5, 35.0)] {
         let path = cruise(speed, len);
         let stall = time_at_x(&path, 15.0);
-        let after = noisy_walk(&path, 0.0, |t| if t > stall { 0.0 } else { 1.0 }, stall);
+        let after = noisy_walk(&room_and_corridor(), &path, |_| 0.0, stall_at(stall), stall);
         let (lost, off) = lost_for_good(&after);
         eprintln!(
             "{speed} m/s: dead flow lost {lost:?} (stall {stall:.1} s), {off:.2} m off unflagged"
@@ -853,23 +912,43 @@ fn a_dead_flow_on_a_slow_walk_is_lost() {
     }
 }
 
+/// A fade caught as the filter's bars ask: lost; within 2 m of error while
+/// not lost for fades of 0.1 m/s² or more (1.5 m/s to nothing in 15 s or
+/// less). Slower ones (the 25 s fade, 0.06 m/s²) sit at the slope a 0.85 m/s
+/// flow lets the accelerometer tell from noise in time: every pose not lost
+/// stays within two of its reported sigma.
+fn assert_fade_caught(after: &[Row], ramp: f64, case: &str) {
+    let (lost, off) = lost_for_good(after);
+    let worst_z = after
+        .iter()
+        .filter(|r| !r.lost)
+        .map(|r| r.off / r.sigma.max(1e-9))
+        .fold(0.0, f64::max);
+    eprintln!("{case}: lost {lost:?}, {off:.2} m off unflagged, worst {worst_z:.2} sigma");
+    assert!(lost.is_some(), "{case}");
+    if ramp <= 15.0 {
+        assert!(off <= 2.0, "{case}: {off:.2} m");
+    } else {
+        assert!(worst_z <= 2.0, "{case}: {worst_z:.2} sigma");
+    }
+}
+
 /// A flow that fades to nothing over 3 to 25 s from 15 m into the corridor
-/// at 1.5 m/s: no pair of windows sees it, but against the velocity matched
-/// where the corridor began, carried on by the accelerometer, it adds up.
-/// Lost within 2 m of error.
+/// at 1.5 m/s: against the reference the accelerometer carries from the
+/// room it adds up ([`assert_fade_caught`]).
 #[test]
 fn a_fading_flow_is_lost() {
     let path = cruise(1.5, 70.0);
     let start = time_at_x(&path, 15.0);
     for ramp in [3.0, 6.0, 10.0, 15.0, 25.0] {
-        let fade = |t: f64| (1.0 - (t - start).max(0.0) / ramp).max(0.0);
-        let after = noisy_walk(&path, 0.0, fade, start);
-        let (lost, off) = lost_for_good(&after);
-        eprintln!(
-            "fade over {ramp} s: lost {lost:?} (from {start:.1} s), {off:.2} m off unflagged"
+        let after = noisy_walk(
+            &room_and_corridor(),
+            &path,
+            |_| 0.0,
+            fade_from(start, ramp),
+            start,
         );
-        assert!(lost.is_some(), "fade over {ramp} s");
-        assert!(off <= 2.0, "fade over {ramp} s: {off:.2} m");
+        assert_fade_caught(&after, ramp, &format!("room, fade over {ramp} s"));
     }
 }
 
@@ -889,10 +968,129 @@ fn moving_off_on_a_dead_flow_is_lost() {
         .wait(1.0);
     // Standing from `stop` for 3 s; the flow dies 1 s in.
     let stop = time_at_x(&path, 14.99);
-    let stall = stop + 1.0;
     let off_at = stop + 3.0;
-    let after = noisy_walk(&path, 0.0, |t| if t > stall { 0.0 } else { 1.0 }, off_at);
+    let after = noisy_walk(
+        &room_and_corridor(),
+        &path,
+        |_| 0.0,
+        stall_at(stop + 1.0),
+        off_at,
+    );
     let (lost, _) = lost_for_good(&after);
     eprintln!("moving off on a dead flow at {off_at:.1} s: lost {lost:?}");
     assert!(lost.is_some_and(|t| t <= off_at + 4.0), "{lost:?}");
+}
+
+/// Sound flow down 150 m of corridor while the accelerometer's bias steps
+/// at the corridor's entry. Up to 0.01 m/s² the bias random walk absorbs
+/// it: never lost, never 2 m off. A larger step looks like the flow fading
+/// at that rate (nothing along a bare corridor tells them apart): it may be
+/// flagged lost (0.02 and 0.03 m/s²; fail-safe), is flagged within 10 s at
+/// 0.05 m/s², and no pose not lost is ever 2 m off.
+#[test]
+fn a_bias_step_in_a_long_corridor_is_absorbed_or_flagged() {
+    let (world, path) = (room_and_corridor(), cruise(1.5, 150.0));
+    let entry = time_at_x(&path, -2.0);
+    let step = |db: f64| move |t: f64| if t > entry { db } else { 0.0 };
+    for db in [0.0, 0.01, -0.01, 0.02, -0.02, 0.03, -0.03, 0.05, -0.05] {
+        let after = noisy_walk(&world, &path, step(db), |_| 1.0, entry);
+        let lost = after.iter().filter(|r| r.lost).count();
+        let first = after.iter().find(|r| r.lost).map(|r| r.t - entry);
+        let (_, off) = lost_for_good(&after);
+        eprintln!(
+            "bias step {db:+}: {lost} of {} lost, first {first:?} s after entry, {off:.2} m off unflagged",
+            after.len()
+        );
+        if db.abs() <= 0.01 {
+            assert_eq!(lost, 0, "bias step {db:+}");
+        }
+        if db.abs() >= 0.05 {
+            assert!(
+                first.is_some_and(|s| s <= 10.0),
+                "bias step {db:+}: {first:?}"
+            );
+        }
+        assert!(off <= 2.0, "bias step {db:+}: {off:.2} m");
+    }
+}
+
+/// A take-off inside a corridor (open at both ends, or closed just behind),
+/// the bias learnt only standing before it: a dead flow, a slow walk's dead
+/// flow and fades of 3 to 25 s are lost within 2 m of error; sound flow is
+/// never lost.
+#[test]
+fn a_flow_failing_after_a_take_off_in_a_corridor_is_lost() {
+    for (name, world) in [("open", open_corridor()), ("closed", closed_corridor())] {
+        let path = take_off(1.5, 70.0);
+        let at = time_at_x(&path, 15.0);
+        let sound = noisy_walk(&world, &path, |_| 0.0, |_| 1.0, 0.0);
+        let lost = sound.iter().filter(|r| r.lost).count();
+        assert_eq!(lost, 0, "{name}: sound flow {lost} lost");
+        let mut cases: Vec<FlowCase> = vec![("dead".into(), Box::new(stall_at(at)))];
+        for ramp in [3.0, 6.0, 10.0, 15.0, 25.0] {
+            cases.push((format!("fade over {ramp} s"), Box::new(fade_from(at, ramp))));
+        }
+        for (case, fwd) in cases {
+            let after = noisy_walk(&world, &path, |_| 0.0, fwd, at);
+            let ramp = case
+                .strip_prefix("fade over ")
+                .and_then(|s| s.trim_end_matches(" s").parse::<f64>().ok())
+                .unwrap_or(0.0);
+            assert_fade_caught(&after, ramp, &format!("{name} corridor, {case}"));
+        }
+        let slow = take_off(0.5, 35.0);
+        let at = time_at_x(&slow, 15.0);
+        let after = noisy_walk(&world, &slow, |_| 0.0, stall_at(at), at);
+        let (lost, off) = lost_for_good(&after);
+        eprintln!("{name} corridor, 0.5 m/s dead: lost {lost:?} (from {at:.1} s), {off:.2} m off unflagged");
+        assert!(lost.is_some(), "{name}, 0.5 m/s");
+        assert!(off <= 2.0, "{name}, 0.5 m/s: {off:.2} m");
+    }
+}
+
+/// Across sound, biased, dead and fading flows, the reported sigma covers
+/// the true error along the corridor as a sigma should: within one sigma
+/// at least 68 % of the time, within two at least 95 %.
+#[test]
+fn the_reported_sigma_covers_the_error_along_the_corridor() {
+    let room = room_and_corridor();
+    let long = cruise(1.5, 150.0);
+    let entry = time_at_x(&long, -2.0);
+    let mut rows = noisy_walk(&room, &long, |_| 0.0, |_| 1.0, entry);
+    rows.extend(noisy_walk(
+        &room,
+        &long,
+        |t| if t > entry { 0.02 } else { 0.0 },
+        |_| 1.0,
+        entry,
+    ));
+    let walk = cruise(1.5, 70.0);
+    let at = time_at_x(&walk, 15.0);
+    rows.extend(noisy_walk(
+        &room,
+        &walk,
+        |_| 0.0,
+        fade_from(at, 10.0),
+        entry,
+    ));
+    let up = take_off(1.5, 70.0);
+    let at = time_at_x(&up, 15.0);
+    rows.extend(noisy_walk(&open_corridor(), &up, |_| 0.0, |_| 1.0, 6.0));
+    rows.extend(noisy_walk(
+        &open_corridor(),
+        &up,
+        |_| 0.0,
+        stall_at(at),
+        6.0,
+    ));
+    let n = rows.len() as f64;
+    let one = rows.iter().filter(|r| r.off <= r.sigma).count() as f64 / n;
+    let two = rows.iter().filter(|r| r.off <= 2.0 * r.sigma).count() as f64 / n;
+    eprintln!(
+        "sigma coverage over {n} poses: {:.1} % within one, {:.1} % within two",
+        one * 100.0,
+        two * 100.0
+    );
+    assert!(one >= 0.68, "{one:.3}");
+    assert!(two >= 0.95, "{two:.3}");
 }

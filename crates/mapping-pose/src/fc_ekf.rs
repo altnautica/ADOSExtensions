@@ -97,6 +97,8 @@ pub enum NavSample {
         arrival_ns: u64,
         imu: RawImu,
         attitude: Option<(u64, [f64; 9])>,
+        /// The autopilot's last `HEARTBEAT` armed flag ([`FcEkfPose::armed`]).
+        armed: Option<bool>,
     },
     /// The optical-flow ground velocity, body FLU m/s
     /// ([`fc_flow::body_velocity`]).
@@ -591,6 +593,7 @@ impl FcEkfPose {
                         arrival_ns,
                         imu: s,
                         attitude: g.host_attitude(),
+                        armed: g.armed,
                     })
             }
             FcMessage::Range(r) => {
