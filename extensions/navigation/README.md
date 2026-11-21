@@ -252,9 +252,11 @@ Routes on the plugin's HTTP socket
 prints the wall time, a fixed workload for comparing CPUs.
 
 Native helpers: basalt-ados (BSD-3) and the Livox SDK2 library (MIT) are
-release payloads with their licence texts. x86_64-linux builds in the
-release workflow; aarch64-linux is a manual release step
-(`lidar-slam/basalt/README.md`, `lidar-slam/livox/build-sdk2.sh`). The
+release payloads with their licence texts. The Livox SDK2 library builds on
+every release leg (x86_64-linux and aarch64-linux) against glibc 2.28
+(`lidar-slam/livox/build-sdk2.sh`); basalt-ados builds for x86_64-linux only
+(`lidar-slam/basalt/README.md`). The LiDAR service links glibc dynamically so
+it can load the Livox library. The
 KISS-ICP odometry environment is built on the device by `uv sync --frozen` on
 the first LiDAR start, which needs network once.
 

@@ -8,8 +8,8 @@
 #   legs      list the binary legs (aarch64-linux, x86_64-linux).
 #   binaries  one leg per arch: build `navigation` and `navigation-lidar-slam`
 #             against the agent SDK pinned in ADOS_AGENT_REV, the pinned uv,
-#             and on the x86_64-linux leg basalt-ados and the Livox SDK2
-#             library; hand them to the release job.
+#             the Livox SDK2 library, and on the x86_64-linux leg
+#             basalt-ados; hand them to the release job.
 #   release   build and test the GCS bundle, write each payload's source,
 #             sha256 and size into the staged manifest, pack the small archive
 #             (manifest, GCS bundle, locales, config-schema.json, the
@@ -36,6 +36,9 @@ env:
   # checkout, pinned by the committed ADOS_AGENT_REV so re-running a tag builds
   # against the same SDK commit.
   ADOS_AGENT_REPO: https://github.com/altnautica/ADOSDroneAgent
+  # The oldest glibc navigation-lidar-slam and the Livox SDK2 library run on
+  # (manylinux_2_28: Debian 10, Ubuntu 18.10 and newer).
+  GLIBC_FLOOR: "2.28"
 
 jobs:
   checks:
@@ -49,17 +52,21 @@ jobs:
       matrix: ${{ steps.legs.outputs.matrix }}
     steps:
       - id: legs
-        # Static musl binaries run on every supported board regardless of its
-        # glibc; the musl legs cross-compile C through zig (cargo-zigbuild),
-        # as in rust-check.yml. basalt-ados and the Livox SDK2 library build
-        # on the x86_64-linux leg only (native).
+        # `navigation` is a static musl binary, so it runs on every supported
+        # board regardless of its glibc; the musl legs cross-compile C through
+        # zig (cargo-zigbuild), as in rust-check.yml. `navigation-lidar-slam`
+        # opens the Livox SDK2 library at run time, which a static musl
+        # binary cannot (its dlopen is a stub), so it links glibc dynamically,
+        # pinned through zig to the same glibc floor as the manylinux image
+        # the Livox library builds in. basalt-ados builds on the x86_64-linux
+        # leg only (native).
         run: |
           set -euo pipefail
           legs='[
             {"runner":"ubuntu-24.04-arm","arch_os":"aarch64-linux","target":"aarch64-unknown-linux-musl",
-             "uv_triple":"aarch64-unknown-linux-musl"},
+             "slam_target":"aarch64-unknown-linux-gnu","uv_triple":"aarch64-unknown-linux-musl"},
             {"runner":"ubuntu-24.04","arch_os":"x86_64-linux","target":"x86_64-unknown-linux-musl",
-             "uv_triple":"x86_64-unknown-linux-musl","native":true}
+             "slam_target":"x86_64-unknown-linux-gnu","uv_triple":"x86_64-unknown-linux-musl","native":true}
           ]'
           matrix="$(jq -c '{include: .}' <<<"${legs}")"
           echo "${matrix}"
@@ -86,7 +93,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.target }},${{ matrix.slam_target }}
 
       - name: Install zig
         uses: mlugg/setup-zig@v2
@@ -103,32 +110,64 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: navigation-release-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: navigation-release-${{ matrix.target }}-
+          key: navigation-release-${{ matrix.arch_os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: navigation-release-${{ matrix.arch_os }}-
 
       - name: Build release binaries
         env:
           TARGET: ${{ matrix.target }}
+          SLAM_TARGET: ${{ matrix.slam_target }}
         run: |
           set -euo pipefail
-          for crate in navigation navigation-lidar-slam; do
-            cargo zigbuild --release --target "${TARGET}" -p "${crate}"
-          done
+          cargo zigbuild --release --target "${TARGET}" -p navigation
+          cargo zigbuild --release --target "${SLAM_TARGET}.${GLIBC_FLOOR}" -p navigation-lidar-slam
 
       - name: Stage payloads
         env:
           TARGET: ${{ matrix.target }}
+          SLAM_TARGET: ${{ matrix.slam_target }}
           ARCH_OS: ${{ matrix.arch_os }}
         run: |
           set -euo pipefail
           mkdir -p payloads
+          cp "target/${TARGET}/release/navigation" "payloads/navigation-${ARCH_OS}"
+          cp "target/${SLAM_TARGET}/release/navigation-lidar-slam" "payloads/navigation-lidar-slam-${ARCH_OS}"
           for crate in navigation navigation-lidar-slam; do
-            cp "target/${TARGET}/release/${crate}" "payloads/${crate}-${ARCH_OS}"
             ls -l "payloads/${crate}-${ARCH_OS}"
             file "payloads/${crate}-${ARCH_OS}"
           done
+          # A static lidar-slam would fail to open the Livox SDK2 library.
+          file "payloads/navigation-lidar-slam-${ARCH_OS}" | grep -q 'dynamically linked' || {
+            echo "ERROR: navigation-lidar-slam must link glibc dynamically to load the Livox SDK2" >&2
+            exit 1
+          }
 
-      - name: Build the native lidar-slam helpers
+      - name: Build the Livox SDK2 library
+        # Inside the manylinux_2_28 image of the leg's arch (native on both
+        # runners), so the library needs nothing newer than glibc 2.28.
+        env:
+          ARCH_OS: ${{ matrix.arch_os }}
+        run: |
+          set -euo pipefail
+          arch="${ARCH_OS%-linux}"
+          out="${RUNNER_TEMP}/livox"
+          mkdir -p "${out}"
+          docker run --rm -v "${GITHUB_WORKSPACE}:/src:ro" -v "${out}:/out" \
+            "quay.io/pypa/manylinux_${GLIBC_FLOOR/./_}_${arch}" \
+            bash /src/extensions/navigation/lidar-slam/livox/build-sdk2.sh --arch "${arch}" --jobs 4 --out /out
+          sudo chown -R "$(id -u):$(id -g)" "${out}"
+          lib="${out}/lib/${ARCH_OS}/liblivox_lidar_sdk_shared.so"
+          need="$(objdump -T "${lib}" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n1)"
+          echo "Livox SDK2 (${ARCH_OS}) needs glibc ${need}"
+          if [ "$(printf '%s\n%s\n' "${need}" "${GLIBC_FLOOR}" | sort -V | tail -n1)" != "${GLIBC_FLOOR}" ]; then
+            echo "ERROR: the Livox SDK2 library needs glibc ${need}, above the ${GLIBC_FLOOR} floor" >&2
+            exit 1
+          fi
+          cp "${lib}" "payloads/navigation-livox-sdk2-${ARCH_OS}.so"
+          cp "${out}/lib/${ARCH_OS}/LICENSE-livox-sdk2.txt" "payloads/navigation-livox-sdk2-LICENSE-${ARCH_OS}"
+          file "payloads/navigation-livox-sdk2-${ARCH_OS}.so"
+
+      - name: Build basalt-ados
         if: matrix.native
         run: |
           set -euo pipefail
@@ -138,7 +177,6 @@ jobs:
           L=extensions/navigation/lidar-slam
           out="${RUNNER_TEMP}/native"
           "$L/basalt/build.sh" --arch x86_64 --jobs 4 --out "$out"
-          "$L/livox/build-sdk2.sh" --arch x86_64 --jobs 4 --out "$out"
           cp "$out/bin/x86_64-linux/basalt-ados" payloads/navigation-basalt-ados-x86_64-linux
           {
             cat "$L/basalt/LICENSE"
@@ -147,9 +185,7 @@ jobs:
               printf '\n\n==== %s ====\n\n' "$(basename "$(dirname "$f")")"; cat "$f"
             done
           } > payloads/navigation-basalt-ados-LICENSES-x86_64-linux
-          cp "$out/lib/x86_64-linux/liblivox_lidar_sdk_shared.so" payloads/navigation-livox-sdk2-x86_64-linux.so
-          cp "$out/lib/x86_64-linux/LICENSE-livox-sdk2.txt" payloads/navigation-livox-sdk2-LICENSE-x86_64-linux
-          file payloads/navigation-basalt-ados-x86_64-linux payloads/navigation-livox-sdk2-x86_64-linux.so
+          file payloads/navigation-basalt-ados-x86_64-linux
 
       - name: Stage uv (pinned, checksum-verified)
         env:

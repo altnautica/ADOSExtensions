@@ -102,10 +102,13 @@ fn lidar_settings_take_per_driver_blocks() {
         ("auto", 460_800)
     );
     assert_eq!(d.livox.host_ip, None);
-    assert!(d
-        .livox
-        .sdk_library
-        .ends_with("liblivox_lidar_sdk_shared.so"));
+    assert_eq!(
+        d.livox.sdk_library,
+        format!(
+            "lib/{}-linux/liblivox_lidar_sdk_shared.so",
+            std::env::consts::ARCH
+        )
+    );
     let c = load(json!({
         "lidar_id": "lidar1",
         "rplidar": {"device": "tcp:192.168.1.50:7700"},
@@ -124,4 +127,33 @@ fn lidar_settings_take_per_driver_blocks() {
         load(json!({"rplidar": {"port": "x"}})).unwrap_err().key,
         KEY_LIDAR
     );
+}
+
+/// The default Livox SDK and `uv` paths, resolved for each release arch, name
+/// manifest payloads for that arch that a drone fetches, so a 3D LiDAR on
+/// either arch finds its driver library and its odometry launcher.
+#[test]
+fn default_native_paths_are_drone_payloads_on_every_release_arch() {
+    let manifest = include_str!("../../manifest.yaml");
+    let d = LidarSettings::default();
+    for arch in ["aarch64", "x86_64"] {
+        for here in [&d.livox.sdk_library, &d.uv] {
+            let path = here.replacen(std::env::consts::ARCH, arch, 1);
+            let entry: Vec<&str> = manifest
+                .split("\n    - path: ")
+                .find(|e| e.lines().next() == Some(path.as_str()))
+                .unwrap_or_else(|| panic!("no manifest payload {path}"))
+                .lines()
+                .skip(1)
+                .take_while(|l| l.starts_with("      "))
+                .map(str::trim)
+                .collect();
+            assert!(
+                entry.contains(&format!("arch_os: {arch}-linux").as_str()),
+                "{path}"
+            );
+            let profiles = entry.iter().find(|l| l.starts_with("profiles:"));
+            assert!(profiles.is_none_or(|p| p.contains("drone")), "{path}");
+        }
+    }
 }

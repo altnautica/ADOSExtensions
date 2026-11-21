@@ -3,6 +3,16 @@
 All notable changes to the Navigation extension (Vision Navigation before
 1.0.0).
 
+## [Unreleased]
+
+### Added
+
+- Navigation drives a Livox Mid-360 on aarch64 drones: the Livox SDK2 library and the KISS-ICP environment tool ship in the drone profile for x86_64 and aarch64.
+
+### Fixed
+
+- The LiDAR service links glibc dynamically, so it can load the Livox SDK2 library; the released static build could not load it on any architecture. The Livox library builds against glibc 2.28, so it runs on Debian 12 and Ubuntu 22.04 boards, and the release fails if either build regresses.
+
 ## [1.0.2] - 2026-11-21
 
 ### Fixed

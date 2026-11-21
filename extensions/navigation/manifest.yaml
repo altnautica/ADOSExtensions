@@ -185,9 +185,11 @@ agent:
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
-    # Native helpers (x86_64-linux; aarch64-linux is a manual release step,
-    # see lidar-slam/basalt/README.md) with their licence texts, and uv for
-    # the on-device KISS-ICP environment sync.
+    # Native helpers with their licence texts: basalt-ados (x86_64-linux;
+    # aarch64-linux is a manual release step, see lidar-slam/basalt/README.md),
+    # the Livox SDK2 library a Mid-360 is driven through (every arch, drone
+    # and visor), and uv for the on-device KISS-ICP environment sync of a 3D
+    # LiDAR's odometry.
     - path: bin/x86_64-linux/basalt-ados
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-basalt-ados-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -203,37 +205,49 @@ agent:
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
-      profiles: [visor]
+      profiles: [drone, visor]
     - path: lib/x86_64-linux/LICENSE-livox-sdk2.txt
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-LICENSE-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
-      profiles: [visor]
+      profiles: [drone, visor]
+    - path: lib/aarch64-linux/liblivox_lidar_sdk_shared.so
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-aarch64-linux.so"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [drone, visor]
+    - path: lib/aarch64-linux/LICENSE-livox-sdk2.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-LICENSE-aarch64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [drone, visor]
     - path: bin/aarch64-linux/uv
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
-      profiles: [visor]
+      profiles: [drone, visor]
     - path: bin/x86_64-linux/uv
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
-      profiles: [visor]
+      profiles: [drone, visor]
     - path: bin/aarch64-linux/LICENSE-uv.txt
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-LICENSE-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
-      profiles: [visor]
+      profiles: [drone, visor]
     - path: bin/x86_64-linux/LICENSE-uv.txt
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-LICENSE-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
-      profiles: [visor]
+      profiles: [drone, visor]
   permissions:
     # navigation (entrypoint): flow from the vision frame bus, the companion
     # rangefinder, the FC bridge. lidar-slam: the stereo frames VIO tracks

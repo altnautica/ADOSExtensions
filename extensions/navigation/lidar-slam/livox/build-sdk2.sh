@@ -14,15 +14,12 @@
 # aarch64-linux-gnu-gcc/g++ (Debian/Ubuntu: g++-aarch64-linux-gnu); CC/CXX in
 # the environment override the compilers.
 #
-# Release: the x86_64-linux leg of the release workflow runs
-# `build-sdk2.sh --arch x86_64` and stages the two files as the assets named
-# in scripts/world-engine-payloads.tsv. aarch64-linux is a release step run
-# before tagging until a release leg builds it: run `build-sdk2.sh --arch
-# aarch64` (natively or with the cross compilers above), upload the library
-# as `world-engine-livox-sdk2-aarch64-linux.so` and the licence as
-# `world-engine-livox-sdk2-LICENSE-aarch64-linux`, and add their rows
-# (paths lib/aarch64-linux/..., arch aarch64-linux, profile visor) to the
-# payload table.
+# Release: each leg of .github/workflows/navigation-release.yml runs
+# `build-sdk2.sh --arch <leg arch>` inside the manylinux_2_28 image of that
+# arch, so the library needs nothing newer than glibc 2.28, and stages the
+# two files as the assets named in scripts/navigation-payloads.tsv. A build
+# on a newer distribution links newer glibc symbols and fails to load on an
+# older board.
 set -euo pipefail
 
 TAG="v1.2.5"
@@ -41,7 +38,7 @@ while [ $# -gt 0 ]; do
     --out) shift; OUT="${1:?--out needs a directory}" ;;
     --src) shift; SRC="${1:?--src needs a directory}" ;;
     --jobs|-j) shift; JOBS="${1:?--jobs needs a number}" ;;
-    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
   shift
@@ -82,8 +79,10 @@ if [ "$HEAD" != "$COMMIT" ]; then
 fi
 
 # The v1.2.5 sources use fixed-width integer types without including
-# <cstdint>, which newer GCC no longer pulls in transitively.
-cmake -S "$SRC" -B "$WORK/build" -DCMAKE_BUILD_TYPE=Release \
+# <cstdint>, which newer GCC no longer pulls in transitively. Their
+# cmake_minimum_required predates 3.5, which CMake 4 refuses without the
+# policy floor.
+cmake -S "$SRC" -B "$WORK/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
   -DCMAKE_CXX_FLAGS="-include cstdint" ${CMAKE_CROSS[@]+"${CMAKE_CROSS[@]}"} >/dev/null
 cmake --build "$WORK/build" --target livox_lidar_sdk_shared -j "$JOBS"
 
