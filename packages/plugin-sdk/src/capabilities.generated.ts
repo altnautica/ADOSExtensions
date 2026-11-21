@@ -54,6 +54,7 @@ export const CAPABILITY_IDS = [
   "sensor.payload.register",
   "sensor.stream.read",
   "sensors.rig.write",
+  "shm.voxmap",
   "telemetry.extend",
   "telemetry.read",
   "telemetry.subscribe",

@@ -1,0 +1,26 @@
+# Robot-centred 3D voxel map: a ring-buffer window of log-odds voxels fed by
+# 3D lidar clouds, depth points and attitude-placed planar scans, with dynamic
+# clearing, decay and an incremental obstacle-distance field, published to the
+# pilot over the agent's voxel-map seam. No threads, no I/O besides the seam
+# writer the caller hands in. Workspace-internal; never published.
+[package]
+name = "ados-voxmap"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "ADOS robot-centred 3D voxel map with an incremental distance field."
+
+[lib]
+name = "ados_voxmap"
+path = "src/lib.rs"
+
+[dependencies]
+ados-protocol = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+# The bench's per-thread CPU clock (already in the workspace lock).
+libc = "0.2"
