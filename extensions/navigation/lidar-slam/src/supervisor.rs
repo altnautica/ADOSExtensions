@@ -48,8 +48,10 @@ pub const CONFIG_POLL: Duration = Duration::from_secs(5);
 /// `RAW_IMU` is the gyro the planar matcher's `fc` IMU integrates
 /// ([`crate::nav::fc_imu`]); `OPTICAL_FLOW` over the downward
 /// `DISTANCE_SENSOR` range is the ground velocity it follows along a corridor
-/// ([`ados_mapping_pose::fc_flow`]).
-const FC_MESSAGES: [&str; 8] = [
+/// ([`ados_mapping_pose::fc_flow`]); the autopilot's `HEARTBEAT` says whether
+/// the vehicle is armed (a map restarted on the take-off spot starts over
+/// only while it is not, [`crate::nav::NavMap::restart_in_flight`]).
+const FC_MESSAGES: [&str; 9] = [
     "ATTITUDE",
     "ATTITUDE_QUATERNION",
     "LOCAL_POSITION_NED",
@@ -58,6 +60,7 @@ const FC_MESSAGES: [&str; 8] = [
     "RAW_IMU",
     "OPTICAL_FLOW",
     "DISTANCE_SENSOR",
+    "HEARTBEAT",
 ];
 
 /// The process-lifetime feeds a run attaches to.

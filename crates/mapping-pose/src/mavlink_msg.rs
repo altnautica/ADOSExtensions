@@ -31,6 +31,12 @@ pub const MSG_GPS_GLOBAL_ORIGIN: u32 = 49;
 pub const MSG_OPTICAL_FLOW: u32 = 100;
 /// `DISTANCE_SENSOR` (132): one rangefinder reading.
 pub const MSG_DISTANCE_SENSOR: u32 = 132;
+/// `HEARTBEAT` (0): the autopilot's, read for its armed flag.
+pub const MSG_HEARTBEAT: u32 = 0;
+/// `MAV_MODE_FLAG_SAFETY_ARMED` in `HEARTBEAT.base_mode`.
+const MODE_FLAG_ARMED: u8 = 128;
+/// `MAV_AUTOPILOT_INVALID`: a heartbeat that is not an autopilot's.
+const AUTOPILOT_INVALID: u8 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AttitudeQuaternion {
@@ -106,6 +112,8 @@ pub enum FcMessage {
     Imu(RawImu),
     Flow(OpticalFlow),
     Range(DistanceSensor),
+    /// The autopilot's `HEARTBEAT`: whether the vehicle is armed.
+    Armed(bool),
 }
 
 /// `(msgid, payload)` of a MAVLink 1 or 2 frame, or `None` when malformed.
@@ -236,6 +244,15 @@ pub fn decode(frame: &[u8]) -> Option<FcMessage> {
                 quality: b[25],
             })
         }
+        // The autopilot's only: a companion's or a GCS's heartbeat says
+        // nothing about the vehicle.
+        MSG_HEARTBEAT if component(frame) == Some(COMP_AUTOPILOT) => {
+            let b: [u8; 9] = padded(payload);
+            if b[5] == AUTOPILOT_INVALID {
+                return None;
+            }
+            FcMessage::Armed(b[6] & MODE_FLAG_ARMED != 0)
+        }
         MSG_DISTANCE_SENSOR => {
             let b: [u8; 14] = padded(payload);
             let cm = |at: usize| u16::from_le_bytes([b[at], b[at + 1]]) as f64 * 0.01;
@@ -364,7 +381,8 @@ mod tests {
         };
         assert!((o.lat_deg - 12.9716).abs() < 1e-9);
         assert!((o.alt_msl_m - 920.4).abs() < 1e-9);
-        assert!(decode(&frame_v2(0, &[0; 9])).is_none());
+        // A message not read (`SYS_STATUS`) decodes to nothing.
+        assert!(decode(&frame_v2(1, &[0; 31])).is_none());
         assert!(decode(&[0xFD, 40, 0]).is_none());
     }
 

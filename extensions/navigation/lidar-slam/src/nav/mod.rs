@@ -170,6 +170,11 @@ pub struct NavMap {
     /// The north was latched from the FC heading although a take-off heading
     /// is declared: the map started over off the take-off spot.
     north_from_fc: bool,
+    /// The FC's attitude yaw when the declared take-off heading was first
+    /// latched: the declared heading holds for the way the vehicle faced
+    /// then, so a later latch on the spot adds the FC's turn since. Kept
+    /// when the map starts over ([`Self::start_over`]).
+    declared_fc_heading: Option<f64>,
     /// The GNSS alignment onto the EKF's local frame.
     align: MapAlign,
     /// `map_ned`'s horizontal offset from the rotated SLAM world (north,
@@ -252,6 +257,7 @@ impl NavMap {
             blind: false,
             left_takeoff: false,
             north_from_fc: false,
+            declared_fc_heading: None,
         }
     }
 
@@ -276,6 +282,7 @@ impl NavMap {
         *self = Self {
             restarted_at: self.restarted_at,
             left_takeoff: self.left_takeoff,
+            declared_fc_heading: self.declared_fc_heading,
             ..Self::new(self.settings)
         };
     }
@@ -345,12 +352,16 @@ impl NavMap {
     /// the north afresh: on the take-off spot as at the first pose, off it
     /// from the FC heading even with a declared take-off heading, which holds
     /// only on that spot. A restart still on the spot of the first heading
-    /// starts over the same way after a trusted pose too: there the north is
-    /// the FC heading (or the declared one) at every pose anyway, so it needs
-    /// no turn across the outage. Blind there (an IMU feed stall on the
-    /// ground, no FC attitude reaching back to the good pose), every pose
-    /// stayed lost, `ODOMETRY` stopped and ArduPilot's VisOdom pre-arm
-    /// check never passed again.
+    /// with the vehicle disarmed starts over the same way after a trusted
+    /// pose too: there the north is the FC heading at every pose anyway, or
+    /// the declared heading turned by the FC's turn since it was latched
+    /// ([`Self::declared_fc_heading`]), so it needs no turn across the
+    /// outage. Blind there (an IMU feed stall on the ground, no FC attitude
+    /// reaching back to the good pose), every pose stayed lost, `ODOMETRY`
+    /// stopped and ArduPilot's VisOdom pre-arm check never passed again. In
+    /// a hover just off the ground (armed, still within the spot) or with a
+    /// declared heading and no FC heading from its latch, the restart takes
+    /// the in-flight path below.
     pub fn restart_in_flight(
         &mut self,
         e: &PoseEstimate,
@@ -371,7 +382,10 @@ impl NavMap {
             self.start_over();
             return;
         }
-        if on_spot && !self.left_spot {
+        let disarmed = fc.and_then(FcEkfPose::armed) == Some(false);
+        let declared = self.settings.takeoff_heading_rad.is_some() && !self.left_takeoff;
+        let relatch = !declared || self.declared_fc_heading.is_some();
+        if on_spot && !self.left_spot && disarmed && relatch {
             tracing::warn!("nav_map_restarted_on_the_spot");
             self.start_over();
             return;
@@ -617,11 +631,23 @@ impl NavMap {
             .filter(|_| !self.left_takeoff)
         {
             if self.yaw0.is_none() {
-                let yaw0 = wrap_pi(declared - frd_yaw(r_frd));
+                // The declared heading is the facing at its first latch; a
+                // later one adds the FC's turn since, and waits for an FC
+                // heading to measure it.
+                let turn = match (self.declared_fc_heading, fc_heading) {
+                    (None, now) => {
+                        self.declared_fc_heading = now;
+                        0.0
+                    }
+                    (Some(then), Some(now)) => wrap_pi(now - then),
+                    (Some(_), None) => return,
+                };
+                let yaw0 = wrap_pi(declared + turn - frd_yaw(r_frd));
                 self.yaw0 = Some(yaw0);
                 self.spot = Some(t_frd);
                 tracing::info!(
                     heading_rad = declared,
+                    turn_rad = turn,
                     fc_heading_rad = fc_heading,
                     yaw0_rad = yaw0,
                     "nav_map_north_declared"

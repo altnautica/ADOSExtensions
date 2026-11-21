@@ -145,6 +145,11 @@ const RATE_WINDOW_NS: u64 = 1_000_000_000;
 /// A wait between two `RAW_IMU` frames longer than this is counted in the
 /// `nav_imu_feed` log ([`FeedState::take_raw_gaps`]).
 const RAW_GAP_LOG_NS: u64 = 100_000_000;
+/// On sim time, a clock feed stale (no tick) for this long, ms: the simulator
+/// is gone, and sim time standing still no longer means a hold. Longer than a
+/// rendered step's hook (up to 3 s of wall time between ticks while the
+/// renderer draws), during which sim time only stands still.
+const SIM_CLOCK_LOST_MS: u32 = 10_000;
 
 /// What the FC feed has handed the pose provider, shared between the
 /// MAVLink delivery thread ([`sink`]) and the capture loop (the attitude
@@ -279,10 +284,17 @@ impl FeedState {
     /// Whether, at `now_ns` ([`Self::now_ns`]), the feed fails to measure the turn the
     /// matcher's heading rides between scans: the attitude stand-in, or a
     /// `RAW_IMU` stream that stalled or arrives under 40 Hz. A pose the
-    /// matcher reports good is then degraded.
+    /// matcher reports good is then degraded. On sim time a clock feed stale
+    /// for [`SIM_CLOCK_LOST_MS`] is a stall: sim time froze at its last tick,
+    /// so no gap would ever show.
     pub fn degraded(&self, now_ns: u64) -> Option<ImuFeedReason> {
         if !self.raw_imu() {
             return Some(ImuFeedReason::AttitudeStandIn);
+        }
+        if let Some(c @ Clock::Sim(_)) = &self.clock {
+            if c.is_stale() && c.lag_ms().is_some_and(|l| l >= SIM_CLOCK_LOST_MS) {
+                return Some(ImuFeedReason::Stalled);
+            }
         }
         let times = self.raw_times();
         let newest = *times.back()?;
@@ -604,6 +616,49 @@ mod tests {
         // Sim time runs on 300 ms with no frame: stalled.
         tick(3_300_000_000);
         assert_eq!(state.degraded(state.now_ns()), Some(ImuFeedReason::Stalled));
+    }
+
+    /// A simulator that stops ticking altogether (it crashed) freezes sim
+    /// time at its last tick, so no frame gap ever shows: a clock feed stale
+    /// for [`SIM_CLOCK_LOST_MS`] reads stalled. A stale gap shorter than that
+    /// (the renderer drawing a step) is a hold.
+    #[test]
+    fn on_sim_time_a_lost_clock_feed_reads_stalled() {
+        use ados_protocol::simclock::wire::{Tick, FLAG_LOCKSTEP};
+        use ados_protocol::simclock::SimFeed;
+        use std::time::{Duration, Instant};
+        let run = |last_tick_ago: Duration| {
+            let feed = SimFeed::new();
+            let state = Arc::new(FeedState::on(Clock::Sim(feed.clone())));
+            let sink = sink(Arc::new(Fed::default()), true, state.clone());
+            let at = Instant::now() - last_tick_ago;
+            for k in 0..100u64 {
+                let t = 1_000_000_000 + k * 10_000_000;
+                let tick = Tick {
+                    flags: FLAG_LOCKSTEP,
+                    seq: k as u32 + 1,
+                    sim_ns: t,
+                    grant_ns: t + 20_000_000,
+                    speed: 0.0,
+                };
+                assert!(feed.ingest(&tick, at));
+                sink(NavSample::Imu {
+                    t_ns: t,
+                    arrival_ns: t,
+                    imu: RawImu {
+                        time_usec: t / 1_000,
+                        gyro: [0.0; 3],
+                        accel: [0.0, 0.0, -9.8],
+                    },
+                    attitude: None,
+                });
+            }
+            assert!(feed.check_stale(Instant::now()), "no tick for over 500 ms");
+            state.degraded(state.now_ns())
+        };
+        let lost = Duration::from_millis(u64::from(SIM_CLOCK_LOST_MS) + 1_000);
+        assert_eq!(run(lost), Some(ImuFeedReason::Stalled));
+        assert_eq!(run(Duration::from_secs(3)), None, "a renderer's step");
     }
 
     /// No yaw rate reaching the matcher (the stand-in, a stalled feed) loses

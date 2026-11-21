@@ -422,36 +422,99 @@ fn a_map_restarted_without_the_fc_turn_stays_lost() {
     assert!(nav.north_unknown());
 }
 
-/// The logged take: on the ground at rest the map tracked good, then the
-/// FC's IMU feed stalled, the heading went unconfirmed and the matcher
-/// started its map over a few millimetres from where it stood, with no FC
-/// attitude reaching back to the good pose. Still on the take-off spot the
-/// north is the FC heading, as at the first pose: the map starts over and
-/// latches it afresh. (Blind there, every pose stayed lost, `ODOMETRY`
-/// stopped and ArduPilot's VisOdom pre-arm check never passed again.)
+/// An FC feed that has heard the autopilot's heartbeat (`armed` or not)
+/// but holds no attitude reaching back to any pose: its IMU feed stalled.
+fn fc_stalled(armed: bool) -> FcEkfPose {
+    let fc = FcEkfPose::new();
+    fc.on_frame(&ados_mapping_pose::fc_ekf::test_frames::heartbeat(armed), 0);
+    fc
+}
+
+/// Ten good poses on the take-off spot, the FC heading `fc_heading`, then
+/// the matcher's restart a few millimetres away with `fc` as its feed.
+fn restarted_on_the_spot(nav: &mut NavMap, fc_heading: f64, fc: &FcEkfPose) {
+    for k in 0..10 {
+        let e = at(estimate(0.0, 0.0, 0.0), k * 100);
+        let pd = nav.on_pose(&e, Some(0.0), Some(fc_heading), k * 100, 0);
+        assert_eq!(pd.expect("due").health, VioHealth::Good);
+    }
+    let mut restart = at(estimate(-0.02, 0.004, 0.0), 1_500);
+    restart.health = VioHealth::Lost;
+    nav.on_matcher_pose(&restart, true, Some(0.0), Some(fc));
+}
+
+/// The logged take: on the ground at rest, disarmed, the map tracked good,
+/// then the FC's IMU feed stalled, the heading went unconfirmed and the
+/// matcher started its map over a few millimetres from where it stood, with
+/// no FC attitude reaching back to the good pose. Still on the take-off
+/// spot the north is the FC heading, as at the first pose: the map starts
+/// over and latches it afresh. (Blind there, every pose stayed lost,
+/// `ODOMETRY` stopped and ArduPilot's VisOdom pre-arm check never passed
+/// again.)
 #[test]
 fn a_map_restarted_on_the_spot_after_a_trusted_pose_latches_its_north_afresh() {
     let heading = 17.2f64.to_radians();
     let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
-    let pose = |nav: &mut NavMap, e: &PoseEstimate| {
-        let t_ms = (e.t_ns / 1_000_000) as i64;
-        nav.on_pose(e, Some(0.0), Some(heading), t_ms, 0)
-            .expect("due")
-    };
-    for k in 0..10 {
-        assert_eq!(
-            pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), k * 100)).health,
-            VioHealth::Good
-        );
-    }
-    let mut restart = at(estimate(-0.02, 0.004, 0.0), 1_500);
-    restart.health = VioHealth::Lost;
-    nav.on_matcher_pose(&restart, true, Some(0.0), None);
+    restarted_on_the_spot(&mut nav, heading, &fc_stalled(false));
     assert!(!nav.north_unknown(), "blind on the take-off spot");
-    let pd = pose(&mut nav, &at(estimate(-0.02, 0.004, 0.0), 2_000));
+    let e = at(estimate(-0.02, 0.004, 0.0), 2_000);
+    let pd = nav
+        .on_pose(&e, Some(0.0), Some(heading), 2_000, 0)
+        .expect("due");
     assert_eq!(pd.health, VioHealth::Good);
     assert_eq!(pd.north, Some(MapNorth::FcHeading));
     assert!(wrap_pi(frd_yaw(&pd.pose.r) - heading).abs() < 1e-9);
+}
+
+/// Armed (a hover just off the ground, still within the spot), the same
+/// restart takes the in-flight path: without the FC's turn it is blind.
+#[test]
+fn an_armed_restart_on_the_spot_does_not_start_the_map_over() {
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
+    restarted_on_the_spot(&mut nav, 0.3, &fc_stalled(true));
+    assert!(nav.north_unknown());
+}
+
+/// A declared take-off heading holds for the way the vehicle faced at its
+/// first latch. Turned 90° on the spot (the FC heading from 0 to 90°) and
+/// restarted, the new map's matcher frame starts at the new facing: the
+/// north latched afresh is the declared heading turned by the FC's 90°,
+/// so the vehicle faces declared + 90°, not the declared heading again.
+#[test]
+fn a_declared_map_restarted_on_the_spot_after_a_turn_carries_the_turn() {
+    let declared = PI / 2.0;
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(declared),
+        ..settings(ComputePlacement::Onboard)
+    });
+    restarted_on_the_spot(&mut nav, 0.0, &fc_stalled(false));
+    assert!(!nav.north_unknown());
+    let e = at(estimate(-0.02, 0.004, 0.0), 2_000);
+    let pd = nav
+        .on_pose(&e, Some(0.0), Some(PI / 2.0), 2_000, 0)
+        .expect("due");
+    assert_eq!(pd.north, Some(MapNorth::Declared));
+    assert!(wrap_pi(frd_yaw(&pd.pose.r) - (declared + PI / 2.0)).abs() < 1e-9);
+}
+
+/// With a declared heading and no FC heading at its latch there is no turn
+/// to carry: the restart on the spot takes the in-flight path (blind
+/// without the FC's turn) rather than give the declared heading to the
+/// vehicle's present facing.
+#[test]
+fn a_declared_map_without_the_fc_heading_at_its_latch_is_not_restarted_on_the_spot() {
+    let mut nav = NavMap::new(NavSettings {
+        takeoff_heading_rad: Some(PI / 2.0),
+        ..settings(ComputePlacement::Onboard)
+    });
+    for k in 0..10 {
+        let e = at(estimate(0.0, 0.0, 0.0), k * 100);
+        nav.on_pose(&e, Some(0.0), None, k * 100, 0);
+    }
+    let mut restart = at(estimate(-0.02, 0.004, 0.0), 1_500);
+    restart.health = VioHealth::Lost;
+    nav.on_matcher_pose(&restart, true, Some(0.0), Some(&fc_stalled(false)));
+    assert!(nav.north_unknown());
 }
 
 /// Without the FC's position over the outage, the restarted map keeps the

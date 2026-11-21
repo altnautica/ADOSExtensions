@@ -266,6 +266,8 @@ struct FeedInner {
     range: Option<(u32, f64)>,
     /// The run's matcher input ([`FcEkfPose::set_nav_sink`]).
     sink: Option<NavSink>,
+    /// The autopilot's last `HEARTBEAT` armed flag; `None` before one.
+    armed: Option<bool>,
 }
 
 /// The FC's heading at one attitude.
@@ -377,6 +379,12 @@ impl FcEkfPose {
     /// heading source (the compass).
     pub fn attitude(&self) -> Option<(u64, [f64; 9])> {
         self.inner.lock().host_attitude()
+    }
+
+    /// Whether the autopilot's last `HEARTBEAT` said armed; `None` before
+    /// one arrived (the feed does not subscribe to it, or it is silent).
+    pub fn armed(&self) -> Option<bool> {
+        self.inner.lock().armed
     }
 
     /// Hand every `RAW_IMU` sample, flow velocity and EKF height to `sink`
@@ -534,6 +542,10 @@ impl FcEkfPose {
                     let t_ns = g.host_ns(ms as i128 * 1_000_000)?;
                     Some(NavSample::Velocity { t_ns, v })
                 }),
+            FcMessage::Armed(armed) => {
+                g.armed = Some(armed);
+                None
+            }
             FcMessage::GpsFix(fix) => {
                 g.fix3d_since_ms = if fix >= FIX_3D {
                     g.fix3d_since_ms.or(g.fc_ms)
@@ -673,6 +685,16 @@ pub mod test_frames {
             p.extend_from_slice(&v.to_le_bytes());
         }
         frame_v2(32, &p)
+    }
+
+    /// The autopilot's `HEARTBEAT` (ArduPilot, quadrotor), `armed` or not.
+    pub fn heartbeat(armed: bool) -> Vec<u8> {
+        let base_mode = if armed { 128 | 1 } else { 1 };
+        // custom_mode, then type (QUADROTOR), autopilot (ARDUPILOTMEGA),
+        // base_mode, system_status, mavlink_version.
+        let mut p = 0u32.to_le_bytes().to_vec();
+        p.extend_from_slice(&[2, 3, base_mode, 4, 3]);
+        frame_v2(0, &p)
     }
 }
 
@@ -1163,5 +1185,22 @@ mod tests {
         );
         assert!(bridged, "the 1 s gap is flagged");
         assert!(p.turn_between(ms(500), ms(1_100)).is_none());
+    }
+
+    /// The autopilot's heartbeat sets the armed flag; a companion's (an
+    /// invalid autopilot) does not.
+    #[test]
+    fn the_autopilot_heartbeat_says_whether_the_vehicle_is_armed() {
+        use super::test_frames::heartbeat;
+        let p = FcEkfPose::new();
+        assert_eq!(p.armed(), None);
+        p.on_frame(&heartbeat(false), 0);
+        assert_eq!(p.armed(), Some(false));
+        p.on_frame(&heartbeat(true), 1);
+        assert_eq!(p.armed(), Some(true));
+        let mut companion = heartbeat(false);
+        companion[10 + 5] = 8;
+        p.on_frame(&companion, 2);
+        assert_eq!(p.armed(), Some(true));
     }
 }
