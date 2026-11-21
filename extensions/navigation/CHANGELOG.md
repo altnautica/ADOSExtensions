@@ -33,6 +33,8 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 - External navigation checks the flight controller's own optical flow against its EKF velocity over 3 s: past 1.5 m apart the pose is degraded (`ekf_flow_disagree`), and after 3 s more it is lost, so no `ODOMETRY` holds the EKF on a pose that stopped and the source-set machine falls back to the flow set. `plugin.navigation.state` and the health `degradedReasons` name why the pose is not good (`health_reason`: `ekf_flow_disagree`, `corridor_unmeasured`, `flow_disagrees`, `pose_sigma_wide`, `corridor_flow_unjudged`, `heading_unconfirmed` or `imu_feed_<reason>`), which the ADOS pilot reads to stop a goal flown on an unverified position.
 
+- The obstacle feed is on by default and runs whenever a LiDAR scan arrives, with navigation engaged or not: a drone flying on GNSS alone with its LiDAR running now gives the flight controller's proximity avoidance (`PRX1_TYPE` 2) the scan as `OBSTACLE_DISTANCE`, where before the feed was off unless configured and stopped whenever navigation was disengaged. It can still be turned off (`obstacle.enabled`), and a node with no flight controller never sends it.
+
 ## [1.0.2] - 2026-11-21
 
 ### Fixed

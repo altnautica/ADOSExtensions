@@ -240,6 +240,7 @@ impl NavigationConfig {
     pub fn for_profile(mut self, profile: Option<&str>) -> Self {
         if profile == Some(NO_FC_PROFILE) {
             self.mode = Mode::Off;
+            self.obstacle.enabled = false;
         }
         self
     }

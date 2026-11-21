@@ -128,9 +128,12 @@ impl NavShared {
     }
 }
 
-/// Whether the obstacle feed runs for this config.
+/// Whether the obstacle feed runs for this config: whenever it is enabled
+/// (by default; a Visor's profile turns it off), engaged or not, so a
+/// GNSS-only flight still gives the flight controller's proximity backstop
+/// the scan. It sends only when a scan arrives.
 pub fn obstacle_active(cfg: &NavigationConfig) -> bool {
-    cfg.obstacle.enabled && cfg.effective_mode() != Mode::Off
+    cfg.obstacle.enabled
 }
 
 /// Whether this config sends from component 197.
@@ -277,15 +280,21 @@ mod tests {
     #[test]
     fn the_extnav_component_is_used_only_when_needed() {
         let mut cfg = NavigationConfig::default();
-        assert!(!uses_extnav_component(&cfg));
-        cfg.mode = Mode::OpticalFlow;
-        cfg.obstacle.enabled = true;
+        // The obstacle feed is on by default, engaged or not.
+        assert!(obstacle_active(&cfg));
         assert!(uses_extnav_component(&cfg));
         cfg.active = false;
+        assert!(obstacle_active(&cfg));
+        assert!(uses_extnav_component(&cfg));
+        cfg.obstacle.enabled = false;
         assert!(!uses_extnav_component(&cfg));
         cfg.active = true;
-        cfg.obstacle.enabled = false;
+        cfg.mode = Mode::OpticalFlow;
+        assert!(!uses_extnav_component(&cfg));
         cfg.mode = Mode::ExternalNav;
         assert!(uses_extnav_component(&cfg));
+        let visor = NavigationConfig::default().for_profile(Some(crate::config::NO_FC_PROFILE));
+        assert!(!obstacle_active(&visor));
+        assert!(!uses_extnav_component(&visor));
     }
 }

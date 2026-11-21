@@ -88,12 +88,12 @@
     "obstacle": {
       "type": "object",
       "title": "Obstacle feed",
-      "description": "Turns a shared planar scan into OBSTACLE_DISTANCE for the flight controller's proximity avoidance (PRX1_TYPE 2).",
+      "description": "Turns a shared planar scan into OBSTACLE_DISTANCE for the flight controller's proximity avoidance (PRX1_TYPE 2). On by default: it sends whenever a LiDAR scan arrives, with navigation engaged or not, so the flight controller's proximity backstop has data on a GNSS flight too. Off on a node with no flight controller.",
       "properties": {
         "enabled": {
           "type": "boolean",
           "title": "Enabled",
-          "default": false
+          "default": true
         },
         "scan_topic": {
           "type": "string",

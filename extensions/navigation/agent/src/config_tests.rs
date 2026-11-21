@@ -221,14 +221,21 @@ fn external_nav_with_origin_parses_and_ignores_the_camera() {
                 Value::Array(vec![Value::F64(1.0), Value::F64(2.0), Value::F64(3.0)]),
             )]),
         ),
-        ("obstacle", map(&[("enabled", Value::from(true))])),
+        ("obstacle", map(&[("enabled", Value::from(false))])),
     ]);
     let cfg = NavigationConfig::from_value(&v).unwrap();
     assert_eq!(cfg.effective_mode(), Mode::ExternalNav);
     assert_eq!(cfg.external_nav.origin_lla, Some([1.0, 2.0, 3.0]));
     assert_eq!(cfg.external_nav.extnav_set, 1);
     assert_eq!(cfg.external_nav.fallback_set, 2);
-    assert!(cfg.obstacle.enabled);
+    assert!(!cfg.obstacle.enabled, "the feed can still be turned off");
+    // On by default: the flight controller's proximity backstop has data
+    // whenever a scan arrives.
+    assert!(NavigationConfig::default().obstacle.enabled);
+    assert!(NavigationConfig::disengaged().obstacle.enabled);
+    // A Visor has no flight controller to feed.
+    let visor = NavigationConfig::default().for_profile(Some(NO_FC_PROFILE));
+    assert!(!visor.obstacle.enabled);
     assert_eq!(Mode::parse("external_nav"), Some(Mode::ExternalNav));
 }
 

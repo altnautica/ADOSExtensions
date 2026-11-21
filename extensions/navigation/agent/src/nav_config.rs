@@ -52,7 +52,9 @@ impl Default for ExternalNavConfig {
     }
 }
 
-/// The `obstacle` block.
+/// The `obstacle` block. On by default: the feed sends only when a planar
+/// scan arrives, so the flight controller's proximity backstop has data
+/// whenever a LiDAR runs, whether or not navigation is engaged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ObstacleConfig {
     pub enabled: bool,
@@ -67,7 +69,7 @@ pub struct ObstacleConfig {
 impl Default for ObstacleConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             scan_topic: DEFAULT_SCAN_TOPIC.to_string(),
             sectors: MAX_SECTORS,
             rate_hz: 10.0,
