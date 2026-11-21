@@ -33,6 +33,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::capture_state::CaptureWatch;
+use crate::depth_source::vision::{DepthLease, LeaseStep, LEASE_HOLD};
 use crate::depth_source::DepthSourceKind;
 use crate::lane::{run_lane, LaneDeps};
 use crate::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
@@ -264,6 +265,21 @@ async fn subscribe_depth(ctx: &PluginContext) {
     }
 }
 
+/// Carry out one poll's depth-lease work (see [`DepthLease`]); a failure is
+/// logged and retried on the next poll.
+async fn hold_depth_lease(ctx: &PluginContext, step: LeaseStep) {
+    let leases = step
+        .release
+        .map(|c| (c, Duration::ZERO))
+        .into_iter()
+        .chain(step.renew.map(|c| (c, LEASE_HOLD)));
+    for (camera, hold) in leases {
+        if let Err(e) = ctx.vision.request_depth(&camera, hold).await {
+            tracing::info!(camera = %camera, error = %e, "navigation_depth_lease_failed");
+        }
+    }
+}
+
 /// The FC messages and the capture state; each is retried on the next poll
 /// until it succeeds.
 async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 2]) {
@@ -344,6 +360,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
         }
     };
     let (mut subscribed, mut frames_subscribed) = ([false; 2], false);
+    let mut depth_lease = DepthLease::default();
     let mut run: Option<Run> = None;
     let mut poll = tokio::time::interval(CONFIG_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -353,6 +370,11 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             _ = poll.tick() => {}
         }
         subscribe_feeds(&ctx, &feeds, &mut subscribed).await;
+        let want = run
+            .as_ref()
+            .filter(|r| r.config.depth.source == DepthSourceKind::Vision)
+            .map(|r| r.config.depth.vision_camera.clone());
+        hold_depth_lease(&ctx, depth_lease.step(want.as_deref())).await;
         if run.as_ref().is_some_and(|r| r.lane.is_finished()) {
             tracing::error!("navigation lane exited unexpectedly; restarting it");
             if let Some(r) = run.take() {
@@ -398,6 +420,14 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
     if let Some(r) = run.take() {
         r.stop(&feeds).await;
     }
+    hold_depth_lease(
+        &ctx,
+        LeaseStep {
+            release: depth_lease.take(),
+            renew: None,
+        },
+    )
+    .await;
     for t in [Some(forwarder), http].into_iter().flatten() {
         t.abort();
         let _ = t.await;

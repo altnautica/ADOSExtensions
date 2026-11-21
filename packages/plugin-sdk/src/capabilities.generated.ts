@@ -81,6 +81,7 @@ export const CAPABILITY_IDS = [
   "vision.model.read",
   "vision.model.register",
   "vision.offload.advertise",
+  "vision.subject.read",
   "vision.track.designate",
 ] as const;
 

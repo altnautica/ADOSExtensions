@@ -101,6 +101,46 @@ pub fn mailbox() -> &'static Arc<Mailbox> {
     &MAILBOX
 }
 
+/// How long one depth lease holds; renewed every supervisor poll (5 s), so a
+/// stopped service lets it lapse within this even without a release.
+pub const LEASE_HOLD: Duration = Duration::from_secs(15);
+
+/// The engine runs its depth model on a camera only while a depth lease is
+/// held there. This tracks the camera this service leases: each poll asks
+/// [`Self::step`] what to release and what to renew.
+#[derive(Debug, Default)]
+pub struct DepthLease {
+    held: Option<String>,
+}
+
+/// One poll's lease work.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LeaseStep {
+    /// Release this camera's lease (hold 0).
+    pub release: Option<String>,
+    /// Take or renew this camera's lease for [`LEASE_HOLD`].
+    pub renew: Option<String>,
+}
+
+impl DepthLease {
+    /// The work for a poll that wants `want` leased (`None`: no lease). A
+    /// renewal that fails is still released later: a stray release is
+    /// harmless, a stray lease keeps the model running.
+    pub fn step(&mut self, want: Option<&str>) -> LeaseStep {
+        let release = self.held.take_if(|c| Some(c.as_str()) != want);
+        self.held = want.map(str::to_owned);
+        LeaseStep {
+            release,
+            renew: self.held.clone(),
+        }
+    }
+
+    /// The camera to release when the service stops.
+    pub fn take(&mut self) -> Option<String> {
+        self.held.take()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VisionConfig {
     /// Only frames from this camera; empty takes every camera.

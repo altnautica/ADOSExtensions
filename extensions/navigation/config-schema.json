@@ -352,7 +352,7 @@
           "default": 7810
         },
         "vision_camera": {
-          "description": "`vision`: map only this camera's depth; empty takes every camera.",
+          "description": "`vision` (required): the camera whose depth the service leases from the vision engine (renewed every 5 s, released on stop) and maps.",
           "type": "string",
           "default": ""
         },

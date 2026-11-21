@@ -89,7 +89,7 @@ pub struct DepthSettings {
     /// Its depth port: 7810 + the vehicle's SITL lease.
     pub we_port: u16,
     pub realsense: RealsenseSettings,
-    /// `vision`: only this camera's frames; empty takes every camera.
+    /// `vision`: the camera whose depth is leased and mapped (required).
     pub vision_camera: String,
     /// `vision`: a frame whose scale fit is older than this (ms) is counted,
     /// not mapped.
@@ -135,6 +135,9 @@ impl DepthSettings {
                 }
             }
             DepthSourceKind::Vision => {
+                if self.vision_camera.trim().is_empty() {
+                    return Err("vision_camera: empty".into());
+                }
                 if self.vision_max_fit_age_ms > VISION_MAX_FIT_AGE_CAP_MS {
                     return Err(format!(
                         "vision_max_fit_age_ms: {} is over {VISION_MAX_FIT_AGE_CAP_MS}",

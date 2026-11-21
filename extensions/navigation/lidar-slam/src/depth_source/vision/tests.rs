@@ -152,10 +152,58 @@ fn the_source_is_unavailable_until_subscribed_and_configures() {
     );
     let over = BTreeMap::from([(
         "navigation.depth".to_string(),
-        json!({"source": "vision", "vision_max_fit_age_ms": 70000}),
+        json!({"source": "vision", "vision_camera": "main", "vision_max_fit_age_ms": 70000}),
     )]);
     assert!(resolve(&over, "navigation.depth")
         .unwrap_err()
         .reason
         .contains("vision_max_fit_age_ms"));
+    let unnamed = BTreeMap::from([("navigation.depth".to_string(), json!({"source": "vision"}))]);
+    assert!(resolve(&unnamed, "navigation.depth")
+        .unwrap_err()
+        .reason
+        .contains("vision_camera"));
+}
+
+#[test]
+fn the_depth_lease_is_renewed_moved_and_released() {
+    let mut lease = DepthLease::default();
+    let renew = |c: &str| Some(c.to_string());
+    // Nothing wanted, nothing held: no work.
+    assert_eq!(
+        lease.step(None),
+        LeaseStep {
+            release: None,
+            renew: None
+        }
+    );
+    // Every poll renews the configured camera.
+    for _ in 0..3 {
+        assert_eq!(
+            lease.step(Some("main")),
+            LeaseStep {
+                release: None,
+                renew: renew("main")
+            }
+        );
+    }
+    // A new camera releases the old one.
+    assert_eq!(
+        lease.step(Some("aux")),
+        LeaseStep {
+            release: renew("main"),
+            renew: renew("aux")
+        }
+    );
+    // Switching the source off releases it; stopping then has nothing left.
+    assert_eq!(
+        lease.step(None),
+        LeaseStep {
+            release: renew("aux"),
+            renew: None
+        }
+    );
+    assert_eq!(lease.take(), None);
+    lease.step(Some("main"));
+    assert_eq!(lease.take(), renew("main"));
 }
