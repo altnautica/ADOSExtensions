@@ -65,9 +65,12 @@ const DRIFT_BUCKET_NS: u64 = 1_000_000_000;
 const DRIFT_BUCKETS: usize = 8;
 const DRIFT_MIN_BUCKETS: usize = 4;
 /// Fastest measured drift, per unit of host time: an FC clock (a
-/// simulator's) running as slow as half the host's. One running faster
-/// makes the offset fall, which it follows at once.
-const MAX_DRIFT: f64 = 0.5;
+/// simulator's) running as slow as a twentieth of the host's. A lockstep
+/// simulator held to a rendered step runs at a quarter of real time and
+/// below; a bound under its drift leaves every sample further behind the
+/// host clock, so the planar matcher's scans are never covered by the IMU.
+/// One running faster makes the offset fall, which it follows at once.
+const MAX_DRIFT: f64 = 0.95;
 /// An FC clock that steps back further than this has restarted: the offset
 /// starts over. An offset falling further than this at once is a step of
 /// the FC clock too: the drift starts over.
@@ -133,8 +136,8 @@ const FIX_3D: u8 = 3;
 /// no longer lags a rising offset by its own length; the newest frame is
 /// still in it, so no stamp is later than its arrival. When the drift is
 /// first measured (or grows), the offset may rise once by the growth over
-/// the host time it was measured across: the lag gathered while the drift
-/// was not yet known.
+/// the host time from the first bucket to the frame that finished the
+/// last: the lag gathered while the drift was not yet known.
 #[derive(Debug, Default)]
 struct FcClock {
     /// `(offset, arrival host ns)` of the last [`OFFSET_WINDOW`] messages.
@@ -200,9 +203,12 @@ impl FcClock {
                 *least = (*least).min(offset);
             }
             _ => {
-                let (drift, span_ns) = self.finished_drift();
+                let drift = self.finished_drift();
                 if drift > self.drift {
-                    self.catch_up = ((drift - self.drift) * span_ns as f64) as i128;
+                    // The lag gathered at the old drift from the first
+                    // bucket up to this frame, which opens the next one.
+                    let since_ns = self.buckets.front().map_or(0, |&(s, _)| arrival_ns - s);
+                    self.catch_up = ((drift - self.drift) * since_ns as f64) as i128;
                 }
                 self.drift = drift;
                 self.buckets.push_back((arrival_ns, offset));
@@ -215,11 +221,11 @@ impl FcClock {
 
     /// How fast the least offset rises per unit of host time over the
     /// buckets so far, all finished: the median of the pairwise slopes, 0
-    /// with too few; and the host time those buckets span.
-    fn finished_drift(&self) -> (f64, u64) {
+    /// with too few.
+    fn finished_drift(&self) -> f64 {
         let b = &self.buckets;
         if b.len() < DRIFT_MIN_BUCKETS {
-            return (0.0, 0);
+            return 0.0;
         }
         let mut slopes = [0.0; DRIFT_BUCKETS * (DRIFT_BUCKETS - 1) / 2];
         let mut n = 0;
@@ -231,8 +237,7 @@ impl FcClock {
         }
         let slopes = &mut slopes[..n];
         slopes.sort_by(f64::total_cmp);
-        let span_ns = b[b.len() - 1].0 - b[0].0;
-        (slopes[n / 2].clamp(0.0, MAX_DRIFT), span_ns)
+        slopes[n / 2].clamp(0.0, MAX_DRIFT)
     }
 
     /// The FC time `fc_ns` on the host clock.
@@ -965,6 +970,52 @@ mod tests {
             (spacing as i64 - 12_500_000).abs() < 2_000_000,
             "spacing {spacing} ns"
         );
+    }
+
+    /// A lockstep simulator held to a rendered step, as a forest take ran:
+    /// 0.38 of real time, then 0.25. Each 20 ms grant's two `RAW_IMU`
+    /// frames arrive together 2 ms after the grant ends on the host. The
+    /// newest sample of each grant stays within the planar matcher's 10 ms
+    /// IMU cover (plus the delay) of its arrival from 6 s after the start
+    /// (the drift measured from four buckets, the lag before it caught up)
+    /// and 8 s after the drop to 0.25; otherwise no scan is covered by the
+    /// IMU and the map never takes one. Under a drift bound of half the
+    /// host's rate the samples fell 0.1 to 0.2 s further behind every
+    /// second, and once the drift was measured the catch-up still left them
+    /// about 0.45 s behind, closed at 5 % of host time.
+    #[test]
+    fn a_lockstep_simulator_at_a_quarter_of_real_time_stays_on_the_host_clock() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        let (mut fc_us, mut host) = (1_000_000u64, 5_000_000_000u64);
+        // (host ns the phase ends, real-time factor, host ns its check starts)
+        let phases = [
+            (35_000_000_000u64, 0.38, 11_000_000_000u64),
+            (75_000_000_000, 0.25, 43_000_000_000),
+        ];
+        let mut worst = [0.0f64; 2];
+        for (i, &(end, rtf, check_from)) in phases.iter().enumerate() {
+            while host < end {
+                host += (20_000_000.0 / rtf) as u64;
+                let first = imu_times(&got).len();
+                for _ in 0..2 {
+                    fc_us += 10_000;
+                    p.on_frame(&raw_imu_frame(fc_us), host + 2_000_000);
+                }
+                let times = imu_times(&got);
+                assert_eq!(times.len(), first + 2);
+                if host >= check_from {
+                    let (t, a) = times[first + 1];
+                    worst[i] = worst[i].max(a.saturating_sub(t) as f64 * 1e-6);
+                }
+            }
+        }
+        for (w, (_, rtf, _)) in worst.iter().zip(phases) {
+            assert!(
+                *w <= 12.0,
+                "at {rtf} of real time the newest sample was placed {w:.0} ms before its arrival"
+            );
+        }
     }
 
     /// A delivery stall that bursts keeps the FC's spacing, drift or not.

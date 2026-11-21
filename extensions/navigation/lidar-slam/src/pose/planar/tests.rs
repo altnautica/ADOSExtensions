@@ -752,3 +752,117 @@ fn a_still_drone_on_the_attitude_stand_in_does_not_spin() {
         );
     }
 }
+
+/// A bench take's blind start, replayed: the drone stands still on the
+/// ground waiting to arm while a lockstep simulator held to a rendered
+/// step runs at 0.38 of real time and then 0.25. The FC's `RAW_IMU` (100
+/// Hz on its clock) arrives in each 20 ms grant's pair 2 ms after the
+/// grant ends on the host; the LiDAR's revolutions (10 Hz on the
+/// simulator's clock) are stamped on the host's, each arriving 5 ms after
+/// its last beam. With the FC clock's drift bounded at half the host's
+/// rate, every sample fell further behind its arrival, no scan was ever
+/// covered by the IMU, the map never took one, and every pose was lost for
+/// the whole take: no `ODOMETRY`, and the FC refused to arm on its visual
+/// odometry. The map fills and the pose turns good within 20 s of the
+/// start, and stays good through the drop to 0.25.
+#[test]
+fn a_still_drone_on_a_lockstep_simulator_at_a_quarter_of_real_time_turns_good() {
+    use crate::nav::fc_imu::{self, FeedState};
+    use ados_mapping_pose::fc_ekf::FcEkfPose;
+    use ados_mapping_pose::mavlink_msg::{frame_v2, MSG_RAW_IMU};
+
+    /// Simulator ns a grant covers, and `RAW_IMU`'s period on the FC clock.
+    const GRANT_NS: u64 = 20_000_000;
+    const STEP_NS: u64 = 10_000_000;
+    /// The FC clock (simulator time since its boot) at the simulator's 0.
+    const FC_BOOT_NS: u64 = 3_000_000_000;
+    /// Simulator ns run at 0.38 of real time, then at 0.25 until the end.
+    const DROP_NS: u64 = 12_000_000_000;
+    const END_NS: u64 = 20_000_000_000;
+    let host = |s: u64| -> u64 {
+        let slow = s.saturating_sub(DROP_NS);
+        T0 + ((s - slow) as f64 / 0.38 + slow as f64 / 0.25) as u64
+    };
+    let walls = rect(0.0, 0.0, 6.0, 4.0);
+    let body = |_t: u64| [3.0, 2.0, 0.0];
+    let p = Arc::new(
+        PlanarLidarPose::spawn(PlanarLidarConfig {
+            rig: rig(),
+            lidar_id: "lidar0".into(),
+            imu_id: fc_imu::FC_IMU_ID.into(),
+        })
+        .expect("spawn"),
+    );
+    let fc = FcEkfPose::new();
+    fc.set_nav_sink(Some(fc_imu::sink(
+        p.clone(),
+        true,
+        Arc::new(FeedState::default()),
+    )));
+    let raw_imu = |s: u64, arrival: u64| {
+        let mut b = ((s + FC_BOOT_NS) / 1_000).to_le_bytes().to_vec();
+        for v in [0i16, 0, -1000, 0, 0, 0, 0, 0, 0] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        fc.on_frame(&frame_v2(MSG_RAW_IMU, &b), arrival);
+    };
+    enum Ev {
+        Imu(u64),
+        Scan(LidarScan),
+    }
+    let mut evs: Vec<(u64, Ev)> = Vec::new();
+    for s in (STEP_NS..=END_NS).step_by(STEP_NS as usize) {
+        let grant_end = s.div_ceil(GRANT_NS) * GRANT_NS;
+        evs.push((host(grant_end) + 2_000_000, Ev::Imu(s)));
+    }
+    for s in (0..END_NS - PERIOD_NS).step_by(PERIOD_NS as usize) {
+        // Each beam at the host time its simulator time passed.
+        let mut sc = scan(host(s), &walls, &body);
+        for o in &mut sc.t_offset_ns {
+            *o = (host(s + u64::from(*o)) - host(s)) as u32;
+        }
+        let end = sc.t_ns + u64::from(*sc.t_offset_ns.iter().max().expect("points"));
+        evs.push((end + 5_000_000, Ev::Scan(sc)));
+    }
+    evs.sort_by_key(|(a, _)| *a);
+    let mut fed = 0u64;
+    let mut est = Vec::new();
+    for (arrival, ev) in evs {
+        match ev {
+            Ev::Imu(s) => raw_imu(s, arrival),
+            Ev::Scan(sc) => {
+                p.feed_lidar(&sc);
+                fed += 1;
+            }
+        }
+        // At most one scan waits for the IMU; let the matcher take the rest.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while p.stats().scans_processed + 1 < fed {
+            assert!(Instant::now() < deadline, "the matcher stalled");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        p.drain_new(&mut est);
+    }
+    assert_eq!(p.stats().scans_dropped, 0);
+    let first_good = est
+        .iter()
+        .find(|e| e.health == VioHealth::Good)
+        .map(|e| (e.t_ns - T0) as f64 * 1e-9);
+    assert!(
+        first_good.is_some_and(|t| t < 20.0),
+        "first good pose at {first_good:?} s of host time"
+    );
+    let after_drop: Vec<_> = est
+        .iter()
+        .filter(|e| e.t_ns > host(DROP_NS) + 8_000_000_000)
+        .collect();
+    assert!(after_drop.len() > 20, "{} poses", after_drop.len());
+    for e in after_drop {
+        assert_eq!(
+            e.health,
+            VioHealth::Good,
+            "pose at {:.1} s of host time",
+            (e.t_ns - T0) as f64 * 1e-9
+        );
+    }
+}
