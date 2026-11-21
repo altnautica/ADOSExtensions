@@ -90,11 +90,15 @@ const FLOW_CHECK_RATIO: f64 = 0.3;
 /// Along the directions the check does not judge (a corridor's axis) a
 /// measured velocity that reads under this, m/s, ...
 const FLOW_STALL_MPS: f64 = 0.1;
-/// ... while the matched chord there still moves over this has stalled (a
-/// flow sensor losing the ground reads near zero at a low quality): it is
-/// not followed until the scans pin every direction again, and a degenerate
-/// stretch goes unmeasured.
+/// ... while the matched chord there still moves over this, for longer than
+/// a stop from the chord's speed at [`FLOW_MAX_DECEL_MPS2`] (plus the
+/// chord's window, which lags the stop) explains, has stalled (a flow
+/// sensor losing the ground reads near zero at a low quality): it is not
+/// followed until the scans pin every direction again or the matched chord
+/// itself comes to rest, and a degenerate stretch goes unmeasured.
 const FLOW_STALL_FROM_MPS: f64 = 0.5;
+/// The hardest braking a multirotor shows along a corridor, m/s².
+const FLOW_MAX_DECEL_MPS2: f64 = 8.0;
 /// A degenerate match with no measured velocity along its free direction
 /// leaves the pose unmeasured there; after this long, seconds, it is lost
 /// ([`PoseOut::unmeasured_free_s`]) and stays lost while the matches stay
@@ -268,6 +272,8 @@ struct Flow {
     raw: Option<Vector2<f64>>,
     /// The flow stalled along a loose direction ([`FLOW_STALL_MPS`]).
     stalled: bool,
+    /// Since when it has read under [`FLOW_STALL_MPS`] there.
+    low_since: Option<u64>,
 }
 
 /// A climb or descent in progress ([`LocalSlam::skip_climbing`]).
@@ -465,8 +471,12 @@ pub struct LocalSlam {
     /// ([`FLOW_CLEAR_M`]).
     flow_agree_since: Option<u64>,
     /// A measured velocity stalled along a loose direction
-    /// ([`FLOW_STALL_MPS`]), held until the scans pin every direction.
+    /// ([`FLOW_STALL_MPS`]), held until the scans pin every direction or the
+    /// matched chord rests.
     flow_stalled: bool,
+    /// Since when the flow has read under [`FLOW_STALL_MPS`] along a loose
+    /// direction.
+    flow_low_since: Option<u64>,
     /// Projector onto the translation directions the last match pinned
     /// firmly (information at least [`FLOW_CHECK_RATIO`] of the largest),
     /// local frame: where a measured velocity is checked against the
@@ -517,6 +527,7 @@ impl LocalSlam {
             flow_disagrees: false,
             flow_agree_since: None,
             flow_stalled: false,
+            flow_low_since: None,
             pinned: None,
         }
     }
@@ -625,6 +636,7 @@ impl LocalSlam {
         self.unobserved = None;
         self.pinned = None;
         self.flow_stalled = false;
+        self.flow_low_since = None;
         self.last_insert = None;
         self.inserted = 0;
         self.suspect = None;
@@ -985,6 +997,7 @@ impl LocalSlam {
             self.confirmed_vel = velocity;
         }
         self.flow_stalled = flow.stalled;
+        self.flow_low_since = flow.low_since;
         let motion = Motion {
             roll,
             pitch,
@@ -1373,7 +1386,12 @@ impl LocalSlam {
             [vel[0], vel[1]],
             rate,
             v,
-            Flow { used, raw, stalled },
+            Flow {
+                used,
+                raw,
+                stalled,
+                low_since,
+            },
         )
     }
 
