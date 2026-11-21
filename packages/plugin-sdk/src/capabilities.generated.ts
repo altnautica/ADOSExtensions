@@ -16,6 +16,7 @@ export const CAPABILITY_IDS = [
   "flight.guided_setpoint",
   "flight.motion",
   "flight.rate_setpoint",
+  "follow.beacon.read",
   "hardware.camera.csi",
   "hardware.gpio",
   "hardware.gpio_out",
