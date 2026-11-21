@@ -83,7 +83,9 @@ def test_box_room_is_well_conditioned_and_tracks():
 def test_corridor_is_degenerate_along_its_axis():
     res = run(corridor)
     last = res[-1]
-    assert last.n > 500
+    # Only cells holding normal_k map points give normals; the sparse
+    # corridor walls fill fewer of them than the box room's.
+    assert last.n > 50
     assert ratio(last) < 0.05, last.eig
     assert ratio(run(box_room)[-1]) > 5 * ratio(last)
 

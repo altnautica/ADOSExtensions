@@ -9,8 +9,6 @@ dependencies = [
   # and its config fields stay fixed across installs.
   "kiss-icp==1.3.0",
   "numpy>=1.26",
-  # k-d tree over the local map for the per-scan normals of the Hessian.
-  "scipy>=1.11",
 ]
 
 [tool.uv]

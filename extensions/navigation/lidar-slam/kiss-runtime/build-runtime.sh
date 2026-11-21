@@ -18,8 +18,8 @@
 # Inside the tree: requirements.lock.txt (the exported lock the wheels were
 # installed from, with hashes) and LICENSES.txt (CPython's licence and every
 # installed distribution's licence files). Licences: CPython PSF-2.0,
-# kiss-icp MIT, numpy and scipy BSD-3-Clause (their bundled OpenBLAS BSD-3,
-# libgfortran GPL-3.0 with the GCC runtime library exception), pydantic MIT;
+# kiss-icp MIT, numpy BSD-3-Clause (its bundled OpenBLAS BSD-3, libgfortran
+# GPL-3.0 with the GCC runtime library exception), pydantic MIT;
 # the full list is LICENSES.txt.
 #
 # Wheels are resolved for `<arch>-manylinux_2_28` and binary only, so nothing
@@ -124,7 +124,7 @@ UV_NO_CONFIG=1 "$UV" pip install --no-config --target "$SITE" --no-deps --requir
 # Console scripts carry this host's paths; test suites, stubs and C headers
 # never load.
 rm -rf "$SITE/bin" "$SITE/numpy/_core/include"
-find "$SITE/numpy" "$SITE/scipy" -depth -type d -name tests -exec rm -rf {} +
+find "$SITE/numpy" -depth -type d -name tests -exec rm -rf {} +
 find "$SITE" -type f \( -name '*.pyi' -o -name '*.pxd' -o -name '*.pyx' \) -delete
 find "$ROOT" -type l -delete
 

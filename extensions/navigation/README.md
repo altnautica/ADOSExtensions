@@ -268,7 +268,7 @@ release ships per arch (`lidar-slam/kiss-runtime/build-runtime.sh`): a
 python-build-standalone CPython pinned by sha256 whose own site-packages hold
 the wheels `lidar-slam/python/kiss_icp_live/uv.lock` pins (binary only,
 manylinux_2_28, so glibc 2.28 and newer), with their licences in
-`LICENSES.txt` (CPython PSF-2.0, kiss-icp MIT, numpy and scipy BSD-3). The
+`LICENSES.txt` (CPython PSF-2.0, kiss-icp MIT, numpy BSD-3). The
 host unpacks it into `lib/<arch>-linux/kiss-icp-runtime`
 (`navigation.lidar.runtime`), inside the install tree the plugin may execute
 from, so the odometry needs no network and writes nothing there; the child

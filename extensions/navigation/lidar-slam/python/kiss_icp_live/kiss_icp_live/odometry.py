@@ -7,9 +7,12 @@ point-to-plane linearisation of the same correspondences, ``r = n_q^T (R p +
 t - q)``, whose translation Jacobian is the map normal ``n_q``; its Hessian
 ``sum n_q n_q^T`` has a near-zero eigenvalue along any direction no surface
 constrains (the axis of a long corridor). Normals are the smallest principal
-axis of the ``normal_k`` nearest map points around each correspondence;
-correspondences use the final pose and KISS-ICP's own gate, ``3 * sigma`` of
-the adaptive threshold, against the map as it stood before this scan.
+axis of the map points sharing the correspondence's cell of a grid 1.5 times
+the map's voxel (at least ``normal_k`` of them), from per-cell moments, so no
+search structure is built per scan. A correspondence is a scan point (final
+pose) whose point-to-plane distance to its cell's points is within KISS-ICP's
+own gate, ``3 * sigma`` of the adaptive threshold, against the map as it stood
+before this scan.
 """
 
 from __future__ import annotations
@@ -23,7 +26,12 @@ from typing import Optional
 import numpy as np
 from kiss_icp.config.parser import KISSConfig
 from kiss_icp.kiss_icp import KissICP
-from scipy.spatial import cKDTree
+
+# Cell indices are offset into 21 bits per axis and packed into one int64.
+_BIAS = 1 << 20
+# The normals' cell, in map voxels: on a synthetic forest and corridor stream
+# it classifies degeneracy as the former 8-nearest-neighbour normals did.
+CELL_VOXELS = 1.5
 
 
 @dataclass
@@ -53,24 +61,40 @@ def load_config(path: Optional[Path]) -> tuple[KISSConfig, LiveConfig]:
     return cfg, live
 
 
+def _cell_keys(pts: np.ndarray, cell: float) -> np.ndarray:
+    c = np.floor(pts / cell).astype(np.int64) + _BIAS
+    return (c[:, 0] << 42) | (c[:, 1] << 21) | c[:, 2]
+
+
 def translational_hessian(
-    source_w: np.ndarray, map_pts: np.ndarray, gate: float, live: LiveConfig, radius: float
+    source_w: np.ndarray, map_pts: np.ndarray, gate: float, live: LiveConfig, cell: float
 ) -> tuple[np.ndarray, int]:
     """``sum n n^T`` over gated correspondences; returns (3x3, count)."""
     k = live.normal_k
     if len(map_pts) < k or len(source_w) == 0:
         return np.zeros((3, 3)), 0
-    tree = cKDTree(map_pts)
-    dist, idx = tree.query(source_w, k=k, distance_upper_bound=max(radius, gate))
-    ok = (dist[:, 0] <= gate) & np.isfinite(dist).all(axis=1)
-    if not ok.any():
+    keys = _cell_keys(source_w, cell)
+    mkeys = _cell_keys(map_pts, cell)
+    near = np.isin(mkeys, keys)
+    if near.sum() < k:
         return np.zeros((3, 3)), 0
-    nb = map_pts[idx[ok]]  # (m, k, 3)
-    centred = nb - nb.mean(axis=1, keepdims=True)
-    cov = np.einsum("mki,mkj->mij", centred, centred) / k
-    w, v = np.linalg.eigh(cov)  # ascending per neighbourhood
-    planar = w[:, 0] <= live.planarity * np.maximum(w[:, 1], 1e-12)
-    normals = v[planar, :, 0]
+    pts = map_pts[near]
+    cells, inv, count = np.unique(mkeys[near], return_inverse=True, return_counts=True)
+    m = len(cells)
+    mean = np.stack([np.bincount(inv, pts[:, i], m) for i in range(3)], axis=1) / count[:, None]
+    d = pts - mean[inv]
+    cov = np.empty((m, 3, 3))
+    for i in range(3):
+        for j in range(i, 3):
+            cov[:, i, j] = cov[:, j, i] = np.bincount(inv, d[:, i] * d[:, j], m) / count
+    w, v = np.linalg.eigh(cov)  # ascending per cell
+    plane = (count >= k) & (w[:, 0] <= live.planarity * np.maximum(w[:, 1], 1e-12))
+    at = np.minimum(np.searchsorted(cells, keys), m - 1)
+    ok = (cells[at] == keys) & plane[at]
+    at = at[ok]
+    normals = v[at, :, 0]
+    residual = np.abs(np.einsum("mi,mi->m", source_w[ok] - mean[at], normals))
+    normals = normals[residual <= gate]
     return normals.T @ normals, int(len(normals))
 
 
@@ -94,7 +118,7 @@ class LiveOdometry:
         _, source = self.kiss.register_frame(np.ascontiguousarray(points, dtype=np.float64), stamps)
         pose = np.array(self.kiss.last_pose, dtype=np.float64)
         source_w = source @ pose[:3, :3].T + pose[:3, 3]
-        radius = 3.0 * float(self.cfg.mapping.voxel_size)
-        h, n = translational_hessian(source_w, map_before, gate, self.live, radius)
+        cell = CELL_VOXELS * float(self.cfg.mapping.voxel_size)
+        h, n = translational_hessian(source_w, map_before, gate, self.live, cell)
         eig = np.clip(np.linalg.eigvalsh(h), 0.0, None)
         return Result(t_ns=int(t_ns + int(offs.max())), pose=pose, eig=eig, n=n)
