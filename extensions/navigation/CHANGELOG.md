@@ -3,7 +3,7 @@
 All notable changes to the Navigation extension (Vision Navigation before
 1.0.0).
 
-## [Unreleased]
+## [1.0.2] - 2026-11-21
 
 ### Fixed
 

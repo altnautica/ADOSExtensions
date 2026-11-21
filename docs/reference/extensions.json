@@ -4,7 +4,7 @@
     {
       "id": "com.altnautica.capture",
       "name": "ADOS Capture",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "description": "Record capture sessions on a drone or Visor and hand them to a reconstruction node.",
       "category": null,
       "supported_boards": [
@@ -114,7 +114,7 @@
     {
       "id": "com.altnautica.navigation",
       "name": "ADOS Navigation",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "GNSS-denied navigation: optical flow, LiDAR SLAM and VIO poses, a live occupancy map, and the external-navigation bridge to the flight controller.",
       "category": null,
       "supported_boards": [

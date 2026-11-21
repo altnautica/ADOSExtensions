@@ -5,7 +5,7 @@
 # radio aux lane onto the LAN.
 [package]
 name = "capture-link"
-version = "1.0.0"
+version = "1.0.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

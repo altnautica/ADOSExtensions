@@ -2,7 +2,7 @@
 
 All notable changes to the Capture extension.
 
-## [Unreleased]
+## [1.0.1] - 2026-11-21
 
 ### Changed
 
