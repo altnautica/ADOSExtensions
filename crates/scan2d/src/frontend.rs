@@ -1362,17 +1362,30 @@ impl LocalSlam {
         let heading = Rotation2::new(p1.th + 0.5 * dyaw);
         let raw = self.measured_velocity(t1, t + span_ns).map(|m| heading * m);
         // Along the directions the matches leave loose they cannot judge
-        // the flow; one that reads near zero there while the matched chord
-        // still moves has stalled, and stays unfollowed until the scans pin
-        // every direction again.
-        let loose = self.pinned.map(|p| Matrix2::identity() - p);
-        let stalled = loose.is_some_and(|l| {
-            l.norm() > 1e-6
-                && (self.flow_stalled
-                    || raw.is_some_and(|m| {
-                        (l * m).norm() < FLOW_STALL_MPS && (l * chord).norm() > FLOW_STALL_FROM_MPS
-                    }))
-        });
+        // the flow; one that has read near zero there for longer than a
+        // stop explains while the matched chord still moves has stalled.
+        // It stays unfollowed until the scans pin every direction again or
+        // the chord, matched (not coasting a degenerate stretch), rests.
+        let loose = self
+            .pinned
+            .map(|p| Matrix2::identity() - p)
+            .filter(|l| l.norm() > 1e-6);
+        let (stalled, low_since) = match loose {
+            None => (false, None),
+            Some(l) => {
+                let lc = (l * chord).norm();
+                let low = raw.is_some_and(|m| (l * m).norm() < FLOW_STALL_MPS);
+                let low_since = low.then(|| self.flow_low_since.unwrap_or(t));
+                let stalled = if self.flow_stalled {
+                    !(self.unobserved.is_none() && lc < FLOW_STALL_MPS)
+                } else {
+                    let stop_s = lc / FLOW_MAX_DECEL_MPS2 + VELOCITY_WINDOW_NS as f64 * 1e-9;
+                    lc > FLOW_STALL_FROM_MPS
+                        && low_since.is_some_and(|s| t.saturating_sub(s) as f64 * 1e-9 >= stop_s)
+                };
+                (stalled, low_since)
+            }
+        };
         let used = raw.filter(|_| agree && !stalled);
         let measured = used.map(|m| heading.inverse() * m);
         let mut v = heading * measured.unwrap_or(Vector2::new(vel[0], vel[1]));

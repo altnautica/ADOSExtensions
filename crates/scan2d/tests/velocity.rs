@@ -526,3 +526,32 @@ fn a_flow_stalling_along_the_corridor_leaves_it_unmeasured() {
     assert!(after(named) <= 0.4, "named after {:.2} s", after(named));
     assert!(after(lost) <= 1.1, "lost after {:.2} s", after(lost));
 }
+
+/// Down the 2 m corridor at 5 m/s, a hard brake at 6 m/s² to rest with
+/// sound flow: the flow drops to zero ahead of the matched chord, which
+/// lags it by its window, yet no faster than braking explains, so it is not
+/// taken for a stalled sensor and the corridor stays measured.
+#[test]
+fn a_hard_brake_with_sound_flow_stays_measured() {
+    let (world, _) = bare_corridor();
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(5.0, 5.0)
+        .line(15.0)
+        .speed_to(0.0, 25.0 / 12.0)
+        .wait(2.0);
+    let (scans, imu, truth) = walk(&world, &path, C1, 11);
+    let est = replay(&scans, &imu, &flow(&path, 1.0, 0.0, 5));
+    let worst = est.iter().map(|p| p.unmeasured_free_s).fold(0.0, f64::max);
+    let (end, walked) = (est.last().unwrap(), truth.last().unwrap().x);
+    eprintln!(
+        "hard brake: ended at {:.2} of {walked:.2}, worst unmeasured {worst:.2} s",
+        end.x
+    );
+    assert_eq!(worst, 0.0, "braking flow keeps the corridor measured");
+    assert!(
+        (end.x - walked).abs() < 0.3,
+        "ended at {:.2} of {walked:.2}",
+        end.x
+    );
+}
