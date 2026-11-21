@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from follow_sim import SPORT, Flight, fly
+from follow_sim import SPORT, SUBJECT_JUMP_MIN_S, SUBJECT_JUMP_MPS, Flight, fly
 
 BOX_JITTER = 0.05
 LAG_S = 0.8
@@ -65,18 +65,53 @@ STILL_DRIFT_MPS = 0.45
 STILL_SEARCH_S = 60.0
 
 
-async def still_then_lost(mp: Any, seed: int, brake: bool, hz: float = 3.0) -> Flight:
+async def still_then_lost(
+    mp: Any, seed: int, brake: bool, hz: float = 3.0, toward: bool = False
+) -> Flight:
     # A subject standing at the origin, followed from 6 m south, for
-    # STILL_S; over its last 3 s the boxes put it drifting away at
-    # STILL_DRIFT_MPS (range noise the filter reads as a slow walk), then
-    # every frame misses it: the lock is lost 3 s on, and the search runs
-    # its full 60 s with the vantage points the stand-in pilot picks.
+    # STILL_S; over its last 3 s the boxes put it drifting away (``toward``:
+    # toward the vehicle) at STILL_DRIFT_MPS (range noise the filter reads
+    # as a slow walk), then every frame misses it: the lock is lost 3 s on,
+    # and the search runs its full 60 s with the vantage points the
+    # stand-in pilot picks.
     drift = _frames(hz, STILL_S - 3.0, 3.0)
-    errors = {k: STILL_DRIFT_MPS * (i + 1) / hz for i, k in enumerate(drift)}
-    lost = _frames(hz, STILL_S, STILL_SEARCH_S + 10.0)
+    sign = -1.0 if toward else 1.0
+    errors = {k: sign * STILL_DRIFT_MPS * (i + 1) / hz for i, k in enumerate(drift)}
+    return await _lost_after(mp, seed, brake, hz, lambda _t: (0.0, 0.0), errors)
+
+
+def _stand_then_walk(speed: float, start_s: float, walk_s: float, accel: float = 1.5) -> Any:
+    """Standing at the origin until ``start_s``, then walking north at
+    ``speed`` (negative: south, toward a vehicle south of it) for
+    ``walk_s``, setting off at ``accel``."""
+    ramp = abs(speed) / accel
+    sign = math.copysign(1.0, speed)
+
+    def at(t: float) -> tuple[float, float]:
+        d = min(max(0.0, t - start_s), walk_s)
+        if d <= ramp:
+            return (sign * 0.5 * accel * d * d, 0.0)
+        return (sign * (0.5 * accel * ramp * ramp + abs(speed) * (d - ramp)), 0.0)
+
+    return at
+
+
+async def stand_then_walk_toward(
+    mp: Any, seed: int, brake: bool, hz: float = 3.0, speed: float = 0.5, before_s: float = 2.0
+) -> Flight:
+    # The subject of :func:`still_then_lost`, but it really sets off toward
+    # the vehicle at ``speed`` ``before_s`` before the boxes stop, and walks
+    # on 5 m: what the estimate sees reads much like the drift.
+    walk = _stand_then_walk(-speed, STILL_S - before_s, 5.0 / speed)
+    return await _lost_after(mp, seed, brake, hz, walk, None)
+
+
+async def _lost_after(
+    mp: Any, seed: int, brake: bool, hz: float, subject: Any, errors: dict[int, float] | None
+) -> Flight:
     return await fly(
         mp,
-        subject=lambda _t: (0.0, 0.0),
+        subject=subject,
         start=(-STANDOFF_M, 0.0),
         duration_s=STILL_S + 3.0 + STILL_SEARCH_S,
         config={"search_budget_s": STILL_SEARCH_S},
@@ -85,11 +120,41 @@ async def still_then_lost(mp: Any, seed: int, brake: bool, hz: float = 3.0) -> F
         box_jitter=BOX_JITTER,
         profile=SPORT,
         lag_s=LAG_S,
-        miss_frames=lost,
+        miss_frames=_frames(hz, STILL_S, STILL_SEARCH_S + 10.0),
         range_errors=errors,
         subject_brake=brake,
         vantage_pilot=True,
     )
+
+
+def subject_jumps(f: Flight, after_s: float) -> int:
+    """How many times the goals from ``after_s`` on name the subject
+    somewhere else (a step the pilot's subject brake takes for a new
+    subject and re-arms on)."""
+    jumps = 0
+    prev: tuple[float, list[float]] | None = None
+    for i in f.after(after_s):
+        s = f.goals[i].get("subject_ne")
+        if s is None:
+            continue
+        if prev is not None:
+            dt = max(f.t[i] - prev[0], SUBJECT_JUMP_MIN_S)
+            if math.hypot(s[0] - prev[1][0], s[1] - prev[1][1]) > SUBJECT_JUMP_MPS * dt:
+                jumps += 1
+        prev = (f.t[i], s)
+    return jumps
+
+
+def backing_away_share(f: Flight, after_s: float) -> float:
+    """The share of the search's goals (repositioning and searching) that
+    back away from the subject rather than ask for a vantage."""
+    kinds = [
+        f.goals[i].get("kind")
+        for i in f.after(after_s)
+        if f.phases[i] in ("repositioning", "searching") and f.goals[i]
+    ]
+    back = sum(k == "position" for k in kinds)
+    return back / max(1, len(kinds))
 
 
 async def coast_ahead(

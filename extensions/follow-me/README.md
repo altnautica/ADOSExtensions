@@ -267,15 +267,27 @@ longer than 3 s is handled as a loss.
   when it stood still at the last sighting: over the last 6 s it was seen
   (at least 6 sightings over 5 s) its estimated speed was at most 0.3 m/s
   at the median, the estimate got no further than 0.3 m/s would take it,
-  and its speed at the last sighting was at most 0.6 m/s. Range noise on a
-  standing subject leaves the estimate a slow walk's speed, and a search
-  that ran it on would carry its vantage points onto the subject. A subject
-  that was moving is searched on the prediction whose velocity fades after
-  the last sighting (the coast), never on the last velocity run on. While
-  searching, the follow backs away from the nearest place the subject may
-  be (the prediction, the last estimate, where it stood, the places the
-  search looks), and its goals name the search's spread as
-  `subject_sigma_m`, so the pilot's subject brake keeps a wider distance.
+  its speed at the last sighting was at most 0.6 m/s, and over the last
+  2 s it came no more than 0.3 m nearer the vehicle (and was not coming
+  toward it faster than 0.3 m/s). Range noise on a standing subject leaves
+  the estimate a slow walk's speed, and a search that ran it on would carry
+  its vantage points onto the subject; a subject that set off toward the
+  vehicle just before the loss reads much the same, so a drift toward the
+  vehicle is never taken for standing. A subject that was moving is
+  searched on the prediction whose velocity fades after the last sighting
+  (the coast).
+
+  While searching, the follow backs away from the nearest place the subject
+  may be: the prediction, the last estimate, where it stood or the places
+  the search looks, and its last velocity run on (one no faster than range
+  noise leaves, 0.6 m/s, for 10 s; a faster one throughout). It asks for
+  vantage points a standoff from each place the search looks, so it never
+  backs away from the vantage it asked for. Every search goal names the
+  search centre as the subject, so the pilot's subject brake stays armed,
+  with the search's spread as `subject_sigma_m`, so it keeps a wider
+  distance. While the lock is unsure and no fix has come for 2 s, a
+  standing subject is guarded as a moving one: its velocity run on, and the
+  clear distance widened.
 
   The prediction's spread is bounded by how far the subject can have gone
   (its class speed cap, 5 m/s for a person, times the time since it was last

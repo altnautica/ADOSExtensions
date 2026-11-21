@@ -441,7 +441,9 @@ class ReadbackMixin:
         if subject is not None:
             path = subject.path_ne(now)[:MAX_PATH_POINTS]
         else:
-            path = [[n, e] for n, e in predicted_path(self._filter, now)]
+            path = [
+                [n, e] for n, e in predicted_path(self._filter, now, vehicle_ne=self._vehicle_at_loss())
+            ]
         state.predicted_path_ne = path or None
 
 

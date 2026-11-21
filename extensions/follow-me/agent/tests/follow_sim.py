@@ -118,8 +118,10 @@ VEHICLE_RADIUS_M = 0.4
 # flown by the FC as a step; outside the kept distance the hard one acts
 # only within SUBJECT_HARD_ZONE_M of it (the push inside the kept distance
 # is hard only). A cut keeps the sideways part within the speed cap. No cut for
-# SUBJECT_ARM_S after the subject is first named or its velocity restarts
-# (a gap of more than _SUBJECT_VEL_GAP_S). (Its climb clear flies the body
+# SUBJECT_ARM_S after the subject is first named, its velocity restarts
+# (a gap of more than _SUBJECT_VEL_GAP_S) or it is named somewhere else (a
+# step between goals faster than SUBJECT_JUMP_MPS over at least
+# SUBJECT_JUMP_MIN_S). (Its climb clear flies the body
 # at 1 m below the rotors: the follow height floor already holds that, so
 # it is not modelled.)
 SUBJECT_MARGIN_M = 0.5
@@ -131,6 +133,8 @@ SUBJECT_ARM_S = 3.0
 SUBJECT_HARD_ZONE_M = 1.0
 SUBJECT_SOFT_AIM_M = 0.4
 _SUBJECT_VEL_GAP_S = 0.5
+SUBJECT_JUMP_MPS = 8.0
+SUBJECT_JUMP_MIN_S = 0.1
 BRAKE_LAG_S = 0.8
 _CREEP_SLACK_M = 0.1 * BRAKE_LAG_S
 
@@ -256,7 +260,14 @@ class _Pilot:
             self._subject = None
             return None
         ne = (float(s[0]), float(s[1]))
-        if self._subject is not None and 0.0 < self.t - self._subject[1] <= _SUBJECT_VEL_GAP_S:
+        jumped = self._subject is not None and math.hypot(
+            ne[0] - self._subject[0][0], ne[1] - self._subject[0][1]
+        ) > SUBJECT_JUMP_MPS * max(self.t - self._subject[1], SUBJECT_JUMP_MIN_S)
+        if jumped:
+            # Named somewhere else: a new subject, armed afresh.
+            self._subject_v = (0.0, 0.0)
+            self._subject_since = self.t
+        elif self._subject is not None and 0.0 < self.t - self._subject[1] <= _SUBJECT_VEL_GAP_S:
             prev, at = self._subject
             dt = self.t - at
             raw = ((ne[0] - prev[0]) / dt, (ne[1] - prev[1]) / dt)

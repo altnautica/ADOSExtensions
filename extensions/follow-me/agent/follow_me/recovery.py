@@ -60,6 +60,7 @@ from follow_me.state import (
     FollowConfig,
 )
 from follow_me.standoff import SEPARATION_SIGMAS, keep_clear, pilot_subject_sigma
+from follow_me.stillness import STILL_RESIDUAL_MPS
 from follow_me.target_filter import position_sigma
 
 # The prediction phase lasts at most this long, and ends early once the
@@ -94,6 +95,12 @@ DESIGNATE_LOCK_S = 3.0
 NEAR_VANTAGE_M = 1.5
 NEAR_VANTAGE_S = 2.0
 REPOSITION_SLACK_S = 3.0
+# The search guard keeps clear of a velocity no faster than range noise
+# leaves run on for this long after the last sighting, then of where that
+# left it: a slow walk toward the vehicle carries on a while, but such a
+# velocity is as likely noise on a standing subject, and run on for the
+# whole search it would back the vehicle off every vantage.
+GUARD_RUN_ON_S = 10.0
 
 # Vantage states as the pilot reports them.
 VANTAGE_ENROUTE = "enroute"
@@ -426,7 +433,16 @@ class RecoveryMixin:
         subject = self._subject_view(now)
         if subject is not None:
             return subject.at(now)
-        return self._filter.search_predicted(now)
+        return self._filter.search_predicted(now, self._vehicle_at_loss())
+
+    def _vehicle_at_loss(self) -> tuple[float, float]:
+        """Where the vehicle was when the subject was lost (where it is,
+        before a recovery starts): what the still rule's approach check
+        measures against, fixed for the whole search."""
+        rec = self._recovery
+        if rec is None:
+            return (self._pose.north_m, self._pose.east_m)
+        return rec.anchor_ne
 
     def _on_frame_shift(self, dn: float, de: float, dd: float) -> None:
         """The local frame jumped (an EKF position reset): move every point
@@ -499,9 +515,16 @@ class RecoveryMixin:
         assert rec.step_index is not None
         step = rec.steps[rec.step_index]
         pn, pe = x[0], x[1]
-        cands = self._guard_candidates(now, x)
+        near = self._search_candidates(x)
+        run_on = self._run_on_candidate(now)
+        cands = near + run_on
+        # The subject every search goal names to the pilot's subject brake:
+        # one place for the whole search, as a jump between goals restarts
+        # the brake; the walk run on when it was coming toward the vehicle
+        # (the brake then stops short of it), else the search centre.
+        named = run_on[0][0] if run_on and self._walked_toward_vehicle() else (pn, pe)
         sigma = self._search_sigma(cfg, x, p, cands)
-        if await self._keep_clear_of_prediction(cfg, now, x, cands, sigma):
+        if await self._keep_clear_of_prediction(cfg, now, x, cands, sigma, named):
             return
         yaw: float | None = None
         if rec.phase == PHASE_SEARCHING:
@@ -525,7 +548,7 @@ class RecoveryMixin:
                 "vd": 0.0,
                 "yaw": yaw,
                 "yaw_rate": None,
-                "subject_ne": [pn, pe],
+                "subject_ne": [named[0], named[1]],
                 "subject_sigma_m": sigma,
                 "max_speed_mps": min(cfg.search_speed_mps, cfg.max_speed_mps),
                 "candidates": None,
@@ -534,7 +557,10 @@ class RecoveryMixin:
                     "predicted_ne": [pn, pe],
                     "cov_ne": [p[0][0], p[0][1], p[1][1]],
                     "sigma_k": step.sigma_k,
-                    "standoff_m": cfg.follow_distance_m,
+                    # A standoff from each place the search looks, so the
+                    # guard never backs the vehicle off the vantage the
+                    # pilot picks.
+                    "standoff_m": vantage_standoff(cfg.follow_distance_m, x, near),
                     "max_radius_m": cfg.search_radius_m,
                     "anchor_ne": [rec.anchor_ne[0], rec.anchor_ne[1]],
                     # Besides the prediction: where the subject was last seen
@@ -550,7 +576,7 @@ class RecoveryMixin:
         )
 
     def _hypotheses(self) -> list[tuple[float, float]]:
-        centre = self._filter.still_centre()
+        centre = self._filter.still_centre(self._vehicle_at_loss())
         if centre is not None:
             # It stood still: where it stood, not back along a velocity
             # range noise left.
@@ -558,25 +584,47 @@ class RecoveryMixin:
         last = self._filter.last_estimate()
         return [] if last is None else search_hypotheses(last)
 
-    def _guard_candidates(
-        self, now: float, x: list[float]
-    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-        """Every place the lost subject may be, with its velocity: the
-        search's prediction ``x``, the last estimate, the still centre, the
-        search hypotheses and, for a subject that was moving, the undecayed
-        prediction (one coming toward the vehicle keeps coming). The guard
-        keeps clear of the nearest: the prediction alone can drift metres off
-        a subject the search then flies onto."""
+    def _search_candidates(self, x: list[float]) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        """The places the search looks for the lost subject, with their
+        velocities: its prediction ``x``, the last estimate and the search
+        hypotheses (the still centre, or where it stopped and a little back
+        along its track)."""
         cands = [((x[0], x[1]), (x[2], x[3]))]
         last = self._filter.last_estimate()
         if last is not None:
             cands.append(((last[0], last[1]), (0.0, 0.0)))
         cands.extend((h, (0.0, 0.0)) for h in self._hypotheses())
-        if self._filter.still_centre() is None:
-            raw = self._filter.predicted(now)
-            if raw is not None:
-                cands.append(((raw[0][0], raw[0][1]), (raw[0][2], raw[0][3])))
         return cands
+
+    def _run_on_candidate(self, now: float) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        """The last velocity run on, undecayed: one walking toward the
+        vehicle keeps coming, and a walk that set off a second or two before
+        the loss reads as noise on a standing subject. A velocity no faster
+        than range noise leaves (STILL_RESIDUAL_MPS) runs on for
+        GUARD_RUN_ON_S, then stands where it got to; a faster one for as
+        long as the prediction lasts. The search guard keeps clear of it and
+        of :meth:`_search_candidates`, whichever is nearest: the prediction
+        alone can drift metres off a subject the search then flies onto."""
+        last = self._filter.last_estimate()
+        if last is None:
+            return []
+        run = now
+        if math.hypot(last[2], last[3]) <= STILL_RESIDUAL_MPS:
+            run = min(now, self._filter.last_update_s + GUARD_RUN_ON_S)
+        raw = self._filter.predicted(run)
+        if raw is None:
+            return []
+        v = (raw[0][2], raw[0][3]) if run == now else (0.0, 0.0)
+        return [((raw[0][0], raw[0][1]), v)]
+
+    def _walked_toward_vehicle(self) -> bool:
+        """Whether the last estimate's velocity points toward where the
+        vehicle was at the loss."""
+        last = self._filter.last_estimate()
+        if last is None:
+            return False
+        vn, ve = self._vehicle_at_loss()
+        return last[2] * (vn - last[0]) + last[3] * (ve - last[1]) > 0.0
 
     @staticmethod
     def _search_sigma(
@@ -652,7 +700,7 @@ class RecoveryMixin:
             template=self._template,
             min_similarity=cfg.reacquire_min_similarity,
             measure=measure,
-            gate=lambda n, e, cov: self._filter.mahalanobis(now, n, e, cov),
+            gate=lambda n, e, cov: self._filter.mahalanobis(now, n, e, cov, self._vehicle_at_loss()),
         )
         if cand is None:
             return
@@ -694,11 +742,14 @@ class RecoveryMixin:
         x: list[float],
         cands: list[tuple[tuple[float, float], tuple[float, float]]],
         sigma: float,
+        named: tuple[float, float],
     ) -> bool:
-        """While the nearest place the lost subject may be (``cands``, see
-        :meth:`_guard_candidates`) lies inside the clear distance, or would
+        """While the nearest place the lost subject may be (``cands``: the
+        search's and the walk run on, see :meth:`_search_candidates` and
+        :meth:`_run_on_candidate`) lies inside the clear distance, or would
         come inside it, back away from it rather than hold for a vantage:
-        whether a goal went out."""
+        whether a goal went out. The goal names ``named`` as the subject,
+        as the vantage goal does."""
         dn, de = self._pose.north_m, self._pose.east_m
         own_v = (self._pose.vn_mps, self._pose.ve_mps)
         near_ne, near_v = min(cands, key=lambda c: math.hypot(c[0][0] - dn, c[0][1] - de))
@@ -731,7 +782,7 @@ class RecoveryMixin:
                 "vel_mode": "command",
                 "yaw": math.atan2(x[1] - de, x[0] - dn),
                 "yaw_rate": None,
-                "subject_ne": [near_ne[0], near_ne[1]],
+                "subject_ne": [named[0], named[1]],
                 "subject_sigma_m": sigma,
                 "max_speed_mps": cfg.max_speed_mps,
                 "candidates": None,
@@ -750,6 +801,25 @@ class RecoveryMixin:
         rec.designated_mahalanobis = cand.mahalanobis
 
 
+def vantage_standoff(
+    standoff_m: float,
+    x: list[float],
+    cands: list[tuple[tuple[float, float], tuple[float, float]]],
+) -> float:
+    """The distance from the search centre ``x`` to ask the vantage at: at
+    least ``standoff_m``, and every point that far from ``x`` at least
+    ``standoff_m`` from each place the subject may be (``cands``) that is
+    not already that far outside the circle. The search guard keeps a
+    clear distance under the standoff from each of them, so it never backs
+    the vehicle off the vantage the pilot picks."""
+    r = standoff_m
+    for d in sorted(math.hypot(c[0][0] - x[0], c[0][1] - x[1]) for c in cands):
+        if d - standoff_m >= r:
+            break
+        r = max(r, d + standoff_m)
+    return r
+
+
 def _sigma_of(pred: tuple[list[float], Any] | None) -> float:
     return 0.0 if pred is None else position_sigma(pred[1])
 
@@ -765,6 +835,7 @@ def _pair(raw: Any) -> tuple[float, float] | None:
 
 
 __all__ = [
+    "GUARD_RUN_ON_S",
     "NARROW_OCCLUDER_M",
     "PREDICT_MAX_S",
     "PREDICT_SIGMA_M",
@@ -772,4 +843,5 @@ __all__ = [
     "VANTAGE_GOAL",
     "Recovery",
     "RecoveryMixin",
+    "vantage_standoff",
 ]

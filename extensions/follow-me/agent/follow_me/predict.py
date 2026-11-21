@@ -35,18 +35,27 @@ def target_of(pred: tuple[list[float], list[list[float]]], t: float) -> Predicte
     return PredictedTarget((x[0], x[1]), (x[2], x[3]), (p[0][0], p[0][1], p[1][1]), t)
 
 
-def predict_target(filt: TargetFilter, t: float) -> PredictedTarget | None:
-    pred = filt.search_predicted(t)
+def predict_target(
+    filt: TargetFilter, t: float, vehicle_ne: tuple[float, float] | None = None
+) -> PredictedTarget | None:
+    """The search's prediction at ``t`` (``vehicle_ne``: where the vehicle
+    was at the loss, see :meth:`TargetFilter.search_predicted`)."""
+    pred = filt.search_predicted(t, vehicle_ne)
     return None if pred is None else target_of(pred, t)
 
 
 def predicted_path(
-    filt: TargetFilter, now: float, *, horizon_s: float = 5.0, step_s: float = 0.5
+    filt: TargetFilter,
+    now: float,
+    *,
+    horizon_s: float = 5.0,
+    step_s: float = 0.5,
+    vehicle_ne: tuple[float, float] | None = None,
 ) -> list[tuple[float, float]]:
     n = min(MAX_PATH_POINTS, int(horizon_s / step_s))
     out: list[tuple[float, float]] = []
     for k in range(n):
-        p = predict_target(filt, now + k * step_s)
+        p = predict_target(filt, now + k * step_s, vehicle_ne)
         if p is None:
             break
         out.append((round(p.mean_ne[0], 2), round(p.mean_ne[1], 2)))

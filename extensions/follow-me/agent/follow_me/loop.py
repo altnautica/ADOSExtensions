@@ -744,15 +744,15 @@ class FollowLoopMixin:
         # of range outliers drags in, is the soft guard's.)
         standoff_m = cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m
         raw = subject.at(now) if subject is not None else self._filter.predicted(now)
-        if ref.still:
-            # A standing subject's centre: its estimate swings a metre on
-            # range noise, and a step toward the vehicle shows in the newest
-            # fixes' range first.
-            cands = [((tn, te), (0.0, 0.0))]
-        else:
-            cands = [((x[0], x[1]), (x[2], x[3]))]
-            if raw is not None:
-                cands.append(((raw[0][0], raw[0][1]), (raw[0][2], raw[0][3])))
+        coast = subject.coast_spread_m(now) if subject is not None else self._filter.coast_spread_m(now)
+        # A standing subject's centre: its estimate swings a metre on range
+        # noise, and a step toward the vehicle shows in the newest fixes'
+        # range first. Unseen past the stale age it may have set off: then
+        # it is guarded as a moving one is (its undecayed prediction too).
+        moving = not ref.still or now - self._fused_s > _MEASUREMENT_STALE_S
+        cands = [((tn, te), (0.0, 0.0))] if ref.still else [((x[0], x[1]), (x[2], x[3]))]
+        if raw is not None and moving:
+            cands.append(((raw[0][0], raw[0][1]), (raw[0][2], raw[0][3])))
         guard_ne, guard_v = min(cands, key=lambda c: math.hypot(c[0][0] - dn, c[0][1] - de))
         nearest_v = guard_v
         guard_near = self._subject_motion.near_range(now)
@@ -761,12 +761,7 @@ class FollowLoopMixin:
         # the vehicle (a walk the estimate puts 10 % slow closes a metre in
         # five seconds), and no credit for the pace fed forward, which
         # decays with the coast.
-        if ref.still:
-            coast_sigma = 0.0
-        elif subject is not None:
-            coast_sigma = subject.coast_spread_m(now)
-        else:
-            coast_sigma = self._filter.coast_spread_m(now)
+        coast_sigma = coast if moving else 0.0
         gr = math.hypot(guard_ne[0] - dn, guard_ne[1] - de)
         if coast_sigma > 0.0 and raw is not None and gr > 1e-6:
             un, ue = (guard_ne[0] - dn) / gr, (guard_ne[1] - de) / gr

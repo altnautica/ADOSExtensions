@@ -457,21 +457,25 @@ class TargetFilter:
             return 0.0
         return math.sqrt(max(0.0, position_sigma(now[1]) ** 2 - position_sigma(then[1]) ** 2))
 
-    def still_centre(self) -> tuple[float, float] | None:
+    def still_centre(self, vehicle_ne: tuple[float, float] | None = None) -> tuple[float, float] | None:
         """Where the subject stood at the last fix fused, or ``None`` when
         it was not standing still then (the rule is
-        :mod:`follow_me.stillness`'s)."""
-        return self._history.still_centre()
+        :mod:`follow_me.stillness`'s; ``vehicle_ne`` is where the vehicle was
+        at the loss)."""
+        return self._history.still_centre(vehicle_ne)
 
-    def search_predicted(self, t: float) -> tuple[list[float], Mat] | None:
+    def search_predicted(
+        self, t: float, vehicle_ne: tuple[float, float] | None = None
+    ) -> tuple[list[float], Mat] | None:
         """What a search uses at ``t``: for a subject that stood still at its
-        last fix (:meth:`still_centre`), the still centre with no velocity;
-        for one that moved, the coast (:meth:`coasted`: the last velocity
-        decays, so a velocity range noise left is not run on for the whole
-        search). The spread is the prediction's; past :data:`MAX_PREDICT_S`,
-        it is the reachable distance round the last estimate (or the still
-        centre), standing. ``None`` before the first update, or past the
-        horizon for a subject with no speed cap."""
+        last fix (:meth:`still_centre`, with the vehicle at ``vehicle_ne``),
+        the still centre with no velocity; for one that moved, the coast
+        (:meth:`coasted`: the last velocity decays, so a velocity range noise
+        left is not run on for the whole search). The spread is the
+        prediction's; past :data:`MAX_PREDICT_S`, it is the reachable
+        distance round the last estimate (or the still centre), standing.
+        ``None`` before the first update, or past the horizon for a subject
+        with no speed cap."""
         pred = self.coasted(t)
         if pred is None:
             if self._x is None:
@@ -490,19 +494,22 @@ class TargetFilter:
                     [0.0, 0.0, 0.0, cap2],
                 ],
             )
-        centre = self.still_centre()
+        centre = self.still_centre(vehicle_ne)
         if centre is None:
             return pred
         return [centre[0], centre[1], 0.0, 0.0], pred[1]
 
-    def mahalanobis(self, t: float, north: float, east: float, r: Cov2) -> float | None:
+    def mahalanobis(
+        self, t: float, north: float, east: float, r: Cov2, vehicle_ne: tuple[float, float] | None = None
+    ) -> float | None:
         """Mahalanobis distance of a position measurement from the search
-        prediction at ``t``, including the measurement's own covariance. A
+        prediction at ``t`` (:meth:`search_predicted`, with the vehicle at
+        ``vehicle_ne``), including the measurement's own covariance. A
         point further from the last estimate than the subject can have gone
         (plus the measurement's own 3 sigma) is infinitely far: the bounded
         spread is centred on the prediction, which runs along the track, so
         on its own it would still admit points beyond reach ahead of it."""
-        pred = self.search_predicted(t)
+        pred = self.search_predicted(t, vehicle_ne)
         if pred is None or self._x is None:
             return None
         reach = self._reach_m(t)
@@ -598,7 +605,7 @@ class TargetFilter:
             self._interval_s = prev + (gap - prev) / _INTERVAL_FIXES
         self._t_meas = max(self._t_meas, t)
         self._sigma_meas = position_sigma(self._p)
-        self._history.add(t, self._x[0], self._x[1], math.hypot(self._x[2], self._x[3]))
+        self._history.add(t, self._x[0], self._x[1], self._x[2], self._x[3])
         return True
 
     def _restart(self, t: float, north: float, east: float, r: Cov2) -> None:
@@ -622,7 +629,7 @@ class TargetFilter:
         self.restarts += 1
         # A new estimate: whether the old one stood says nothing of it.
         self._history.clear()
-        self._history.add(t, north, east, 0.0)
+        self._history.add(t, north, east, 0.0, 0.0)
 
     def _reacquire_chi2(self, t: float, y: list[float], r: Cov2) -> float | None:
         """For a fix at ``t``, ``y`` off the prediction, REACQUIRE_GAP_S or
