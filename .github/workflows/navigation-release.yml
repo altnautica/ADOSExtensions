@@ -8,8 +8,8 @@
 #   legs      list the binary legs (aarch64-linux, x86_64-linux).
 #   binaries  one leg per arch: build `navigation` and `navigation-lidar-slam`
 #             against the agent SDK pinned in ADOS_AGENT_REV, the pinned uv,
-#             the Livox SDK2 library, and on the x86_64-linux leg
-#             basalt-ados; hand them to the release job.
+#             the Livox SDK2 and librealsense2 libraries, and on the
+#             x86_64-linux leg basalt-ados; hand them to the release job.
 #   release   build and test the GCS bundle, write each payload's source,
 #             sha256 and size into the staged manifest, pack the small archive
 #             (manifest, GCS bundle, locales, config-schema.json, the
@@ -166,6 +166,31 @@ jobs:
           cp "${lib}" "payloads/navigation-livox-sdk2-${ARCH_OS}.so"
           cp "${out}/lib/${ARCH_OS}/LICENSE-livox-sdk2.txt" "payloads/navigation-livox-sdk2-LICENSE-${ARCH_OS}"
           file "payloads/navigation-livox-sdk2-${ARCH_OS}.so"
+
+      - name: Build the librealsense2 library
+        # Inside the manylinux_2_28 image of the leg's arch, so the library
+        # needs nothing newer than glibc 2.28; it links the board's libusb-1.0.
+        env:
+          ARCH_OS: ${{ matrix.arch_os }}
+        run: |
+          set -euo pipefail
+          arch="${ARCH_OS%-linux}"
+          out="${RUNNER_TEMP}/librealsense2"
+          mkdir -p "${out}"
+          docker run --rm -v "${GITHUB_WORKSPACE}:/src:ro" -v "${out}:/out" \
+            "quay.io/pypa/manylinux_${GLIBC_FLOOR/./_}_${arch}" \
+            bash /src/extensions/navigation/lidar-slam/realsense/build-librealsense2.sh --arch "${arch}" --jobs 4 --out /out
+          sudo chown -R "$(id -u):$(id -g)" "${out}"
+          lib="${out}/lib/${ARCH_OS}/librealsense2.so"
+          need="$(objdump -T "${lib}" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n1)"
+          echo "librealsense2 (${ARCH_OS}) needs glibc ${need}"
+          if [ "$(printf '%s\n%s\n' "${need}" "${GLIBC_FLOOR}" | sort -V | tail -n1)" != "${GLIBC_FLOOR}" ]; then
+            echo "ERROR: librealsense2 needs glibc ${need}, above the ${GLIBC_FLOOR} floor" >&2
+            exit 1
+          fi
+          cp "${lib}" "payloads/navigation-librealsense2-${ARCH_OS}.so"
+          cp "${out}/lib/${ARCH_OS}/LICENSE-librealsense2.txt" "payloads/navigation-librealsense2-LICENSE-${ARCH_OS}"
+          file "payloads/navigation-librealsense2-${ARCH_OS}.so"
 
       - name: Build basalt-ados
         if: matrix.native

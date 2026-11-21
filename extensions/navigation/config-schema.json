@@ -298,6 +298,91 @@
         }
       }
     },
+    "navigation.depth": {
+      "description": "Depth camera feeding the 3D map.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "description": "`realsense` (Intel RealSense D435i / D455), `we` (the World Engine depth stream) or `off`.",
+          "type": "string",
+          "enum": ["off", "realsense", "we"],
+          "default": "off"
+        },
+        "extrinsic": {
+          "description": "The camera's mount on the body: `translation_m` in body forward-right-down from the body origin, and the rotation as `rpy_deg` (roll, pitch, yaw, Z-Y-X; all zero looks forward, pitch -90 straight down) or `quat_wxyz`, not both. Neither: straight ahead.",
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "translation_m": {
+              "type": "array",
+              "items": { "type": "number", "minimum": -10, "maximum": 10 },
+              "minItems": 3,
+              "maxItems": 3,
+              "default": [0, 0, 0]
+            },
+            "rpy_deg": {
+              "type": ["array", "null"],
+              "items": { "type": "number" },
+              "minItems": 3,
+              "maxItems": 3,
+              "default": null
+            },
+            "quat_wxyz": {
+              "type": ["array", "null"],
+              "items": { "type": "number" },
+              "minItems": 4,
+              "maxItems": 4,
+              "default": null
+            }
+          }
+        },
+        "we_host": {
+          "description": "Address of the World Engine host serving the depth stream.",
+          "type": "string",
+          "default": "127.0.0.1"
+        },
+        "we_port": {
+          "description": "The vehicle's depth port: 7810 plus its SITL lease.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 7810
+        },
+        "realsense": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": false,
+          "properties": {
+            "library": {
+              "type": "string"
+            },
+            "width": {
+              "type": "integer",
+              "enum": [848, 640],
+              "default": 848
+            },
+            "height": {
+              "type": "integer",
+              "enum": [480],
+              "default": 480
+            },
+            "fps": {
+              "type": "integer",
+              "enum": [15, 30],
+              "default": 30
+            },
+            "serial": {
+              "description": "Only the camera with this serial number; empty takes the first found.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        }
+      }
+    },
     "firmware": {
       "type": "object",
       "title": "Flight firmware",

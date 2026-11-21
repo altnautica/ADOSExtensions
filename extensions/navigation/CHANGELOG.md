@@ -9,9 +9,15 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 - Navigation drives a Livox Mid-360 on aarch64 drones: the Livox SDK2 library and the KISS-ICP environment tool ship in the drone profile for x86_64 and aarch64.
 
+- Depth camera drivers for the LiDAR service, set by `navigation.depth`: an Intel RealSense D435i or D455 through librealsense2 (Apache-2.0, built for x86_64 and aarch64 against glibc 2.28 and shipped as a payload in the drone and Visor profiles), and the World Engine depth stream over UDP. Each frame carries its intrinsics and the camera's mount, and turns into body-frame points; a missing library or camera reports the source unavailable.
+
 ### Fixed
 
 - The LiDAR service links glibc dynamically, so it can load the Livox SDK2 library; the released static build could not load it on any architecture. The Livox library builds against glibc 2.28, so it runs on Debian 12 and Ubuntu 22.04 boards, and the release fails if either build regresses.
+
+- LiDAR SLAM along a corridor no longer carries a frozen pose. Over a dusty or bare floor the flight controller's flow sensor reads a low quality at a sound rate, and every flow sample under quality 128 was dropped, so along a mine drift nothing measured the planar matcher's free axis: the pose stopped while the drone flew on, read degraded at most, and the EKF followed it. Flow of any quality above 0 now reaches the matcher, which follows it only while it agrees with the matches along the directions they pin. A degenerate match with no measured velocity widens its sigma and is lost after a second (`corridor_unmeasured`); where the axis is measured again the map starts over instead of re-locking into the frozen one, and is placed from the last pose before the corridor went unmeasured. A match that leaves the integrated flow by more than 1.5 m or a quarter over 3 s is degraded (`flow_disagrees`). The pose topic carries the reason as `health_reason`.
+
+- External navigation checks the flight controller's own optical flow against its EKF velocity over 3 s: past 1.5 m apart the pose is degraded (`ekf_flow_disagree`), and after 3 s more it is lost, so no `ODOMETRY` holds the EKF on a pose that stopped and the source-set machine falls back to the flow set. `plugin.navigation.state` and the health `degradedReasons` name why the pose is not good (`health_reason`: `ekf_flow_disagree`, `corridor_unmeasured`, `flow_disagrees`, `heading_unconfirmed` or `imu_feed_<reason>`), which the ADOS pilot reads to stop a goal flown on an unverified position.
 
 ## [1.0.2] - 2026-11-21
 

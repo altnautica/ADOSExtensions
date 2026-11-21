@@ -24,12 +24,20 @@ navigation-lidar-slam-x86_64-linux   bin/x86_64-linux/navigation-lidar-slam   x8
 #     -> <dir>/lib/<arch>-linux/{liblivox_lidar_sdk_shared.so,LICENSE-livox-sdk2.txt}
 #        every leg, inside the manylinux_2_28 image of the leg's arch, so the
 #        library loads on glibc 2.28 and newer.
+#   extensions/navigation/lidar-slam/realsense/build-librealsense2.sh --arch <arch> --out <dir>
+#     -> <dir>/lib/<arch>-linux/{librealsense2.so,LICENSE-librealsense2.txt}
+#        every leg, inside the manylinux_2_28 image of the leg's arch, so the
+#        library loads on glibc 2.28 and newer.
 navigation-basalt-ados-x86_64-linux          bin/x86_64-linux/basalt-ados                    x86_64-linux  drone,visor
 navigation-basalt-ados-LICENSES-x86_64-linux bin/x86_64-linux/LICENSE-basalt-ados.txt        x86_64-linux  drone,visor
 navigation-livox-sdk2-aarch64-linux.so       lib/aarch64-linux/liblivox_lidar_sdk_shared.so  aarch64-linux drone,visor
 navigation-livox-sdk2-x86_64-linux.so        lib/x86_64-linux/liblivox_lidar_sdk_shared.so   x86_64-linux  drone,visor
 navigation-livox-sdk2-LICENSE-aarch64-linux  lib/aarch64-linux/LICENSE-livox-sdk2.txt        aarch64-linux drone,visor
 navigation-livox-sdk2-LICENSE-x86_64-linux   lib/x86_64-linux/LICENSE-livox-sdk2.txt         x86_64-linux  drone,visor
+navigation-librealsense2-aarch64-linux.so       lib/aarch64-linux/librealsense2.so            aarch64-linux drone,visor
+navigation-librealsense2-x86_64-linux.so        lib/x86_64-linux/librealsense2.so             x86_64-linux  drone,visor
+navigation-librealsense2-LICENSE-aarch64-linux  lib/aarch64-linux/LICENSE-librealsense2.txt   aarch64-linux drone,visor
+navigation-librealsense2-LICENSE-x86_64-linux   lib/x86_64-linux/LICENSE-librealsense2.txt    x86_64-linux  drone,visor
 # uv runs the on-device `uv sync --frozen` of the KISS-ICP odometry
 # environment; the release workflow stages the pinned, checksum-verified
 # musl build and its MIT licence.

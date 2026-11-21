@@ -20,6 +20,7 @@ pub const KEY_VIO: &str = "navigation.vio";
 pub const KEY_LIDAR: &str = "navigation.lidar";
 pub const KEY_MEMORY_BUDGET_MB: &str = "navigation.memory_budget_mb";
 pub const KEY_MAP_PLACEMENT: &str = "navigation.map_placement";
+pub const KEY_DEPTH: &str = "navigation.depth";
 
 /// Every key the service reads.
 pub const CONFIG_KEYS: &[&str] = &[
@@ -30,6 +31,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_LIDAR,
     KEY_MEMORY_BUDGET_MB,
     KEY_MAP_PLACEMENT,
+    KEY_DEPTH,
 ];
 
 /// The configured pose provider (`navigation.pose_provider`). `Auto` picks
@@ -78,6 +80,8 @@ pub struct NavConfig {
     pub takeoff_heading_deg: Option<f64>,
     pub vio: VioSettings,
     pub lidar: LidarSettings,
+    /// The depth camera (`navigation.depth`); see [`crate::depth_source::config`].
+    pub depth: crate::depth_source::DepthSettings,
     /// `None`: 80 % of the unit's memory cap.
     pub memory_budget_mb: Option<u64>,
     pub map_placement: ComputePlacement,
@@ -91,6 +95,7 @@ impl Default for NavConfig {
             takeoff_heading_deg: None,
             vio: VioSettings::default(),
             lidar: LidarSettings::default(),
+            depth: crate::depth_source::DepthSettings::default(),
             memory_budget_mb: None,
             map_placement: ComputePlacement::default(),
         }
@@ -110,6 +115,7 @@ impl NavConfig {
             takeoff_heading_deg: heading_deg(values, KEY_TAKEOFF_HEADING_DEG)?,
             vio: typed(values, KEY_VIO, d.vio)?,
             lidar: typed(values, KEY_LIDAR, d.lidar)?,
+            depth: crate::depth_source::config::resolve(values, KEY_DEPTH)?,
             memory_budget_mb: optional_unsigned(values, KEY_MEMORY_BUDGET_MB)?,
             map_placement: typed(values, KEY_MAP_PLACEMENT, d.map_placement)?,
         })

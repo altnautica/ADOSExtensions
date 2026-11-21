@@ -224,6 +224,32 @@ agent:
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
+    # librealsense2, the RealSense depth camera library (every arch, drone
+    # and visor; loads the board's libusb-1.0).
+    - path: lib/x86_64-linux/librealsense2.so
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-x86_64-linux.so"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [drone, visor]
+    - path: lib/x86_64-linux/LICENSE-librealsense2.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-LICENSE-x86_64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: x86_64-linux
+      profiles: [drone, visor]
+    - path: lib/aarch64-linux/librealsense2.so
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-aarch64-linux.so"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [drone, visor]
+    - path: lib/aarch64-linux/LICENSE-librealsense2.txt
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-LICENSE-aarch64-linux"
+      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      size_bytes: 1
+      arch_os: aarch64-linux
+      profiles: [drone, visor]
     - path: bin/aarch64-linux/uv
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -280,6 +306,10 @@ agent:
     - id: network.listen
       required: false
       degraded_behavior: "No Livox LiDAR: its UDP data ports stay closed."
+    # The RealSense depth camera, driven over raw USB by librealsense2.
+    - id: hardware.usb
+      required: false
+      degraded_behavior: "No RealSense depth camera: `navigation.depth.source = realsense` reports the source unavailable and the 3D map runs on the other sensors."
   mavlink_components:
     - component_id: 198
       component_kind: vio

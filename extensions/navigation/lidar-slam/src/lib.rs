@@ -9,6 +9,7 @@
 //! - [`pose`], [`providers`]: the LiDAR, planar and VIO providers and their
 //!   choice from the config and rig;
 //! - [`lidar_source`]: the RPLIDAR and Livox drivers behind one runner;
+//! - [`depth_source`]: the World Engine and RealSense depth cameras;
 //! - [`nav`]: the north-aligned navigation map, live occupancy and sweep
 //!   cloud, the flight controller's IMU feed and the scans waiting for their
 //!   pose;
@@ -18,6 +19,7 @@
 //! - [`http`], [`status`], [`sweep`]: the routes.
 
 pub mod capture_state;
+pub mod depth_source;
 pub mod http;
 pub mod lane;
 pub mod lidar_source;

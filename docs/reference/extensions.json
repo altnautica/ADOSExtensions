@@ -125,6 +125,7 @@
         "event.publish",
         "event.subscribe",
         "hardware.uart",
+        "hardware.usb",
         "mavlink.component.vio",
         "mavlink.read",
         "mavlink.write",
