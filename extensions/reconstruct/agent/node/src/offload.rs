@@ -220,6 +220,8 @@ mod tests {
             keypoints: None,
             depth: None,
             world_pos: None,
+            track_state: None,
+            appearance_id: None,
         };
         let out = to_offload_detection(v, 1280, 720).expect("a boxed detection normalizes");
         assert_eq!(out.bbox, [0.25, 0.25, 0.5, 0.5]);
