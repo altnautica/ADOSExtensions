@@ -24,6 +24,7 @@ use super::subscriptions::Sinks;
 use super::ticks::companion_state_from_i64;
 use crate::config::Mode;
 use crate::external_nav::{measured_at_ns, ExtnavHealth, OdometryBuilder, COMPONENT_EXTNAV};
+use crate::flow_monitor::{health_reason, NAV_REASONS};
 use crate::health::HealthSnapshot;
 use crate::mavlink_emit::{frame_for, monotonic_ns, next_sequence, ComponentRouter};
 use crate::nav_commands::{
@@ -122,12 +123,23 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
 
             // One ODOMETRY per new pose (the tracker's scan rate, ~10 Hz);
             // nothing between poses, nothing while lost or stale. It carries
-            // the time the pose describes, not the time it arrived.
+            // the time the pose describes, not the time it arrived. The FC's
+            // own flow against its EKF velocity can degrade or lose a pose
+            // the publisher calls good.
             let view = task.shared.pose_view(now);
-            let health = view.fresh.map(|(p, _)| p.health);
+            let fresh = view.fresh.map(|(mut p, recv)| {
+                p.health = fc.flow_ekf.over(p.health);
+                (p, recv)
+            });
+            let health = fresh.map(|(p, _)| p.health);
+            let reason = health_reason(
+                fc.flow_ekf,
+                fresh.and_then(|(p, _)| p.health_reason),
+                fresh.and_then(|(p, _)| p.imu_feed),
+            );
             let mut odom = None;
             let mut odom_ts_ms = 0;
-            if let Some((pose, recv)) = view.fresh.filter(|_| view.seq != last_seq) {
+            if let Some((pose, recv)) = fresh.filter(|_| view.seq != last_seq) {
                 last_seq = view.seq;
                 odom_ts_ms = pose.ts_ms;
                 let t = measured_at_ns(pose.ts_ms, unix_ms(), now, recv, clock.wall_to_ados());
@@ -247,8 +259,8 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                     source_denied: task.shared.pose_denied.load(Ordering::Relaxed),
                     pose_error: view.error.clone(),
                     health,
-                    north: view.fresh.and_then(|(p, _)| p.north),
-                    imu_feed: view.fresh.and_then(|(p, _)| p.imu_feed),
+                    north: fresh.and_then(|(p, _)| p.north),
+                    imu_feed: fresh.and_then(|(p, _)| p.imu_feed),
                     origin_seen: fc.origin_seen,
                     origin_by_plugin: origin.origin_by_plugin(),
                     gps_primary: task.cfg.gps_primary,
@@ -270,6 +282,9 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                 h.estimator_state = Some(estimator_state_for(health).to_string());
                 h.pre_arm_report = Some(report.to_value());
                 h.pose_age_ms = pose_age.median_ms();
+                h.degraded_reasons
+                    .retain(|r| !NAV_REASONS.contains(&r.as_str()));
+                h.degraded_reasons.extend(reason.map(str::to_string));
             }
             let rate = odom_rate.rate_hz(now);
             task.shared.update_state(|s| {
@@ -278,6 +293,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                 s.extnav_health = health;
                 s.odom_rate_hz = Some(rate);
                 s.last_reset_counter = Some(builder.reset_counter());
+                s.health_reason = reason;
             });
         }
     })

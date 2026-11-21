@@ -80,6 +80,6 @@ pub mod submap;
 pub use attitude::{ImuSample, VelocitySample};
 pub use backend::{LoopClosure, Trajectory};
 pub use config::Scan2dConfig;
-pub use frontend::{HeightSample, LocalMap, LocalSlam, PoseOut};
+pub use frontend::{HeightSample, LocalMap, LocalSlam, PoseOut, UNMEASURED_FREE_LOST_S};
 pub use pose::Pose2;
 pub use scan::{Scan2d, ScanInput};

@@ -155,6 +155,7 @@ fn estimate(t_ns: u64, x: f64) -> PoseEstimate {
         health: VioHealth::Good,
         sigma_xy_m: Some(0.05),
         heading_ok: true,
+        health_reason: None,
     }
 }
 

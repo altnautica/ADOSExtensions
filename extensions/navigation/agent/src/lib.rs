@@ -32,7 +32,8 @@
 //!   the firmware-aware component router.
 //! - [`external_nav`] — pose topic parsing, FLU/FRD conversion and the
 //!   `ODOMETRY` builder; [`fc_nav`] — the flight-controller state it
-//!   reads; [`source_set`] — EKF source-set switching;
+//!   reads; [`flow_monitor`] — the FC's flow against its EKF velocity in
+//!   flight; [`source_set`] — EKF source-set switching;
 //!   [`nav_commands`] — the commands it sends.
 //! - [`obstacle`] — planar scan to `OBSTACLE_DISTANCE`.
 //! - [`nav_state`] — the `plugin.navigation.state` event.
@@ -48,6 +49,7 @@ pub mod estimators;
 pub mod external_nav;
 pub mod fc_nav;
 pub mod flow;
+pub mod flow_monitor;
 pub mod framing;
 pub mod health;
 pub mod imu;

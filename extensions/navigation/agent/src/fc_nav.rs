@@ -5,7 +5,9 @@
 //! `HEARTBEAT` armed state, source-set `COMMAND_ACK` and the flight
 //! controller's own `OPTICAL_FLOW` here; the external-nav ticks read a
 //! [`FcNavSnapshot`] with every stale field already dropped (the flow keeps
-//! its age, so a stale flow reads differently from one never heard).
+//! its age, so a stale flow reads differently from one never heard). The
+//! flow, `LOCAL_POSITION_NED` velocity and `ATTITUDE` yaw also feed the
+//! [`FlowEkfMonitor`].
 //!
 //! A heartbeat after [`FC_SILENCE_NS`] of silence (or the first one ever),
 //! or a `time_boot_ms` that goes back by more than
@@ -15,6 +17,8 @@
 //! rebooted flight controller has none until it sets or receives one again.
 
 use std::sync::Mutex;
+
+use crate::flow_monitor::{FlowEkf, FlowEkfMonitor};
 
 /// `LOCAL_POSITION_NED` older than this is not used for `ODOMETRY` z.
 pub const LOCAL_POSITION_STALE_NS: i64 = 1_000_000_000;
@@ -80,6 +84,8 @@ pub struct FcNavSnapshot {
     /// The flight controller's last `OPTICAL_FLOW`, however old; `None`
     /// when none has arrived this boot.
     pub flow: Option<FcFlow>,
+    /// The FC's flow against its EKF velocity ([`FlowEkfMonitor`]).
+    pub flow_ekf: FlowEkf,
 }
 
 #[derive(Default)]
@@ -96,6 +102,7 @@ struct Inner {
     last_boot_ms: Option<u32>,
     boot_ns: Option<i64>,
     boot_epoch: u64,
+    flow_ekf: FlowEkfMonitor,
 }
 
 impl Inner {
@@ -107,6 +114,7 @@ impl Inner {
         self.origin_seen = false;
         self.armed = false;
         self.flow = None;
+        self.flow_ekf.reset();
     }
 }
 
@@ -115,12 +123,20 @@ impl Inner {
 pub struct FcNavSink(Mutex<Inner>);
 
 impl FcNavSink {
-    pub fn on_local_position(&self, z: f32, vz: f32, now_ns: i64) {
-        self.lock().local = Some((LocalPosition { z, vz }, now_ns));
+    /// `LOCAL_POSITION_NED`: `vx`, `vy` (north, east) feed the
+    /// [`FlowEkfMonitor`]; `z`, `vz` the `ODOMETRY` height.
+    pub fn on_local_position(&self, vx: f32, vy: f32, z: f32, vz: f32, now_ns: i64) {
+        let mut g = self.lock();
+        g.local = Some((LocalPosition { z, vz }, now_ns));
+        g.flow_ekf.on_velocity(vx, vy, now_ns);
     }
 
-    pub fn on_attitude(&self, a: Attitude, now_ns: i64) {
-        self.lock().attitude = Some((a, now_ns));
+    /// `ATTITUDE`: `yaw` turns the flow to north-east for the
+    /// [`FlowEkfMonitor`].
+    pub fn on_attitude(&self, a: Attitude, yaw: f32, now_ns: i64) {
+        let mut g = self.lock();
+        g.attitude = Some((a, now_ns));
+        g.flow_ekf.on_yaw(yaw, now_ns);
     }
 
     /// `GPS_RAW_INT` fix type and `h_acc` (mm, 0 = unknown).
@@ -129,9 +145,12 @@ impl FcNavSink {
         self.lock().gps = Some((fix_type, h_acc, now_ns));
     }
 
-    /// The flight controller's own `OPTICAL_FLOW` quality.
-    pub fn on_flow(&self, quality: u8, now_ns: i64) {
-        self.lock().flow = Some((quality, now_ns));
+    /// The flight controller's own `OPTICAL_FLOW`: quality, the body-rate
+    /// compensated flow (rad/s, body x and y) and ground distance (m).
+    pub fn on_flow(&self, quality: u8, comp: [f32; 2], ground_m: f32, now_ns: i64) {
+        let mut g = self.lock();
+        g.flow = Some((quality, now_ns));
+        g.flow_ekf.on_flow(comp, quality, ground_m, now_ns);
     }
 
     /// The flight controller's `HEARTBEAT`. The first one, or one after
@@ -199,6 +218,7 @@ impl FcNavSink {
                 quality,
                 age_ns: (now_ns - t).max(0),
             }),
+            flow_ekf: g.flow_ekf.state(),
             origin_seen: g.origin_seen,
             source_set_ack: g.source_set_ack,
             armed: g.armed,
@@ -219,7 +239,7 @@ mod tests {
     #[test]
     fn stale_fields_drop_out_of_the_snapshot() {
         let s = FcNavSink::default();
-        s.on_local_position(-2.5, 0.1, 0);
+        s.on_local_position(0.0, 0.0, -2.5, 0.1, 0);
         s.on_gps_fix(3, 1200, 0);
         let fresh = s.snapshot(100_000_000);
         assert_eq!(fresh.local.unwrap().z, -2.5);
@@ -240,7 +260,7 @@ mod tests {
         let s = FcNavSink::default();
         s.on_heartbeat(false, 0);
         assert_eq!(s.snapshot(0).flow, None);
-        s.on_flow(150, S);
+        s.on_flow(150, [0.0, 0.0], 1.0, S);
         let flow = s.snapshot(4 * S).flow.unwrap();
         assert_eq!((flow.quality, flow.age_ns), (150, 3 * S));
         s.on_heartbeat(false, 10 * S);

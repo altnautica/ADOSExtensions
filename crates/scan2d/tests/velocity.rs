@@ -7,7 +7,7 @@ mod common;
 use std::f64::consts::PI;
 
 use ados_scan2d::{ImuSample, LocalSlam, PoseOut, Scan2dConfig, ScanInput, VelocitySample};
-use common::{walk, Path, Rng, BEAMS, C1, PERIOD_NS};
+use common::{rect, walk, Path, Rng, BEAMS, C1, PERIOD_NS};
 
 fn cfg() -> Scan2dConfig {
     Scan2dConfig::for_sensor(0.05, 12.0, &[])
@@ -16,6 +16,19 @@ fn cfg() -> Scan2dConfig {
 /// Feed `imu` and `vel` (each in time order) up to every scan's last return,
 /// as the capture service does, then the scan; one pose per scan.
 fn replay(scans: &[ScanInput], imu: &[ImuSample], vel: &[VelocitySample]) -> Vec<PoseOut> {
+    replay_counted(scans, imu, vel)
+        .into_iter()
+        .map(|(p, _)| p)
+        .collect()
+}
+
+/// [`replay`], with the scans the matcher's map holds after each one
+/// (`LocalSlam::inserted_scans`, from which the capture counts a new map).
+fn replay_counted(
+    scans: &[ScanInput],
+    imu: &[ImuSample],
+    vel: &[VelocitySample],
+) -> Vec<(PoseOut, usize)> {
     let mut slam = LocalSlam::new(cfg());
     let (mut i, mut v) = (imu.iter().peekable(), vel.iter().peekable());
     scans
@@ -32,7 +45,8 @@ fn replay(scans: &[ScanInput], imu: &[ImuSample], vel: &[VelocitySample]) -> Vec
                     (None, None) => break,
                 }
             }
-            slam.feed_scan(s)
+            let p = slam.feed_scan(s);
+            (p, slam.inserted_scans())
         })
         .collect()
 }
@@ -167,17 +181,7 @@ fn mine_drift_keeps_its_length_on_the_flow_velocity() {
     assert_eq!(rec.scans.len(), 107);
     let scans: Vec<ScanInput> = rec.scans.iter().map(|s| s.0.clone()).collect();
     let est = replay(&scans, &rec.imu, &rec.vel);
-    // Truth in the local frame: the LiDAR frame at the first scan, levelled.
-    let (p0, yaw0) = (rec.scans[0].1, rec.scans[0].2);
-    let (s, c) = yaw0.sin_cos();
-    let truth: Vec<[f64; 2]> = rec
-        .scans
-        .iter()
-        .map(|(_, p, _)| {
-            let (dx, dy) = (p[0] - p0[0], p[1] - p0[1]);
-            [c * dx + s * dy, -s * dx + c * dy]
-        })
-        .collect();
+    let truth = local_truth(&rec);
     let (t_end, e_end) = (truth.last().unwrap(), est.last().unwrap());
     let length = t_end[0].hypot(t_end[1]);
     let axis = [t_end[0] / length, t_end[1] / length];
@@ -209,4 +213,255 @@ fn mine_drift_keeps_its_length_on_the_flow_velocity() {
         (deg_est / deg_truth - 1.0).abs() < 0.05,
         "degenerate scans moved {deg_est:.2} m of {deg_truth:.2}"
     );
+}
+
+/// A recording's true positions in the local frame: the LiDAR frame at the
+/// first scan, levelled.
+fn local_truth(rec: &Recording) -> Vec<[f64; 2]> {
+    let (p0, yaw0) = (rec.scans[0].1, rec.scans[0].2);
+    let (s, c) = yaw0.sin_cos();
+    rec.scans
+        .iter()
+        .map(|(_, p, _)| {
+            let (dx, dy) = (p[0] - p0[0], p[1] - p0[1]);
+            [c * dx + s * dy, -s * dx + c * dy]
+        })
+        .collect()
+}
+
+/// The same drift with nothing measuring the motion along it (the flow
+/// sensor's samples all dropped): no pose the capture would call good is
+/// more than 2 m off. The drift goes unmeasured and loses the pose; where
+/// the walls measure it again the map starts over, and the capture places
+/// the new map, and each pose while it warms up lost, at the last pose it
+/// trusted moved by the flight controller's own displacement since (the
+/// truth's stands in for it here). Health is the capture's
+/// (`world-engine-capture` `health_of`): lost before the map holds 10 scans
+/// and while unmeasured; good when matched, not degenerate, the heading
+/// vouched for and the flow not against it. Before, the pose coasted to
+/// rest and re-locked into the old map wherever it froze, good while
+/// metres behind.
+#[test]
+fn mine_drift_without_flow_is_never_good_far_off() {
+    let rec = recorded(include_str!("data/mine_drift_flow.txt"));
+    let scans: Vec<ScanInput> = rec.scans.iter().map(|s| s.0.clone()).collect();
+    let est = replay_counted(&scans, &rec.imu, &[]);
+    let truth = local_truth(&rec);
+    let ratio = cfg().degenerate_ratio;
+    let lost_s = ados_scan2d::UNMEASURED_FREE_LOST_S;
+    let (mut offset, mut trusted, mut seating) = ([0.0; 2], None::<(usize, [f64; 2])>, false);
+    let (mut good, mut lost, mut restarts, mut worst) = (0, 0, 0, 0.0f64);
+    for (k, (p, inserted)) in est.iter().enumerate() {
+        let is_lost = *inserted < 10
+            || p.heading_unconfirmed
+            || p.unmeasured_free_s >= lost_s
+            || (p.unmeasured_free_s > 0.0 && p.sigma_xy_m > 1.0);
+        restarts += usize::from(p.map_restarted);
+        seating = (seating || p.map_restarted) && is_lost;
+        if let (true, Some((j, at))) = (seating, trusted) {
+            let moved = [truth[k][0] - truth[j][0], truth[k][1] - truth[j][1]];
+            offset = [at[0] + moved[0] - p.x, at[1] + moved[1] - p.y];
+        }
+        let placed = [p.x + offset[0], p.y + offset[1]];
+        if !is_lost && p.unmeasured_free_s == 0.0 {
+            trusted = Some((k, placed));
+        }
+        let is_good =
+            !is_lost && p.score > 0.0 && p.degeneracy >= ratio && p.heading_ok && !p.flow_disagrees;
+        lost += usize::from(is_lost);
+        if is_good {
+            good += 1;
+            worst = worst.max((placed[0] - truth[k][0]).hypot(placed[1] - truth[k][1]));
+        }
+    }
+    eprintln!(
+        "mine drift without flow: {good} good, {lost} lost of {}; {restarts} restarts; worst good {worst:.2} m off",
+        est.len()
+    );
+    assert!(
+        lost > 10,
+        "the unmeasured drift loses the pose ({lost} lost)"
+    );
+    assert!(good > 10, "{good} good scans");
+    assert!(worst < 2.0, "good while {worst:.2} m off");
+}
+
+/// The walker's measured velocity along `path` at 50 Hz in its own frame,
+/// with 5 % noise: forward speed times `scale`, plus `sideways` m/s.
+fn flow(path: &Path, scale: f64, sideways: f64, seed: u64) -> Vec<VelocitySample> {
+    let mut rng = Rng::new(seed);
+    (0..=(path.duration_s() * 50.0) as u64)
+        .map(|k| {
+            let t = k as f64 * 0.02;
+            let (a, b) = (path.at_time((t - 0.01).max(0.0)), path.at_time(t + 0.01));
+            let d = (b.x - a.x).hypot(b.y - a.y) / (t + 0.01 - (t - 0.01).max(0.0));
+            VelocitySample {
+                t_ns: (t * 1e9).round() as u64,
+                v: [
+                    d * scale * (1.0 + 0.05 * rng.gauss()),
+                    sideways + 0.02 * rng.gauss(),
+                ],
+            }
+        })
+        .collect()
+}
+
+fn bare_corridor() -> (Vec<common::Seg>, Path) {
+    let world = vec![
+        ([-2.0, -1.0], [200.0, -1.0]),
+        ([-2.0, 1.0], [200.0, 1.0]),
+        ([-2.0, -1.0], [-2.0, 1.0]),
+    ];
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(2.0, 1.0)
+        .line(20.0)
+        .speed_to(0.0, 1.0)
+        .wait(1.0);
+    (world, path)
+}
+
+/// A bare 2 m wide corridor from its closed end at -2 m to a 10 m by 10 m
+/// room at 30 m, and a walk 30 m down it into the room: the room's walls
+/// measure the walk along the corridor again.
+fn corridor_into_a_room() -> (Vec<common::Seg>, Path) {
+    let world = vec![
+        ([-2.0, -1.0], [30.0, -1.0]),
+        ([-2.0, 1.0], [30.0, 1.0]),
+        ([-2.0, -1.0], [-2.0, 1.0]),
+        ([30.0, 1.0], [30.0, 5.0]),
+        ([30.0, 5.0], [40.0, 5.0]),
+        ([40.0, 5.0], [40.0, -5.0]),
+        ([40.0, -5.0], [30.0, -5.0]),
+        ([30.0, -5.0], [30.0, -1.0]),
+    ];
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(2.0, 1.0)
+        .line(30.0)
+        .speed_to(0.0, 1.0)
+        .wait(1.0);
+    (world, path)
+}
+
+/// Down a bare corridor with nothing measuring the motion along it, the
+/// pose there is the motion prior coasting to rest while the walker goes
+/// on at 2 m/s. Its sigma grows at the speed the corridor went free with,
+/// it reports how long it has gone unmeasured, and past a second it stays
+/// unmeasured (lost) for as long as the matches stay degenerate: no new map
+/// is started inside the corridor, where it would freeze again. Once the
+/// room measures the walk again, the map starts over at that scan, once,
+/// rather than the pose re-locking into the old map wherever it froze.
+/// Before, the sigma stayed at the anchor's 0.05 m the whole way and the
+/// pose re-locked metres behind the walker.
+#[test]
+fn a_corridor_without_measured_velocity_stays_lost_until_measured_again() {
+    let (world, path) = corridor_into_a_room();
+    let (scans, imu, truth) = walk(&world, &path, C1, 11);
+    let est = replay(&scans, &imu, &[]);
+    let lost = ados_scan2d::UNMEASURED_FREE_LOST_S;
+    let first = est
+        .iter()
+        .position(|p| p.unmeasured_free_s >= lost)
+        .expect("the corridor goes unmeasured");
+    let sigma = est[..=first]
+        .iter()
+        .map(|p| p.sigma_xy_m)
+        .fold(0.0, f64::max);
+    let again = first
+        + est[first..]
+            .iter()
+            .position(|p| p.unmeasured_free_s == 0.0)
+            .expect("the recess measures the corridor again");
+    let p = &est[again];
+    let err = (p.x - truth[again].x).hypot(p.y - truth[again].y);
+    eprintln!(
+        "corridor without flow: lost at {:.1} m, measured again at {:.1} m, {err:.2} m off there, sigma {sigma:.2} m",
+        truth[first].x, truth[again].x
+    );
+    assert!(sigma >= 0.5, "sigma {sigma:.2} m while the pose froze");
+    assert!(
+        est[first..again]
+            .iter()
+            .all(|p| p.unmeasured_free_s >= lost),
+        "lost for as long as the corridor stays unmeasured"
+    );
+    assert!(err > 3.0, "the old map froze {err:.2} m behind the walker");
+    assert!(
+        p.map_restarted,
+        "the map starts over where the corridor is measured again"
+    );
+    assert_eq!(
+        est.iter().filter(|p| p.map_restarted).count(),
+        1,
+        "once per unmeasured stretch, never inside it"
+    );
+}
+
+/// The same corridor with a measured velocity that agrees with the walls
+/// is followed and never goes unmeasured. One that reads 2 m/s across the
+/// corridor while the walls hold the walker still across it is not
+/// followed: the corridor goes unmeasured as without one.
+#[test]
+fn a_measured_velocity_against_the_walls_is_not_followed() {
+    let (world, path) = bare_corridor();
+    let (scans, imu, truth) = walk(&world, &path, C1, 11);
+    let good = replay(&scans, &imu, &flow(&path, 1.0, 0.0, 5));
+    let worst = good.iter().map(|p| p.unmeasured_free_s).fold(0.0, f64::max);
+    let end = good.last().unwrap();
+    let walked = truth.last().unwrap().x;
+    assert_eq!(worst, 0.0, "agreeing flow measures the corridor");
+    assert!(
+        (end.x - walked).abs() < 0.3,
+        "ended at {:.2} of {walked:.2}",
+        end.x
+    );
+    let bad = replay(&scans, &imu, &flow(&path, 1.0, 2.0, 5));
+    assert!(
+        bad.iter()
+            .any(|p| p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S),
+        "flow across the walls is not taken for the corridor's motion"
+    );
+}
+
+/// In a room whose walls and a pillar pin the pose, a flow sensor reading
+/// twice the true speed leaves the matched displacement more than 1.5 m
+/// from its own over 3 s: the pose reports it, and keeps reporting it while
+/// the two disagree. Once the drone holds still the doubled flow reads zero
+/// with the scans; agreeing within 1 m for 3 s with every direction pinned
+/// clears it, with no map restart. Before, it stayed flagged until landing.
+/// The true flow raises nothing.
+#[test]
+fn a_pose_that_slid_against_the_flow_is_flagged_until_they_agree_again() {
+    let mut world = rect(-1.0, -2.0, 9.0, 2.0);
+    world.extend(rect(4.0, 0.6, 4.4, 1.0));
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(1.2, 0.6)
+        .line(5.0)
+        .speed_to(0.0, 0.6)
+        .wait(9.0);
+    let (scans, imu, _) = walk(&world, &path, C1, 13);
+    let true_flow = replay(&scans, &imu, &flow(&path, 1.0, 0.0, 7));
+    assert!(
+        true_flow.iter().all(|p| !p.flow_disagrees),
+        "true flow agrees"
+    );
+    let doubled = replay(&scans, &imu, &flow(&path, 2.0, 0.0, 7));
+    let first = doubled
+        .iter()
+        .position(|p| p.flow_disagrees)
+        .expect("doubled flow disagrees");
+    let cleared = first
+        + doubled[first..]
+            .iter()
+            .position(|p| !p.flow_disagrees)
+            .expect("agreeing again clears it");
+    let held_s = (doubled[cleared].t_ns - doubled[first].t_ns) as f64 * 1e-9;
+    assert!(held_s >= 3.0, "held {held_s:.1} s");
+    assert!(
+        doubled[cleared..].iter().all(|p| !p.flow_disagrees),
+        "stays clear"
+    );
+    assert!(doubled.iter().all(|p| !p.map_restarted), "no restart");
 }

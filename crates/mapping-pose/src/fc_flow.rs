@@ -42,15 +42,16 @@ pub fn ground_range(r: &DistanceSensor) -> Option<f64> {
         .then_some(r.distance_m)
 }
 
-/// The lowest flow quality (0-255) a sample is used at: below it the sensor
-/// is tracking too few features (dark or bare ground) to trust its rate.
-pub const MIN_FLOW_QUALITY: u8 = 128;
-
 /// The body velocity along x and y (FLU), m/s, of a flow sample over
-/// `range_m`; `None` below [`MIN_FLOW_QUALITY`].
+/// `range_m`; `None` at quality 0 (the sensor tracks nothing). Any other
+/// quality is used, as the flight controller's EKF uses it: over dusty or
+/// bare ground the quality falls to a few tens while the rate stays sound,
+/// and that is where a corridor needs it most. A bad rate is kept out by
+/// its consistency with the scans (`ados_scan2d::LocalSlam::feed_velocity`),
+/// not by a quality floor.
 pub fn body_velocity(flow: &OpticalFlow, range_m: f64) -> Option<[f64; 2]> {
     let v = [flow.comp[1] * range_m, flow.comp[0] * range_m];
-    (flow.quality >= MIN_FLOW_QUALITY && v.iter().all(|x| x.is_finite())).then_some(v)
+    (flow.quality > 0 && v.iter().all(|x| x.is_finite())).then_some(v)
 }
 
 #[cfg(test)]
@@ -75,13 +76,15 @@ mod tests {
         assert_eq!(body_velocity(&flow([0.1, 0.1], 0), 1.0), None, "no quality");
     }
 
+    /// A downward flow sensor over dusty mine floor reads quality 18 to 68
+    /// at a sound rate; only quality 0 (nothing tracked) is dropped.
     #[test]
-    fn low_quality_flow_is_rejected() {
-        assert_eq!(
-            body_velocity(&flow([0.1, 0.1], MIN_FLOW_QUALITY - 1), 1.0),
-            None
-        );
-        assert!(body_velocity(&flow([0.1, 0.1], MIN_FLOW_QUALITY), 1.0).is_some());
+    fn dusty_mine_flow_is_used() {
+        let v = body_velocity(&flow([0.0, 2.0], 41), 1.8).unwrap();
+        assert!((v[0] - 3.6).abs() < 1e-9, "{v:?}");
+        assert!(body_velocity(&flow([0.1, 0.1], 1), 1.0).is_some());
+        assert_eq!(body_velocity(&flow([0.1, 0.1], 0), 1.0), None);
+        assert_eq!(body_velocity(&flow([f64::NAN, 0.1], 200), 1.0), None);
     }
 
     #[test]

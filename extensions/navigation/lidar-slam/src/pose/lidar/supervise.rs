@@ -131,6 +131,7 @@ pub fn apply_line(track: &PoseTrack, t_body_lidar: &[f64; 16], seen: u32, line: 
         health,
         sigma_xy_m: None,
         heading_ok: true,
+        health_reason: None,
     });
     true
 }

@@ -71,6 +71,47 @@ const CLIMB_SPEED_SIGMA_MPS: f64 = 0.03;
 /// hold their position; a climb that begins in flight may carry real
 /// sideways motion and keeps riding the velocity its matches showed.
 const TAKEOFF_FROM_M: f64 = 0.3;
+/// A measured velocity is followed only while it agrees with the matches
+/// along the directions they constrain: over the motion prior's window its
+/// mean there may differ from the matched chord by at most this, m/s, ...
+/// (a recorded mine drift's flow at quality 18 to 68 stays inside 0.75; at
+/// 0.5 its noise drops good samples and the pose slides 1 to 2 m further).
+const FLOW_AGREE_MPS: f64 = 0.75;
+/// ... plus this fraction of the chord's speed there. An optical-flow
+/// sensor over dusty or bare ground reports a low quality yet a sound rate
+/// (the flight controller's EKF fuses any quality above zero); consistency
+/// with the scans, not a quality floor, keeps a bad one out.
+const FLOW_AGREE_FRAC: f64 = 0.2;
+/// The directions the check judges: those whose translation information is
+/// at least this fraction of the largest. A wall pins the pose across it
+/// firmly; along a rough drift the scans hold the pose only loosely and lag
+/// a fast flight, so the flow is not judged against them there.
+const FLOW_CHECK_RATIO: f64 = 0.3;
+/// A degenerate match with no measured velocity along its free direction
+/// leaves the pose unmeasured there; after this long, seconds, it is lost
+/// ([`PoseOut::unmeasured_free_s`]) and stays lost while the matches stay
+/// degenerate. Once the scans or a measured velocity measure the direction
+/// again the map starts over ([`PoseOut::map_restarted`]), so the scans
+/// after the stretch build a new map where the caller places it instead of
+/// re-locking into the old one wherever the stretch left it.
+pub const UNMEASURED_FREE_LOST_S: f64 = 1.0;
+/// A map started over after an unmeasured stretch settles once this many
+/// matches in a row measure every direction (the capture trusts a new map
+/// after as many scans). Until then any unmeasured stretch, however short,
+/// starts it over again when it ends: the new map rode the prior through
+/// it at no measured speed, while its pose is still unchecked.
+const UNMEASURED_SETTLE_SCANS: usize = 10;
+/// Flow against the matches ([`PoseOut::flow_disagrees`]): over this
+/// window the matched displacement may differ from the integrated measured
+/// velocity by at most [`FLOW_DISAGREE_M`] or [`FLOW_DISAGREE_FRAC`] of the
+/// integrated distance, whichever is larger.
+const FLOW_CHECK_NS: u64 = 3_000_000_000;
+const FLOW_DISAGREE_M: f64 = 1.5;
+const FLOW_DISAGREE_FRAC: f64 = 0.25;
+/// A flagged slide clears once, with every direction pinned by the
+/// matches, the two displacements over [`FLOW_CHECK_NS`] have stayed within
+/// this, metres, for [`FLOW_CHECK_NS`].
+const FLOW_CLEAR_M: f64 = 1.0;
 /// The IMU covers a scan once its newest sample is no more than this before
 /// the scan's time (one sample of a 50 Hz IMU).
 const IMU_COVER_SLACK_NS: u64 = 20_000_000;
@@ -211,6 +252,14 @@ struct Unobserved {
     since_ns: u64,
 }
 
+/// A scan interval's measured velocity, local frame: `raw` as measured,
+/// `used` when it agrees with the matches and the prior follows it.
+#[derive(Debug, Clone, Copy, Default)]
+struct Flow {
+    used: Option<Vector2<f64>>,
+    raw: Option<Vector2<f64>>,
+}
+
 /// A climb or descent in progress ([`LocalSlam::skip_climbing`]).
 #[derive(Debug, Clone, Copy)]
 struct Climb {
@@ -293,17 +342,37 @@ pub struct PoseOut {
     /// navigation heading. Confirming re-seeds the heading to the one the
     /// scans found.
     pub heading_unconfirmed: bool,
-    /// The heading was not re-confirmed within the bounds
-    /// ([`RESTART_AFTER_GATE_NS`] and the rest): the map was dropped at this
-    /// scan and a new one starts at its pose, its heading the gyro's guess
-    /// across the gap. Until the new map has matched poses of its own it
-    /// moves at the velocity matched before the gap, turned with the gyro,
-    /// and the gyro keeps the bias it had before the gap: neither takes
-    /// anything from the scans matched while the heading was suspect. The
-    /// caller re-anchors the new map's heading (the flight controller's,
-    /// while it does not fuse this pose);
-    /// [`LocalSlam::inserted_scans`] counts from it.
+    /// The map was dropped at this scan and a new one starts at its pose:
+    /// - the heading was not re-confirmed within the bounds
+    ///   ([`RESTART_AFTER_GATE_NS`] and the rest), so the new map's heading
+    ///   is the gyro's guess across the gap. Until the new map has matched
+    ///   poses of its own it moves at the velocity matched before the gap,
+    ///   turned with the gyro, and the gyro keeps the bias it had before the
+    ///   gap: neither takes anything from the scans matched while the
+    ///   heading was suspect;
+    /// - or the scans measure a direction again that went unmeasured long
+    ///   enough to lose the pose ([`UNMEASURED_FREE_LOST_S`]), so the old
+    ///   map froze wherever the stretch left it.
+    ///
+    /// The caller places the new map (from the flight controller, while it
+    /// does not fuse this pose); [`LocalSlam::inserted_scans`] counts from
+    /// it.
     pub map_restarted: bool,
+    /// How long the pose has gone unmeasured along a direction the matches
+    /// leave free: degenerate matches in a row with no measured velocity
+    /// agreeing with them, seconds (0 otherwise). The pose there is the
+    /// motion prior coasting to rest, whatever the vehicle does, so its
+    /// sigma grows meanwhile at the speed it had when the direction went
+    /// free; at [`UNMEASURED_FREE_LOST_S`] it is no navigation position, and
+    /// the map starts over once the scans or a measured velocity measure the
+    /// direction again ([`PoseOut::map_restarted`]).
+    pub unmeasured_free_s: f64,
+    /// The matched displacement over the last 3 s left the integrated
+    /// measured velocity by more than 1.5 m or a quarter of its distance:
+    /// the scans re-locked somewhere the vehicle did not fly (or the flow
+    /// read wrong). Held until the two have agreed within 1 m for 3 s while
+    /// the matches pin every direction, or the map starts over.
+    pub flow_disagrees: bool,
 }
 
 /// Everything local SLAM built, for the offline back end.
@@ -370,6 +439,26 @@ pub struct LocalSlam {
     /// ([`Self::feed_fc_position`]), the last [`FC_POSITION_KEEP_NS`],
     /// oldest first.
     fc_positions: VecDeque<(u64, Vector2<f64>)>,
+    /// The first scan of the current run of degenerate matches with no
+    /// measured velocity ([`PoseOut::unmeasured_free_s`]).
+    unmeasured_free_since: Option<u64>,
+    /// Matches in a row that measured every direction since the map started
+    /// over after an unmeasured stretch, until [`UNMEASURED_SETTLE_SCANS`].
+    settling: Option<usize>,
+    /// `(t_ns, matched position, integrated measured displacement)` of the
+    /// scans of the last [`FLOW_CHECK_NS`] with a measured velocity, local
+    /// frame, oldest first; cleared by a scan without one.
+    flow_track: VecDeque<(u64, Vector2<f64>, Vector2<f64>)>,
+    /// [`PoseOut::flow_disagrees`], held.
+    flow_disagrees: bool,
+    /// Since when a flagged slide's displacements have agreed again
+    /// ([`FLOW_CLEAR_M`]).
+    flow_agree_since: Option<u64>,
+    /// Projector onto the translation directions the last match pinned
+    /// firmly (information at least [`FLOW_CHECK_RATIO`] of the largest),
+    /// local frame: where a measured velocity is checked against the
+    /// matches.
+    pinned: Option<Matrix2<f64>>,
 }
 
 impl LocalSlam {
@@ -409,6 +498,12 @@ impl LocalSlam {
             confirm_pyramid: None,
             fc_headings: VecDeque::new(),
             fc_positions: VecDeque::new(),
+            unmeasured_free_since: None,
+            settling: None,
+            flow_track: VecDeque::new(),
+            flow_disagrees: false,
+            flow_agree_since: None,
+            pinned: None,
         }
     }
 
@@ -514,11 +609,15 @@ impl LocalSlam {
         self.history.clear();
         self.gyro_offsets.clear();
         self.unobserved = None;
+        self.pinned = None;
         self.last_insert = None;
         self.inserted = 0;
         self.suspect = None;
         self.restart_vel = None;
         self.confirm_pyramid = None;
+        self.flow_track.clear();
+        self.flow_disagrees = false;
+        self.flow_agree_since = None;
     }
 
     /// The gap in the IMU that ended at `end_ns` after `len_ns` left the
@@ -835,7 +934,8 @@ impl LocalSlam {
             _ => t,
         });
         let span_ns = input.t_offset_ns.iter().copied().max().unwrap_or(0) as u64;
-        let (mut prior, mut velocity, yaw_rate, mut prior_vel) = self.predict(t, heading, span_ns);
+        let (mut prior, mut velocity, yaw_rate, mut prior_vel, mut flow) =
+            self.predict(t, heading, span_ns);
         // Whether the gyro measured the turn since the reference scan: a gap
         // in the IMU bridges it with a guess. Scans before the first sample
         // are no gap: the heading starts there, and nothing was lost.
@@ -865,7 +965,7 @@ impl LocalSlam {
             // Nor at none: the drone flies on, and a map warmed up on a
             // standing prior drags its first matches behind it.
             self.restart_vel = Some(self.confirmed_vel);
-            (prior, velocity, _, prior_vel) = self.predict(t, heading, span_ns);
+            (prior, velocity, _, prior_vel, flow) = self.predict(t, heading, span_ns);
         } else if measured && reached && self.suspect.is_none() {
             self.confirmed_vel = velocity;
         }
@@ -893,6 +993,8 @@ impl LocalSlam {
             heading_ok: false,
             heading_unconfirmed: false,
             map_restarted: restarted,
+            unmeasured_free_s: 0.0,
+            flow_disagrees: false,
         };
         // Riding the prior: it carried the pose `speed × dt` since the last
         // scan without a match to check it.
@@ -927,6 +1029,9 @@ impl LocalSlam {
             self.advance(t, pose, heading);
             self.sigma_xy_m = sigma;
             out.sigma_xy_m = sigma;
+            self.track_flow(t, pose, flow.raw, dt_s);
+            out.flow_disagrees = self.flow_disagrees;
+            out.unmeasured_free_s = self.unmeasured_free_s(t);
             return out;
         }
         // Matched through a climb it could not ride (no measured velocity),
@@ -957,6 +1062,9 @@ impl LocalSlam {
         let (id, sm) = &self.active[0];
         let mut pose = prior;
         let mut in_submap = confirmed.unwrap_or_else(|| sm.pose.inverse() * prior);
+        // A direction unmeasured long enough to lose the pose is measured
+        // again at this scan.
+        let mut remeasured = false;
         if sm.scans() > 0 {
             let window = Window {
                 linear_m: self.cfg.linear_window_m,
@@ -982,6 +1090,12 @@ impl LocalSlam {
             );
             let info = constraint_information(&scan, r.pose);
             let deg = degeneracy(&info);
+            {
+                let rot = Rotation2::new(sm.pose.th);
+                let loose = unconstrained_directions(&info, FLOW_CHECK_RATIO);
+                self.pinned =
+                    Some(rot.matrix() * (Matrix2::identity() - loose) * rot.matrix().transpose());
+            }
             // The heading the scans turned since the last scan against the
             // gyro's, for the gyro's z bias; never the FC's fused yaw, and
             // never while the heading is suspect: the scan is then matched
@@ -1030,13 +1144,54 @@ impl LocalSlam {
             if climb_growth > 0.0 {
                 out.sigma_xy_m = out.sigma_xy_m.max(climbed_sigma);
             }
+            match self.unobserved {
+                // Free along a direction no measured velocity covers: the
+                // pose there is the prior coasting to rest, not the
+                // vehicle's, and it is as uncertain as riding at the speed
+                // the direction went free with.
+                Some(u) if flow.used.is_none() => {
+                    self.unmeasured_free_since.get_or_insert(t);
+                    let speed = u.vel.norm().max(prior_vel.norm());
+                    let grown =
+                        (self.sigma_xy_m + SIGMA_GROWTH_PER_M * speed * dt_s).min(SIGMA_MAX_M);
+                    out.sigma_xy_m = out.sigma_xy_m.max(grown);
+                }
+                _ => {
+                    let stretch = self.unmeasured_free_since.take();
+                    remeasured = stretch.is_some_and(|s| {
+                        self.settling.is_some()
+                            || t.saturating_sub(s) as f64 * 1e-9 >= UNMEASURED_FREE_LOST_S
+                    });
+                    if stretch.is_none() {
+                        self.settling = self
+                            .settling
+                            .map(|n| n + 1)
+                            .filter(|&n| n < UNMEASURED_SETTLE_SCANS);
+                    }
+                }
+            }
         } else {
             // A new submap's first scan is placed by the prior, unchecked.
             out.sigma_xy_m = riding_sigma.max(climbed_sigma);
         }
-        let home = *id;
+        let mut home = *id;
         (out.x, out.y, out.yaw) = (pose.x, pose.y, pose.th);
         self.sigma_xy_m = out.sigma_xy_m;
+        // The scans (or a measured velocity that agrees with them) measure a
+        // direction again that went unmeasured long enough to lose the pose,
+        // or at all in a map that has not settled since: the old map froze
+        // wherever the stretch left it, and this scan only re-locked into it
+        // there. The map starts over with this scan as its first, which the
+        // caller places afresh; a match that is still degenerate keeps the
+        // pose lost instead.
+        if remeasured {
+            self.heading_unmeasured();
+            self.start_submap(pose, self.sigma_xy_m);
+            home = self.active[0].0;
+            in_submap = Pose2::IDENTITY;
+            out.map_restarted = true;
+            self.settling = Some(0);
+        }
         // A new submap takes its first scan whatever the motion filter says,
         // so the next scan has something to match against. A scan on a
         // heading the IMU did not measure (not reached, or suspect since a
@@ -1059,6 +1214,9 @@ impl LocalSlam {
                 scan: insert.then_some(scan),
             });
         }
+        self.track_flow(t, pose, flow.raw, dt_s);
+        out.flow_disagrees = self.flow_disagrees;
+        out.unmeasured_free_s = self.unmeasured_free_s(t);
         let consistent = self.check_heading(t, pose.th, heading, yaw_rate, measured);
         out.heading_ok = reached && consistent && self.suspect.is_none();
         out.heading_unconfirmed = self.suspect.is_some();
@@ -1113,26 +1271,54 @@ impl LocalSlam {
     /// expressed at its middle heading) so it turns with the walker through a
     /// corner. Without a measured velocity, along directions the last match
     /// left unconstrained the chord only replays the prior, so the velocity
-    /// there is the one last observed, fading over [`COAST_TAU_S`].
-    fn predict(&self, t: u64, heading: f64, span_ns: u64) -> (Pose2, [f64; 2], f64, Vector2<f64>) {
+    /// there is the one last observed, fading over [`COAST_TAU_S`]. A
+    /// measured velocity whose component along the directions the matches
+    /// constrain leaves the matched chord by more than [`FLOW_AGREE_MPS`]
+    /// plus [`FLOW_AGREE_FRAC`] of the chord's speed there is not followed.
+    fn predict(
+        &self,
+        t: u64,
+        heading: f64,
+        span_ns: u64,
+    ) -> (Pose2, [f64; 2], f64, Vector2<f64>, Flow) {
         let imu_rate = if span_ns > 0 {
             (self.att.heading_at(t + span_ns) - self.att.heading_at(t)) / (span_ns as f64 * 1e-9)
         } else {
             self.att.heading_rate()
         };
         let Some((t1, p1, heading1)) = self.last else {
-            return (Pose2::IDENTITY, [0.0, 0.0], imu_rate, Vector2::zeros());
+            return (
+                Pose2::IDENTITY,
+                [0.0, 0.0],
+                imu_rate,
+                Vector2::zeros(),
+                Flow::default(),
+            );
         };
         let dt = t.saturating_sub(t1) as f64 * 1e-9;
-        let (vel, omega) = match self.history.front() {
+        // The chord over the window, local frame, and the measured velocity
+        // over the same window turned by its middle heading: the two the
+        // consistency check compares (a single scan interval's few flow
+        // samples are too noisy to judge).
+        let (vel, omega, agree) = match self.history.front() {
             Some(&(t0, p0)) if t1 > t0 => {
                 let d = (t1 - t0) as f64 * 1e-9;
                 let turn = wrap(p1.th - p0.th);
-                let (s, c) = (p0.th + 0.5 * turn).sin_cos();
+                let mid = p0.th + 0.5 * turn;
+                let (s, c) = mid.sin_cos();
                 let (cx, cy) = ((p1.x - p0.x) / d, (p1.y - p0.y) / d);
-                ([c * cx + s * cy, -s * cx + c * cy], turn / d)
+                let chord = Vector2::new(cx, cy);
+                let agree = match (self.pinned, self.measured_velocity(t0, t1)) {
+                    (Some(pinned), Some(m)) => {
+                        let m = Rotation2::new(mid) * m;
+                        (pinned * (m - chord)).norm()
+                            <= FLOW_AGREE_MPS + FLOW_AGREE_FRAC * (pinned * chord).norm()
+                    }
+                    _ => true,
+                };
+                ([c * cx + s * cy, -s * cx + c * cy], turn / d, agree)
             }
-            _ => (self.restart_vel.unwrap_or([0.0, 0.0]), 0.0),
+            _ => (self.restart_vel.unwrap_or([0.0, 0.0]), 0.0, true),
         };
         let (dyaw, rate) = if self.att.has_data() {
             (heading - heading1, imu_rate)
@@ -1140,7 +1326,9 @@ impl LocalSlam {
             (omega * dt, omega)
         };
         let heading = Rotation2::new(p1.th + 0.5 * dyaw);
-        let measured = self.measured_velocity(t1, t + span_ns);
+        let raw = self.measured_velocity(t1, t + span_ns).map(|m| heading * m);
+        let used = raw.filter(|_| agree);
+        let measured = used.map(|m| heading.inverse() * m);
         let mut v = heading * measured.unwrap_or(Vector2::new(vel[0], vel[1]));
         if let (None, Some(u)) = (measured, &self.unobserved) {
             let fade = (-(t.saturating_sub(u.since_ns) as f64 * 1e-9) / COAST_TAU_S).exp();
@@ -1152,7 +1340,59 @@ impl LocalSlam {
             [vel[0], vel[1]],
             rate,
             v,
+            Flow { used, raw },
         )
+    }
+
+    /// How long the pose has gone unmeasured along a free direction at
+    /// scan time `t`, seconds ([`PoseOut::unmeasured_free_s`]).
+    fn unmeasured_free_s(&self, t: u64) -> f64 {
+        self.unmeasured_free_since
+            .map_or(0.0, |s| t.saturating_sub(s) as f64 * 1e-9)
+    }
+
+    /// Integrate the measured velocity `raw` over the `dt_s` up to scan `t`
+    /// at `pose` and compare it with the matched displacement over
+    /// [`FLOW_CHECK_NS`] ([`PoseOut::flow_disagrees`]). A scan without one
+    /// clears the window: there is nothing to compare across it.
+    fn track_flow(&mut self, t: u64, pose: Pose2, raw: Option<Vector2<f64>>, dt_s: f64) {
+        let Some(v) = raw else {
+            self.flow_track.clear();
+            self.flow_agree_since = None;
+            return;
+        };
+        let xy = Vector2::new(pose.x, pose.y);
+        let cum = self
+            .flow_track
+            .back()
+            .map_or(Vector2::zeros(), |&(_, _, c)| c + v * dt_s);
+        self.flow_track.push_back((t, xy, cum));
+        while self
+            .flow_track
+            .get(1)
+            .is_some_and(|&(t1, _, _)| t.saturating_sub(t1) >= FLOW_CHECK_NS)
+        {
+            self.flow_track.pop_front();
+        }
+        let &(t0, xy0, cum0) = self.flow_track.front().expect("pushed");
+        if t.saturating_sub(t0) >= FLOW_CHECK_NS {
+            let flown = cum - cum0;
+            let gap = ((xy - xy0) - flown).norm();
+            if gap > FLOW_DISAGREE_M.max(FLOW_DISAGREE_FRAC * flown.norm()) {
+                self.flow_disagrees = true;
+                self.flow_agree_since = None;
+            } else if self.flow_disagrees {
+                if gap <= FLOW_CLEAR_M && self.unobserved.is_none() {
+                    let since = *self.flow_agree_since.get_or_insert(t);
+                    if t.saturating_sub(since) >= FLOW_CHECK_NS {
+                        self.flow_disagrees = false;
+                        self.flow_agree_since = None;
+                    }
+                } else {
+                    self.flow_agree_since = None;
+                }
+            }
+        }
     }
 
     fn advance(&mut self, t: u64, pose: Pose2, heading: f64) {
@@ -1232,7 +1472,7 @@ mod tests {
         let mut slam = LocalSlam::new(Scan2dConfig::for_sensor(0.05, 12.0, &[]));
         slam.restart_vel = Some([1.2, 0.0]);
         slam.advance(1_000_000_000, Pose2::new(0.0, 0.0, 0.0), 0.0);
-        let (_, warm, _, _) = slam.predict(1_100_000_000, 0.0, 0);
+        let (_, warm, _, _, _) = slam.predict(1_100_000_000, 0.0, 0);
         assert_eq!(
             warm,
             [1.2, 0.0],
@@ -1241,7 +1481,7 @@ mod tests {
         slam.advance(1_100_000_000, Pose2::new(0.12, 0.0, 0.0), 0.0);
         // Matched poses of its own; then the heading is re-confirmed in place.
         slam.history.clear();
-        let (_, vel, _, _) = slam.predict(1_200_000_000, 0.0, 0);
+        let (_, vel, _, _, _) = slam.predict(1_200_000_000, 0.0, 0);
         assert_eq!(vel, [0.0, 0.0], "predicted at the stale starting velocity");
     }
 }

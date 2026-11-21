@@ -699,7 +699,10 @@ impl NavMap {
         } else {
             e.health
         };
-        if health != VioHealth::Lost && e.heading_ok {
+        // A pose coasting along an unmeasured corridor, or one the matcher
+        // found sliding against the optical flow, is not where the drone is:
+        // it never places a restarted map.
+        if health != VioHealth::Lost && e.heading_ok && e.health_reason.is_none() {
             let at = Some((e.t_ns, [t[0], t[1]], frd_yaw(&r)));
             self.measured = at;
             if health == VioHealth::Good {
@@ -724,6 +727,7 @@ impl NavMap {
             sigma_xy_m: e.sigma_xy_m,
             // Set by the lane, which knows the FC IMU feed.
             imu_feed: None,
+            health_reason: e.health_reason,
         })
     }
 

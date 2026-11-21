@@ -20,6 +20,7 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         north: Some(MapNorth::Declared),
         sigma_xy_m: Some(0.35),
         imu_feed: Some(ImuFeedReason::Stalled),
+        health_reason: Some(PoseHealthReason::CorridorUnmeasured),
     };
     let v = serde_json::to_value(&pd).unwrap();
     assert_eq!(v["health"], "good");
@@ -28,6 +29,7 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
     assert_eq!(v["north"], "declared");
     assert_eq!(v["sigma_xy_m"], 0.35);
     assert_eq!(v["imu_feed"], "stalled");
+    assert_eq!(v["health_reason"], "corridor_unmeasured");
     assert_eq!(
         v["t_ns"], 4_150_000_000u64,
         "the host monotonic instant beside ts_ms"
@@ -37,25 +39,34 @@ fn the_pose_descriptor_carries_health_frame_and_source_as_words() {
         PoseDescriptor::from_msgpack(&pd.to_msgpack().unwrap()).unwrap(),
         pd
     );
-    // An older publisher sends no north, sigma or IMU feed; they read as
-    // unknown.
+    // An older publisher sends no north, sigma, IMU feed or health reason;
+    // they read as unknown.
     let mut old = v.clone();
-    for key in ["north", "sigma_xy_m", "imu_feed"] {
+    for key in ["north", "sigma_xy_m", "imu_feed", "health_reason"] {
         old.as_object_mut().unwrap().remove(key);
     }
     let parsed: PoseDescriptor = serde_json::from_value(old).unwrap();
     assert_eq!(parsed.north, None);
     assert_eq!(parsed.sigma_xy_m, None);
     assert_eq!(parsed.imu_feed, None);
+    assert_eq!(parsed.health_reason, None);
     let none = PoseDescriptor {
         north: None,
         sigma_xy_m: None,
         imu_feed: None,
+        health_reason: None,
         ..pd
     };
     let v = serde_json::to_value(&none).unwrap();
     assert!(v.get("north").is_none() && v.get("sigma_xy_m").is_none());
-    assert!(v.get("imu_feed").is_none());
+    assert!(v.get("imu_feed").is_none() && v.get("health_reason").is_none());
+    let slid = PoseDescriptor {
+        health_reason: Some(PoseHealthReason::FlowDisagrees),
+        ..none
+    };
+    let v = serde_json::to_value(&slid).unwrap();
+    assert_eq!(v["health_reason"], "flow_disagrees");
+    assert_eq!(serde_json::from_value::<PoseDescriptor>(v).unwrap(), slid);
 }
 
 #[test]

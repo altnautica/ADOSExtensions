@@ -678,6 +678,7 @@ mod tests {
                 health,
                 sigma_xy_m: None,
                 heading_ok: true,
+                health_reason: None,
             })
         };
         // The poses are at host 0; RAW_IMU began at `since`.

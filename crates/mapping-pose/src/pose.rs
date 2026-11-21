@@ -24,7 +24,7 @@
 use std::collections::VecDeque;
 
 use ados_capture_contract::v1::ImuBatch;
-use ados_mapping_protocol::capture::{PoseSource, VioHealth, POSE_COV_LEN};
+use ados_mapping_protocol::capture::{PoseHealthReason, PoseSource, VioHealth, POSE_COV_LEN};
 use ados_scan2d::{HeightSample, VelocitySample};
 use parking_lot::Mutex;
 
@@ -60,6 +60,12 @@ pub struct PoseEstimate {
     /// (`PoseOut::heading_ok`), its heading the matcher's guess on a stale
     /// prior. True from estimators that measure their heading throughout.
     pub heading_ok: bool,
+    /// Why the estimator left this pose lost or degraded beyond its routine
+    /// states (the planar scan matcher's corridor without measured velocity,
+    /// or its slide against the optical flow). Published as the pose's
+    /// `health_reason`; a pose unmeasured along a corridor never places a
+    /// restarted map.
+    pub health_reason: Option<PoseHealthReason>,
 }
 
 /// Producer-side quality signals the HUD shows beside the pose.
@@ -234,6 +240,7 @@ pub fn interpolate(poses: &VecDeque<PoseEstimate>, t_ns: u64) -> Option<PoseEsti
             (x, y) => x.or(y),
         },
         heading_ok: a.heading_ok && b.heading_ok,
+        health_reason: b.health_reason.or(a.health_reason),
     })
 }
 

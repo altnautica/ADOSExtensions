@@ -270,21 +270,28 @@ fn a_scan_waits_for_the_imu_that_covers_it() {
     assert!(trusted >= 10, "{trusted} trusted poses");
 }
 
+/// A featureless corridor with nothing measuring the motion along it: the
+/// pose there is the motion prior's, however still the drone holds, so it
+/// is never good and is lost once the corridor has gone unmeasured a
+/// second, saying why.
 #[test]
-fn a_featureless_corridor_is_degraded() {
+fn a_featureless_corridor_without_measured_velocity_is_lost() {
     // 2 m wide, its ends far beyond the 12 m range.
     let walls = vec![([-100.0, 0.0], [100.0, 0.0]), ([-100.0, 2.0], [100.0, 2.0])];
     let rate = 25f64.to_radians();
     let body = |t: u64| [0.0, 1.0, rate * (t - T0) as f64 * 1e-9];
     let p = spawn();
     let est = drive(&p, &walls, &body, rate, 20);
-    let trusted: Vec<_> = est.iter().filter(|e| e.health != VioHealth::Lost).collect();
     assert!(
-        trusted.len() >= 5,
-        "{} poses past the first submap",
-        trusted.len()
+        est.iter().all(|e| e.health != VioHealth::Good),
+        "never good"
     );
-    assert!(trusted.iter().all(|e| e.health == VioHealth::Degraded));
+    let last = est.last().expect("poses");
+    assert_eq!(last.health, VioHealth::Lost);
+    assert_eq!(
+        last.health_reason,
+        Some(PoseHealthReason::CorridorUnmeasured)
+    );
     assert!(p.quality().degeneracy_ratio.unwrap() < 0.05);
 }
 
@@ -386,9 +393,50 @@ fn health_and_frames_follow_the_matcher() {
         heading_ok: true,
         heading_unconfirmed: false,
         map_restarted: false,
+        unmeasured_free_s: 0.0,
+        flow_disagrees: false,
     };
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS - 1, 0.05), VioHealth::Lost);
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS, 0.05), VioHealth::Good);
+    assert_eq!(reason_of(&p), None);
+    // A corridor with no measured velocity along it: degraded at first,
+    // lost once it has gone unmeasured a second or its sigma passed 1 m.
+    let unmeasured = PoseOut {
+        degeneracy: 0.01,
+        unmeasured_free_s: 0.5,
+        sigma_xy_m: 0.4,
+        ..p
+    };
+    assert_eq!(health_of(&unmeasured, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(
+        reason_of(&unmeasured),
+        Some(PoseHealthReason::CorridorUnmeasured)
+    );
+    let long = PoseOut {
+        unmeasured_free_s: 1.0,
+        ..unmeasured
+    };
+    assert_eq!(health_of(&long, 30, 0.05), VioHealth::Lost);
+    let wide = PoseOut {
+        sigma_xy_m: 1.1,
+        ..unmeasured
+    };
+    assert_eq!(health_of(&wide, 30, 0.05), VioHealth::Lost);
+    // A match that slid against the flow is never good.
+    let slid = PoseOut {
+        flow_disagrees: true,
+        ..p
+    };
+    assert_eq!(health_of(&slid, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(reason_of(&slid), Some(PoseHealthReason::FlowDisagrees));
+    // A corridor unmeasured for under CORRIDOR_REASON_AFTER_S names no
+    // reason, whatever its sigma below the loss bound.
+    let brief = PoseOut {
+        unmeasured_free_s: 0.2,
+        ..unmeasured
+    };
+    assert_eq!(health_of(&brief, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(reason_of(&brief), None);
     let corridor = PoseOut {
         degeneracy: 0.01,
         ..p
@@ -422,6 +470,52 @@ fn health_and_frames_follow_the_matcher() {
     };
     let (r, _) = se3::from_mat4(&t_w_l(&pitched));
     assert!((se3::mat_vec(&r, [1.0, 0.0, 0.0])[2] + 0.1f64.sin()).abs() < 1e-12);
+}
+
+/// Down a mine drift over a dusty floor the flow is noisy (about ±0.9 rad/s
+/// a sample at quality 40 to 50, 1.9 m up), so its mean over one prior
+/// window now and then leaves the matches by more than the agreement bound
+/// and that window coasts on the prior. A flight recorded one such stretch:
+/// two scans, the second 0.1 s in with its sigma grown to 0.41 m, while the
+/// pose stayed within 0.6 m of the truth. Scan by scan at 10 Hz, that
+/// stretch names no reason (the pose stays degraded and flown); a stretch
+/// that goes on names `corridor_unmeasured` from 0.3 s and is lost at 1 s.
+#[test]
+fn a_single_noisy_flow_window_names_no_corridor() {
+    let scan = |unmeasured_free_s: f64, sigma_xy_m: f64| PoseOut {
+        t_ns: 1,
+        x: 0.0,
+        y: 0.0,
+        yaw: 0.0,
+        roll: 0.0,
+        pitch: 0.0,
+        score: 0.6,
+        degeneracy: 0.01,
+        sigma_xy_m,
+        heading_ok: true,
+        heading_unconfirmed: false,
+        map_restarted: false,
+        unmeasured_free_s,
+        flow_disagrees: false,
+    };
+    // The recorded stretch, between scans that followed the flow.
+    for p in [scan(0.0, 0.26), scan(0.1, 0.41), scan(0.0, 0.26)] {
+        assert_eq!(reason_of(&p), None, "{p:?}");
+        assert_eq!(health_of(&p, 30, 0.05), VioHealth::Degraded);
+    }
+    // A stretch that goes on: named from 0.3 s, lost from 1 s.
+    let named: Vec<_> = (0..=10)
+        .map(|k| {
+            let p = scan(k as f64 * 0.1, 0.26 + 0.05 * k as f64);
+            (reason_of(&p), health_of(&p, 30, 0.05))
+        })
+        .collect();
+    for (k, (reason, health)) in named.iter().enumerate() {
+        let want = (k >= 3).then_some(PoseHealthReason::CorridorUnmeasured);
+        assert_eq!(*reason, want, "{k} scans in");
+        let lost = k >= 10;
+        assert_eq!(*health == VioHealth::Lost, lost, "{k} scans in");
+    }
 }
 
 #[test]

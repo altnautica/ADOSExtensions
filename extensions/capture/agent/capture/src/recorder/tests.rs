@@ -150,6 +150,7 @@ fn every_channel_is_recorded_and_segments_roll() {
                 health: VioHealth::Good,
                 sigma_xy_m: None,
                 heading_ok: true,
+                health_reason: None,
             },
             t,
         );

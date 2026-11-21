@@ -6,12 +6,18 @@
 //! ```json
 //! {"mode": "external_nav", "active_set": 1, "extnav_health": "good",
 //!  "odom_rate_hz": 30.0, "last_reset_counter": 0, "obstacle_rate_hz": 10.0,
-//!  "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null}
+//!  "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null,
+//!  "health_reason": null}
 //! ```
 //!
 //! Fields a mode does not produce are `null`. `source_hold` names why the
 //! GPS-primary source-set machine holds its set (`no_origin`,
-//! `no_position`; [`crate::source_set::SourceHold`]).
+//! `no_position`; [`crate::source_set::SourceHold`]). `health_reason` says
+//! why the pose is not good when there is a reason beyond its health
+//! ([`crate::flow_monitor::health_reason`]): `ekf_flow_disagree` (the FC's
+//! optical flow and EKF velocity parted), `corridor_unmeasured` or
+//! `flow_disagrees` (the pose publisher's own), else the publisher's FC IMU
+//! feed (`heading_unconfirmed`, `imu_feed_<reason>`).
 
 use rmpv::Value;
 
@@ -31,6 +37,7 @@ pub struct NavState {
     pub min_obstacle_m: Option<f32>,
     pub gps_fix: u8,
     pub source_hold: Option<&'static str>,
+    pub health_reason: Option<&'static str>,
 }
 
 impl NavState {
@@ -56,6 +63,10 @@ impl NavState {
             (
                 Value::from("source_hold"),
                 self.source_hold.map_or(Value::Nil, Value::from),
+            ),
+            (
+                Value::from("health_reason"),
+                self.health_reason.map_or(Value::Nil, Value::from),
             ),
         ])
     }
@@ -158,6 +169,7 @@ mod tests {
             min_obstacle_m: Some(3.25),
             gps_fix: 0,
             source_hold: Some("no_origin"),
+            health_reason: Some("ekf_flow_disagree"),
         };
         let v = s.to_value();
         assert_eq!(field(&v, "mode").as_str(), Some("external_nav"));
@@ -168,8 +180,12 @@ mod tests {
         assert_eq!(field(&v, "min_obstacle_m").as_f64(), Some(3.25));
         assert_eq!(field(&v, "gps_fix").as_u64(), Some(0));
         assert_eq!(field(&v, "source_hold").as_str(), Some("no_origin"));
+        assert_eq!(
+            field(&v, "health_reason").as_str(),
+            Some("ekf_flow_disagree")
+        );
         let Value::Map(e) = &v else { unreachable!() };
-        assert_eq!(e.len(), 9);
+        assert_eq!(e.len(), 10);
     }
 
     #[test]
@@ -182,6 +198,7 @@ mod tests {
         assert!(field(&v, "active_set").is_nil());
         assert!(field(&v, "extnav_health").is_nil());
         assert!(field(&v, "min_obstacle_m").is_nil());
+        assert!(field(&v, "health_reason").is_nil());
     }
 
     #[test]

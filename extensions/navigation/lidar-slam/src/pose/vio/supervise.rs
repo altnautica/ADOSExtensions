@@ -65,6 +65,7 @@ pub fn to_estimate(st: &ChildState, t_imu_body: &[f64; 16], health: VioHealth) -
         health,
         sigma_xy_m: None,
         heading_ok: true,
+        health_reason: None,
     }
 }
 

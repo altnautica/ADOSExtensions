@@ -275,6 +275,7 @@ fn occupancy_splat_mesh_pose_round_trip() {
         north: Some(MapNorth::Gnss),
         sigma_xy_m: Some(0.4),
         imu_feed: Some(ImuFeedReason::Starved),
+        health_reason: Some(PoseHealthReason::FlowDisagrees),
     };
     assert_eq!(
         pose_desc,

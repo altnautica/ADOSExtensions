@@ -193,7 +193,7 @@ otherwise):
 ```json
 {"mode": "external_nav", "active_set": 1, "extnav_health": "good",
  "odom_rate_hz": 30.0, "last_reset_counter": 0, "obstacle_rate_hz": 10.0,
- "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null}
+ "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null, "health_reason": null}
 ```
 
 Fields a mode does not produce are `null`. `source_hold` says why the
@@ -201,9 +201,14 @@ GPS-primary source set is held: `no_origin` (a lost GPS is not handed to
 external navigation without an EKF origin), `no_position` (on external
 navigation with the pose lost and no usable GPS; nothing to switch to, the
 flight controller's EKF failsafe acts) or `unknown_set` (started while
-armed, the flight controller's set unknown). The Navigation page shows the
-state as the navigation feed card, and the cockpit panel shows it in
-flight.
+armed, the flight controller's set unknown). `health_reason` says why the
+pose is not good when there is a reason beyond its health:
+`ekf_flow_disagree` (the flight controller's optical flow and its EKF
+velocity parted), `corridor_unmeasured` (the LiDAR pose's free axis has
+gone 0.3 s with no measured velocity), `flow_disagrees` (the LiDAR match
+slid against the flow), else the FC IMU feed (`heading_unconfirmed`,
+`imu_feed_<reason>`). The Navigation page shows the state as the
+navigation feed card, and the cockpit panel shows it in flight.
 
 ## LiDAR SLAM and the live map
 

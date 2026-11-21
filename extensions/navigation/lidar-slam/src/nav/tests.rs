@@ -1,7 +1,9 @@
 use std::f64::consts::PI;
 
 use ados_mapping_protocol::capture::nav::OCCUPANCY_OCCUPIED;
-use ados_mapping_protocol::capture::{ComputePlacement, NavPoseSource, PoseSource, VioHealth};
+use ados_mapping_protocol::capture::{
+    ComputePlacement, NavPoseSource, PoseHealthReason, PoseSource, VioHealth,
+};
 
 use super::*;
 use ados_mapping_pose::se3;
@@ -26,6 +28,7 @@ fn estimate(x: f64, y: f64, yaw: f64) -> PoseEstimate {
         health: VioHealth::Good,
         sigma_xy_m: None,
         heading_ok: true,
+        health_reason: None,
     }
 }
 
@@ -350,6 +353,49 @@ fn a_map_restarted_long_after_its_last_good_pose_keeps_the_north() {
         "heading {:.2}°",
         heading.to_degrees()
     );
+}
+
+/// A pose the matcher flagged as unmeasured along the corridor (the motion
+/// prior coasting there), or as slid against the optical flow, is never the
+/// one a restart is placed from, however its heading reads: past 30 s the
+/// poses carry a reason and a heading 20° off, and the restart still
+/// carries the north from the last degraded pose without one.
+#[test]
+fn a_restart_is_never_placed_from_a_pose_with_a_health_reason() {
+    for reason in [
+        PoseHealthReason::CorridorUnmeasured,
+        PoseHealthReason::FlowDisagrees,
+    ] {
+        let mut nav = NavMap::new(NavSettings {
+            takeoff_heading_rad: Some(PI / 2.0),
+            ..settings(ComputePlacement::Onboard)
+        });
+        let pose = |nav: &mut NavMap, e: &PoseEstimate| {
+            let t_ms = (e.t_ns / 1_000_000) as i64;
+            nav.on_pose(e, Some(0.0), Some(0.0), t_ms, 0).expect("due")
+        };
+        for s in 0..=38u32 {
+            let flagged = s > 30;
+            let yaw = if flagged { 20f64.to_radians() } else { 0.0 };
+            let mut e = at(estimate(s as f64, 0.0, yaw), s as i64 * 1_000);
+            if s > 6 {
+                e.health = VioHealth::Degraded;
+            }
+            e.health_reason = flagged.then_some(reason);
+            let pd = pose(&mut nav, &e);
+            assert_eq!(pd.health_reason, e.health_reason, "published as is");
+        }
+        let fc = fc_down_a_corridor();
+        let mut lost = at(estimate(40.0, 0.0, 0.0), 40_000);
+        lost.health = VioHealth::Lost;
+        nav.on_matcher_pose(&lost, true, Some(0.0), Some(&fc));
+        let want = PI / 2.0 + 45f64.to_radians();
+        let off = wrap_pi(nav.map_yaw().expect("a north") - want).to_degrees();
+        assert!(
+            off.abs() < 0.1,
+            "{reason:?}: north {off:+.2}° off the last pose without a reason"
+        );
+    }
 }
 
 /// While the FC's attitude history reaches back to the last good pose, a

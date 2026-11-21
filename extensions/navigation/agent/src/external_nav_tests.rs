@@ -43,6 +43,7 @@ fn pose(x: f64, y: f64, yaw: f64, health: ExtnavHealth) -> PoseSample {
         north: Some(MapNorth::Declared),
         sigma_xy_m: None,
         imu_feed: None,
+        health_reason: None,
     }
 }
 
@@ -131,6 +132,30 @@ fn the_fc_imu_feed_reason_is_read_when_present() {
     // An older publisher sends none; an unknown word does not say.
     assert_eq!(with_feed(None), None);
     assert_eq!(with_feed(Some("sideways")), None);
+}
+
+#[test]
+fn a_corridor_degraded_pose_names_its_reason() {
+    let with_reason = |word: Option<&str>| {
+        let Value::Map(mut m) = payload("map_ned", "degraded", IDENTITY, [0.0; 3]) else {
+            unreachable!()
+        };
+        if let Some(w) = word {
+            m.push((Value::from("health_reason"), Value::from(w)));
+        }
+        parse_pose_payload(&Value::Map(m)).unwrap().health_reason
+    };
+    assert_eq!(
+        with_reason(Some("corridor_unmeasured")),
+        Some(PoseReason::CorridorUnmeasured)
+    );
+    assert_eq!(
+        with_reason(Some("flow_disagrees")),
+        Some(PoseReason::FlowDisagrees)
+    );
+    // An older publisher sends none; an unknown word does not say.
+    assert_eq!(with_reason(None), None);
+    assert_eq!(with_reason(Some("sideways")), None);
 }
 
 #[test]

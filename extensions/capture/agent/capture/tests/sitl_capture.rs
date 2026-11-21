@@ -179,6 +179,7 @@ async fn a_two_camera_sim_session_records_and_validates() {
             health: VioHealth::Good,
             sigma_xy_m: None,
             heading_ok: true,
+            health_reason: None,
         })
         .collect();
     let sensors = Arc::new(Mutex::new(SensorState::default()));

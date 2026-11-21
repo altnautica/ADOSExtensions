@@ -288,6 +288,8 @@ pub fn optimize(map: &LocalMap, cfg: &Scan2dConfig) -> Trajectory {
                     heading_ok: true,
                     heading_unconfirmed: false,
                     map_restarted: false,
+                    unmeasured_free_s: 0.0,
+                    flow_disagrees: false,
                 }
             })
             .collect(),

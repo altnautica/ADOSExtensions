@@ -230,6 +230,7 @@ mod tests {
             health: VioHealth::Degraded,
             sigma_xy_m: None,
             heading_ok: true,
+            health_reason: None,
         };
         let (p, c) = pose(&e, 1_500_000_000);
         let pose = p.pose.unwrap();

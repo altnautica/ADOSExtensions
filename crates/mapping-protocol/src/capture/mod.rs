@@ -148,8 +148,8 @@ pub use keyframe::{
 pub use nav::{
     ComputePlacement, ImuFeedReason, ImuFeedState, ImuFeedStatus, LidarHealth, LidarStatus,
     LiveOccupancy, LivePointCloud, MapNorth, MapPayloadKind, MapStatus, NavFrame, NavPoseSource,
-    OccupancyTile, ScanDescriptor, StreamPhase, StreamProgress, UploadPhase, UploadProgress,
-    LIDAR_STATUS_VERSION,
+    OccupancyTile, PoseHealthReason, ScanDescriptor, StreamPhase, StreamProgress, UploadPhase,
+    UploadProgress, LIDAR_STATUS_VERSION,
 };
 pub use polar::{PolarError, PolarScan};
 pub use stream::{

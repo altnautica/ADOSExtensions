@@ -92,6 +92,7 @@ mod tests {
             health: VioHealth::Good,
             sigma_xy_m: None,
             heading_ok: true,
+            health_reason: None,
         }
     }
 

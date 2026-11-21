@@ -22,18 +22,29 @@
 //! pose is single-floor: z stays at the mount height.
 //!
 //! Health: `Lost` until the map holds [`MIN_SUBMAP_SCANS`] scans (counted
-//! again from each new map: the first `RAW_IMU`, or a heading not
-//! re-confirmed in time, `PoseOut::map_restarted`), and while the heading a
+//! again from each new map: the first `RAW_IMU`, a heading not re-confirmed
+//! in time, or a corridor measured again after it lost the pose,
+//! `PoseOut::map_restarted`), and while the heading a
 //! gap in the IMU left unmeasured is not yet re-confirmed against the map
 //! (`PoseOut::heading_unconfirmed`: it may be off by any turn the gap hid);
+//! `Lost` too once a degenerate match has gone a second with no measured
+//! velocity along its free direction, or its sigma has grown past
+//! [`UNMEASURED_FREE_MAX_SIGMA_M`] meanwhile (`PoseOut::unmeasured_free_s`:
+//! the pose there is the motion prior coasting to rest, whatever the
+//! vehicle does), until the walls or a measured velocity measure the
+//! direction again and the matcher starts its map over there;
 //! `Degraded` while the match's `degeneracy`
 //! (translation `eig_min / eig_max`, reported as
 //! `quality().degeneracy_ratio`) is below the matcher's degenerate ratio
 //! (the pose rides a motion prior along the weak direction, measured
 //! velocity or not), the scan could not be matched (a climb among them),
-//! or the integrated gyro does not vouch for its heading
+//! the integrated gyro does not vouch for its heading
 //! (`PoseOut::heading_ok`: the IMU stream stalled, or the match jumped
-//! against it); `Good` otherwise.
+//! against it), or the matched displacement left the optical flow's
+//! (`PoseOut::flow_disagrees`, held until they agree again or the map
+//! starts over); `Good` otherwise. A slide against the flow, and a corridor
+//! unmeasured for [`CORRIDOR_REASON_AFTER_S`], say so in the pose's
+//! `health_reason`.
 
 #[cfg(test)]
 mod tests;
@@ -45,9 +56,10 @@ use std::thread::JoinHandle;
 
 use ados_capture_contract::v1::ImuBatch;
 use ados_capture_contract::{Rig, RigSensorKind};
-use ados_mapping_protocol::capture::{PoseSource, VioHealth};
+use ados_mapping_protocol::capture::{PoseHealthReason, PoseSource, VioHealth};
 use ados_scan2d::{
     HeightSample, ImuSample, LocalSlam, PoseOut, Scan2dConfig, ScanInput, VelocitySample,
+    UNMEASURED_FREE_LOST_S,
 };
 
 use super::lidar::supervise::{nominal_cov, world_from_body};
@@ -151,14 +163,45 @@ pub fn t_w_l(p: &PoseOut) -> [f64; 16] {
     se3::to_mat4(&rotation_zyx(p.roll, p.pitch, p.yaw), [p.x, p.y, 0.0])
 }
 
+/// A degenerate match with no measured velocity is lost past this sigma,
+/// metres, even before [`UNMEASURED_FREE_LOST_S`].
+pub const UNMEASURED_FREE_MAX_SIGMA_M: f64 = 1.0;
+
+/// A corridor is named unmeasured (`corridor_unmeasured`) only once its free
+/// axis has gone this long, seconds, with no measured velocity agreeing with
+/// the matches. Over a dusty floor the flow is noisy enough that its mean
+/// over one prior window now and then leaves the matches by more than the
+/// agreement bound: one such window coasts the pose 0.1 s on the prior, too
+/// little to matter, and naming it would stop every goal flown on the pose.
+/// The loss rules ([`UNMEASURED_FREE_LOST_S`],
+/// [`UNMEASURED_FREE_MAX_SIGMA_M`]) still count from the stretch's start.
+pub const CORRIDOR_REASON_AFTER_S: f64 = 0.3;
+
 /// Health of one matcher pose, `inserted` scans into the first submap.
 pub fn health_of(p: &PoseOut, inserted: usize, degenerate_ratio: f64) -> VioHealth {
-    if inserted < MIN_SUBMAP_SCANS || p.heading_unconfirmed {
+    let unmeasured = p.unmeasured_free_s >= UNMEASURED_FREE_LOST_S
+        || (p.unmeasured_free_s > 0.0 && p.sigma_xy_m > UNMEASURED_FREE_MAX_SIGMA_M);
+    if inserted < MIN_SUBMAP_SCANS || p.heading_unconfirmed || unmeasured {
         VioHealth::Lost
-    } else if p.score <= 0.0 || p.degeneracy < degenerate_ratio || !p.heading_ok {
+    } else if p.score <= 0.0 || p.degeneracy < degenerate_ratio || !p.heading_ok || p.flow_disagrees
+    {
         VioHealth::Degraded
     } else {
         VioHealth::Good
+    }
+}
+
+/// Why a matcher pose is not good beyond the matcher's routine states
+/// ([`PoseEstimate::health_reason`]): unmeasured along a corridor for
+/// [`CORRIDOR_REASON_AFTER_S`], or slid against the flight controller's
+/// optical flow.
+pub fn reason_of(p: &PoseOut) -> Option<PoseHealthReason> {
+    if p.unmeasured_free_s >= CORRIDOR_REASON_AFTER_S {
+        Some(PoseHealthReason::CorridorUnmeasured)
+    } else if p.flow_disagrees {
+        Some(PoseHealthReason::FlowDisagrees)
+    } else {
+        None
     }
 }
 
@@ -241,11 +284,36 @@ fn run(
     // started over in flight so far.
     let mut unconfirmed = false;
     let mut restarts = 0u32;
+    let mut flow_disagrees = false;
+    // Whether the last scan was unmeasured along a free direction: a map
+    // started over right after one was started for the corridor.
+    let mut unmeasured = false;
+    // Whether the last pose named its corridor unmeasured, logged on each
+    // change.
+    let mut named = false;
     let mut process = |slam: &mut LocalSlam, scan: ScanInput| {
         let out = slam.feed_scan(&scan);
         if out.map_restarted {
             restarts += 1;
-            tracing::warn!(restarts, "nav_map_restarted_unconfirmed");
+            if unmeasured {
+                tracing::warn!(restarts, "nav_map_restarted_corridor_unmeasured");
+            } else {
+                tracing::warn!(restarts, "nav_map_restarted_unconfirmed");
+            }
+        }
+        unmeasured = out.unmeasured_free_s > 0.0;
+        let corridor = out.unmeasured_free_s >= CORRIDOR_REASON_AFTER_S;
+        if corridor != named {
+            named = corridor;
+            if named {
+                tracing::warn!("nav_pose_corridor_unmeasured");
+            }
+        }
+        if out.flow_disagrees != flow_disagrees {
+            flow_disagrees = out.flow_disagrees;
+            if flow_disagrees {
+                tracing::warn!("nav_pose_flow_disagrees");
+            }
         }
         if out.heading_unconfirmed != unconfirmed {
             unconfirmed = out.heading_unconfirmed;
@@ -272,6 +340,7 @@ fn run(
             health,
             sigma_xy_m: Some(out.sigma_xy_m),
             heading_ok: out.heading_ok,
+            health_reason: reason_of(&out),
         });
         counters.queued_scans.fetch_sub(1, Ordering::Release);
         counters.scans_processed.fetch_add(1, Ordering::Release);

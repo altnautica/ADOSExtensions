@@ -194,6 +194,19 @@ impl ImuFeed {
         })
     }
 
+    /// The `degradedReasons` / `plugin.navigation.state` `health_reason`
+    /// key: `heading_unconfirmed` for a heading the map has not confirmed
+    /// (after a gap, or after a restart whose north is unknown), else
+    /// `imu_feed_<reason>`.
+    pub fn reason_key(self) -> &'static str {
+        match self {
+            ImuFeed::AttitudeStandIn => "imu_feed_attitude_stand_in",
+            ImuFeed::Stalled => "imu_feed_stalled",
+            ImuFeed::Starved => "imu_feed_starved",
+            ImuFeed::HeadingUnconfirmed | ImuFeed::NorthUnknown => "heading_unconfirmed",
+        }
+    }
+
     /// How an operator reads it.
     pub fn describe(self) -> &'static str {
         match self {
@@ -208,6 +221,37 @@ impl ImuFeed {
                 "heading unconfirmed after a map restart: the flight controller's turn \
                  since the last trusted pose is unknown"
             }
+        }
+    }
+}
+
+/// Why the publisher's estimator itself left the pose lost or degraded, as
+/// the pose topic's `health_reason` reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoseReason {
+    /// The scans leave a direction free (a corridor's axis) and nothing
+    /// measures the motion along it; lost after a second.
+    CorridorUnmeasured,
+    /// The matched motion left the flight controller's optical flow: the
+    /// scans re-locked where the vehicle did not fly.
+    FlowDisagrees,
+}
+
+impl PoseReason {
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "corridor_unmeasured" => PoseReason::CorridorUnmeasured,
+            "flow_disagrees" => PoseReason::FlowDisagrees,
+            _ => return None,
+        })
+    }
+
+    /// The `degradedReasons` / `plugin.navigation.state` `health_reason`
+    /// key.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PoseReason::CorridorUnmeasured => "corridor_unmeasured",
+            PoseReason::FlowDisagrees => "flow_disagrees",
         }
     }
 }
@@ -227,6 +271,9 @@ pub struct PoseSample {
     /// Why the publisher's FC IMU feed left the pose degraded or lost;
     /// `None` when it did not (or the publisher does not say).
     pub imu_feed: Option<ImuFeed>,
+    /// Why the publisher's estimator left the pose lost or degraded;
+    /// `None` when it gives no reason (or does not say).
+    pub health_reason: Option<PoseReason>,
 }
 
 impl PoseSample {
@@ -350,6 +397,9 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
     let imu_feed = get(p, "imu_feed")
         .and_then(Value::as_str)
         .and_then(ImuFeed::parse);
+    let health_reason = get(p, "health_reason")
+        .and_then(Value::as_str)
+        .and_then(PoseReason::parse);
     Ok(PoseSample {
         ts_ms,
         r,
@@ -358,6 +408,7 @@ pub fn parse_pose_payload(p: &Value) -> Result<PoseSample, PoseError> {
         north,
         sigma_xy_m,
         imu_feed,
+        health_reason,
     })
 }
 

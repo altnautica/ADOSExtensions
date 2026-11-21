@@ -414,4 +414,9 @@ pub struct PoseDescriptor {
     /// FC as their IMU.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imu_feed: Option<super::nav::ImuFeedReason>,
+    /// Why the estimator itself left the pose lost or degraded
+    /// ([`super::nav::PoseHealthReason`]); absent when it gives none, and
+    /// from older publishers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_reason: Option<super::nav::PoseHealthReason>,
 }

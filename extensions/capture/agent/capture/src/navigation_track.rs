@@ -49,6 +49,7 @@ impl NavigationTrack {
                 health: e.health,
                 sigma_xy_m: e.sigma_xy_m,
                 heading_ok: e.heading_ok,
+                health_reason: None,
             });
         }
         if let Some(h) = health {

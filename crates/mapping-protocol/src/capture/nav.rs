@@ -290,6 +290,31 @@ impl ImuFeedReason {
     }
 }
 
+/// Why the pose estimator itself reports a pose lost or degraded, beyond
+/// its routine states (`PoseDescriptor::health_reason`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PoseHealthReason {
+    /// The scans leave a direction free (a corridor's axis) and no measured
+    /// velocity covers it: the pose there coasts to rest whatever the
+    /// vehicle does. Lost after a second.
+    CorridorUnmeasured,
+    /// The matched displacement left the flight controller's optical flow
+    /// by more than 1.5 m or a quarter over 3 s: the scans re-locked where
+    /// the vehicle did not fly. Degraded until the two agree within 1 m for
+    /// 3 s with every direction pinned, or the map starts over.
+    FlowDisagrees,
+}
+
+impl PoseHealthReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PoseHealthReason::CorridorUnmeasured => "corridor_unmeasured",
+            PoseHealthReason::FlowDisagrees => "flow_disagrees",
+        }
+    }
+}
+
 /// [`MapStatus::imu_feed`]: the FC IMU feed of a planar LiDAR pose that
 /// takes the flight controller as its IMU (`navigation.lidar.imu = "fc"`). The
 /// pose is degraded or lost while the feed is ([`ImuFeedReason::state`]).

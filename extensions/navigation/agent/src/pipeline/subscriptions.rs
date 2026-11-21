@@ -208,7 +208,9 @@ pub fn apply(
         // a gimbal or camera reporting its own ATTITUDE is never mixed in.
         MavMessage::LOCAL_POSITION_NED(d) if is_fc(sinks, system, component) => {
             sinks.fc_nav.on_boot_time(d.time_boot_ms, now_ns);
-            sinks.fc_nav.on_local_position(d.z, d.vz, now_ns)
+            sinks
+                .fc_nav
+                .on_local_position(d.vx, d.vy, d.z, d.vz, now_ns)
         }
         MavMessage::ATTITUDE(d) if is_fc(sinks, system, component) => {
             sinks.fc_nav.on_boot_time(d.time_boot_ms, now_ns);
@@ -220,6 +222,7 @@ pub fn apply(
                     pitchspeed: d.pitchspeed,
                     yawspeed: d.yawspeed,
                 },
+                d.yaw,
                 now_ns,
             )
         }
@@ -233,9 +236,12 @@ pub fn apply(
         // own OPTICAL_FLOW. A flow module talking MAVLink straight on the
         // bus (its own system id) and this plugin's camera flow (component
         // 198) are not the flight controller's.
-        MavMessage::OPTICAL_FLOW(d) if is_fc(sinks, system, component) => {
-            sinks.fc_nav.on_flow(d.quality, now_ns)
-        }
+        MavMessage::OPTICAL_FLOW(d) if is_fc(sinks, system, component) => sinks.fc_nav.on_flow(
+            d.quality,
+            [d.flow_comp_m_x, d.flow_comp_m_y],
+            d.ground_distance,
+            now_ns,
+        ),
         MavMessage::PARAM_VALUE(d) => {
             if let Ok(id) = d.param_id.to_str() {
                 if WATCHED_FC_PARAMS.contains(&id) {
