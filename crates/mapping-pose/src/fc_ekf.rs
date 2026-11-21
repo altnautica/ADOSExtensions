@@ -24,7 +24,8 @@
 //! a faster delivery and rises no faster than the measured clock drift plus
 //! [`MAX_OFFSET_RISE`] of the host time that passes ([`FcClock`]), so a
 //! delivery stall longer than the window keeps the delayed burst at the FC's
-//! own spacing, and a simulator below real time stays on the host clock.
+//! own spacing, and on a node following a simulator's clock
+//! ([`FcEkfPose::on`]) a simulator below real time stays on the host clock.
 //!
 //! Frames: the EKF works in NED at its origin with an FRD body. The world is
 //! the session ENU frame at the session anchor: position goes NED → ECEF (at
@@ -64,13 +65,19 @@ const DRIFT_BUCKET_NS: u64 = 1_000_000_000;
 /// Drift buckets kept, and the fewest the drift is measured from.
 const DRIFT_BUCKETS: usize = 8;
 const DRIFT_MIN_BUCKETS: usize = 4;
-/// Fastest measured drift, per unit of host time: an FC clock (a
-/// simulator's) running as slow as a twentieth of the host's. A lockstep
-/// simulator held to a rendered step runs at a quarter of real time and
-/// below; a bound under its drift leaves every sample further behind the
-/// host clock, so the planar matcher's scans are never covered by the IMU.
-/// One running faster makes the offset fall, which it follows at once.
-const MAX_DRIFT: f64 = 0.95;
+/// Fastest measured drift, per unit of host time, on wall time: a hardware
+/// FC's clock drifts by parts per million. A delivery backlog that grows
+/// (a loaded companion, a MAVLink fan-out or plugin queue falling behind)
+/// raises the least offset just as a slow clock does; a looser bound would
+/// read that growth as drift and stamp every sample late by the backlog.
+const MAX_DRIFT: f64 = 1e-3;
+/// Fastest measured drift on a node following a simulator's clock: an FC
+/// clock running as slow as a twentieth of the host's. A lockstep simulator
+/// held to a rendered step runs at a quarter of real time and below; a
+/// bound under its drift leaves every sample further behind the host clock,
+/// so the planar matcher's scans are never covered by the IMU. One running
+/// faster makes the offset fall, which it follows at once.
+const SIM_MAX_DRIFT: f64 = 0.95;
 /// An FC clock that steps back further than this has restarted: the offset
 /// starts over. An offset falling further than this at once is a step of
 /// the FC clock too: the drift starts over.
@@ -125,21 +132,27 @@ const FIX_3D: u8 = 3;
 /// integrated from those stamps loses the turn the burst measured.
 ///
 /// The drift is an FC clock running slower than the host's: a simulator
-/// below real time (0.8 of it in a loaded bench flight). The least offset
-/// then rises steadily with every frame on time, and a fixed bound would
-/// leave each sample further behind the host clock, read as a stalled feed
-/// and scans waiting on IMU seconds old. It is the median slope of the
-/// least offset of each [`DRIFT_BUCKET_NS`] of host time over the last
+/// below real time, on a node following its clock. The least offset then
+/// rises steadily with every frame on time, and a fixed bound would leave
+/// each sample further behind the host clock, read as a stalled feed and
+/// scans waiting on IMU seconds old. It is the median slope of the least
+/// offset of each [`DRIFT_BUCKET_NS`] of host time over the last
 /// [`DRIFT_BUCKETS`] (a stall's burst moves one bucket, not the median),
-/// within `[0, MAX_DRIFT]`. Each windowed offset is carried forward by the
-/// drift to the newest arrival before the minimum is taken, so the window
-/// no longer lags a rising offset by its own length; the newest frame is
-/// still in it, so no stamp is later than its arrival. When the drift is
-/// first measured (or grows), the offset may rise once by the growth over
-/// the host time from the first bucket to the frame that finished the
-/// last: the lag gathered while the drift was not yet known.
+/// within `[0, SIM_MAX_DRIFT]` following a simulator and `[0, MAX_DRIFT]`
+/// on wall time, where a slope steeper than a real clock's is a delivery
+/// backlog growing. Each windowed offset is carried forward by the drift to
+/// the newest arrival before the minimum is taken, so the window no longer
+/// lags a rising offset by its own length; the newest frame is still in it,
+/// so no stamp is later than its arrival. Following a simulator, when the
+/// drift is first measured (or grows), the offset may rise once by the
+/// growth over the host time from the first bucket to the frame that
+/// finished the last: the lag gathered while the drift was not yet known.
+/// On wall time it only slews: a backlog read as drift growth must not move
+/// every stamp forward at once.
 #[derive(Debug, Default)]
 struct FcClock {
+    /// The node follows a simulator's clock ([`FcEkfPose::on`]).
+    sim: bool,
     /// `(offset, arrival host ns)` of the last [`OFFSET_WINDOW`] messages.
     window: VecDeque<(i128, u64)>,
     /// The offset in use, the host time it was last moved at and the newest
@@ -150,8 +163,8 @@ struct FcClock {
     buckets: VecDeque<(u64, i128)>,
     /// The drift over the finished buckets, measured as each one finishes.
     drift: f64,
-    /// One-off rise allowed beyond the rate: the lag a newly measured drift
-    /// gathered before it was known.
+    /// One-off rise allowed beyond the rate, following a simulator: the lag
+    /// a newly measured drift gathered before it was known.
     catch_up: i128,
 }
 
@@ -204,7 +217,7 @@ impl FcClock {
             }
             _ => {
                 let drift = self.finished_drift();
-                if drift > self.drift {
+                if self.sim && drift > self.drift {
                     // The lag gathered at the old drift from the first
                     // bucket up to this frame, which opens the next one.
                     let since_ns = self.buckets.front().map_or(0, |&(s, _)| arrival_ns - s);
@@ -237,7 +250,8 @@ impl FcClock {
         }
         let slopes = &mut slopes[..n];
         slopes.sort_by(f64::total_cmp);
-        slopes[n / 2].clamp(0.0, MAX_DRIFT)
+        let max = if self.sim { SIM_MAX_DRIFT } else { MAX_DRIFT };
+        slopes[n / 2].clamp(0.0, max)
     }
 
     /// The FC time `fc_ns` on the host clock.
@@ -349,11 +363,23 @@ impl Default for FcEkfPose {
 }
 
 impl FcEkfPose {
+    /// A feed on wall time: a hardware FC, whose clock drifts by parts per
+    /// million ([`MAX_DRIFT`]).
     pub fn new() -> Self {
         Self {
             inner: Arc::new(Mutex::new(FeedInner::default())),
             track: Arc::new(PoseTrack::new()),
         }
+    }
+
+    /// A feed for a node on `clock`, the plugin's ADOS time
+    /// ([`ados_sdk::clock`]): following a simulator's clock, the FC's may run
+    /// as slow as a twentieth of the host's ([`SIM_MAX_DRIFT`]); on wall time
+    /// as [`Self::new`].
+    pub fn on(clock: &ados_protocol::simclock::Clock) -> Self {
+        let p = Self::new();
+        p.inner.lock().clock.sim = matches!(clock, ados_protocol::simclock::Clock::Sim(_));
+        p
     }
 
     /// The world anchor estimates are placed against (`None` = local frame).
@@ -943,13 +969,19 @@ mod tests {
             .collect()
     }
 
+    /// A feed on a node following a simulator's clock.
+    fn on_sim_time() -> FcEkfPose {
+        let feed = ados_protocol::simclock::SimFeed::new();
+        FcEkfPose::on(&ados_protocol::simclock::Clock::Sim(feed))
+    }
+
     /// A simulator running at 0.8 of real time: `RAW_IMU` at 100 Hz on the
     /// FC clock arrives steadily, 12.5 ms apart on the host's. The measured
     /// drift keeps each sample at its arrival less the 2 ms delay, where a
     /// bound of 5 % alone left the newest 1.4 s behind after 10 s.
     #[test]
     fn a_simulator_below_real_time_stays_on_the_host_clock() {
-        let p = FcEkfPose::new();
+        let p = on_sim_time();
         let got = collect(&p);
         for k in 0..1_000u64 {
             let fc_us = 1_000_000 + k * 10_000;
@@ -985,7 +1017,7 @@ mod tests {
     /// about 0.45 s behind, closed at 5 % of host time.
     #[test]
     fn a_lockstep_simulator_at_a_quarter_of_real_time_stays_on_the_host_clock() {
-        let p = FcEkfPose::new();
+        let p = on_sim_time();
         let got = collect(&p);
         let (mut fc_us, mut host) = (1_000_000u64, 5_000_000_000u64);
         // (host ns the phase ends, real-time factor, host ns its check starts)
@@ -1043,7 +1075,7 @@ mod tests {
     /// taken at once, not smoothed over by the drift.
     #[test]
     fn a_clock_step_is_taken_at_once() {
-        let p = FcEkfPose::new();
+        let p = on_sim_time();
         let got = collect(&p);
         // 8 s at 0.8 of real time: the drift is measured.
         for k in 0..640u64 {
@@ -1077,6 +1109,81 @@ mod tests {
             (spacing - 10e6).abs() < 1e6,
             "burst spacing {spacing} ns after the step"
         );
+    }
+
+    /// On wall time (a hardware FC, its clock the host's), a delivery
+    /// backlog that grows by 0.25 s each second for 8 s and then holds at
+    /// 2 s is no drift: the measured drift stays within [`MAX_DRIFT`], and
+    /// each sample is stamped no later than its 1 ms delay plus the slew
+    /// ([`MAX_OFFSET_RISE`] and the drift) over the host time since the
+    /// backlog began to grow.
+    /// Read as drift (up to 0.95 following a simulator), the backlog would
+    /// have stamped every sample about 2 s late.
+    #[test]
+    fn on_wall_time_a_growing_backlog_is_no_drift() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        const START: u64 = 5_000_000_000;
+        const GROW: u64 = 11_000_000_000;
+        for k in 0..1_800u64 {
+            let sampled = START + k * 10_000_000;
+            let grown = sampled.saturating_sub(GROW);
+            let backlog = grown.min(8_000_000_000) / 4;
+            p.on_frame(
+                &raw_imu_frame(sampled / 1_000),
+                sampled + 1_000_000 + backlog,
+            );
+            let drift = p.inner.lock().clock.drift;
+            assert!(drift <= MAX_DRIFT, "drift {drift} at sample {k}");
+            let (t, _) = *imu_times(&got).last().expect("one");
+            let late = t as f64 - sampled as f64;
+            // Host time since the backlog began to grow: its arrivals' span.
+            let host_grown = grown + backlog;
+            let bound = 1e6 + (MAX_OFFSET_RISE + MAX_DRIFT) * host_grown as f64 + 1e3;
+            assert!(
+                late <= bound,
+                "sample {k} stamped {:.1} ms late, bound {:.1} ms",
+                late * 1e-6,
+                bound * 1e-6
+            );
+        }
+    }
+
+    /// On wall time, an FC clock 50 ppm slow read with 1 to 5 ms of
+    /// delivery jitter stays on the host clock: every sample stamped within
+    /// 5 ms of when it was sampled and never after its arrival, the drift
+    /// within [`MAX_DRIFT`]. A reboot 20 s in (the FC clock back to 1 s)
+    /// starts the offset over at its first frame's arrival, and the samples
+    /// after it are back within 5 ms.
+    #[test]
+    fn on_wall_time_a_ppm_drift_with_jitter_and_a_reboot_stays_on_the_host_clock() {
+        let p = FcEkfPose::new();
+        let got = collect(&p);
+        const START: u64 = 5_000_000_000;
+        const REBOOT: u64 = 2_000;
+        let mut lcg = 0x9e37_79b9_u64;
+        for k in 0..4_000u64 {
+            let sampled = START + k * 10_000_000;
+            // FC ns since boot, its clock 50 ppm slow.
+            let (boot, since) = if k < REBOOT {
+                (60_000_000_000, k * 10_000_000)
+            } else {
+                (1_000_000_000, (k - REBOOT) * 10_000_000)
+            };
+            let fc_ns = boot + since - since / 20_000;
+            lcg = lcg.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            let arrival = sampled + 1_000_000 + (lcg >> 33) % 4_000_000;
+            p.on_frame(&raw_imu_frame(fc_ns / 1_000), arrival);
+            let drift = p.inner.lock().clock.drift;
+            assert!(drift <= MAX_DRIFT, "drift {drift} at sample {k}");
+            let (t, a) = *imu_times(&got).last().expect("one");
+            assert!(t <= a, "sample {k} stamped after its arrival");
+            if k == REBOOT {
+                assert_eq!(t, a, "the reboot starts the offset over");
+            }
+            let err = (t as f64 - sampled as f64).abs();
+            assert!(err <= 5e6, "sample {k} stamped {:.2} ms off", err * 1e-6);
+        }
     }
 
     /// `OPTICAL_FLOW` (ArduPilot: boot ms in `time_usec`) is scaled by the

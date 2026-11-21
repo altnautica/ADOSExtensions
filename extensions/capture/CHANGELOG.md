@@ -11,6 +11,10 @@ All notable changes to the Capture extension.
   both taken from the build. A test keeps the Capture crate version equal to
   the extension's manifest version.
 
+### Fixed
+
+- The flight controller's poses and samples are placed on the host clock by a drift bound that follows the plugin's ADOS time: up to 0.95 of host time on a node following a simulator's clock, 0.001 on wall time (a hardware FC drifts by parts per million), so a growing MAVLink delivery backlog is no longer read as clock drift.
+
 ## [1.0.0] - 2026-11-20
 
 Capture: session recording, keyframe selection and session upload, as its

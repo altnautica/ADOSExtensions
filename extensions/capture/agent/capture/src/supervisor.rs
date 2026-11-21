@@ -356,7 +356,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
     let feeds = Feeds {
         router: FrameRouter::new(),
         vehicle: VehicleFeed::new(),
-        fc: FcEkfPose::new(),
+        fc: FcEkfPose::on(&ados_sdk::clock()),
         hud: Arc::new(Mutex::new(None)),
         reconstruct_steps: SharedSteps::default(),
         nav: NavigationTrack::new(),

@@ -7,7 +7,7 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 ### Fixed
 
-- LiDAR SLAM with the flight controller as its IMU keeps the FC's `RAW_IMU` on the host clock when the simulator runs slower than half of real time. The FC-to-host clock drift was bounded at 0.5 of host time, so a lockstep simulator held to a rendered step (0.2 to 0.4 of real time) left every sample further behind its arrival, by 0.1 to 0.2 s each second: no LiDAR scan was ever covered by the IMU, the map took none, every pose stayed lost, no `ODOMETRY` reached the flight controller and ArduPilot refused to arm (`VisOdom: not healthy`). The bound is now 0.95, and once the drift is measured the samples catch up on the lag gathered until then at once rather than at 5 % of host time.
+- LiDAR SLAM with the flight controller as its IMU keeps the FC's `RAW_IMU` on the host clock when the simulator runs slower than half of real time. The FC-to-host clock drift was bounded at 0.5 of host time, so a lockstep simulator held to a rendered step (0.2 to 0.4 of real time) left every sample further behind its arrival, by 0.1 to 0.2 s each second: no LiDAR scan was ever covered by the IMU, the map took none, every pose stayed lost, no `ODOMETRY` reached the flight controller and ArduPilot refused to arm (`VisOdom: not healthy`). On a node following a simulator's clock the bound is now 0.95, and once the drift is measured the samples catch up on the lag gathered until then at once rather than at 5 % of host time. On wall time (a hardware FC, whose clock drifts by parts per million) the bound is now 0.001 and the offset only slews, so a growing delivery backlog is no longer read as drift that stamps every sample late by the whole backlog.
 
 ## [1.0.1] - 2026-11-21
 

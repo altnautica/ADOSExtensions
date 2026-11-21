@@ -283,7 +283,7 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
     let (out, out_rx) = Publisher::new();
     let feeds = Feeds {
         router: FrameRouter::new(),
-        fc: FcEkfPose::new(),
+        fc: FcEkfPose::on(&ados_sdk::clock()),
         capture: CaptureWatch::default(),
         out,
         shared: Arc::new(Shared::default()),

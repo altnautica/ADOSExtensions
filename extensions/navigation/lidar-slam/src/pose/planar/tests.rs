@@ -755,16 +755,16 @@ fn a_still_drone_on_the_attitude_stand_in_does_not_spin() {
 
 /// A bench take's blind start, replayed: the drone stands still on the
 /// ground waiting to arm while a lockstep simulator held to a rendered
-/// step runs at 0.38 of real time and then 0.25. The FC's `RAW_IMU` (100
-/// Hz on its clock) arrives in each 20 ms grant's pair 2 ms after the
-/// grant ends on the host; the LiDAR's revolutions (10 Hz on the
-/// simulator's clock) are stamped on the host's, each arriving 5 ms after
-/// its last beam. With the FC clock's drift bounded at half the host's
-/// rate, every sample fell further behind its arrival, no scan was ever
-/// covered by the IMU, the map never took one, and every pose was lost for
-/// the whole take: no `ODOMETRY`, and the FC refused to arm on its visual
-/// odometry. The map fills and the pose turns good within 20 s of the
-/// start, and stays good through the drop to 0.25.
+/// step runs at 0.38 of real time and then 0.25, the node following its
+/// clock. The FC's `RAW_IMU` (100 Hz on its clock) arrives in each 20 ms
+/// grant's pair 2 ms after the grant ends on the host; the LiDAR's
+/// revolutions (10 Hz on the simulator's clock) are stamped on the host's,
+/// each arriving 5 ms after its last beam. With the FC clock's drift
+/// bounded at half the host's rate, every sample fell further behind its
+/// arrival, no scan was ever covered by the IMU, the map never took one,
+/// and every pose was lost for the whole take: no `ODOMETRY`, and the FC
+/// refused to arm on its visual odometry. The map fills and the pose turns
+/// good within 20 s of the start, and stays good through the drop to 0.25.
 #[test]
 fn a_still_drone_on_a_lockstep_simulator_at_a_quarter_of_real_time_turns_good() {
     use crate::nav::fc_imu::{self, FeedState};
@@ -793,7 +793,9 @@ fn a_still_drone_on_a_lockstep_simulator_at_a_quarter_of_real_time_turns_good() 
         })
         .expect("spawn"),
     );
-    let fc = FcEkfPose::new();
+    let fc = FcEkfPose::on(&ados_protocol::simclock::Clock::Sim(
+        ados_protocol::simclock::SimFeed::new(),
+    ));
     fc.set_nav_sink(Some(fc_imu::sink(
         p.clone(),
         true,
