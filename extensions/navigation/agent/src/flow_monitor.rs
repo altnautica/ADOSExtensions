@@ -10,13 +10,18 @@
 //! integrates both over [`WINDOW_NS`]: the flow's rate times its ground
 //! distance, turned to north-east by the FC's yaw, against
 //! `LOCAL_POSITION_NED`'s velocity. When the two displacements part by more
-//! than [`DISAGREE_M`] the pose is degraded (`ekf_flow_disagree`); held for
-//! [`LOST_AFTER_NS`] it is lost, and the source-set machine falls back to
-//! the flow set. It clears once they agree within [`CLEAR_M`] for
-//! [`CLEAR_AFTER_NS`].
+//! than [`DISAGREE_M`] plus the flow's own noise ([`NOISE_SIGMAS`]) the pose
+//! is degraded (`ekf_flow_disagree`); held for [`LOST_AFTER_NS`] it is lost,
+//! and the source-set machine falls back to the flow set. It clears once
+//! they agree within [`CLEAR_M`] plus the same noise for [`CLEAR_AFTER_NS`].
 //!
 //! Flow of any quality above 0 is used, as EKF3 uses it: a sensor over
-//! dusty or bare ground reads a low quality at a sound rate.
+//! dusty or bare ground reads a low quality at a sound rate. Its noise
+//! there (about 1 m/s per axis and sample at 2 m) summed over the window
+//! at 20 Hz moves the gap by about 0.4 m per axis on a correct estimate,
+//! so the thresholds rise with it: the noise is measured in the window from
+//! the sample-to-sample differences of flow minus EKF velocity, which white
+//! noise fills and a steady or slowly growing gap (a frozen pose) does not.
 
 use std::collections::VecDeque;
 
@@ -33,6 +38,9 @@ pub const LOST_AFTER_NS: i64 = 3_000_000_000;
 pub const CLEAR_M: f64 = 1.0;
 /// ... for this long.
 pub const CLEAR_AFTER_NS: i64 = 3_000_000_000;
+/// The disagree and clear thresholds sit this many standard deviations of
+/// the window's summed flow noise above [`DISAGREE_M`] and [`CLEAR_M`].
+pub const NOISE_SIGMAS: f64 = 2.0;
 /// A gap in the flow longer than this starts the window over.
 const FLOW_GAP_NS: i64 = 500_000_000;
 /// An EKF velocity or yaw older than this at a flow sample is not used.
@@ -44,7 +52,8 @@ pub enum FlowEkf {
     /// Agreeing, or not enough flow and EKF velocity to tell.
     #[default]
     Agree,
-    /// Parted by more than [`DISAGREE_M`] over the window.
+    /// Parted by more than [`DISAGREE_M`] (plus the flow's noise) over the
+    /// window.
     Disagree,
     /// Parted for [`LOST_AFTER_NS`].
     Lost,
@@ -126,15 +135,26 @@ pub fn health_reason(
     }
 }
 
+/// One flow sample: when, the flow and EKF displacements cumulative from
+/// the window's start (north-east metres), flow minus EKF velocity (m/s)
+/// and the time since the sample before (s).
+#[derive(Debug, Clone, Copy)]
+struct Sample {
+    t: i64,
+    flow: [f64; 2],
+    ekf: [f64; 2],
+    gap: [f64; 2],
+    dt: f64,
+}
+
 #[derive(Debug, Default)]
 pub struct FlowEkfMonitor {
     /// `(t, vn, ve)` of the newest `LOCAL_POSITION_NED`.
     ekf: Option<(i64, f64, f64)>,
     /// `(t, yaw)` of the newest `ATTITUDE`, radians clockwise from north.
     yaw: Option<(i64, f64)>,
-    /// `(t, flow displacement, EKF displacement)`, north-east metres,
-    /// cumulative from the window's start, oldest first.
-    track: VecDeque<(i64, [f64; 2], [f64; 2])>,
+    /// The window's flow samples, oldest first; the oldest is its start.
+    track: VecDeque<Sample>,
     /// When the current disagreement began.
     disagree_since: Option<i64>,
     /// When the displacements last came within [`CLEAR_M`] during a
@@ -176,43 +196,71 @@ impl FlowEkfMonitor {
         let right = -f64::from(comp[0]) * range;
         let (s, c) = yaw.sin_cos();
         let flow = [c * forward - s * right, s * forward + c * right];
-        let (cum_flow, cum_ekf) = match self.track.back() {
-            Some(&(t, f, e)) if now_ns - t <= FLOW_GAP_NS && now_ns > t => {
-                let dt = (now_ns - t) as f64 * 1e-9;
-                (
-                    [f[0] + flow[0] * dt, f[1] + flow[1] * dt],
-                    [e[0] + vn * dt, e[1] + ve * dt],
-                )
+        let gap = [flow[0] - vn, flow[1] - ve];
+        let sample = match self.track.back() {
+            Some(b) if now_ns - b.t <= FLOW_GAP_NS && now_ns > b.t => {
+                let dt = (now_ns - b.t) as f64 * 1e-9;
+                Sample {
+                    t: now_ns,
+                    flow: [b.flow[0] + flow[0] * dt, b.flow[1] + flow[1] * dt],
+                    ekf: [b.ekf[0] + vn * dt, b.ekf[1] + ve * dt],
+                    gap,
+                    dt,
+                }
             }
-            Some(&(t, _, _)) if now_ns <= t => return,
+            Some(b) if now_ns <= b.t => return,
             _ => {
                 self.track.clear();
-                ([0.0; 2], [0.0; 2])
+                Sample {
+                    t: now_ns,
+                    flow: [0.0; 2],
+                    ekf: [0.0; 2],
+                    gap,
+                    dt: 0.0,
+                }
             }
         };
-        self.track.push_back((now_ns, cum_flow, cum_ekf));
-        while self
-            .track
-            .get(1)
-            .is_some_and(|&(t, _, _)| now_ns - t >= WINDOW_NS)
-        {
+        self.track.push_back(sample);
+        while self.track.get(1).is_some_and(|s| now_ns - s.t >= WINDOW_NS) {
             self.track.pop_front();
         }
-        let &(t0, f0, e0) = self.track.front().expect("pushed");
-        if now_ns - t0 < WINDOW_NS {
+        let first = *self.track.front().expect("pushed");
+        if now_ns - first.t < WINDOW_NS {
             return;
         }
-        let gap = ((cum_flow[0] - f0[0]) - (cum_ekf[0] - e0[0]))
-            .hypot((cum_flow[1] - f0[1]) - (cum_ekf[1] - e0[1]));
-        self.judge(gap, now_ns);
+        let gap = ((sample.flow[0] - first.flow[0]) - (sample.ekf[0] - first.ekf[0]))
+            .hypot((sample.flow[1] - first.flow[1]) - (sample.ekf[1] - first.ekf[1]));
+        let noise = NOISE_SIGMAS * self.noise_m();
+        self.judge(gap, noise, now_ns);
     }
 
-    fn judge(&mut self, gap: f64, now_ns: i64) {
-        if gap > DISAGREE_M {
+    /// One standard deviation of the flow noise summed into the window's
+    /// gap, metres: the per-sample variance of flow minus EKF velocity (both
+    /// axes), from half the mean square of successive differences, times the
+    /// sum of the squared sample periods. The window's first sample only
+    /// marks its start.
+    fn noise_m(&self) -> f64 {
+        let n = self.track.len().saturating_sub(1);
+        if n < 2 {
+            return 0.0;
+        }
+        let inside = || self.track.iter().skip(1);
+        let diff_sq: f64 = inside()
+            .zip(inside().skip(1))
+            .map(|(a, b)| (b.gap[0] - a.gap[0]).powi(2) + (b.gap[1] - a.gap[1]).powi(2))
+            .sum();
+        let dt_sq: f64 = inside().map(|s| s.dt * s.dt).sum();
+        (diff_sq / (2.0 * (n - 1) as f64) * dt_sq).sqrt()
+    }
+
+    /// Judge the window's `gap` against the thresholds raised by `noise`
+    /// (metres).
+    fn judge(&mut self, gap: f64, noise: f64, now_ns: i64) {
+        if gap > DISAGREE_M + noise {
             self.disagree_since.get_or_insert(now_ns);
             self.agree_since = None;
         } else if self.disagree_since.is_some() {
-            if gap <= CLEAR_M {
+            if gap <= CLEAR_M + noise {
                 let since = *self.agree_since.get_or_insert(now_ns);
                 if now_ns - since >= CLEAR_AFTER_NS {
                     self.disagree_since = None;

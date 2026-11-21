@@ -165,3 +165,107 @@ fn the_reason_falls_back_to_the_imu_feed() {
         assert!(NAV_REASONS.contains(&feed.reason_key()), "{feed:?}");
     }
 }
+
+/// A seeded xorshift64* with Box-Muller normals, for flow noise.
+struct Noise(u64);
+
+impl Noise {
+    fn new(seed: u64) -> Self {
+        Self(
+            seed.wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(1)
+                .max(1),
+        )
+    }
+    /// Uniform in (0, 1].
+    fn unit(&mut self) -> f64 {
+        let mut x = self.0;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.0 = x;
+        ((x.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) + 1) as f64 / (1u64 << 53) as f64
+    }
+    fn normal(&mut self) -> f64 {
+        let (u1, u2) = (self.unit(), self.unit());
+        (-2.0 * u1.ln()).sqrt() * (std::f64::consts::TAU * u2).cos()
+    }
+}
+
+/// One standard deviation of the flow rate's noise, rad/s, per axis and
+/// sample: about 1.1 m/s at 1.9 m, a dusty floor at quality 20.
+const DUSTY_SIGMA_RAD_S: f64 = 0.6;
+
+/// A flight north at yaw 0, 1.9 m up, `secs` long: `LOCAL_POSITION_NED`
+/// every 20 ms, `OPTICAL_FLOW` at 20 Hz with seeded white noise at
+/// [`DUSTY_SIGMA_RAD_S`]. The ground velocity is `ground(t)`; the EKF's
+/// follows it 0.3 s behind, less `freeze.1` m/s from `freeze.0` s on (a
+/// frozen pose holding it back). Returns when the monitor first disagreed, s.
+fn dusty_flight(
+    seed: u64,
+    secs: f64,
+    ground: impl Fn(f64) -> f64,
+    freeze: Option<(f64, f64)>,
+) -> Option<f64> {
+    const AGL: f64 = 1.9;
+    let mut m = FlowEkfMonitor::default();
+    let mut noise = Noise::new(seed);
+    let mut est = 0.0;
+    let mut sample = None;
+    for tick in 0..(secs * 50.0) as i64 {
+        let (now, t) = (tick * 20 * MS, tick as f64 * 0.02);
+        let g = ground(t);
+        est += (g - est) * 0.02 / 0.3;
+        let held = freeze.filter(|(at, _)| t >= *at).map_or(0.0, |(_, v)| v);
+        m.on_yaw(0.0, now);
+        m.on_velocity((est - held) as f32, 0.0, now);
+        if sample != Some(tick * 20 / 50) {
+            sample = Some(tick * 20 / 50);
+            let comp_y = g / AGL + DUSTY_SIGMA_RAD_S * noise.normal();
+            let comp_x = DUSTY_SIGMA_RAD_S * noise.normal();
+            m.on_flow([comp_x as f32, comp_y as f32], 20, AGL as f32, now);
+            if m.state() != FlowEkf::Agree {
+                return Some(t);
+            }
+        }
+    }
+    None
+}
+
+/// Stop, speed up at 1 m/s² to 1.6 m/s, cruise, slow down: a 7.6 s cycle.
+fn stop_and_go(t: f64) -> f64 {
+    match t % 7.6 {
+        c if c < 2.0 => 0.0,
+        c if c < 3.6 => c - 2.0,
+        c if c < 6.0 => 1.6,
+        c => 1.6 - (c - 6.0),
+    }
+}
+
+/// Noisy flow over a dusty floor, its mean on the ground velocity, against
+/// an EKF velocity that is right but for its lag: never a disagreement.
+/// Each seed crossed the bare 1.5 m threshold (noise alone moves the 3 s
+/// gap by about 0.4 m per axis at 20 Hz, the lag through the speed changes
+/// by more).
+#[test]
+fn noisy_flow_around_a_correct_ekf_raises_no_disagreement() {
+    for seed in 1..=3 {
+        let at = dusty_flight(seed, 30.0, stop_and_go, None);
+        assert_eq!(at, None, "seed {seed}: disagreed at {at:?} s");
+    }
+}
+
+/// The same noisy flow at a steady 1.6 m/s, the EKF velocity frozen 1 m/s
+/// short of it from 10 s on: the monitor still parts them within 3.5 s.
+#[test]
+fn a_frozen_pose_is_caught_through_noisy_flow() {
+    for seed in 1..=3 {
+        let at = dusty_flight(seed, 20.0, |_| 1.6, Some((10.0, 1.0)));
+        let at = at.unwrap_or_else(|| panic!("seed {seed}: never caught"));
+        eprintln!("seed {seed}: disagreed {:.2} s after the freeze", at - 10.0);
+        assert!(
+            (10.0..13.5).contains(&at),
+            "seed {seed}: disagreed at {at} s"
+        );
+    }
+}
