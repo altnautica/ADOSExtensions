@@ -20,9 +20,9 @@ uses independent semantic versioning per extension.
 
 - While searching, the follow keeps clear of the nearest place the subject may be: the predicted position, where it was last seen, where it stood, where the search looks for it, and its last speed carried on (for 10 s when that speed is no more than range noise leaves, 0.6 m/s). It asks the pilot for vantage points a set distance from each place the search looks, so it no longer backs away from the vantage it asked for and flies back, over and over. Every search goal names one subject to the pilot for the whole search, so the pilot's own subject brake stays armed, with how far the subject may be from it, so the brake keeps a wider distance.
 
-- While the lock is unsure and no sighting has come for 2 s, a standing subject is guarded as a moving one: its last speed carried on, and the distance kept widened as the estimate ages.
+- While the lock is unsure and no sighting comes, a standing subject whose last sightings walked it up to the copter (over a full 2 s, coming at 0.35-0.7 m/s and at least 0.3 m nearer) is guarded as a moving one: its last speed carried on, and the distance kept widened as the estimate ages. A standing subject with no such walk up is held where it is through short unsure spells, as before.
 
-  Flown in simulation (box-height range, the pilot answering 0.8 s late, its subject brake on, the search running 60 s), the least horizontal distance to the subject: a subject standing 30 s whose boxes drift it off at about 0.45 m/s for its last 3 s, from 0.06 m to 5.7 m; the same drifting toward the copter, 5.8 m; one setting off toward the copter at 0.5 m/s 2 s before it is lost, from 2.8 m to 3.3 m.
+  Flown in simulation (box-height range, the pilot answering 0.8 s late, its subject brake on, the search running 60 s), the least horizontal distance to the subject: a subject standing 30 s whose boxes drift it off at about 0.45 m/s for its last 3 s, from 0.06 m to 5.7 m; the same drifting toward the copter, 5.8 m; one setting off toward the copter at 0.5 m/s 2 s before it is lost, from 2.2 m to 3.4 m at 3 sightings a second and from 2.8 m to 2.9 m at 10 (there its sightings at the loss look like a standing subject's).
 
 ## [0.6.0] - 2026-11-21
 

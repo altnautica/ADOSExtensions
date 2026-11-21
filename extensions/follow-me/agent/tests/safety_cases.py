@@ -157,6 +157,37 @@ def backing_away_share(f: Flight, after_s: float) -> float:
     return back / max(1, len(kinds))
 
 
+async def standing_with_unsure_spells(mp: Any, seed: int, hz: float, miss: float = 0.0) -> Flight:
+    # A subject standing at the origin, held from 6 m south for 50 s, with
+    # three 2.7 s unsure spells (at 20, 30 and 40 s; none long enough to
+    # lose the lock), or with ``miss`` of its frames missed at random
+    # instead.
+    spells: tuple[int, ...] = ()
+    if miss == 0.0:
+        for t0 in (20.0, 30.0, 40.0):
+            spells += _frames(hz, t0, 2.7)
+    return await fly(
+        mp,
+        subject=lambda _t: (0.0, 0.0),
+        start=(-STANDOFF_M, 0.0),
+        duration_s=50.0,
+        fix_hz=hz,
+        seed=seed,
+        miss=miss,
+        box_jitter=BOX_JITTER,
+        profile=SPORT,
+        lag_s=LAG_S,
+        miss_frames=spells,
+        subject_brake=True,
+    )
+
+
+def path_flown(f: Flight, after_s: float) -> float:
+    """The horizontal path the vehicle flew from ``after_s`` on."""
+    idx = list(f.after(after_s))
+    return sum(math.hypot(f.pos[i][0] - f.pos[i - 1][0], f.pos[i][1] - f.pos[i - 1][1]) for i in idx[1:])
+
+
 async def coast_ahead(
     mp: Any, seed: int, *, hz: float, speed: float, spell_s: float, angle_deg: float, brake: bool
 ) -> float:

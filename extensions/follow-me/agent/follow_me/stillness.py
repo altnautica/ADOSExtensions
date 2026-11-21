@@ -47,6 +47,14 @@ STILL_SPEED_MPS = 0.3
 STILL_RESIDUAL_MPS = 0.6
 STILL_RECENT_S = 2.0
 STILL_APPROACH_M = 0.3
+# The walk up a held standing subject is taken to be making: the newest
+# velocity toward the vehicle between these. In simulation a 0.5 m/s walk
+# up reads 0.37-0.63 m/s, while range noise on a standing subject reads up
+# to about 0.33 m/s with a box-height range, and on a camera's noisier range
+# a run of outliers up to 0.8 m/s with a jump of more than a metre (the
+# standing detector ends standing on a real walk faster than that).
+WALK_UP_MIN_MPS = 0.35
+WALK_UP_MAX_MPS = 0.7
 
 
 def _median(values: list[float]) -> float:
@@ -95,23 +103,35 @@ class SpeedHistory:
             return None
         if math.hypot(n1 - n0, e1 - e0) > STILL_SPEED_MPS * span:
             return None
-        if vehicle_ne is not None and self._approached(vehicle_ne):
+        if vehicle_ne is not None and self.approached(vehicle_ne):
             return None
         return (_median([f[1] for f in fixes]), _median([f[2] for f in fixes]))
 
-    def _approached(self, vehicle_ne: tuple[float, float]) -> bool:
+    def approached(self, vehicle_ne: tuple[float, float], *, both: bool = False) -> bool:
         """Whether the last STILL_RECENT_S brought the estimate toward
-        ``vehicle_ne`` (see the module's rule)."""
+        ``vehicle_ne`` (see the module's rule): its newest velocity or its
+        displacement over them. With ``both``, for a subject the follow
+        holds as standing, the two together over a full STILL_RECENT_S of
+        fixes, the velocity between WALK_UP_MIN_MPS and WALK_UP_MAX_MPS: a
+        slow walk up shows all of that, while range noise gives one now and
+        then, and a run of agreeing outliers a start over or a jump far
+        faster than the fixes either side. ``False`` with no fix."""
+        if not self._fixes:
+            return False
         t1, n1, e1, vn1, ve1 = self._fixes[-1]
+        if both and self._fixes[0][0] > t1 - STILL_RECENT_S:
+            return False
         dn, de = vehicle_ne[0] - n1, vehicle_ne[1] - e1
         d = math.hypot(dn, de)
         if d <= 1e-6:
             return True
         un, ue = dn / d, de / d
-        if vn1 * un + ve1 * ue > STILL_SPEED_MPS:
-            return True
+        coming = vn1 * un + ve1 * ue > STILL_SPEED_MPS
         then = next(f for f in self._fixes if f[0] >= t1 - STILL_RECENT_S)
-        return (n1 - then[1]) * un + (e1 - then[2]) * ue > STILL_APPROACH_M
+        came = (n1 - then[1]) * un + (e1 - then[2]) * ue > STILL_APPROACH_M
+        if both:
+            return came and WALK_UP_MIN_MPS < vn1 * un + ve1 * ue <= WALK_UP_MAX_MPS
+        return coming or came
 
 
 __all__ = [
@@ -122,5 +142,7 @@ __all__ = [
     "STILL_RESIDUAL_MPS",
     "STILL_SPEED_MPS",
     "STILL_WINDOW_S",
+    "WALK_UP_MAX_MPS",
+    "WALK_UP_MIN_MPS",
     "SpeedHistory",
 ]

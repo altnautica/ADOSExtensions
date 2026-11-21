@@ -747,9 +747,9 @@ class FollowLoopMixin:
         coast = subject.coast_spread_m(now) if subject is not None else self._filter.coast_spread_m(now)
         # A standing subject's centre: its estimate swings a metre on range
         # noise, and a step toward the vehicle shows in the newest fixes'
-        # range first. Unseen past the stale age it may have set off: then
-        # it is guarded as a moving one is (its undecayed prediction too).
-        moving = not ref.still or now - self._fused_s > _MEASUREMENT_STALE_S
+        # range first. On a coast after a walk up to the vehicle (see
+        # TargetFilter.approached) it is guarded as a moving one is.
+        moving = not ref.still or (coast > 0.0 and self._filter.approached((dn, de), both=True))
         cands = [((tn, te), (0.0, 0.0))] if ref.still else [((x[0], x[1]), (x[2], x[3]))]
         if raw is not None and moving:
             cands.append(((raw[0][0], raw[0][1]), (raw[0][2], raw[0][3])))
@@ -759,13 +759,13 @@ class FollowLoopMixin:
         guard_pace: tuple[float, float] = (tvn, tve)
         # On a coast, also a sigma of the velocity's own error faster toward
         # the vehicle (a walk the estimate puts 10 % slow closes a metre in
-        # five seconds), and no credit for the pace fed forward, which
-        # decays with the coast.
+        # five seconds; not for a standing subject's walk up, whose noise is
+        # that error), and no credit for the pace fed forward.
         coast_sigma = coast if moving else 0.0
         gr = math.hypot(guard_ne[0] - dn, guard_ne[1] - de)
         if coast_sigma > 0.0 and raw is not None and gr > 1e-6:
             un, ue = (guard_ne[0] - dn) / gr, (guard_ne[1] - de) / gr
-            toward = math.sqrt(max(0.0, 0.5 * (raw[1][2][2] + raw[1][3][3])))
+            toward = 0.0 if ref.still else math.sqrt(max(0.0, 0.5 * (raw[1][2][2] + raw[1][3][3])))
             guard_v = (guard_v[0] - toward * un, guard_v[1] - toward * ue)
             guard_pace = guard_v
         if ref.still:

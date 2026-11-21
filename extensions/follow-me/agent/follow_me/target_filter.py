@@ -464,6 +464,11 @@ class TargetFilter:
         at the loss)."""
         return self._history.still_centre(vehicle_ne)
 
+    def approached(self, vehicle_ne: tuple[float, float], *, both: bool = False) -> bool:
+        """Whether the last fixes fused brought the estimate toward
+        ``vehicle_ne`` (:meth:`follow_me.stillness.SpeedHistory.approached`)."""
+        return self._history.approached(vehicle_ne, both=both)
+
     def search_predicted(
         self, t: float, vehicle_ne: tuple[float, float] | None = None
     ) -> tuple[list[float], Mat] | None:

@@ -285,9 +285,11 @@ longer than 3 s is handled as a loss.
   backs away from the vantage it asked for. Every search goal names the
   search centre as the subject, so the pilot's subject brake stays armed,
   with the search's spread as `subject_sigma_m`, so it keeps a wider
-  distance. While the lock is unsure and no fix has come for 2 s, a
-  standing subject is guarded as a moving one: its velocity run on, and the
-  clear distance widened.
+  distance. While the lock is unsure and no fix comes, a standing subject
+  whose last fixes walked it up to the vehicle (over a full 2 s, coming at
+  0.35-0.7 m/s and at least 0.3 m nearer) is guarded as a moving one: its
+  velocity run on, and the clear distance widened. A standing subject with
+  no such walk up is held where it is through an unsure spell.
 
   The prediction's spread is bounded by how far the subject can have gone
   (its class speed cap, 5 m/s for a person, times the time since it was last
