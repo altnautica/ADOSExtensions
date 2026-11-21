@@ -726,87 +726,150 @@ fn a_noisy_flow_stalling_midway_is_caught_by_the_accelerometer() {
     assert!(since(lost) <= 1.5, "lost {:.2} s after", since(lost));
 }
 
-/// A walk down a 400 m bare corridor on flow read at 0.85 m/s noise a
-/// sample, an accelerometer `bias` (m/s² along the walk), the flow's
-/// forward part reading zero (plus its noise) from `stall_s` when `stall`.
-/// The poses after `from_s` and whether each is lost.
-fn noisy_corridor(path: &Path, bias: f64, stall: Option<f64>, from_s: f64) -> Vec<(f64, bool)> {
-    let world = vec![
+/// A 20 m by 10 m room, where the walks start and the walls pin every
+/// direction while the accelerometer's bias is learnt, opening at x = -2
+/// into a bare corridor 2 m wide and 400 m long.
+fn room_and_corridor() -> Vec<common::Seg> {
+    vec![
         ([-2.0, -1.0], [400.0, -1.0]),
         ([-2.0, 1.0], [400.0, 1.0]),
-        ([-2.0, -1.0], [-2.0, 1.0]),
-    ];
-    let (scans, imu, _, force) = walk_forced(&world, path, C1, 11);
-    let force: Vec<[f64; 3]> = force.iter().map(|f| [f[0] + bias, f[1], f[2]]).collect();
-    let mut rng = Rng::new(17);
-    let mut vel = flow(path, 1.0, 0.0, 5);
-    for s in vel.iter_mut() {
-        let dead = stall.is_some_and(|t| s.t_ns as f64 * 1e-9 > t);
-        let fwd = if dead { 0.0 } else { s.v[0] };
-        s.v = [fwd + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
-    }
-    replay_forced(&scans, &imu, &force, &vel)
-        .iter()
-        .map(|p| {
-            (
-                p.t_ns as f64 * 1e-9,
-                p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S,
-            )
-        })
-        .filter(|&(t, _)| t > from_s)
-        .collect()
+        ([-22.0, -5.0], [-2.0, -5.0]),
+        ([-22.0, 5.0], [-2.0, 5.0]),
+        ([-22.0, -5.0], [-22.0, 5.0]),
+        ([-2.0, -5.0], [-2.0, -1.0]),
+        ([-2.0, 1.0], [-2.0, 5.0]),
+    ]
 }
 
+/// A walk from the room's middle, standing 6 s, then at `speed` for `len`
+/// m and to a stop.
 fn cruise(speed: f64, len: f64) -> Path {
-    Path::new(0.0, 0.0, 0.0)
-        .wait(1.0)
+    Path::new(-12.0, 0.0, 0.0)
+        .wait(6.0)
         .speed_to(speed, 1.0)
         .line(len)
         .speed_to(0.0, 1.0)
         .wait(3.0)
 }
 
-/// The first lost pose's time, after which every pose stays lost.
-fn lost_for_good(after: &[(f64, bool)]) -> Option<f64> {
-    let first = after.iter().position(|&(_, lost)| lost)?;
-    after[first..]
-        .iter()
-        .all(|&(_, lost)| lost)
-        .then_some(after[first].0)
+/// When the walk first reaches `x`, seconds.
+fn time_at_x(path: &Path, x: f64) -> f64 {
+    (0..)
+        .map(|k| k as f64 * 0.01)
+        .find(|&t| path.at_time(t).x >= x || t > path.duration_s())
+        .expect("unbounded")
 }
 
-/// A dead flow sensor stays lost however the accelerometer is biased (up
-/// to 0.2 m/s²), through the stop at the corridor's end: the velocity the
-/// accelerometer carries drifts by its bias, so agreeing with it is no
-/// sign of life. A sound one with the same bias is never lost.
+/// The walk on flow read at 0.85 m/s noise a sample, its forward part
+/// scaled by `fwd(t)`, and an accelerometer `bias` (m/s² along the walk):
+/// after `from_s`, each pose's time, whether it is lost and how far off it
+/// is along the corridor.
+fn noisy_walk(
+    path: &Path,
+    bias: f64,
+    fwd: impl Fn(f64) -> f64,
+    from_s: f64,
+) -> Vec<(f64, bool, f64)> {
+    let (scans, imu, truth, force) = walk_forced(&room_and_corridor(), path, C1, 11);
+    let force: Vec<[f64; 3]> = force.iter().map(|f| [f[0] + bias, f[1], f[2]]).collect();
+    let mut rng = Rng::new(17);
+    let mut vel = flow(path, 1.0, 0.0, 5);
+    for s in vel.iter_mut() {
+        let k = fwd(s.t_ns as f64 * 1e-9);
+        s.v = [s.v[0] * k + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
+    }
+    replay_forced(&scans, &imu, &force, &vel)
+        .iter()
+        .zip(&truth)
+        .map(|(p, tr)| {
+            (
+                p.t_ns as f64 * 1e-9,
+                p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S,
+                // The matcher's frame starts at the walk's first pose.
+                (p.x - (tr.x - truth[0].x)).abs(),
+            )
+        })
+        .filter(|&(t, _, _)| t > from_s)
+        .collect()
+}
+
+/// The first lost pose's time, after which every pose stays lost, and the
+/// worst lengthwise error of a pose not lost.
+fn lost_for_good(after: &[(f64, bool, f64)]) -> (Option<f64>, f64) {
+    let unflagged = after
+        .iter()
+        .filter(|e| !e.1)
+        .map(|e| e.2)
+        .fold(0.0, f64::max);
+    let first = after.iter().position(|e| e.1);
+    let lost = first.and_then(|i| after[i..].iter().all(|e| e.1).then_some(after[i].0));
+    (lost, unflagged)
+}
+
+/// A dead flow sensor (15 m into the corridor) is lost and stays lost
+/// however the accelerometer is biased (up to 0.2 m/s², learnt in the
+/// room), through the stop at the corridor's end: agreeing with a velocity
+/// the accelerometer carries is no sign of life. A sound one with the same
+/// bias is never lost.
 #[test]
 fn a_biased_accelerometer_neither_revives_a_dead_flow_nor_kills_a_live_one() {
+    let path = cruise(1.5, 50.0);
+    let stall = time_at_x(&path, 15.0);
     for bias in [0.1, -0.1, 0.2, -0.2] {
-        let after = noisy_corridor(&cruise(1.5, 40.0), bias, Some(12.0), 12.0);
-        let lost = lost_for_good(&after);
-        eprintln!("bias {bias:+}: dead flow lost from {lost:?} s");
-        assert!(lost.is_some_and(|t| t <= 13.5), "bias {bias:+}: {lost:?}");
+        let after = noisy_walk(&path, bias, |t| if t > stall { 0.0 } else { 1.0 }, stall);
+        let (lost, off) = lost_for_good(&after);
+        eprintln!(
+            "bias {bias:+}: dead flow lost {lost:?} (stall {stall:.1} s), {off:.2} m off unflagged"
+        );
+        assert!(
+            lost.is_some_and(|t| t <= stall + 1.5),
+            "bias {bias:+}: {lost:?}"
+        );
+        assert!(off <= 2.0, "bias {bias:+}: {off:.2} m");
     }
     for bias in [0.2, -0.2] {
-        let after = noisy_corridor(&cruise(1.5, 40.0), bias, None, 0.0);
-        let lost = after.iter().filter(|&&(_, lost)| lost).count();
+        let after = noisy_walk(&path, bias, |_| 1.0, 0.0);
+        let lost = after.iter().filter(|e| e.1).count();
         eprintln!("bias {bias:+}: sound flow {lost} of {} lost", after.len());
         assert_eq!(lost, 0, "bias {bias:+}");
     }
 }
 
-/// Slow walks whose flow dies: 0.8 and 0.5 m/s are under the short
-/// windows' threshold, and the long windows catch them.
+/// Slow walks whose flow dies 15 m into the corridor: 0.8 and 0.5 m/s are
+/// under the short windows' threshold; the long ones catch them within
+/// 2 m of error.
 #[test]
 fn a_dead_flow_on_a_slow_walk_is_lost() {
-    for (speed, len, stall_s) in [(0.8, 20.0, 20.0), (0.5, 15.0, 31.0)] {
-        let after = noisy_corridor(&cruise(speed, len), 0.0, Some(stall_s), stall_s);
-        let lost = lost_for_good(&after);
-        eprintln!("{speed} m/s: dead flow lost from {lost:?} s");
-        assert!(
-            lost.is_some_and(|t| t <= stall_s + 5.0),
-            "{speed} m/s: {lost:?}"
+    for (speed, len) in [(0.8, 35.0), (0.5, 35.0)] {
+        let path = cruise(speed, len);
+        let stall = time_at_x(&path, 15.0);
+        let after = noisy_walk(&path, 0.0, |t| if t > stall { 0.0 } else { 1.0 }, stall);
+        let (lost, off) = lost_for_good(&after);
+        eprintln!(
+            "{speed} m/s: dead flow lost {lost:?} (stall {stall:.1} s), {off:.2} m off unflagged"
         );
+        assert!(lost.is_some(), "{speed} m/s");
+        assert!(off <= 2.0, "{speed} m/s: {off:.2} m");
+    }
+}
+
+/// A flow that fades to nothing over 3 to 25 s from 15 m into the corridor
+/// at 1.5 m/s: no pair of windows sees it, but against the velocity matched
+/// where the corridor began, carried on by the accelerometer, it adds up.
+/// Lost within 2 m of error.
+#[test]
+fn a_fading_flow_is_lost() {
+    let path = cruise(1.5, 70.0);
+    let start = time_at_x(&path, 15.0);
+    for ramp in [3.0, 6.0, 10.0, 15.0, 25.0] {
+        let fade = |t: f64| (1.0 - (t - start).max(0.0) / ramp).max(0.0);
+        let after = noisy_walk(&path, 0.0, fade, start);
+        let (lost, off) = lost_for_good(&after);
+        eprintln!(
+            "fade over {ramp} s: lost {lost:?} (from {start:.1} s), {off:.2} m off unflagged"
+        );
+        assert!(lost.is_some(), "fade over {ramp} s");
+        assert!(off <= 2.0, "fade over {ramp} s: {off:.2} m");
     }
 }
 
@@ -814,19 +877,22 @@ fn a_dead_flow_on_a_slow_walk_is_lost() {
 /// the dead flow does not follow the accelerometer: lost, and stays lost.
 #[test]
 fn moving_off_on_a_dead_flow_is_lost() {
-    let path = Path::new(0.0, 0.0, 0.0)
-        .wait(1.0)
+    let path = Path::new(-12.0, 0.0, 0.0)
+        .wait(6.0)
         .speed_to(1.5, 1.0)
-        .line(15.0)
+        .line(25.0)
         .speed_to(0.0, 1.0)
         .wait(3.0)
         .speed_to(1.5, 1.0)
         .line(15.0)
         .speed_to(0.0, 1.0)
         .wait(1.0);
-    // Stopped from 13.7 s, moving off at 16.7 s.
-    let after = noisy_corridor(&path, 0.0, Some(15.0), 16.7);
-    let lost = lost_for_good(&after);
-    eprintln!("moving off on a dead flow: lost from {lost:?} s");
-    assert!(lost.is_some_and(|t| t <= 16.7 + 4.0), "{lost:?}");
+    // Standing from `stop` for 3 s; the flow dies 1 s in.
+    let stop = time_at_x(&path, 14.99);
+    let stall = stop + 1.0;
+    let off_at = stop + 3.0;
+    let after = noisy_walk(&path, 0.0, |t| if t > stall { 0.0 } else { 1.0 }, off_at);
+    let (lost, _) = lost_for_good(&after);
+    eprintln!("moving off on a dead flow at {off_at:.1} s: lost {lost:?}");
+    assert!(lost.is_some_and(|t| t <= off_at + 4.0), "{lost:?}");
 }

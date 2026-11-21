@@ -125,16 +125,30 @@ const FLOW_IMU_LONG_NS: u64 = 3_000_000_000;
 /// bias taken out, [`FLOW_IMU_BIAS_GAIN`]) may differ by this much, m/s,
 /// either way.
 const FLOW_IMU_LONG_MPS: f64 = 0.35;
+/// A flow that fades slowly passes every pair of windows; against the
+/// velocity the scans matched where the loose stretch began, carried on by
+/// the accelerometer, its mean over this window, ns, ...
+const FLOW_IMU_CUM_NS: u64 = 2_000_000_000;
+/// ... may differ by this much, m/s, ...
+const FLOW_IMU_CUM_MPS: f64 = 0.3;
+/// ... plus this much a second since the stretch began, m/s² (what is left
+/// of the accelerometer's bias once learnt).
+const FLOW_IMU_DRIFT_MPS2: f64 = 0.01;
 /// A stalled flow is alive again only on positive evidence: the
 /// accelerometer shows a change over this, m/s, between the long windows,
 /// and the flow follows it within [`FLOW_IMU_SHOWN_FRAC`] of it. Reading
 /// zero while the vehicle stands still is no evidence: a dead sensor does.
 const FLOW_IMU_LIFE_MPS: f64 = 0.5;
-/// The accelerometer's bias (and the levelling's error) is learnt from the
-/// long windows while the flow agrees with it, by this share a scan; ...
-const FLOW_IMU_BIAS_GAIN: f64 = 0.05;
-/// ... and the long check judges only once this many scans have taught it.
-const FLOW_IMU_BIAS_SETTLE: u32 = 50;
+/// The accelerometer's bias (and the levelling's error) is learnt only
+/// while the scans pin every direction, against the velocity they match:
+/// its velocity change over this span, ns, ...
+const FLOW_IMU_BIAS_SPAN_NS: u64 = 3_000_000_000;
+/// ... against the matched one's, by this share a scan; never from the
+/// flow, which a slowly failing sensor would teach its own drift. It holds
+/// through a loose stretch.
+const FLOW_IMU_BIAS_GAIN: f64 = 0.1;
+/// ... and the long checks judge only once this many scans have taught it.
+const FLOW_IMU_BIAS_SETTLE: u32 = 30;
 /// The accelerometer's velocity change is integrated over this long, ns.
 const IMU_TRACK_NS: u64 = 6_500_000_000;
 /// IMU samples further apart than this break the integration, ns.
@@ -314,9 +328,12 @@ struct Flow {
     stalled: bool,
     /// Since when it has read under [`FLOW_STALL_MPS`] there.
     low_since: Option<u64>,
-    /// The accelerometer's bias learnt, attitude frame, m/s², and the scans
-    /// that taught it ([`LocalSlam::imu_bias`]).
-    imu_bias: Option<(Vector2<f64>, u32)>,
+    /// The velocity the scans matched over the history window, the
+    /// attitude's levelled frame, and its mean time, when they pinned every
+    /// direction ([`LocalSlam::learn_bias`]).
+    pinned_chord: Option<(u64, Vector2<f64>)>,
+    /// The last match left a loose direction.
+    loose: bool,
 }
 
 /// The measured velocity along the loose directions, judged on sample means
@@ -346,11 +363,17 @@ struct ImuCheck {
     /// Over the long windows the flow's change and the accelerometer's
     /// differ by more than [`FLOW_IMU_LONG_MPS`], either way.
     disagrees: bool,
+    /// The flow, over [`FLOW_IMU_CUM_NS`], left the velocity matched where
+    /// the loose stretch began carried on by the accelerometer
+    /// ([`FLOW_IMU_CUM_MPS`]).
+    drifted: bool,
     /// Over the long windows the accelerometer shows a change over
     /// [`FLOW_IMU_LIFE_MPS`] and the flow follows it.
     alive: bool,
-    /// The accelerometer's bias, learnt on.
-    bias: Option<(Vector2<f64>, u32)>,
+    /// The velocity matched where the loose stretch began carried on by the
+    /// accelerometer to now, the attitude's levelled frame: what a stalled
+    /// flow's stretch rides on.
+    carried: Option<Vector2<f64>>,
 }
 
 /// A climb or descent in progress ([`LocalSlam::skip_climbing`]).
@@ -558,6 +581,14 @@ pub struct LocalSlam {
     /// the attitude's levelled frame, m/s², and the scans that taught it
     /// ([`FLOW_IMU_BIAS_GAIN`]).
     imu_bias: Option<(Vector2<f64>, u32)>,
+    /// While the scans pin every direction, the velocity they matched
+    /// (attitude frame), the accelerometer's integrated velocity at its
+    /// time and its stretch: `(t_ns, matched, integrated, stretch)`, the last
+    /// [`FLOW_IMU_BIAS_SPAN_NS`] and a second.
+    pinned_chords: VecDeque<(u64, Vector2<f64>, Vector2<f64>, u32)>,
+    /// The newest of those when the loose stretch began: the velocity the
+    /// flow along it is judged against ([`FLOW_IMU_CUM_MPS`]).
+    flow_anchor: Option<(u64, Vector2<f64>, Vector2<f64>, u32)>,
     /// The accelerometer's horizontal specific force integrated, in the
     /// attitude's levelled frame: `(t_ns, velocity change, segment)`, the
     /// last [`IMU_TRACK_NS`]; a new segment starts after a gap.
@@ -614,6 +645,8 @@ impl LocalSlam {
             flow_stalled: false,
             flow_low_since: None,
             imu_bias: None,
+            pinned_chords: VecDeque::new(),
+            flow_anchor: None,
             imu_track: VecDeque::new(),
             pinned: None,
         }
@@ -708,15 +741,9 @@ impl LocalSlam {
     }
 
     /// The flow against the accelerometer up to `to` along `loose` (local
-    /// frame, its heading `local_angle`), and the accelerometer's bias
-    /// learnt on while the flow is not `stalled` and agrees.
-    fn imu_check(
-        &self,
-        loose: &Matrix2<f64>,
-        local_angle: f64,
-        to: u64,
-        stalled: bool,
-    ) -> ImuCheck {
+    /// frame, its heading `local_angle`). The long checks judge only once
+    /// the accelerometer's bias has been learnt ([`Self::learn_bias`]).
+    fn imu_check(&self, loose: &Matrix2<f64>, local_angle: f64, to: u64) -> ImuCheck {
         let off = Rotation2::new(local_angle - self.att.heading_at(to));
         let along = |v: Vector2<f64>| loose * (off * v);
         // The two windows' change in flow and in the accelerometer's
@@ -727,36 +754,86 @@ impl LocalSlam {
                 self.window_means(to.saturating_sub(2 * w), to.saturating_sub(w))?;
             (sn == sb).then(|| (mn - mb, vn - vb, tn.saturating_sub(tb) as f64 * 1e-9))
         };
-        let mut c = ImuCheck {
-            bias: self.imu_bias,
-            ..ImuCheck::default()
-        };
+        let mut c = ImuCheck::default();
         if let Some((df, dv, _)) = pair(FLOW_IMU_WINDOW_NS) {
             let df = along(df);
             let s = df.norm();
             let shown = along(dv).dot(&df) / s.max(1e-9);
             c.unshown = s > FLOW_IMU_CHANGE_MPS && shown < FLOW_IMU_SHOWN_FRAC * s;
         }
-        let Some((df, dv, span)) = pair(FLOW_IMU_LONG_NS).filter(|p| p.2 > 0.0) else {
+        let long = pair(FLOW_IMU_LONG_NS).filter(|p| p.2 > 0.0);
+        // With the accelerometer, a stalled flow revives only on evidence,
+        // which needs its bias learnt; until then it does not.
+        c.available = long.is_some();
+        let Some(b) = self
+            .imu_bias
+            .filter(|&(_, n)| n >= FLOW_IMU_BIAS_SETTLE)
+            .map(|(b, _)| b)
+        else {
             return c;
         };
-        c.available = true;
-        let settled = self
-            .imu_bias
-            .is_some_and(|(_, n)| n >= FLOW_IMU_BIAS_SETTLE);
-        let shown = dv - self.imu_bias.map_or(Vector2::zeros(), |(b, _)| b) * span;
-        let resid = df - shown;
-        let (r, s) = (along(resid).norm(), along(shown).norm());
-        c.disagrees = settled && r > FLOW_IMU_LONG_MPS;
-        c.alive = settled && s > FLOW_IMU_LIFE_MPS && r < FLOW_IMU_SHOWN_FRAC * s;
-        if !stalled && (!settled || resid.norm() < FLOW_IMU_LONG_MPS) {
-            let inst = (dv - df) / span;
-            c.bias = Some(match self.imu_bias {
+        if let Some((df, dv, span)) = long {
+            let shown = dv - b * span;
+            let (r, s) = (along(df - shown).norm(), along(shown).norm());
+            c.disagrees = r > FLOW_IMU_LONG_MPS;
+            c.alive = s > FLOW_IMU_LIFE_MPS && r < FLOW_IMU_SHOWN_FRAC * s;
+        }
+        // Against the velocity matched where the stretch began, carried on
+        // by the accelerometer: a slow fade adds up here.
+        if let Some((ta, va, ia, sa)) = self.flow_anchor {
+            let now = self.imu_track.back().map_or(to, |e| e.0.min(to));
+            c.carried = self
+                .imu_at(now)
+                .filter(|&(_, s)| s == sa)
+                .map(|(a, _)| va + (a - ia) - b * (now.saturating_sub(ta) as f64 * 1e-9));
+            let from = to.saturating_sub(FLOW_IMU_CUM_NS).max(ta);
+            let (mut sum, mut n) = (Vector2::zeros(), 0usize);
+            for &(t, v) in self.measured.iter().filter(|&&(t, _)| t > from && t <= to) {
+                let Some((a, _)) = self.imu_at(t).filter(|&(_, s)| s == sa) else {
+                    return c;
+                };
+                let carried = va + (a - ia) - b * (t.saturating_sub(ta) as f64 * 1e-9);
+                sum += Rotation2::new(self.att.heading_at(t)) * v - carried;
+                n += 1;
+            }
+            if n >= FLOW_MEAN_SAMPLES {
+                let age = to.saturating_sub(ta) as f64 * 1e-9;
+                c.drifted =
+                    along(sum / n as f64).norm() > FLOW_IMU_CUM_MPS + FLOW_IMU_DRIFT_MPS2 * age;
+            }
+        }
+        c
+    }
+
+    /// Learn the accelerometer's bias from `chord`, the velocity the scans
+    /// matched (attitude frame) at its time, while they pin every
+    /// direction: its integrated velocity's change over
+    /// [`FLOW_IMU_BIAS_SPAN_NS`] against the matched one's.
+    fn learn_bias(&mut self, chord: Option<(u64, Vector2<f64>)>) {
+        let Some((t, v)) = chord else {
+            return;
+        };
+        let Some((a, seg)) = self.imu_at(t) else {
+            return;
+        };
+        let old = self
+            .pinned_chords
+            .iter()
+            .rev()
+            .find(|e| t.saturating_sub(e.0) >= FLOW_IMU_BIAS_SPAN_NS)
+            .copied();
+        if let Some((t0, v0, a0, _)) = old.filter(|e| e.3 == seg) {
+            let inst = ((a - a0) - (v - v0)) / ((t - t0) as f64 * 1e-9);
+            self.imu_bias = Some(match self.imu_bias {
                 Some((b, n)) => (b + (inst - b) * FLOW_IMU_BIAS_GAIN, n.saturating_add(1)),
                 None => (inst, 1),
             });
         }
-        c
+        self.pinned_chords.push_back((t, v, a, seg));
+        let keep = FLOW_IMU_BIAS_SPAN_NS + 1_000_000_000;
+        while self.pinned_chords.front().is_some_and(|e| e.0 + keep < t) {
+            self.pinned_chords.pop_front();
+        }
     }
 
     /// The flight controller's own heading of the IMU frame about the
@@ -845,6 +922,8 @@ impl LocalSlam {
         self.flow_stalled = false;
         self.flow_low_since = None;
         self.imu_bias = None;
+        self.pinned_chords.clear();
+        self.flow_anchor = None;
         self.last_insert = None;
         self.inserted = 0;
         self.suspect = None;
@@ -1248,7 +1327,18 @@ impl LocalSlam {
         }
         self.flow_stalled = flow.stalled;
         self.flow_low_since = flow.low_since;
-        self.imu_bias = flow.imu_bias;
+        self.learn_bias(flow.pinned_chord);
+        // A loose stretch is judged against the velocity matched just before
+        // it; none older than a second stands for it.
+        if !flow.loose {
+            self.flow_anchor = None;
+        } else if self.flow_anchor.is_none() {
+            self.flow_anchor = self
+                .pinned_chords
+                .back()
+                .filter(|e| t.saturating_sub(e.0) <= 1_000_000_000)
+                .copied();
+        }
         let motion = Motion {
             roll,
             pitch,
@@ -1580,7 +1670,7 @@ impl LocalSlam {
         // over the same window turned by its middle heading: the two the
         // consistency check compares (a single scan interval's few flow
         // samples are too noisy to judge).
-        let (vel, omega, agree, chord) = match self.history.front() {
+        let (vel, omega, agree, chord, chord_t) = match self.history.front() {
             Some(&(t0, p0)) if t1 > t0 => {
                 let d = (t1 - t0) as f64 * 1e-9;
                 let turn = wrap(p1.th - p0.th);
@@ -1596,13 +1686,20 @@ impl LocalSlam {
                     }
                     _ => true,
                 };
-                ([c * cx + s * cy, -s * cx + c * cy], turn / d, agree, chord)
+                (
+                    [c * cx + s * cy, -s * cx + c * cy],
+                    turn / d,
+                    agree,
+                    chord,
+                    t0 + (t1 - t0) / 2,
+                )
             }
             _ => (
                 self.restart_vel.unwrap_or([0.0, 0.0]),
                 0.0,
                 true,
                 Vector2::zeros(),
+                t1,
             ),
         };
         let (dyaw, rate) = if self.att.has_data() {
@@ -1614,7 +1711,8 @@ impl LocalSlam {
         let raw = self.measured_velocity(t1, t + span_ns).map(|m| heading * m);
         // Along the directions the matches leave loose they cannot judge
         // the flow. One that changes in a way the accelerometer does not
-        // show, either way ([`Self::imu_check`]), that falls there to near
+        // show, either way, or drifts from the velocity matched where the
+        // stretch began ([`Self::imu_check`]), that falls there to near
         // zero faster than braking explains ([`Self::flow_drop`]), or that
         // has read near zero for longer than a stop explains while the
         // matched chord still moves, has stalled. It stays unfollowed until
@@ -1629,8 +1727,13 @@ impl LocalSlam {
             &loose.unwrap_or_else(Matrix2::identity),
             heading.angle(),
             to,
-            self.flow_stalled,
         );
+        // With every direction pinned, the matched velocity teaches the
+        // accelerometer's bias, in its frame.
+        let pinned_chord = (self.pinned.is_some() && loose.is_none() && chord_t < t1).then(|| {
+            let off = heading.angle() - self.att.heading_at(chord_t);
+            (chord_t, Rotation2::new(-off) * chord)
+        });
         let (stalled, low_since) = match loose {
             None => (false, None),
             Some(l) => {
@@ -1651,7 +1754,11 @@ impl LocalSlam {
                     let stop_s = lc / FLOW_MAX_DECEL_MPS2 + VELOCITY_WINDOW_NS as f64 * 1e-9;
                     let lingered = lc > FLOW_STALL_FROM_MPS
                         && low_since.is_some_and(|s| t.saturating_sub(s) as f64 * 1e-9 >= stop_s);
-                    check.unshown || check.disagrees || (low && drop.abrupt) || lingered
+                    check.unshown
+                        || check.disagrees
+                        || check.drifted
+                        || (low && drop.abrupt)
+                        || lingered
                 };
                 (stalled, low_since)
             }
@@ -1660,8 +1767,17 @@ impl LocalSlam {
         let measured = used.map(|m| heading.inverse() * m);
         let mut v = heading * measured.unwrap_or(Vector2::new(vel[0], vel[1]));
         if let (None, Some(u)) = (measured, &self.unobserved) {
-            let fade = (-(t.saturating_sub(u.since_ns) as f64 * 1e-9) / COAST_TAU_S).exp();
-            v += u.free * (u.vel * fade - v);
+            // A stalled flow's stretch rides on the velocity the
+            // accelerometer carries from where it began; without one the
+            // prior coasts to rest.
+            let target = match check.carried.filter(|_| stalled) {
+                Some(c) => Rotation2::new(heading.angle() - self.att.heading_at(to)) * c,
+                None => {
+                    let fade = (-(t.saturating_sub(u.since_ns) as f64 * 1e-9) / COAST_TAU_S).exp();
+                    u.vel * fade
+                }
+            };
+            v += u.free * (target - v);
         }
         let vel = heading.inverse() * v;
         (
@@ -1674,7 +1790,8 @@ impl LocalSlam {
                 raw,
                 stalled,
                 low_since,
-                imu_bias: check.bias,
+                pinned_chord,
+                loose: loose.is_some(),
             },
         )
     }
