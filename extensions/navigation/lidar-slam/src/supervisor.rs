@@ -171,6 +171,8 @@ impl Run {
             shared: feeds.shared.clone(),
             scratch_dir: Some(work_dir.join("map").join(TILES_DIR)),
             voxfeed: voxfeed.as_ref().map(VoxFeed::tx),
+            clock: ados_sdk::clock(),
+            lockstep: crate::lane::lockstep::LidarLockstep::socket_from_env(),
         };
         let lane = tokio::spawn(run_lane(deps, cancel.clone()));
         Self {
@@ -293,8 +295,10 @@ async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 2
                         .find(|(k, _)| k.as_str() == Some("frame"))
                         .and_then(|(_, v)| v.as_slice().map(<[u8]>::to_vec))
                 });
-                if let Some(frame) = frame {
-                    fc.on_frame(&frame, ados_mapping_pose::clock::mono_ns());
+                // Stamped on the lane's timebase; none before the
+                // simulator's first tick.
+                if let (Some(frame), Some(at)) = (frame, crate::timebase::stamp()) {
+                    fc.on_frame(&frame, at);
                 }
             });
             if let Err(e) = ctx.mavlink.subscribe(name, cb).await {

@@ -11,8 +11,9 @@
 //!
 //! Every driver hands out [`DepthFrame`]s: a 16-bit millimetre depth image
 //! along the optical axis (0 = no return), its pinhole intrinsics and the
-//! camera's mount on the body, stamped on the host monotonic clock when the
-//! frame was complete. [`DepthFrame::to_points`] turns one into body-frame
+//! camera's mount on the body, stamped on the service's timebase
+//! ([`crate::timebase`]) when the frame was complete.
+//! [`DepthFrame::to_points`] turns one into body-frame
 //! points (forward, right, down) for the map. A driver whose library or
 //! camera is absent fails to open with [`DepthSourceError::Unavailable`];
 //! it never panics.
@@ -113,7 +114,8 @@ impl Default for Extrinsic {
 /// One depth image.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DepthFrame {
-    /// Host monotonic ns when the frame was complete on this host.
+    /// When the frame was complete on this host, ns on the service's
+    /// timebase ([`crate::timebase`]).
     pub stamp_ns: u64,
     /// The source's own time of the frame: sim ns for the World Engine,
     /// the device timestamp (ms × 10⁶) for a RealSense.
@@ -142,7 +144,13 @@ impl DepthFrame {
         out.clear();
         let stride = stride.max(1);
         let (w, h) = (self.w as usize, self.h as usize);
-        if self.depth_mm.len() < w * h || self.fx <= 0.0 || self.fy <= 0.0 {
+        let focal_ok = |f: f32| f > 0.0 && f.is_finite();
+        if self.depth_mm.len() < w * h
+            || !focal_ok(self.fx)
+            || !focal_ok(self.fy)
+            || !self.cx.is_finite()
+            || !self.cy.is_finite()
+        {
             return;
         }
         out.reserve(w.div_ceil(stride) * h.div_ceil(stride));
@@ -255,7 +263,7 @@ pub trait DepthSource: Send {
     /// Hand a frame back so its buffer is reused for a later one.
     fn recycle(&mut self, _frame: DepthFrame) {}
 
-    /// The status block at host monotonic time `now_ns`.
+    /// The status block at `now_ns` on the service's timebase.
     fn status(&self, now_ns: u64) -> DepthStatus {
         let health = self.health();
         let fresh = health.last_stamp_ns != 0

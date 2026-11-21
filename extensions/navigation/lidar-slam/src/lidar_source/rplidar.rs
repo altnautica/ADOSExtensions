@@ -1,5 +1,5 @@
 //! An RPLIDAR through `ados-rplidar`: its revolutions, already in the sensor
-//! FLU frame (z = 0) and stamped on the host monotonic clock, forwarded as
+//! FLU frame (z = 0) and stamped on the service's timebase, forwarded as
 //! [`LidarScan`]s onto a tokio channel by a small bridge thread.
 //!
 //! The device driver keeps reconnecting a lost link on its own; the port and

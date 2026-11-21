@@ -125,6 +125,12 @@ fn fly(
 ) -> (Vec<Split>, ados_voxmap::WorkStats, ados_voxmap::WorkStats) {
     let mut map = VoxMap::new(cfg).unwrap();
     let dir = tempfile::tempdir().unwrap();
+    // The seam writer publishes only into a directory nobody else may write.
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
     let mut writer = VoxmapWriter::create(&dir.path().join("vox"), map.dims(), None).unwrap();
     let mut splits = Vec::with_capacity(scans.len());
     let mut work = ados_voxmap::WorkStats::default();

@@ -30,7 +30,10 @@ impl PoseProvider for LidarPose {
     }
 }
 
-fn deps(pose: Option<Arc<dyn PoseProvider>>, planar: bool) -> (LaneDeps, mpsc::Receiver<Event>) {
+pub(super) fn deps(
+    pose: Option<Arc<dyn PoseProvider>>,
+    planar: bool,
+) -> (LaneDeps, mpsc::Receiver<Event>) {
     let values = BTreeMap::from([(KEY_LIDAR.to_string(), serde_json::json!({ "imu": "fc" }))]);
     let cfg = NavConfig::from_values(&values).unwrap();
     let (out, rx) = Publisher::new();
@@ -53,6 +56,8 @@ fn deps(pose: Option<Arc<dyn PoseProvider>>, planar: bool) -> (LaneDeps, mpsc::R
         shared: Arc::new(Shared::default()),
         scratch_dir: None,
         voxfeed: None,
+        clock: Clock::wall(),
+        lockstep: None,
     };
     (deps, rx)
 }

@@ -18,6 +18,7 @@ fn cfg(library: PathBuf, config_json: PathBuf) -> SdkDriverConfig {
         decoder: DecoderConfig::default(),
         enable_imu: true,
         queue: 64,
+        rx_clock: None,
     }
 }
 

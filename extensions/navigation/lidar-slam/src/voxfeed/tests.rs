@@ -248,9 +248,21 @@ fn the_body_pose_comes_from_the_sensor_pose_and_the_mount() {
     assert!(dot.abs() > 1.0 - 1e-6, "{body:?}");
 }
 
+/// A tempdir only this process may write: the seam writer publishes only into
+/// such a directory (a umask of `002` leaves a fresh one group-writable).
+fn private_tempdir() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    dir
+}
+
 #[test]
 fn the_published_map_reads_back_through_the_seam() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_tempdir();
     let path = dir.path().join("voxmap");
     let mut f = feeder();
     let mut writer = VoxmapWriter::create(&path, f.map().dims(), None).unwrap();
@@ -336,7 +348,7 @@ fn polar(t: [f32; 3]) -> PolarScan {
 /// scans while it works costs the sender nothing but drops.
 #[test]
 fn the_feed_thread_publishes_and_never_blocks_the_lidar_path() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = private_tempdir();
     let path = dir.path().join("voxmap");
     let start = Instant::now();
     let feed = VoxFeed::start(FeedOptions {

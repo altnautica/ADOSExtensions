@@ -15,7 +15,7 @@ use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::pose::PoseEstimate;
 
 /// How long a scan waits for its pose before it is placed without one
-/// (host monotonic nanoseconds past its first return).
+/// (nanoseconds past its first return on the lane's timebase).
 pub const SCAN_POSE_WAIT_NS: u64 = 500_000_000;
 /// Scans held at most; past it the oldest is placed without a pose.
 pub const SCAN_WAIT_DEPTH: usize = 32;

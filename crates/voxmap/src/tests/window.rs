@@ -70,6 +70,12 @@ fn the_seam_carries_the_window_in_order() {
     assert_ne!(m.om, [32, 32, 16]);
 
     let dir = tempfile::tempdir().unwrap();
+    // The seam writer publishes only into a directory nobody else may write.
+    std::fs::set_permissions(
+        dir.path(),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
     let path = dir.path().join("ados-voxmap-v1");
     let mut w = VoxmapWriter::create(&path, m.dims(), None).unwrap();
     let body = Pose::at([0.75, -0.6, 0.3]);

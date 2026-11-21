@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_protocol::capture::{PolarScan, PoseDescriptor, VioHealth};
-use ados_protocol::voxmap::{VoxmapWriter, VOXMAP_GROUP, VOXMAP_SHM_PATH};
+use ados_protocol::voxmap::{VoxmapWriter, VOXMAP_GROUP, VOXMAP_PATH};
 use ados_voxmap::{Pose, VoxTier};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -64,7 +64,9 @@ pub struct FeedOptions {
     pub planar: bool,
     /// The depth camera; `source = off` runs no reader.
     pub depth: DepthSettings,
-    /// The seam file and the group it is handed to.
+    /// The seam file and the group it is handed to. The file's directory
+    /// must be this process's own (the agent hands the seam directory to the
+    /// one plugin granted the map); until it is, the writer is retried.
     pub path: PathBuf,
     pub group: Option<String>,
     pub now: Now,
@@ -78,7 +80,7 @@ impl FeedOptions {
             settings: settings.clone(),
             planar: sensors.planar && settings.planar,
             depth: depth.clone(),
-            path: PathBuf::from(VOXMAP_SHM_PATH),
+            path: PathBuf::from(VOXMAP_PATH),
             group: Some(VOXMAP_GROUP.to_string()),
             now: Arc::new(move || clock.now_ns()),
         }

@@ -18,7 +18,9 @@
 //! - [`settings`]: the `navigation.*` keys;
 //! - [`topics`], [`publish`], [`capture_state`]: what is published, how it
 //!   reaches the host, and when a capture session wants raw scans;
-//! - [`http`], [`status`], [`sweep`]: the routes.
+//! - [`http`], [`status`], [`sweep`]: the routes;
+//! - [`timebase`]: the clock every stamp is on (sim time on a simulated
+//!   node).
 
 pub mod capture_state;
 pub mod depth_source;
@@ -33,6 +35,7 @@ pub mod settings;
 pub mod status;
 pub mod supervisor;
 pub mod sweep;
+pub mod timebase;
 pub mod topics;
 pub mod voxfeed;
 

@@ -61,7 +61,7 @@ fn stream(shared: &Shared, mut src: Box<dyn DepthSource>, max_range_m: f32) {
         }
         if status_at.elapsed() >= Duration::from_secs(1) {
             status_at = Instant::now();
-            let status = src.status(ados_mapping_pose::clock::mono_ns());
+            let status = src.status(crate::timebase::now_ns());
             shared.health.lock().depth = Some(status);
         }
     }

@@ -132,3 +132,48 @@ fn we_driver_rebuilds_frames_over_loopback_udp() {
     let (_server, from) = renew.join().unwrap();
     assert_eq!(from, client);
 }
+
+/// A frame from any address but the stream's is never read: neither another
+/// port on the stream's host nor the stream's port on another host.
+#[test]
+fn we_driver_ignores_a_foreign_sender() {
+    let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+    server
+        .set_read_timeout(Some(Duration::from_secs(3)))
+        .unwrap();
+    let port = server.local_addr().unwrap().port();
+    let mut src = WeSource::open(&WeConfig {
+        host: "127.0.0.1".into(),
+        port,
+        extrinsic: Extrinsic::from_rpy_deg([0.0; 3], [0.0; 3]),
+    })
+    .unwrap();
+    let client = subscriber(&server);
+
+    let other_port = UdpSocket::bind("127.0.0.1:0").unwrap();
+    // The stream's port on another loopback address (Linux routes all of
+    // 127/8 to lo).
+    let other_host = UdpSocket::bind(("127.0.0.2", port)).ok();
+    let (_, f0) = datagrams(0);
+    for d in &f0 {
+        other_port.send_to(d, client).unwrap();
+        if let Some(s) = &other_host {
+            s.send_to(d, client).unwrap();
+        }
+    }
+    assert!(src
+        .next_frame(Duration::from_millis(200))
+        .unwrap()
+        .is_none());
+    assert_eq!(src.health().frames, 0);
+
+    // The stream itself still gets through.
+    for d in &f0 {
+        server.send_to(d, client).unwrap();
+    }
+    let got = src
+        .next_frame(Duration::from_secs(2))
+        .unwrap()
+        .expect("frame 0 from the stream");
+    assert_eq!(got.seq, 0);
+}

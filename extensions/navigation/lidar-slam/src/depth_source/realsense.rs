@@ -365,7 +365,7 @@ impl RealsenseSource {
             self.health.drops += number.saturating_sub(prev).saturating_sub(1);
         }
         self.last_number = Some(number);
-        let stamp_ns = ados_mapping_pose::clock::mono_ns();
+        let stamp_ns = crate::timebase::now_ns();
         self.health.frames += 1;
         self.health.last_stamp_ns = stamp_ns;
         Ok(DepthFrame {

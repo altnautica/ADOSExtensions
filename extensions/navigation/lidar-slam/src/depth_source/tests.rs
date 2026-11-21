@@ -268,6 +268,40 @@ fn points_of_a_tilted_camera_land_on_the_plane() {
 }
 
 #[test]
+fn bad_intrinsics_yield_no_points() {
+    let good = DepthFrame {
+        stamp_ns: 1,
+        source_ns: 1,
+        seq: 1,
+        w: 4,
+        h: 3,
+        fx: 4.0,
+        fy: 4.0,
+        cx: 1.5,
+        cy: 1.0,
+        depth_mm: vec![2000; 12],
+        extrinsic: Extrinsic::identity(),
+    };
+    let mut pts = Vec::new();
+    good.to_points(1, 100.0, &mut pts);
+    assert_eq!(pts.len(), 12);
+    let bad: [fn(&mut DepthFrame); 6] = [
+        |f| f.fx = f32::NAN,
+        |f| f.fy = f32::INFINITY,
+        |f| f.fx = 0.0,
+        |f| f.fy = -4.0,
+        |f| f.cx = f32::NAN,
+        |f| f.cy = f32::NEG_INFINITY,
+    ];
+    for (i, spoil) in bad.iter().enumerate() {
+        let mut f = good.clone();
+        spoil(&mut f);
+        f.to_points(1, 100.0, &mut pts);
+        assert!(pts.is_empty(), "case {i}: {pts:?}");
+    }
+}
+
+#[test]
 fn identity_mount_maps_optical_axes_to_frd() {
     let [ox, oy, oz] = Extrinsic::identity().optical_to_body();
     assert_eq!(

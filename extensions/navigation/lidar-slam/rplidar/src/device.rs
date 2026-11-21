@@ -3,7 +3,8 @@
 //!
 //! Start-up is `STOP`, a 10 ms settle, discard stale input, `GET_INFO`,
 //! `GET_HEALTH` (status error fails), then `SCAN`. The reader thread stamps
-//! each received chunk with host monotonic time and hands it to the
+//! each received chunk on the receive clock ([`RplidarConfig::clock`], host
+//! monotonic time by default) and hands it to the
 //! [`RevolutionAssembler`]. A link that errors, closes or goes quiet for
 //! [`STALL_TIMEOUT`] is reopened every [`RECONNECT_DELAY`], without limit,
 //! until it answers again or the driver is dropped; the port, info and
@@ -36,13 +37,16 @@ pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(1);
 /// Revolutions buffered for the consumer before new ones are dropped.
 pub const CHANNEL_DEPTH: usize = 4;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RplidarConfig {
     /// Serial port path, `tcp:<host>:<port>`, or `auto` (USB discovery).
     pub device: String,
     pub baud: u32,
     /// Rig sensor id, for logs.
     pub sensor_id: String,
+    /// The receive clock chunks are stamped on, ns: host monotonic time by
+    /// default; a host following a simulator's clock passes sim time.
+    pub clock: fn() -> u64,
 }
 
 impl Default for RplidarConfig {
@@ -51,6 +55,7 @@ impl Default for RplidarConfig {
             device: AUTO_DEVICE.to_string(),
             baud: DEFAULT_BAUD,
             sensor_id: "lidar0".to_string(),
+            clock: mono_ns,
         }
     }
 }
@@ -233,7 +238,7 @@ fn run(
 ) {
     let mut asm = RevolutionAssembler::new(cfg.baud);
     loop {
-        match stream(link.as_mut(), &mut asm, shared, tx) {
+        match stream(link.as_mut(), &mut asm, shared, tx, cfg.clock) {
             End::Stopped => {
                 // Draining after STOP leaves nothing unread, so the link
                 // closes cleanly behind the request.
@@ -273,6 +278,7 @@ fn stream(
     asm: &mut RevolutionAssembler,
     shared: &Shared,
     tx: &SyncSender<RawScan>,
+    clock: fn() -> u64,
 ) -> End {
     let mut buf = [0u8; 4096];
     let mut last_rx = Instant::now();
@@ -283,7 +289,7 @@ fn stream(
         match link.read(&mut buf) {
             Ok(0) => return End::Lost("link closed".into()),
             Ok(n) => {
-                let t_rx = mono_ns();
+                let t_rx = clock();
                 last_rx = Instant::now();
                 let mut receiver_gone = false;
                 asm.push(&buf[..n], t_rx, |scan| {

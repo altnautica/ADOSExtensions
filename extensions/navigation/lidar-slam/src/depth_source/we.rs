@@ -5,7 +5,9 @@
 //! The subscription is a [`SUBSCRIBE`] datagram from this driver's socket,
 //! sent at open and renewed every [`RESUBSCRIBE`] (the World Engine forgets
 //! a subscriber not heard for 5 s), so frames come back to the same socket.
-//! Only datagrams from the stream's port are read. A World Engine run
+//! The socket is connected to the stream's address, so the kernel drops a
+//! datagram from any other host or port, and the driver also reads only
+//! datagrams whose whole source address is the stream's. A World Engine run
 //! without a renderer serves nothing: the driver then opens and waits.
 
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
@@ -58,7 +60,8 @@ impl WeSource {
                 .map_err(|_| DepthSourceError::Stream("bind address".into()))?
         };
         let socket = UdpSocket::bind(bind)?;
-        socket.send_to(SUBSCRIBE, server)?;
+        socket.connect(server)?;
+        socket.send(SUBSCRIBE)?;
         Ok(Self {
             socket,
             server,
@@ -79,7 +82,7 @@ impl WeSource {
     fn renew(&mut self, now: Instant) -> std::io::Result<()> {
         if now.duration_since(self.last_sub) >= RESUBSCRIBE {
             self.last_sub = now;
-            self.socket.send_to(SUBSCRIBE, self.server)?;
+            self.socket.send(SUBSCRIBE)?;
         }
         Ok(())
     }
@@ -93,7 +96,7 @@ impl WeSource {
             }
         }
         self.last_seq = Some(seq);
-        let stamp_ns = ados_mapping_pose::clock::mono_ns();
+        let stamp_ns = crate::timebase::now_ns();
         self.health.frames += 1;
         self.health.last_stamp_ns = stamp_ns;
         DepthFrame {
@@ -135,7 +138,7 @@ impl DepthSource for WeSource {
             self.socket.set_read_timeout(Some(wait))?;
             match self.socket.recv_from(&mut self.buf) {
                 Ok((n, from)) => {
-                    if from.port() != self.server.port() {
+                    if from != self.server {
                         continue;
                     }
                     if let Some(a) = self.asm.push(&self.buf[..n]) {

@@ -12,6 +12,10 @@
 //! - per LiDAR scan: the binned body-frame scan, the raw scan while a capture
 //!   session records (`scan_raw`), and once its pose is settled the placed
 //!   scan into the map (and `scan_polar` while the map is built on a node).
+//!
+//! Every stamp is on the lane's timebase ([`crate::timebase`]): sim time on
+//! a node following the simulator, where the LiDAR lane is also a lockstep
+//! participant ([`lockstep`]) so the simulator waits for each scan's pose.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +31,7 @@ use ados_mapping_protocol::capture::{
     chunk_scan, pack_points, ImuFeedReason, PoseDescriptor, PoseTrackBatch, PoseTrackEntry,
 };
 use ados_protocol::shutdown::Shutdown;
+use ados_protocol::simclock::Clock;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::capture_state::CaptureWatch;
@@ -34,6 +39,7 @@ use crate::nav::{fc_imu, scan_wait::ScanWait, NavMap, NavSettings, TickInputs};
 use crate::publish::Publisher;
 use crate::settings::NavConfig;
 use crate::status::Shared;
+use crate::timebase;
 
 /// The pose lane's poll, independent of `navigation.pose_publish_interval_ms`
 /// (which only thins the poses, on their own measurement time): a pose waits
@@ -44,7 +50,6 @@ pub const NAV_POLL: Duration = Duration::from_millis(10);
 pub const TRACK_EVERY: Duration = Duration::from_millis(100);
 /// The live-map tick.
 pub const SLOW_EVERY: Duration = Duration::from_secs(1);
-/// on the host clock).
 
 /// A request for the whole sweep cloud (packed triples, voxel edge, seq).
 pub type WholeSweep = oneshot::Sender<(Vec<u8>, f32, u64)>;
@@ -72,6 +77,11 @@ pub struct LaneDeps {
     pub scratch_dir: Option<PathBuf>,
     /// The 3D voxel map's feed; `None` when the map does not run.
     pub voxfeed: Option<crate::voxfeed::VoxFeedTx>,
+    /// The plugin's ADOS time ([`ados_sdk::clock`]): the lane's timebase.
+    pub clock: Clock,
+    /// The lockstep barrier's participants socket on a node following the
+    /// simulator's clock ([`lockstep::LidarLockstep::socket_from_env`]).
+    pub lockstep: Option<PathBuf>,
 }
 
 pub(crate) struct Lane {
@@ -101,6 +111,9 @@ pub(crate) struct Lane {
     scan_seq: u64,
     /// Estimates since the last `pose_track` batch.
     track: Vec<PoseTrackEntry>,
+    clock: Clock,
+    /// The LiDAR lane's lockstep participation, on sim time.
+    lockstep: Option<lockstep::LidarLockstep>,
 }
 
 impl Lane {
@@ -120,12 +133,18 @@ impl Lane {
             scan_wait: ScanWait::default(),
             fc_imu_prev: None,
             // Judged on ADOS time: a lockstep hold is no IMU stall.
-            fc_nav: Arc::new(fc_imu::FeedState::on(ados_sdk::clock())),
+            fc_nav: Arc::new(fc_imu::FeedState::on(deps.clock.clone())),
             imu_feed_degraded: None,
             nav_map_restarts: 0,
             nav_feed: NavFeedStats::default(),
             scan_seq: 0,
             track: Vec::new(),
+            lockstep: deps
+                .lockstep
+                .clone()
+                .filter(|_| matches!(deps.clock, Clock::Sim(_)))
+                .map(|socket| lockstep::LidarLockstep::new(deps.clock.clone(), socket)),
+            clock: deps.clock.clone(),
         }
     }
 
@@ -176,6 +195,10 @@ impl Lane {
     /// One LiDAR scan: the pose provider, the body-frame scan and the raw
     /// stream now; the map once its pose is known ([`Self::place_scans`]).
     pub(crate) async fn on_lidar(&mut self, scan: LidarScan) {
+        // Before the simulator's first tick a driver's stamps are no time.
+        if timebase::stamp_on(&self.clock).is_none() {
+            return;
+        }
         self.feed_fc_attitude();
         if self.fc_feeds_lidar_pose() {
             let end = scan.t_ns + u64::from(scan.t_offset_ns.iter().copied().max().unwrap_or(0));
@@ -187,6 +210,10 @@ impl Lane {
         if let Some(p) = &self.pose {
             p.feed_lidar(&scan);
         }
+        if let Some(l) = &mut self.lockstep {
+            l.fed(scan.t_ns);
+        }
+        self.pace();
         let mount = self.lidar_mount(&scan.sensor_id);
         let blocked = self.blocked_azimuth_deg(&scan.sensor_id);
         // The FC attitudes around the scan level each 3D return at its
@@ -217,7 +244,7 @@ impl Lane {
             return;
         };
         loop {
-            let now = ados_mapping_pose::clock::mono_ns();
+            let now = timebase::stamp_on(&self.clock).unwrap_or(0);
             let newest = pose.latest().map(|e| e.t_ns);
             let Some((scan, world)) = self.scan_wait.next(now, newest, |t| pose.pose_at(t)) else {
                 return;
@@ -252,6 +279,16 @@ impl Lane {
             self.out.pose(&pd).await;
         }
         self.place_scans().await;
+        self.pace();
+    }
+
+    /// Report the LiDAR lane's progress to the lockstep barrier: the
+    /// scans the pose provider has answered (all of them without one).
+    fn pace(&mut self) {
+        if let Some(l) = &mut self.lockstep {
+            let newest = self.pose.as_ref().and_then(|p| p.latest()).map(|e| e.t_ns);
+            l.poll(newest, self.pose.is_some());
+        }
     }
 
     /// Fold every new estimate into the map and the pose track; the pose to
@@ -261,7 +298,7 @@ impl Lane {
         let mut out = Vec::new();
         pose.drain_new(&mut out);
         let q = pose.quality();
-        let now_mono_ns = ados_mapping_pose::clock::mono_ns();
+        let now_ns = timebase::stamp_on(&self.clock).unwrap_or(0);
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
@@ -282,7 +319,13 @@ impl Lane {
             .or(self.nav_imu_reason(q.heading_unconfirmed));
         let due = out
             .last()
-            .and_then(|e| self.nav.on_pose(e, fc_up, heading, now_ms, now_mono_ns))
+            .and_then(|e| {
+                // `ts_ms` is a unix stamp: the pose's age goes back as wall
+                // time, which on sim time is the sim age over the speed.
+                let age = timebase::wall_age_ns(&self.clock, now_ns.saturating_sub(e.t_ns));
+                self.nav
+                    .on_pose(e, fc_up, heading, now_ms, e.t_ns.saturating_add(age))
+            })
             .map(|pd| PoseDescriptor { imu_feed, ..pd });
         self.track.extend(out.iter().map(|e| PoseTrackEntry {
             t_ns: e.t_ns,
@@ -330,7 +373,7 @@ impl Lane {
         }
         self.out.map_status(&out.status).await;
         let latest = self.pose.as_ref().and_then(|p| p.latest());
-        let now = ados_mapping_pose::clock::mono_ns();
+        let now = timebase::stamp_on(&self.clock).unwrap_or(0);
         let mut view = self.shared.view.lock();
         view.provider = out.status.pose_provider;
         view.health = self.pose.as_ref().map(|p| p.health());
@@ -428,6 +471,7 @@ pub async fn run_lane(mut deps: LaneDeps, cancel: Shutdown) {
 }
 
 mod fc_feed;
+pub mod lockstep;
 #[cfg(test)]
 mod tests;
 

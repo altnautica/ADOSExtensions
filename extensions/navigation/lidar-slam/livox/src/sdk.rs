@@ -105,6 +105,10 @@ pub struct SdkDriverConfig {
     pub enable_imu: bool,
     /// Packets queued between the callbacks and the decode thread.
     pub queue: usize,
+    /// The receive clock packets are stamped on, ns (the host side of the
+    /// device clock mapping); `None`: host monotonic time. A host following
+    /// a simulator's clock passes sim time.
+    pub rx_clock: Option<fn() -> u64>,
 }
 
 /// An [`Event`] from one device (`handle` is the SDK's device handle).
@@ -133,6 +137,7 @@ struct Ctx {
     dropped: AtomicU64,
     set_work_mode: SetWorkModeFn,
     enable_imu: Option<EnableImuFn>,
+    rx_clock: fn() -> u64,
 }
 
 pub struct SdkDriver {
@@ -177,10 +182,10 @@ unsafe extern "C" fn on_packet(handle: u32, _dev_type: u8, data: *mut u8, client
         if data.is_null() || client.is_null() {
             return;
         }
-        let host_rx_ns = mono_ns();
         // SAFETY: `client` is the `Ctx` registered with the callback; it
         // outlives every callback (see `SdkDriver::drop`).
         let ctx = unsafe { &*(client as *const Ctx) };
+        let host_rx_ns = (ctx.rx_clock)();
         // SAFETY: the SDK hands a packet of at least its fixed header.
         let head = unsafe { std::slice::from_raw_parts(data, 3) };
         let len = declared_len(head).unwrap_or(0);
@@ -339,6 +344,7 @@ impl SdkDriver {
             dropped: AtomicU64::new(0),
             set_work_mode,
             enable_imu: cfg.enable_imu.then_some(enable_imu),
+            rx_clock: cfg.rx_clock.unwrap_or(mono_ns),
         }));
         let thread = {
             let (stats, dcfg) = (stats.clone(), cfg.decoder);

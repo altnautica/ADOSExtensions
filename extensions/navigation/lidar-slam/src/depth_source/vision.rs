@@ -261,7 +261,7 @@ impl DepthSource for VisionSource {
                 self.health.rejected += 1;
                 continue;
             };
-            let stamp_ns = ados_mapping_pose::clock::mono_ns();
+            let stamp_ns = crate::timebase::now_ns();
             match Self::convert(&self.cfg, &bus, stamp_ns, self.seq) {
                 Ok(frame) => {
                     self.seq += 1;

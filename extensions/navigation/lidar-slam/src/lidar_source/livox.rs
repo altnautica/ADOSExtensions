@@ -164,6 +164,8 @@ fn start_impl(
             },
             enable_imu: false,
             queue: 1024,
+            // Device time maps onto the lane's timebase.
+            rx_clock: Some(crate::timebase::now_ns),
         },
         sink,
     )?;

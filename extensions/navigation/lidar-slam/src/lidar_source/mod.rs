@@ -7,9 +7,10 @@
 //!   ([`livox`], feature `livox-sdk`, Unix).
 //!
 //! Every driver delivers [`LidarScan`]s on the tokio channel it is started
-//! with, in the sensor FLU frame, stamped on the host monotonic clock. A
-//! model with no driver fails with [`LidarSourceError::UnsupportedModel`];
-//! there is no fallback source.
+//! with, in the sensor FLU frame, stamped on the service's timebase
+//! ([`crate::timebase`]: host monotonic time, sim time on a node following
+//! the simulator). A model with no driver fails with
+//! [`LidarSourceError::UnsupportedModel`]; there is no fallback source.
 //!
 //! [`LidarRunner`] owns the driver for a capture run: it starts it, retries a
 //! device that was absent (or did not answer) every [`START_RETRY`], and
@@ -185,6 +186,7 @@ pub fn start(
                     device: device.to_string(),
                     baud: settings.rplidar.baud,
                     sensor_id: sensor_id.to_string(),
+                    clock: crate::timebase::now_ns,
                 },
                 scans,
             )?;
