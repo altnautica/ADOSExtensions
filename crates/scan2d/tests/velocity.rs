@@ -725,3 +725,108 @@ fn a_noisy_flow_stalling_midway_is_caught_by_the_accelerometer() {
     );
     assert!(since(lost) <= 1.5, "lost {:.2} s after", since(lost));
 }
+
+/// A walk down a 400 m bare corridor on flow read at 0.85 m/s noise a
+/// sample, an accelerometer `bias` (m/s² along the walk), the flow's
+/// forward part reading zero (plus its noise) from `stall_s` when `stall`.
+/// The poses after `from_s` and whether each is lost.
+fn noisy_corridor(path: &Path, bias: f64, stall: Option<f64>, from_s: f64) -> Vec<(f64, bool)> {
+    let world = vec![
+        ([-2.0, -1.0], [400.0, -1.0]),
+        ([-2.0, 1.0], [400.0, 1.0]),
+        ([-2.0, -1.0], [-2.0, 1.0]),
+    ];
+    let (scans, imu, _, force) = walk_forced(&world, path, C1, 11);
+    let force: Vec<[f64; 3]> = force.iter().map(|f| [f[0] + bias, f[1], f[2]]).collect();
+    let mut rng = Rng::new(17);
+    let mut vel = flow(path, 1.0, 0.0, 5);
+    for s in vel.iter_mut() {
+        let dead = stall.is_some_and(|t| s.t_ns as f64 * 1e-9 > t);
+        let fwd = if dead { 0.0 } else { s.v[0] };
+        s.v = [fwd + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
+    }
+    replay_forced(&scans, &imu, &force, &vel)
+        .iter()
+        .map(|p| {
+            (
+                p.t_ns as f64 * 1e-9,
+                p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S,
+            )
+        })
+        .filter(|&(t, _)| t > from_s)
+        .collect()
+}
+
+fn cruise(speed: f64, len: f64) -> Path {
+    Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(speed, 1.0)
+        .line(len)
+        .speed_to(0.0, 1.0)
+        .wait(3.0)
+}
+
+/// The first lost pose's time, after which every pose stays lost.
+fn lost_for_good(after: &[(f64, bool)]) -> Option<f64> {
+    let first = after.iter().position(|&(_, lost)| lost)?;
+    after[first..]
+        .iter()
+        .all(|&(_, lost)| lost)
+        .then_some(after[first].0)
+}
+
+/// A dead flow sensor stays lost however the accelerometer is biased (up
+/// to 0.2 m/s²), through the stop at the corridor's end: the velocity the
+/// accelerometer carries drifts by its bias, so agreeing with it is no
+/// sign of life. A sound one with the same bias is never lost.
+#[test]
+fn a_biased_accelerometer_neither_revives_a_dead_flow_nor_kills_a_live_one() {
+    for bias in [0.1, -0.1, 0.2, -0.2] {
+        let after = noisy_corridor(&cruise(1.5, 40.0), bias, Some(12.0), 12.0);
+        let lost = lost_for_good(&after);
+        eprintln!("bias {bias:+}: dead flow lost from {lost:?} s");
+        assert!(lost.is_some_and(|t| t <= 13.5), "bias {bias:+}: {lost:?}");
+    }
+    for bias in [0.2, -0.2] {
+        let after = noisy_corridor(&cruise(1.5, 40.0), bias, None, 0.0);
+        let lost = after.iter().filter(|&&(_, lost)| lost).count();
+        eprintln!("bias {bias:+}: sound flow {lost} of {} lost", after.len());
+        assert_eq!(lost, 0, "bias {bias:+}");
+    }
+}
+
+/// Slow walks whose flow dies: 0.8 and 0.5 m/s are under the short
+/// windows' threshold, and the long windows catch them.
+#[test]
+fn a_dead_flow_on_a_slow_walk_is_lost() {
+    for (speed, len, stall_s) in [(0.8, 20.0, 20.0), (0.5, 15.0, 31.0)] {
+        let after = noisy_corridor(&cruise(speed, len), 0.0, Some(stall_s), stall_s);
+        let lost = lost_for_good(&after);
+        eprintln!("{speed} m/s: dead flow lost from {lost:?} s");
+        assert!(
+            lost.is_some_and(|t| t <= stall_s + 5.0),
+            "{speed} m/s: {lost:?}"
+        );
+    }
+}
+
+/// The flow dies while the walker stands 3 s mid-corridor; it moves off and
+/// the dead flow does not follow the accelerometer: lost, and stays lost.
+#[test]
+fn moving_off_on_a_dead_flow_is_lost() {
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(1.5, 1.0)
+        .line(15.0)
+        .speed_to(0.0, 1.0)
+        .wait(3.0)
+        .speed_to(1.5, 1.0)
+        .line(15.0)
+        .speed_to(0.0, 1.0)
+        .wait(1.0);
+    // Stopped from 13.7 s, moving off at 16.7 s.
+    let after = noisy_corridor(&path, 0.0, Some(15.0), 16.7);
+    let lost = lost_for_good(&after);
+    eprintln!("moving off on a dead flow: lost from {lost:?} s");
+    assert!(lost.is_some_and(|t| t <= 16.7 + 4.0), "{lost:?}");
+}

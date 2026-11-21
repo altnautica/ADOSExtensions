@@ -56,8 +56,9 @@ const MAX_GAP_S: f64 = 0.5;
 /// unmeasured ([`Attitude::measured_since`]): the integration bridges the gap
 /// with the later sample's rate, a guess, up to [`MAX_GAP_S`].
 pub const MAX_SAMPLE_GAP_NS: u64 = 200_000_000;
-/// How long the heading history reaches back.
-const HISTORY_NS: u64 = 2_000_000_000;
+/// How long the heading history reaches back: over the matcher's longest
+/// flow window pair (6 s), whose samples it turns into one frame.
+const HISTORY_NS: u64 = 7_000_000_000;
 /// Time constant of the gyro z-bias estimate: long against a scan's match
 /// noise, short against a gyro bias that drifts with temperature (a
 /// simulated one went from 0.03 to 0.23 degrees/s and back over eight
