@@ -141,6 +141,23 @@ fn component(frame: &[u8]) -> Option<u8> {
     }
 }
 
+/// The sender's system id of a MAVLink 1 or 2 frame.
+fn system(frame: &[u8]) -> Option<u8> {
+    match *frame.first()? {
+        0xFD => frame.get(5).copied(),
+        0xFE => frame.get(3).copied(),
+        _ => None,
+    }
+}
+
+/// The system id of the autopilot that sent `frame` (component
+/// [`COMP_AUTOPILOT`]); `None` for any other sender.
+pub fn autopilot_system(frame: &[u8]) -> Option<u8> {
+    (component(frame)? == COMP_AUTOPILOT)
+        .then(|| system(frame))
+        .flatten()
+}
+
 /// `MAV_COMP_ID_AUTOPILOT1`.
 const COMP_AUTOPILOT: u8 = 1;
 

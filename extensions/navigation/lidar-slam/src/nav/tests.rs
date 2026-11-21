@@ -423,10 +423,14 @@ fn a_map_restarted_without_the_fc_turn_stays_lost() {
 }
 
 /// An FC feed that has heard the autopilot's heartbeat (`armed` or not)
-/// but holds no attitude reaching back to any pose: its IMU feed stalled.
+/// after one attitude long before the poses (the feed's autopilot known)
+/// and nothing since: its IMU feed stalled, no attitude reaches back to any
+/// pose.
 fn fc_stalled(armed: bool) -> FcEkfPose {
+    use ados_mapping_pose::fc_ekf::test_frames::{att, heartbeat};
     let fc = FcEkfPose::new();
-    fc.on_frame(&ados_mapping_pose::fc_ekf::test_frames::heartbeat(armed), 0);
+    fc.on_frame(&att(0, [1.0, 0.0, 0.0, 0.0]), 0);
+    fc.on_frame(&heartbeat(armed), 0);
     fc
 }
 

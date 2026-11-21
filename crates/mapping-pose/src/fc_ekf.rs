@@ -44,7 +44,8 @@ use crate::align::GNSS_SETTLE_MS;
 use crate::fc_flow;
 use crate::geodesy::{EnuFrame, R_ENU_NED, R_FRD_FLU};
 use crate::mavlink_msg::{
-    decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, LocalPositionNed, RawImu,
+    autopilot_system, decode, AttitudeQuaternion, FcMessage, GpsGlobalOrigin, LocalPositionNed,
+    RawImu,
 };
 use crate::pose::{PoseEstimate, PoseProvider, PoseTrack};
 use crate::se3;
@@ -268,6 +269,10 @@ struct FeedInner {
     sink: Option<NavSink>,
     /// The autopilot's last `HEARTBEAT` armed flag; `None` before one.
     armed: Option<bool>,
+    /// The system id of the autopilot whose attitude this feed follows,
+    /// from its first attitude: only its own heartbeat says whether the
+    /// vehicle is armed (a swarm peer's, relayed, never does).
+    fc_system: Option<u8>,
 }
 
 /// The FC's heading at one attitude.
@@ -480,6 +485,9 @@ impl FcEkfPose {
         let mut estimate = None;
         let nav = match msg {
             FcMessage::Attitude(a) => {
+                if g.fc_system.is_none() {
+                    g.fc_system = autopilot_system(frame);
+                }
                 g.clock.note(a.time_boot_ms as i128 * 1_000_000, arrival_ns);
                 g.fc_ms = Some(a.time_boot_ms);
                 g.attitude = Some(a);
@@ -543,7 +551,10 @@ impl FcEkfPose {
                     Some(NavSample::Velocity { t_ns, v })
                 }),
             FcMessage::Armed(armed) => {
-                g.armed = Some(armed);
+                // Before the feed knows its autopilot, no heartbeat counts.
+                if g.fc_system.is_some() && autopilot_system(frame) == g.fc_system {
+                    g.armed = Some(armed);
+                }
                 None
             }
             FcMessage::GpsFix(fix) => {
@@ -1187,20 +1198,27 @@ mod tests {
         assert!(p.turn_between(ms(500), ms(1_100)).is_none());
     }
 
-    /// The autopilot's heartbeat sets the armed flag; a companion's (an
-    /// invalid autopilot) does not.
+    /// The autopilot's heartbeat sets the armed flag once the feed knows its
+    /// autopilot from its attitude; one before that, a companion's (an
+    /// invalid autopilot) and another system's (a swarm peer, relayed) do
+    /// not.
     #[test]
-    fn the_autopilot_heartbeat_says_whether_the_vehicle_is_armed() {
+    fn only_the_feeds_own_autopilot_heartbeat_says_whether_it_is_armed() {
         use super::test_frames::heartbeat;
         let p = FcEkfPose::new();
-        assert_eq!(p.armed(), None);
         p.on_frame(&heartbeat(false), 0);
+        assert_eq!(p.armed(), None, "before the feed's autopilot is known");
+        p.on_frame(&att(0, [1.0, 0.0, 0.0, 0.0]), 0);
+        p.on_frame(&heartbeat(false), 1);
         assert_eq!(p.armed(), Some(false));
-        p.on_frame(&heartbeat(true), 1);
+        p.on_frame(&heartbeat(true), 2);
         assert_eq!(p.armed(), Some(true));
         let mut companion = heartbeat(false);
         companion[10 + 5] = 8;
-        p.on_frame(&companion, 2);
+        p.on_frame(&companion, 3);
+        let mut peer = heartbeat(false);
+        peer[5] = 2;
+        p.on_frame(&peer, 4);
         assert_eq!(p.armed(), Some(true));
     }
 }
