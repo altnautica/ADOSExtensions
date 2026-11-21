@@ -297,6 +297,12 @@ pub trait PoseProvider: Send + Sync {
     /// its value.
     fn feed_fc_position(&self, _t_ns: u64, _ne_m: [f64; 2]) {}
 
+    /// The true specific force (body FLU, m/s²) of the IMU sample at host
+    /// `t_ns` fed just before, when that sample carries the flight
+    /// controller's attitude as gravity instead: the planar matcher checks
+    /// a measured velocity along a corridor against it.
+    fn feed_specific_force(&self, _t_ns: u64, _force: [f64; 3]) {}
+
     /// The pose holds one floor only (a planar LiDAR cannot see a level
     /// change); the capture HUD says so.
     fn single_floor(&self) -> bool {

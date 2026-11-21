@@ -106,6 +106,22 @@ const FLOW_MAX_DECEL_MPS2: f64 = 8.0;
 const FLOW_MEAN_SAMPLES: usize = 5;
 /// How far before a drop the drop test looks for the speed it fell from, ns.
 const FLOW_DROP_LOOKBACK_NS: u64 = 500_000_000;
+/// The flow is checked against the accelerometer over two windows this
+/// long, back to back, ns: means over 15 samples of a 50 Hz flow sensor.
+const FLOW_IMU_WINDOW_NS: u64 = 300_000_000;
+/// A change between the two windows' flow means over this, m/s, ...
+const FLOW_IMU_CHANGE_MPS: f64 = 1.0;
+/// ... of which the accelerometer ([`LocalSlam::feed_specific_force`])
+/// shows less than this fraction (room for its bias and the attitude's
+/// error) is no motion: the flow sensor stalled, read noise or jumped.
+const FLOW_IMU_SHOWN_FRAC: f64 = 0.3;
+/// A stalled flow is back once its window mean reads within this, m/s, of
+/// the velocity it stalled at, carried on by the accelerometer.
+const FLOW_IMU_AGREE_MPS: f64 = 0.75;
+/// The accelerometer's velocity change is integrated over this long, ns.
+const IMU_TRACK_NS: u64 = 1_500_000_000;
+/// IMU samples further apart than this break the integration, ns.
+const IMU_TRACK_MAX_GAP_NS: u64 = 50_000_000;
 /// A degenerate match with no measured velocity along its free direction
 /// leaves the pose unmeasured there; after this long, seconds, it is lost
 /// ([`PoseOut::unmeasured_free_s`]) and stays lost while the matches stay
@@ -281,6 +297,9 @@ struct Flow {
     stalled: bool,
     /// Since when it has read under [`FLOW_STALL_MPS`] there.
     low_since: Option<u64>,
+    /// The velocity the flow stalled at, local frame, and when
+    /// ([`LocalSlam::flow_ref`]).
+    flow_ref: Option<(u64, Vector2<f64>)>,
 }
 
 /// The measured velocity along the loose directions, judged on sample means
@@ -498,6 +517,14 @@ pub struct LocalSlam {
     /// Since when the flow has read under [`FLOW_STALL_MPS`] along a loose
     /// direction.
     flow_low_since: Option<u64>,
+    /// While the flow is stalled, the vehicle's velocity (local frame) at
+    /// the given time: the one it stalled at, carried on by the
+    /// accelerometer ([`FLOW_IMU_AGREE_MPS`]).
+    flow_ref: Option<(u64, Vector2<f64>)>,
+    /// The accelerometer's horizontal specific force integrated, in the
+    /// attitude's levelled frame: `(t_ns, velocity change, segment)`, the
+    /// last [`IMU_TRACK_NS`]; a new segment starts after a gap.
+    imu_track: VecDeque<(u64, Vector2<f64>, u32)>,
     /// Projector onto the translation directions the last match pinned
     /// firmly (information at least [`FLOW_CHECK_RATIO`] of the largest),
     /// local frame: where a measured velocity is checked against the
@@ -549,6 +576,8 @@ impl LocalSlam {
             flow_agree_since: None,
             flow_stalled: false,
             flow_low_since: None,
+            flow_ref: None,
+            imu_track: VecDeque::new(),
             pinned: None,
         }
     }
@@ -571,6 +600,66 @@ impl LocalSlam {
 
     pub fn feed_imu(&mut self, s: &ImuSample) {
         self.att.update(s);
+    }
+
+    /// The accelerometer's true specific force at `t_ns`, IMU frame, m/s²,
+    /// when the IMU samples fed carry the flight controller's attitude as
+    /// gravity instead (its fused attitude does not follow the thrust axis
+    /// through a sustained acceleration as an accelerometer-corrected one
+    /// does). Levelled with the attitude and integrated, it checks the
+    /// measured velocity along a direction the scans leave loose
+    /// ([`FLOW_IMU_CHANGE_MPS`]). Feed it after the IMU sample of its time.
+    pub fn feed_specific_force(&mut self, t_ns: u64, force: [f64; 3]) {
+        if !self.att.has_data() || self.imu_track.back().is_some_and(|&(t, _, _)| t >= t_ns) {
+            return;
+        }
+        let a = self.att.level_accel(force);
+        let a = Vector2::new(a[0], a[1]);
+        let next = match self.imu_track.back() {
+            Some(&(t, v, seg)) if t_ns - t <= IMU_TRACK_MAX_GAP_NS => {
+                (t_ns, v + a * ((t_ns - t) as f64 * 1e-9), seg)
+            }
+            Some(&(_, _, seg)) => (t_ns, Vector2::zeros(), seg + 1),
+            None => (t_ns, Vector2::zeros(), 0),
+        };
+        self.imu_track.push_back(next);
+        while self
+            .imu_track
+            .front()
+            .is_some_and(|&(t, _, _)| t + IMU_TRACK_NS < t_ns)
+        {
+            self.imu_track.pop_front();
+        }
+    }
+
+    /// The accelerometer's velocity change from `from` to `to`, the
+    /// attitude's levelled frame; `None` unless one unbroken stretch of
+    /// samples covers both.
+    fn imu_dv(&self, from: u64, to: u64) -> Option<Vector2<f64>> {
+        let at = |x: u64| {
+            let k = self.imu_track.partition_point(|&(t, _, _)| t < x);
+            let &(tb, vb, sb) = self.imu_track.get(k)?;
+            if tb == x {
+                return Some((vb, sb));
+            }
+            let &(ta, va, sa) = self.imu_track.get(k.checked_sub(1)?)?;
+            (sa == sb).then(|| (va + (vb - va) * ((x - ta) as f64 / (tb - ta) as f64), sa))
+        };
+        let ((va, sa), (vb, sb)) = (at(from)?, at(to)?);
+        (sa == sb).then_some(vb - va)
+    }
+
+    /// The mean measured velocity over `(from, to]` and its mean time, from
+    /// at least [`FLOW_MEAN_SAMPLES`] samples.
+    fn flow_mean(&self, from: u64, to: u64) -> Option<(Vector2<f64>, u64)> {
+        let (sum, ts, n) = self
+            .measured
+            .iter()
+            .filter(|&&(t, _)| t > from && t <= to)
+            .fold((Vector2::zeros(), 0u128, 0usize), |(s, ts, n), &(t, v)| {
+                (s + v, ts + t as u128, n + 1)
+            });
+        (n >= FLOW_MEAN_SAMPLES).then(|| (sum / n as f64, (ts / n as u128) as u64))
     }
 
     /// The flight controller's own heading of the IMU frame about the
@@ -658,6 +747,7 @@ impl LocalSlam {
         self.pinned = None;
         self.flow_stalled = false;
         self.flow_low_since = None;
+        self.flow_ref = None;
         self.last_insert = None;
         self.inserted = 0;
         self.suspect = None;
@@ -1061,6 +1151,7 @@ impl LocalSlam {
         }
         self.flow_stalled = flow.stalled;
         self.flow_low_since = flow.low_since;
+        self.flow_ref = flow.flow_ref;
         let motion = Motion {
             roll,
             pitch,
@@ -1435,23 +1526,62 @@ impl LocalSlam {
             .pinned
             .map(|p| Matrix2::identity() - p)
             .filter(|l| l.norm() > 1e-6);
-        let (stalled, low_since) = match loose {
-            None => (false, None),
+        let (stalled, low_since, flow_ref) = match loose {
+            None => (false, None, None),
             Some(l) => {
+                let to = t + span_ns;
                 let lc = (l * chord).norm();
                 let low = raw.is_some_and(|m| (l * m).norm() < FLOW_STALL_MPS);
                 let low_since = low.then(|| self.flow_low_since.unwrap_or(t));
-                let drop = self.flow_drop(&l, &heading, t + span_ns);
-                let stalled = if self.flow_stalled {
-                    !((self.unobserved.is_none() && lc < FLOW_STALL_MPS) || drop.moving)
-                } else {
-                    let stop_s = lc / FLOW_MAX_DECEL_MPS2 + VELOCITY_WINDOW_NS as f64 * 1e-9;
-                    (low && drop.abrupt)
-                        || (lc > FLOW_STALL_FROM_MPS
-                            && low_since
-                                .is_some_and(|s| t.saturating_sub(s) as f64 * 1e-9 >= stop_s))
+                let drop = self.flow_drop(&l, &heading, to);
+                // Flow means over the last window and the one before it, and
+                // a velocity change from the IMU's attitude frame turned into
+                // the local one.
+                let w = FLOW_IMU_WINDOW_NS;
+                let now = self.flow_mean(to.saturating_sub(w), to);
+                let before = self.flow_mean(to.saturating_sub(2 * w), to.saturating_sub(w));
+                let local = |at: u64, dv: Vector2<f64>| {
+                    Rotation2::new(heading.angle() - self.att.heading_at(at)) * dv
                 };
-                (stalled, low_since)
+                if self.flow_stalled {
+                    // The velocity the vehicle had when the flow stalled,
+                    // carried on by the IMU; the flow is back once it reads
+                    // that again.
+                    let carried = self.flow_ref.and_then(|(tr, vr)| {
+                        let (mn, tn) = now?;
+                        let dv = self.imu_dv(tr, tn)?;
+                        Some((tn, vr + local(tn, dv), mn))
+                    });
+                    let back = match carried {
+                        Some((_, vr, mn)) => (l * (heading * mn - vr)).norm() < FLOW_IMU_AGREE_MPS,
+                        None => drop.moving,
+                    };
+                    let clear = (self.unobserved.is_none() && lc < FLOW_STALL_MPS) || back;
+                    let flow_ref = (!clear)
+                        .then(|| carried.map(|(tn, vr, _)| (tn, vr)).or(self.flow_ref))
+                        .flatten();
+                    (!clear, low_since, flow_ref)
+                } else {
+                    // A change in the flow the accelerometer does not show.
+                    let unshown = match (now, before) {
+                        (Some((mn, tn)), Some((mb, tb))) => self.imu_dv(tb, tn).is_some_and(|dv| {
+                            let df = l * (heading * (mn - mb));
+                            let s = df.norm();
+                            let shown = (l * local(tn, dv)).dot(&df) / s.max(1e-9);
+                            s > FLOW_IMU_CHANGE_MPS && shown < FLOW_IMU_SHOWN_FRAC * s
+                        }),
+                        _ => false,
+                    };
+                    let stop_s = lc / FLOW_MAX_DECEL_MPS2 + VELOCITY_WINDOW_NS as f64 * 1e-9;
+                    let lingered = lc > FLOW_STALL_FROM_MPS
+                        && low_since.is_some_and(|s| t.saturating_sub(s) as f64 * 1e-9 >= stop_s);
+                    let stalled = unshown || (low && drop.abrupt) || lingered;
+                    let flow_ref = match before {
+                        Some((mb, tb)) if unshown => Some((tb, heading * mb)),
+                        _ => stalled.then_some((t1, chord)),
+                    };
+                    (stalled, low_since, flow_ref)
+                }
             }
         };
         let used = raw.filter(|_| agree && !stalled);
@@ -1472,6 +1602,7 @@ impl LocalSlam {
                 raw,
                 stalled,
                 low_since,
+                flow_ref,
             },
         )
     }

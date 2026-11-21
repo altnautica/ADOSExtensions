@@ -380,6 +380,12 @@ pub fn sink(pose: Arc<dyn PoseProvider>, fc_is_imu: bool, state: Arc<FeedState>)
             }
             let samples = vec![from_raw(t_ns, &imu, attitude)];
             pose.feed_imu(FC_IMU_ID, &ImuBatch { samples });
+            // The sample carries the FC's attitude as gravity; its own
+            // reading, the true specific force, checks the flow.
+            if attitude.is_some_and(|(t, _)| t.abs_diff(t_ns) <= MAX_GAP_NS) {
+                let a = imu.accel;
+                pose.feed_specific_force(t_ns, [a[0], -a[1], -a[2]]);
+            }
             state.note_raw_imu(t_ns, arrival_ns);
         }
         NavSample::Velocity { t_ns, v } if fc_is_imu => {
@@ -757,6 +763,7 @@ mod tests {
         Height(HeightSample),
         FcHeading(u64, f64),
         FcPosition(u64, [f64; 2]),
+        Force(u64, [f64; 3]),
     }
 
     #[derive(Default)]
@@ -796,6 +803,9 @@ mod tests {
         fn feed_fc_position(&self, t_ns: u64, ne_m: [f64; 2]) {
             self.got.lock().push(Got::FcPosition(t_ns, ne_m));
         }
+        fn feed_specific_force(&self, t_ns: u64, force: [f64; 3]) {
+            self.got.lock().push(Got::Force(t_ns, force));
+        }
     }
 
     fn samples() -> [NavSample; 3] {
@@ -827,7 +837,8 @@ mod tests {
 
     /// With the FC as the matcher's IMU every sample reaches the provider in
     /// arrival order: `RAW_IMU` in the FLU body with gravity from the FC's
-    /// attitude, the flow velocity, the height and the horizontal position.
+    /// attitude, then its own specific force, the flow velocity, the height
+    /// and the horizontal position.
     #[test]
     fn the_sink_feeds_every_sample_as_it_comes() {
         let fed = Arc::new(Fed::default());
@@ -838,7 +849,7 @@ mod tests {
             sink(s);
         }
         let got = fed.got.lock().clone();
-        let [Got::FcHeading(ht, heading), Got::Imu(src, imu), Got::Velocity(vsrc, v), Got::Height(h), Got::FcPosition(pt, ne)] =
+        let [Got::FcHeading(ht, heading), Got::Imu(src, imu), Got::Force(ft, force), Got::Velocity(vsrc, v), Got::Height(h), Got::FcPosition(pt, ne)] =
             got.as_slice()
         else {
             panic!("{got:?}");
@@ -850,6 +861,11 @@ mod tests {
             "{heading}"
         );
         assert_eq!((src.as_str(), vsrc.as_str()), (FC_IMU_ID, FC_IMU_ID));
+        assert_eq!(
+            (*ft, *force),
+            (100_000_000, [3.0, -0.0, 9.8]),
+            "the accelerometer's own reading, FLU"
+        );
         assert_eq!(imu.t_ns, 100_000_000);
         assert_eq!(
             imu.gyro,

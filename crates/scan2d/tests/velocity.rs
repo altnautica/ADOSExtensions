@@ -7,7 +7,7 @@ mod common;
 use std::f64::consts::PI;
 
 use ados_scan2d::{ImuSample, LocalSlam, PoseOut, Scan2dConfig, ScanInput, VelocitySample};
-use common::{rect, walk, Path, Rng, BEAMS, C1, PERIOD_NS};
+use common::{rect, walk, walk_forced, Path, Rng, BEAMS, C1, PERIOD_NS};
 
 fn cfg() -> Scan2dConfig {
     Scan2dConfig::for_sensor(0.05, 12.0, &[])
@@ -16,31 +16,49 @@ fn cfg() -> Scan2dConfig {
 /// Feed `imu` and `vel` (each in time order) up to every scan's last return,
 /// as the capture service does, then the scan; one pose per scan.
 fn replay(scans: &[ScanInput], imu: &[ImuSample], vel: &[VelocitySample]) -> Vec<PoseOut> {
-    replay_counted(scans, imu, vel)
+    replay_forced(scans, imu, &[], vel)
+}
+
+/// [`replay`], each IMU sample followed by its specific force from `force`
+/// (by index; none past its end).
+fn replay_forced(
+    scans: &[ScanInput],
+    imu: &[ImuSample],
+    force: &[[f64; 3]],
+    vel: &[VelocitySample],
+) -> Vec<PoseOut> {
+    replay_counted(scans, imu, force, vel)
         .into_iter()
         .map(|(p, _)| p)
         .collect()
 }
 
-/// [`replay`], with the scans the matcher's map holds after each one
+/// [`replay_forced`], with the scans the matcher's map holds after each one
 /// (`LocalSlam::inserted_scans`, from which the capture counts a new map).
 fn replay_counted(
     scans: &[ScanInput],
     imu: &[ImuSample],
+    force: &[[f64; 3]],
     vel: &[VelocitySample],
 ) -> Vec<(PoseOut, usize)> {
     let mut slam = LocalSlam::new(cfg());
-    let (mut i, mut v) = (imu.iter().peekable(), vel.iter().peekable());
+    let (mut i, mut v) = (imu.iter().enumerate().peekable(), vel.iter().peekable());
+    let feed_imu = |slam: &mut LocalSlam, (k, s): (usize, &ImuSample)| {
+        slam.feed_imu(s);
+        if let Some(f) = force.get(k) {
+            slam.feed_specific_force(s.t_ns, *f);
+        }
+    };
     scans
         .iter()
         .map(|s| {
             let end = s.t_ns + s.t_offset_ns.iter().copied().max().unwrap_or(0) as u64;
             loop {
-                let ti = i.peek().map(|x| x.t_ns).filter(|&t| t <= end);
+                let ti = i.peek().map(|x| x.1.t_ns).filter(|&t| t <= end);
                 let tv = v.peek().map(|x| x.t_ns).filter(|&t| t <= end);
                 match (ti, tv) {
                     (Some(a), Some(b)) if b < a => slam.feed_velocity(v.next().unwrap()),
-                    (Some(_), _) => slam.feed_imu(i.next().unwrap()),
+                    (Some(_), _) => feed_imu(&mut slam, i.next().unwrap()),
                     (None, Some(_)) => slam.feed_velocity(v.next().unwrap()),
                     (None, None) => break,
                 }
@@ -245,7 +263,7 @@ fn local_truth(rec: &Recording) -> Vec<[f64; 2]> {
 fn mine_drift_without_flow_is_never_good_far_off() {
     let rec = recorded(include_str!("data/mine_drift_flow.txt"));
     let scans: Vec<ScanInput> = rec.scans.iter().map(|s| s.0.clone()).collect();
-    let est = replay_counted(&scans, &rec.imu, &[]);
+    let est = replay_counted(&scans, &rec.imu, &[], &[]);
     let truth = local_truth(&rec);
     let ratio = cfg().degenerate_ratio;
     let lost_s = ados_scan2d::UNMEASURED_FREE_LOST_S;
@@ -540,8 +558,8 @@ fn a_hard_brake_with_sound_flow_stays_measured() {
         .line(15.0)
         .speed_to(0.0, 25.0 / 12.0)
         .wait(2.0);
-    let (scans, imu, truth) = walk(&world, &path, C1, 11);
-    let est = replay(&scans, &imu, &flow(&path, 1.0, 0.0, 5));
+    let (scans, imu, truth, force) = walk_forced(&world, &path, C1, 11);
+    let est = replay_forced(&scans, &imu, &force, &flow(&path, 1.0, 0.0, 5));
     let worst = est.iter().map(|p| p.unmeasured_free_s).fold(0.0, f64::max);
     let (end, walked) = (est.last().unwrap(), truth.last().unwrap().x);
     eprintln!(
@@ -625,13 +643,13 @@ fn a_noisy_hover_in_the_corridor_stays_measured() {
         .line(14.0)
         .speed_to(0.0, 1.0)
         .wait(15.0);
-    let (scans, imu, _) = walk(&world, &path, C1, 11);
+    let (scans, imu, _, force) = walk_forced(&world, &path, C1, 11);
     let mut rng = Rng::new(17);
     let mut vel = flow(&path, 1.0, 0.0, 5);
     for s in vel.iter_mut() {
         s.v = [s.v[0] + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
     }
-    let est = replay(&scans, &imu, &vel);
+    let est = replay_forced(&scans, &imu, &force, &vel);
     let t_stop = 1.0 + 1.0 + 14.0 / 1.5 + 1.0;
     let hover: Vec<_> = est
         .iter()
@@ -644,4 +662,66 @@ fn a_noisy_hover_in_the_corridor_stays_measured() {
     eprintln!("noisy hover: {lost} of {} hover scans lost", hover.len());
     assert!(hover.len() > 100);
     assert_eq!(lost, 0, "the noisy hover is never lost");
+}
+
+/// Down the 2 m corridor at 1.5 m/s on flow as noisy as a dusty floor reads
+/// (0.85 m/s a sample on each axis), the sensor loses the ground 9 s in and
+/// reads that noise around zero from then on: from the flow alone a noisy
+/// hover. The accelerometer shows no braking, so the flow is taken for
+/// stalled: the corridor goes unmeasured within 0.5 s and the pose is lost
+/// within 1.5 s. Before, it was never unmeasured and ended 11 m off.
+#[test]
+fn a_noisy_flow_stalling_midway_is_caught_by_the_accelerometer() {
+    let (world, _) = bare_corridor();
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(1.5, 1.0)
+        .line(20.0)
+        .speed_to(0.0, 1.0)
+        .wait(1.0);
+    let (scans, imu, _, force) = walk_forced(&world, &path, C1, 11);
+    let stall_ns = 9_000_000_000u64;
+    let noisy = |stall: bool| {
+        let mut rng = Rng::new(17);
+        let mut vel = flow(&path, 1.0, 0.0, 5);
+        for s in vel.iter_mut() {
+            let fwd = if stall && s.t_ns > stall_ns {
+                0.0
+            } else {
+                s.v[0]
+            };
+            s.v = [fwd + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
+        }
+        replay_forced(&scans, &imu, &force, &vel)
+    };
+    let control = noisy(false);
+    let lost_control = control
+        .iter()
+        .filter(|p| p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S)
+        .count();
+    let est = noisy(true);
+    let since = |i: usize| (est[i].t_ns as f64 - stall_ns as f64) * 1e-9;
+    let first = est
+        .iter()
+        .position(|p| p.t_ns > stall_ns && p.unmeasured_free_s > 0.0)
+        .expect("the stalled flow leaves the corridor unmeasured");
+    let lost = est
+        .iter()
+        .position(|p| {
+            p.t_ns > stall_ns && p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S
+        })
+        .expect("the stalled flow loses the pose");
+    eprintln!(
+        "noisy stall: unmeasured {:.2} s after, lost {:.2} s after; control {lost_control} of {} lost",
+        since(first),
+        since(lost),
+        control.len()
+    );
+    assert_eq!(lost_control, 0, "sound noisy flow is never lost");
+    assert!(
+        since(first) <= 0.5,
+        "unmeasured {:.2} s after",
+        since(first)
+    );
+    assert!(since(lost) <= 1.5, "lost {:.2} s after", since(lost));
 }

@@ -219,6 +219,15 @@ impl Attitude {
         (r, p)
     }
 
+    /// The horizontal part of an IMU-frame specific force `accel`, m/s², in
+    /// the attitude's levelled frame (turned by [`Self::heading`]): the
+    /// vehicle's horizontal acceleration, gravity being vertical. As good
+    /// as the roll and pitch: 1° off reads 0.17 m/s².
+    pub fn level_accel(&self, accel: [f64; 3]) -> [f64; 2] {
+        let a = self.q * (self.r_lidar_imu * Vector3::from(accel));
+        [a.x, a.y]
+    }
+
     /// Latest rate of the heading, rad/s.
     pub fn heading_rate(&self) -> f64 {
         self.heading_rate

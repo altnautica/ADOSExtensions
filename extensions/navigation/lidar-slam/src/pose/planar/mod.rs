@@ -125,6 +125,8 @@ enum Input {
     FcHeading(u64, f64),
     /// `(t_ns, north, east)`: [`PoseProvider::feed_fc_position`].
     FcPosition(u64, [f64; 2]),
+    /// `(t_ns, force)`: [`PoseProvider::feed_specific_force`].
+    Force(u64, [f64; 3]),
     Scan(ScanInput),
 }
 
@@ -368,6 +370,7 @@ fn run(
             Input::Height(samples) => samples.iter().for_each(|s| slam.feed_height(s)),
             Input::FcHeading(t_ns, heading) => slam.feed_fc_heading(t_ns, heading),
             Input::FcPosition(t_ns, ne_m) => slam.feed_fc_position(t_ns, ne_m),
+            Input::Force(t_ns, force) => slam.feed_specific_force(t_ns, force),
             Input::Scan(scan) => {
                 if let Some(p) = pending.take() {
                     process(&mut slam, p);
@@ -448,6 +451,13 @@ impl PoseProvider for PlanarLidarPose {
     fn feed_fc_position(&self, t_ns: u64, ne_m: [f64; 2]) {
         let Some(tx) = &self.tx else { return };
         if tx.try_send(Input::FcPosition(t_ns, ne_m)).is_err() {
+            self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn feed_specific_force(&self, t_ns: u64, force: [f64; 3]) {
+        let Some(tx) = &self.tx else { return };
+        if tx.try_send(Input::Force(t_ns, force)).is_err() {
             self.counters.imu_dropped.fetch_add(1, Ordering::Relaxed);
         }
     }

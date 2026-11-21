@@ -232,13 +232,27 @@ pub fn revolution(
 }
 
 /// Scans every period over the path's duration, with a level IMU at 200 Hz
-/// reporting the path's turn rate.
+/// reporting the path's turn rate and gravity alone.
 pub fn walk(
     world: &[Seg],
     path: &Path,
     sensor: Sensor,
     seed: u64,
 ) -> (Vec<ScanInput>, Vec<ImuSample>, Vec<Pose2>) {
+    let (scans, imu, truth, _) = walk_forced(world, path, sensor, seed);
+    (scans, imu, truth)
+}
+
+/// [`walk`], with each IMU sample's true specific force (IMU frame): the
+/// walker's horizontal acceleration in its own frame, over gravity. The
+/// samples themselves carry gravity alone, as the flight controller's
+/// attitude stand-in does.
+pub fn walk_forced(
+    world: &[Seg],
+    path: &Path,
+    sensor: Sensor,
+    seed: u64,
+) -> (Vec<ScanInput>, Vec<ImuSample>, Vec<Pose2>, Vec<[f64; 3]>) {
     let mut rng = Rng::new(seed);
     let pose_at = |t: f64| path.at_time(t);
     let n = (path.duration_s() / (PERIOD_NS as f64 * 1e-9)).floor() as usize;
@@ -250,20 +264,35 @@ pub fn walk(
         truth.push(pose_at(t));
     }
     let dt = 0.005;
-    let imu = (0..=(path.duration_s() / dt) as usize)
+    let (imu, force) = (0..=(path.duration_s() / dt) as usize)
         .map(|i| {
             let t = i as f64 * dt;
             let h = 1e-4;
             let rate = ados_scan2d::pose::wrap(pose_at(t + h).th - pose_at((t - h).max(0.0)).th)
                 / (t + h - (t - h).max(0.0));
-            ImuSample {
+            let [ax, ay] = body_accel(&pose_at, t);
+            let s = ImuSample {
                 t_ns: (t * 1e9).round() as u64,
                 gyro: [0.0, 0.0, rate],
                 accel: [0.0, 0.0, 9.81],
-            }
+            };
+            (s, [ax, ay, 9.81])
         })
-        .collect();
-    (scans, imu, truth)
+        .unzip();
+    (scans, imu, truth, force)
+}
+
+/// The walker's horizontal acceleration at `t`, in its own frame.
+fn body_accel(pose_at: &impl Fn(f64) -> Pose2, t: f64) -> [f64; 2] {
+    let h = 2e-3;
+    let t = t.max(h);
+    let (a, b, c) = (pose_at(t - h), pose_at(t), pose_at(t + h));
+    let (wx, wy) = (
+        (a.x - 2.0 * b.x + c.x) / (h * h),
+        (a.y - 2.0 * b.y + c.y) / (h * h),
+    );
+    let (s, co) = b.th.sin_cos();
+    [co * wx + s * wy, -s * wx + co * wy]
 }
 
 /// `b` expressed in the frame of `a`.
