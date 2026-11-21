@@ -305,13 +305,13 @@
       "additionalProperties": false,
       "properties": {
         "source": {
-          "description": "`realsense` (Intel RealSense D435i / D455), `we` (the World Engine depth stream) or `off`.",
+          "description": "`realsense` (Intel RealSense D435i / D455), `we` (the World Engine depth stream), `vision` (the vision engine's camera depth on the plugin bus; needs the `vision.depth.read` permission) or `off`.",
           "type": "string",
-          "enum": ["off", "realsense", "we"],
+          "enum": ["off", "realsense", "we", "vision"],
           "default": "off"
         },
         "extrinsic": {
-          "description": "The camera's mount on the body: `translation_m` in body forward-right-down from the body origin, and the rotation as `rpy_deg` (roll, pitch, yaw, Z-Y-X; all zero looks forward, pitch -90 straight down) or `quat_wxyz`, not both. Neither: straight ahead.",
+          "description": "The camera's mount on the body: `translation_m` in body forward-right-down from the body origin, and the rotation as `rpy_deg` (roll, pitch, yaw, Z-Y-X; all zero looks forward, pitch -90 straight down) or `quat_wxyz`, not both. Neither: straight ahead, except for `vision`, which then takes the camera pitch the vision engine reports.",
           "type": "object",
           "default": {},
           "additionalProperties": false,
@@ -350,6 +350,18 @@
           "minimum": 1,
           "maximum": 65535,
           "default": 7810
+        },
+        "vision_camera": {
+          "description": "`vision`: map only this camera's depth; empty takes every camera.",
+          "type": "string",
+          "default": ""
+        },
+        "vision_max_fit_age_ms": {
+          "description": "`vision`: a frame whose metric scale fit is older than this is counted and left out of the map, milliseconds.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 60000,
+          "default": 2000
         },
         "realsense": {
           "type": "object",

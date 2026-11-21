@@ -140,6 +140,7 @@
         "ui.slot.cockpit-panel",
         "ui.slot.flight-skill",
         "ui.slot.node-agent-page",
+        "vision.depth.read",
         "vision.frame.read"
       ],
       "halves": [

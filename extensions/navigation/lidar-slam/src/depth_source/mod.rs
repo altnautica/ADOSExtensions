@@ -5,6 +5,8 @@
 //!   ([`we`], wire format in [`wire`]);
 //! - `realsense`: an Intel RealSense D435i / D455 through librealsense2,
 //!   opened at run time ([`realsense`], Unix);
+//! - `vision`: the vision engine's camera depth (`vision.depth.v2` off the
+//!   plugin bus), metric frames only ([`vision`]);
 //! - `off`: none.
 //!
 //! Every driver hands out [`DepthFrame`]s: a 16-bit millimetre depth image
@@ -18,6 +20,7 @@
 pub mod config;
 #[cfg(unix)]
 pub mod realsense;
+pub mod vision;
 pub mod we;
 pub mod wire;
 
@@ -179,6 +182,8 @@ pub struct DepthHealth {
     pub drops: u64,
     /// Datagrams or frames refused as malformed.
     pub rejected: u64,
+    /// Frames left out for want of a metric scale (the `vision` source).
+    pub unscaled: u64,
     /// `stamp_ns` of the newest frame; 0 before the first.
     pub last_stamp_ns: u64,
 }
@@ -294,5 +299,14 @@ pub fn open(s: &DepthSettings) -> Result<Option<Box<dyn DepthSource>>, DepthSour
         DepthSourceKind::Realsense => Err(DepthSourceError::Unavailable(
             "RealSense needs a Unix build".into(),
         )),
+        DepthSourceKind::Vision => Ok(Some(Box::new(vision::VisionSource::open(
+            vision::mailbox().clone(),
+            vision::VisionConfig {
+                camera: s.vision_camera.clone(),
+                max_fit_age_ms: s.vision_max_fit_age_ms,
+                extrinsic,
+                frame_mount: s.extrinsic.rpy_deg.is_none() && s.extrinsic.quat_wxyz.is_none(),
+            },
+        )?))),
     }
 }

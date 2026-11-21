@@ -26,6 +26,7 @@ use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::sensor_bus::{run_ingest, SensorState};
 use ados_mapping_protocol::capture::{LidarStatus, PoseSource};
 use ados_protocol::shutdown::Shutdown;
+use ados_protocol::vision_depth_frame::VISION_DEPTH_FRAME_TOPIC;
 use ados_sdk::PluginContext;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, watch};
@@ -246,6 +247,23 @@ async fn subscribe_frames(ctx: &PluginContext, feeds: &Feeds, done: &mut bool) {
     }
 }
 
+/// The vision engine's depth frames for the `vision` depth source; retried on
+/// the next poll until it succeeds (it needs `vision.depth.read`).
+async fn subscribe_depth(ctx: &PluginContext) {
+    let mailbox = crate::depth_source::vision::mailbox();
+    if mailbox.subscribed() {
+        return;
+    }
+    match ctx
+        .events
+        .subscribe(VISION_DEPTH_FRAME_TOPIC, mailbox.callback())
+        .await
+    {
+        Ok(_) => mailbox.set_subscribed(true),
+        Err(e) => tracing::info!(error = %e, "navigation_vision_depth_unavailable"),
+    }
+}
+
 /// The FC messages and the capture state; each is retried on the next poll
 /// until it succeeds.
 async fn subscribe_feeds(ctx: &PluginContext, feeds: &Feeds, done: &mut [bool; 2]) {
@@ -349,6 +367,12 @@ pub async fn supervise(ctx: PluginContext, cancel: Shutdown) {
             }
         };
         let desired = values.and_then(|v| NavConfig::from_values(&v));
+        if desired
+            .as_ref()
+            .is_ok_and(|c| c.depth.source == DepthSourceKind::Vision)
+        {
+            subscribe_depth(&ctx).await;
+        }
         if let Some(r) = &run {
             let same = desired.as_ref().is_ok_and(|d| *d == r.config);
             if same && !r.rig_stale(&feeds.capture) {

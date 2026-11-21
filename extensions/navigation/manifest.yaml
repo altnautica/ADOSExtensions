@@ -310,6 +310,10 @@ agent:
     - id: hardware.usb
       required: false
       degraded_behavior: "No RealSense depth camera: `navigation.depth.source = realsense` reports the source unavailable and the 3D map runs on the other sensors."
+    # The vision engine's camera depth (`navigation.depth.source = vision`).
+    - id: vision.depth.read
+      required: false
+      degraded_behavior: "No camera depth from the vision engine: `navigation.depth.source = vision` reports the source unavailable and the 3D map runs on the other sensors."
     # lidar-slam publishes the 3D voxel map the pilot reads (shared memory).
     - id: shm.voxmap
       required: false

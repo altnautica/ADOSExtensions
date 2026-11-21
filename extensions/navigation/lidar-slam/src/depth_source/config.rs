@@ -37,6 +37,9 @@ pub enum DepthSourceKind {
     Realsense,
     /// The World Engine depth stream (`ADOSDEPTH1` frames over UDP).
     We,
+    /// The vision engine's camera depth (`vision.depth.v2` on the plugin
+    /// bus); needs `vision.depth.read`.
+    Vision,
 }
 
 /// The camera mount as configured (`navigation.depth.extrinsic`).
@@ -86,6 +89,11 @@ pub struct DepthSettings {
     /// Its depth port: 7810 + the vehicle's SITL lease.
     pub we_port: u16,
     pub realsense: RealsenseSettings,
+    /// `vision`: only this camera's frames; empty takes every camera.
+    pub vision_camera: String,
+    /// `vision`: a frame whose scale fit is older than this (ms) is counted,
+    /// not mapped.
+    pub vision_max_fit_age_ms: u32,
 }
 
 impl Default for DepthSettings {
@@ -96,9 +104,16 @@ impl Default for DepthSettings {
             we_host: "127.0.0.1".into(),
             we_port: 7810,
             realsense: RealsenseSettings::default(),
+            vision_camera: String::new(),
+            vision_max_fit_age_ms: VISION_MAX_FIT_AGE_MS,
         }
     }
 }
+
+/// The default oldest scale fit a `vision` frame is mapped with, ms.
+pub const VISION_MAX_FIT_AGE_MS: u32 = 2000;
+/// The largest `vision_max_fit_age_ms` accepted.
+pub const VISION_MAX_FIT_AGE_CAP_MS: u32 = 60_000;
 
 /// The RealSense stream sizes the driver asks for.
 pub const REALSENSE_SIZES: [(u32, u32); 2] = [(848, 480), (640, 480)];
@@ -117,6 +132,14 @@ impl DepthSettings {
                 }
                 if self.we_port == 0 {
                     return Err("we_port: 0 is not a port".into());
+                }
+            }
+            DepthSourceKind::Vision => {
+                if self.vision_max_fit_age_ms > VISION_MAX_FIT_AGE_CAP_MS {
+                    return Err(format!(
+                        "vision_max_fit_age_ms: {} is over {VISION_MAX_FIT_AGE_CAP_MS}",
+                        self.vision_max_fit_age_ms
+                    ));
                 }
             }
             DepthSourceKind::Realsense => {

@@ -74,6 +74,7 @@ export const CAPABILITY_IDS = [
   "ui.slot.video-overlay",
   "video.source.set",
   "video.whep.relay",
+  "vision.depth.read",
   "vision.detection.publish",
   "vision.detection.subscribe",
   "vision.frame.read",
