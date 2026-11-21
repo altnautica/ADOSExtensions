@@ -3,7 +3,9 @@
 //! [`supervise`] polls the `navigation.*` plugin config every
 //! [`CONFIG_POLL`]. While the config resolves, one run is alive: the
 //! sensor-bus ingest, the rig's LiDAR (when it declares one), the pose
-//! provider the config and rig ask for, and the lane. A changed config
+//! provider the config and rig ask for, the 3D voxel map with its depth
+//! camera (when the sensors or `navigation.voxmap` ask for it), and the
+//! lane. A changed config
 //! restarts the run; a changed rig document restarts it unless a capture
 //! session is recording. An invalid config leaves nothing running and says
 //! why on `GET /navigation/status`.
@@ -30,6 +32,7 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
 use crate::capture_state::CaptureWatch;
+use crate::depth_source::DepthSourceKind;
 use crate::lane::{run_lane, LaneDeps};
 use crate::lidar_source::{LidarRunner, SCAN_CHANNEL_DEPTH};
 use crate::nav::{NavSettings, TILES_DIR};
@@ -37,6 +40,7 @@ use crate::publish::Publisher;
 use crate::settings::{NavConfig, CONFIG_KEYS};
 use crate::status::Shared;
 use crate::topics;
+use crate::voxfeed::{FeedOptions, Sensors, VoxFeed};
 
 /// How often the plugin config is re-read.
 pub const CONFIG_POLL: Duration = Duration::from_secs(5);
@@ -98,6 +102,7 @@ struct Run {
     cancel: Shutdown,
     tasks: Vec<JoinHandle<()>>,
     lane: JoinHandle<()>,
+    voxfeed: Option<VoxFeed>,
 }
 
 impl Run {
@@ -147,6 +152,7 @@ impl Run {
             ados_mapping_pose::rig::lidar_sensor(r, &config.lidar.lidar_id)
                 .is_some_and(|(_, m)| m.pattern == ados_capture_contract::LidarModelPattern::Planar)
         });
+        let voxfeed = start_voxfeed(&config, lidar_rx.is_some(), lidar_planar);
         feeds.shared.reset_run();
         let deps = LaneDeps {
             settings: nav_settings(&config),
@@ -162,6 +168,7 @@ impl Run {
             capture: feeds.capture.clone(),
             shared: feeds.shared.clone(),
             scratch_dir: Some(work_dir.join("map").join(TILES_DIR)),
+            voxfeed: voxfeed.as_ref().map(VoxFeed::tx),
         };
         let lane = tokio::spawn(run_lane(deps, cancel.clone()));
         Self {
@@ -170,6 +177,7 @@ impl Run {
             cancel,
             tasks,
             lane,
+            voxfeed,
         }
     }
 
@@ -189,8 +197,28 @@ impl Run {
             t.abort();
             let _ = t.await;
         }
+        if let Some(v) = self.voxfeed {
+            // Joining waits up to a depth read; off the async workers.
+            let _ = tokio::task::spawn_blocking(move || v.stop()).await;
+        }
         feeds.router.detach();
     }
+}
+
+/// The 3D voxel map, when the config and the run's sensors ask for it.
+fn start_voxfeed(config: &NavConfig, lidar: bool, lidar_planar: bool) -> Option<VoxFeed> {
+    let sensors = Sensors {
+        lidar3d: lidar && !lidar_planar,
+        planar: lidar && lidar_planar,
+        depth: config.depth.source != DepthSourceKind::Off,
+    };
+    if !config.voxmap.active(sensors) {
+        tracing::info!(?sensors, "voxmap_off");
+        return None;
+    }
+    VoxFeed::start(FeedOptions::for_run(&config.voxmap, sensors, &config.depth))
+        .map_err(|e| tracing::warn!(error = %e, "voxmap_unavailable"))
+        .ok()
 }
 
 /// The run's LiDAR: the driver with its start retry, and its link status

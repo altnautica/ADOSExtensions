@@ -383,6 +383,44 @@
         }
       }
     },
+    "navigation.voxmap": {
+      "description": "The 3D voxel map the ADOS pilot plans and brakes on, published to it through shared memory at 10 Hz.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "description": "null: on when the LiDAR is a 3D LiDAR, when a depth camera is configured, or when the LiDAR is planar and `planar` is true. true or false forces it.",
+          "type": ["boolean", "null"],
+          "default": null
+        },
+        "planar": {
+          "description": "Feed planar LiDAR scans into the map, placed at their true height from the attitude; only returns within the flight band count.",
+          "type": "boolean",
+          "default": false
+        },
+        "window": {
+          "description": "`default`: 0.2 m voxels over 24 x 24 x 10 m. `fine`: 0.15 m voxels over 30 x 30 x 12 m, for an RK3588-class board with 8 GB.",
+          "type": "string",
+          "enum": ["default", "fine"],
+          "default": "default"
+        },
+        "esdf_every": {
+          "description": "Update the obstacle-distance field every this many map frames (2 halves its cost on a slower board).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 1
+        },
+        "depth_max_range_m": {
+          "description": "Depth camera returns farther than this are left out of the map, metres.",
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 20,
+          "default": 10
+        }
+      }
+    },
     "firmware": {
       "type": "object",
       "title": "Flight firmware",

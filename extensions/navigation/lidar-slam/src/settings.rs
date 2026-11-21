@@ -21,6 +21,7 @@ pub const KEY_LIDAR: &str = "navigation.lidar";
 pub const KEY_MEMORY_BUDGET_MB: &str = "navigation.memory_budget_mb";
 pub const KEY_MAP_PLACEMENT: &str = "navigation.map_placement";
 pub const KEY_DEPTH: &str = "navigation.depth";
+pub const KEY_VOXMAP: &str = "navigation.voxmap";
 
 /// Every key the service reads.
 pub const CONFIG_KEYS: &[&str] = &[
@@ -32,6 +33,7 @@ pub const CONFIG_KEYS: &[&str] = &[
     KEY_MEMORY_BUDGET_MB,
     KEY_MAP_PLACEMENT,
     KEY_DEPTH,
+    KEY_VOXMAP,
 ];
 
 /// The configured pose provider (`navigation.pose_provider`). `Auto` picks
@@ -82,6 +84,8 @@ pub struct NavConfig {
     pub lidar: LidarSettings,
     /// The depth camera (`navigation.depth`); see [`crate::depth_source::config`].
     pub depth: crate::depth_source::DepthSettings,
+    /// The 3D voxel map (`navigation.voxmap`); see [`crate::voxfeed::config`].
+    pub voxmap: crate::voxfeed::VoxmapSettings,
     /// `None`: 80 % of the unit's memory cap.
     pub memory_budget_mb: Option<u64>,
     pub map_placement: ComputePlacement,
@@ -96,6 +100,7 @@ impl Default for NavConfig {
             vio: VioSettings::default(),
             lidar: LidarSettings::default(),
             depth: crate::depth_source::DepthSettings::default(),
+            voxmap: crate::voxfeed::VoxmapSettings::default(),
             memory_budget_mb: None,
             map_placement: ComputePlacement::default(),
         }
@@ -116,6 +121,7 @@ impl NavConfig {
             vio: typed(values, KEY_VIO, d.vio)?,
             lidar: typed(values, KEY_LIDAR, d.lidar)?,
             depth: crate::depth_source::config::resolve(values, KEY_DEPTH)?,
+            voxmap: crate::voxfeed::config::resolve(values, KEY_VOXMAP)?,
             memory_budget_mb: optional_unsigned(values, KEY_MEMORY_BUDGET_MB)?,
             map_placement: typed(values, KEY_MAP_PLACEMENT, d.map_placement)?,
         })

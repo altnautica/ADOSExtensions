@@ -3978,6 +3978,7 @@ dependencies = [
  "ados-scan2d",
  "ados-sdk",
  "ados-sensorbus",
+ "ados-voxmap",
  "anyhow",
  "async-trait",
  "axum",

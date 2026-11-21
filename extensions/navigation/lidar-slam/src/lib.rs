@@ -10,6 +10,8 @@
 //!   choice from the config and rig;
 //! - [`lidar_source`]: the RPLIDAR and Livox drivers behind one runner;
 //! - [`depth_source`]: the World Engine and RealSense depth cameras;
+//! - [`voxfeed`]: the 3D voxel map the pilot reads, fed by the 3D LiDAR,
+//!   the depth camera and (when asked) the planar LiDAR;
 //! - [`nav`]: the north-aligned navigation map, live occupancy and sweep
 //!   cloud, the flight controller's IMU feed and the scans waiting for their
 //!   pose;
@@ -32,6 +34,7 @@ pub mod status;
 pub mod supervisor;
 pub mod sweep;
 pub mod topics;
+pub mod voxfeed;
 
 use std::path::PathBuf;
 

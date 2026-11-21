@@ -69,6 +69,8 @@ pub struct LaneDeps {
     pub shared: Arc<Shared>,
     /// Where evicted occupancy tiles go.
     pub scratch_dir: Option<PathBuf>,
+    /// The 3D voxel map's feed; `None` when the map does not run.
+    pub voxfeed: Option<crate::voxfeed::VoxFeedTx>,
 }
 
 pub(crate) struct Lane {
@@ -81,6 +83,7 @@ pub(crate) struct Lane {
     capture: CaptureWatch,
     shared: Arc<Shared>,
     scratch_dir: Option<PathBuf>,
+    voxfeed: Option<crate::voxfeed::VoxFeedTx>,
     pub(crate) nav: NavMap,
     /// LiDAR scans waiting for their pose before they are placed.
     scan_wait: ScanWait,
@@ -111,6 +114,7 @@ impl Lane {
             capture: deps.capture.clone(),
             shared: deps.shared.clone(),
             scratch_dir: deps.scratch_dir.clone(),
+            voxfeed: deps.voxfeed.clone(),
             nav: NavMap::new(deps.settings),
             scan_wait: ScanWait::default(),
             fc_imu_prev: None,
@@ -225,12 +229,21 @@ impl Lane {
         if let (true, Some(polar)) = (self.nav.streams(), &polar) {
             self.out.scan_polar(polar).await;
         }
+        // The whole cloud, before any flattening, with the sensor pose the
+        // live map placed it at; the hand-off never waits.
+        if let (Some(v), Some(polar)) = (&self.voxfeed, &polar) {
+            let blocked = self.blocked_azimuth_deg(&scan.sensor_id);
+            v.lidar(scan, polar, mount, blocked, self.lidar_planar);
+        }
     }
 
     /// The pose lane's poll ([`NAV_POLL`]).
     pub(crate) async fn on_nav_tick(&mut self) {
         self.feed_fc_attitude();
         if let Some(pd) = self.drain_poses() {
+            if let Some(v) = &self.voxfeed {
+                v.pose(&pd);
+            }
             self.out.pose(&pd).await;
         }
         self.place_scans().await;
@@ -318,6 +331,11 @@ impl Lane {
         view.health = self.pose.as_ref().map(|p| p.health());
         view.pose_age_ms = latest.map(|e| now.saturating_sub(e.t_ns) / 1_000_000);
         view.map = Some(out.status);
+        view.voxmap = Some(
+            self.voxfeed
+                .as_ref()
+                .map_or_else(Default::default, crate::voxfeed::VoxFeedTx::health),
+        );
     }
 
     fn on_bus(&self, ev: BusEvent) {

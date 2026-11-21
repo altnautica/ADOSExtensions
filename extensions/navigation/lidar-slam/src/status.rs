@@ -23,6 +23,8 @@ pub struct StatusView {
     pub pose_age_ms: Option<u64>,
     pub lidar: Option<LidarStatus>,
     pub map: Option<MapStatus>,
+    /// The 3D voxel map; null before the first status tick of a run.
+    pub voxmap: Option<crate::voxfeed::VoxmapHealth>,
 }
 
 /// State shared between the lane and the routes.

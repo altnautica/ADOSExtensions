@@ -52,6 +52,7 @@ fn deps(pose: Option<Arc<dyn PoseProvider>>, planar: bool) -> (LaneDeps, mpsc::R
         capture: CaptureWatch::default(),
         shared: Arc::new(Shared::default()),
         scratch_dir: None,
+        voxfeed: None,
     };
     (deps, rx)
 }

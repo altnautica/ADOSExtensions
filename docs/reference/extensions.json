@@ -133,6 +133,7 @@
         "network.outbound",
         "node.info.read",
         "sensor.stream.read",
+        "shm.voxmap",
         "telemetry.extend",
         "telemetry.read",
         "telemetry.subscribe.navigation",

@@ -11,6 +11,8 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 - Depth camera drivers for the LiDAR service, set by `navigation.depth`: an Intel RealSense D435i or D455 through librealsense2 (Apache-2.0, built for x86_64 and aarch64 against glibc 2.28 and shipped as a payload in the drone and Visor profiles), and the World Engine depth stream over UDP. Each frame carries its intrinsics and the camera's mount, and turns into body-frame points; a missing library or camera reports the source unavailable.
 
+- A 3D voxel map for the ADOS pilot, published at 10 Hz through the agent's shared-memory voxel-map seam (permission `shm.voxmap`). Its own thread builds it from the whole 3D LiDAR cloud (before the 360-bin flattening), from the depth camera, which the service now opens, through its mount, and, with `navigation.voxmap.planar`, from planar scans placed at their true height, only in-band returns counting. It runs by default with a 3D LiDAR or a depth camera; `navigation.voxmap` sets it. The hand-off drops the oldest input when the map falls behind, never stalling the LiDAR path, and `GET /navigation/status` reports the map's tier, rate, p95 frame cost, drops and depth camera state.
+
 ### Fixed
 
 - The live occupancy map no longer paints the underside of a tree crown as a wall. A planar scan leaning with the drone reached the leaves over the flight a metre or two off, and every such return became a permanent wall at flight height (and the cells along its beam free). A return levelled more than 0.33 m over the sensor (the airframe's top plus 0.3 m, the band the ADOS pilot's brake keeps walls in) now paints neither; the sweep cloud keeps it.

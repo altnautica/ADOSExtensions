@@ -30,6 +30,7 @@ ados-livox = { path = "livox" }
 ados-rplidar = { path = "rplidar" }
 ados-scan2d = { workspace = true }
 ados-livemap = { workspace = true }
+ados-voxmap = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = "0.22"

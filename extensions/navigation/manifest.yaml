@@ -310,6 +310,10 @@ agent:
     - id: hardware.usb
       required: false
       degraded_behavior: "No RealSense depth camera: `navigation.depth.source = realsense` reports the source unavailable and the 3D map runs on the other sensors."
+    # lidar-slam publishes the 3D voxel map the pilot reads (shared memory).
+    - id: shm.voxmap
+      required: false
+      degraded_behavior: "No 3D voxel map for the pilot: it plans and brakes on the flattened scan alone, and the Navigation status names the map's publishing error."
   mavlink_components:
     - component_id: 198
       component_kind: vio
