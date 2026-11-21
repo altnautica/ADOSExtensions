@@ -101,6 +101,7 @@ impl Lane {
 
     /// With the FC feeding the LiDAR pose, the pose follows the FC IMU feed
     /// ([`fc_imu::FeedState::degraded`], [`fc_imu::hold_poses_to_feed`]).
+    /// `now_ns` on the feed's clock ([`fc_imu::FeedState::now_ns`]).
     pub(super) fn degrade_on_imu_feed(&mut self, poses: &mut [PoseEstimate], now_ns: u64) {
         if !self.fc_feeds_lidar_pose() {
             return;
@@ -161,7 +162,7 @@ impl Lane {
         if !self.fc_feeds_lidar_pose() {
             return None;
         }
-        let now = ados_mapping_pose::clock::mono_ns();
+        let now = self.fc_nav.now_ns();
         let unconfirmed = self
             .pose
             .as_ref()

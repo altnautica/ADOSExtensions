@@ -114,7 +114,8 @@ impl Lane {
             nav: NavMap::new(deps.settings),
             scan_wait: ScanWait::default(),
             fc_imu_prev: None,
-            fc_nav: Default::default(),
+            // Judged on ADOS time: a lockstep hold is no IMU stall.
+            fc_nav: Arc::new(fc_imu::FeedState::on(ados_sdk::clock())),
             imu_feed_degraded: None,
             nav_map_restarts: 0,
             nav_feed: NavFeedStats::default(),
@@ -246,7 +247,8 @@ impl Lane {
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as i64);
-        self.degrade_on_imu_feed(&mut out, now_mono_ns);
+        let feed_now = self.fc_nav.now_ns();
+        self.degrade_on_imu_feed(&mut out, feed_now);
         let (fc_up, heading) = (self.fc_up(), self.fc_heading());
         let fc = self.fc.clone();
         self.nav.on_matcher_poses(

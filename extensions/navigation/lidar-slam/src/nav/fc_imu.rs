@@ -133,7 +133,9 @@ pub fn enu_flu(r_ned_frd: &[f64; 9]) -> [f64; 9] {
 /// No `RAW_IMU` frame received for longer than this at the capture loop's
 /// pose tick: the stream stalled. Received, not stamped: a simulator below
 /// real time stamps its samples ever further behind the host clock while
-/// every one arrives on time.
+/// every one arrives on time. On ADOS time ([`FeedState::on`]): a node
+/// following the simulator judges arrivals on sim time, so a lockstep hold
+/// (seconds of wall time with sim time standing still) is no stall.
 const RAW_IMU_STALE_NS: u64 = 250_000_000;
 /// Fewer `RAW_IMU` frames than this received over the last second: the
 /// stream is starved (the FC is asked for 50 or 100 Hz).
@@ -146,7 +148,7 @@ const RAW_GAP_LOG_NS: u64 = 100_000_000;
 /// What the FC feed has handed the pose provider, shared between the
 /// MAVLink delivery thread ([`sink`]) and the capture loop (the attitude
 /// stand-in, the `nav_imu_feed` log and the pose health).
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct FeedState {
     imu_samples: AtomicU64,
     /// Host ns of the newest IMU sample handed on; 0 before the first.
@@ -155,16 +157,55 @@ pub struct FeedState {
     /// Host ns of the first `RAW_IMU` sample; 0 before it.
     raw_since_ns: AtomicU64,
     flow: AtomicBool,
-    /// Host arrival ns of the `RAW_IMU` frames of the last
-    /// [`RATE_WINDOW_NS`] up to the newest, oldest first.
+    /// Arrival times ([`Self::now_ns`]'s clock) of the `RAW_IMU` frames of
+    /// the last [`RATE_WINDOW_NS`] up to the newest, oldest first.
     raw_times: Mutex<VecDeque<u64>>,
     /// Waits between `RAW_IMU` frames over [`RAW_GAP_LOG_NS`] since the last
     /// [`Self::take_raw_gaps`]: how many, and the longest, ns.
     raw_gaps: AtomicU64,
     raw_gap_max_ns: AtomicU64,
+    /// The clock arrivals and health are judged on: `None` or wall time, the
+    /// host's monotonic clock (frames' own arrival times); sim time on a node
+    /// following the simulator.
+    clock: Option<Clock>,
+}
+
+impl std::fmt::Debug for FeedState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FeedState")
+            .field("raw_imu", &self.raw_imu())
+            .field("sim_time", &matches!(self.clock, Some(Clock::Sim(_))))
+            .finish_non_exhaustive()
+    }
 }
 
 impl FeedState {
+    /// A feed judged on `clock`, the plugin's ADOS time ([`ados_sdk::clock`]).
+    pub fn on(clock: Clock) -> Self {
+        Self {
+            clock: Some(clock),
+            ..Self::default()
+        }
+    }
+
+    /// Now on the feed's clock: sim time (0 before the first tick) on a node
+    /// following the simulator, else the host's monotonic clock.
+    pub fn now_ns(&self) -> u64 {
+        match &self.clock {
+            Some(c @ Clock::Sim(_)) => c.sim_ns().unwrap_or(0),
+            _ => ados_mapping_pose::clock::mono_ns(),
+        }
+    }
+
+    /// A frame's arrival on the feed's clock: on sim time the sim time it
+    /// arrived at, else its host arrival time.
+    fn arrival_ns(&self, host_arrival_ns: u64) -> u64 {
+        match &self.clock {
+            Some(Clock::Sim(_)) => self.now_ns(),
+            _ => host_arrival_ns,
+        }
+    }
+
     /// One IMU sample at host `t_ns` handed on.
     pub fn note_imu(&self, t_ns: u64) {
         self.imu_samples.fetch_add(1, Ordering::Relaxed);
@@ -172,9 +213,10 @@ impl FeedState {
     }
 
     /// One `RAW_IMU` sample at host `t_ns` handed on, its frame received at
-    /// host `arrival_ns`.
+    /// host `arrival_ns` (recorded on the feed's clock, [`Self::arrival_ns`]).
     fn note_raw_imu(&self, t_ns: u64, arrival_ns: u64) {
         self.note_imu(t_ns);
+        let arrival_ns = self.arrival_ns(arrival_ns);
         let mut times = self.raw_times();
         if let Some(&prev) = times.back() {
             let wait = arrival_ns.saturating_sub(prev);
@@ -233,7 +275,7 @@ impl FeedState {
         self.raw_imu.load(Ordering::Acquire)
     }
 
-    /// Whether, at host `now_ns`, the feed fails to measure the turn the
+    /// Whether, at `now_ns` ([`Self::now_ns`]), the feed fails to measure the turn the
     /// matcher's heading rides between scans: the attitude stand-in, or a
     /// `RAW_IMU` stream that stalled or arrives under 40 Hz. A pose the
     /// matcher reports good is then degraded.
@@ -252,7 +294,7 @@ impl FeedState {
         }
     }
 
-    /// `RAW_IMU` frames received over the second up to host `now_ns`;
+    /// `RAW_IMU` frames received over the second up to `now_ns` ([`Self::now_ns`]);
     /// `None` before `RAW_IMU`.
     pub fn raw_rate_hz(&self, now_ns: u64) -> Option<f32> {
         if !self.raw_imu() {
@@ -493,6 +535,74 @@ mod tests {
         sink(raw(last + 412_500_000, 0));
         assert_eq!(state.take_raw_gaps(), (1, 400.0));
         assert_eq!(state.take_raw_gaps(), (0, 0.0), "taken");
+    }
+
+    /// On a node following the simulator the feed is judged on sim time. A
+    /// rendered lockstep take runs at about a third of real time and holds
+    /// its clock for seconds: a 100 Hz stream then arrives at about 35 a
+    /// wall second, and during a hold none arrives at all, yet the feed is
+    /// steady. A stream that stops while sim time runs on still stalls.
+    #[test]
+    fn on_sim_time_a_held_clock_is_no_stall_and_a_slow_run_no_starvation() {
+        use ados_protocol::simclock::wire::{Tick, FLAG_LOCKSTEP};
+        use ados_protocol::simclock::SimFeed;
+        let feed = SimFeed::new();
+        let state = Arc::new(FeedState::on(Clock::Sim(feed.clone())));
+        let host = Arc::new(FeedState::default());
+        let sink_sim = sink(Arc::new(Fed::default()), true, state.clone());
+        let sink_host = sink(Arc::new(Fed::default()), true, host.clone());
+        let mut seq = 0u32;
+        let mut tick = |sim_ns: u64| {
+            seq += 1;
+            let t = Tick {
+                flags: FLAG_LOCKSTEP,
+                seq,
+                sim_ns,
+                grant_ns: sim_ns + 20_000_000,
+                speed: 0.0,
+            };
+            assert!(feed.ingest(&t, std::time::Instant::now()));
+        };
+        let raw = |t_ns: u64, arrival_ns: u64| NavSample::Imu {
+            t_ns,
+            arrival_ns,
+            imu: RawImu {
+                time_usec: t_ns / 1_000,
+                gyro: [0.0; 3],
+                accel: [0.0, 0.0, -9.8],
+            },
+            attitude: None,
+        };
+        // Two seconds of sim time at 100 Hz, at a third of real time (host
+        // arrivals over the last six seconds).
+        let start = ados_mapping_pose::clock::mono_ns() - 6_000_000_000;
+        let mut last_host = start;
+        for k in 0..200u64 {
+            let t = 1_000_000_000 + k * 10_000_000;
+            tick(t);
+            last_host = start + 3 * k * 10_000_000;
+            sink_sim(raw(t, last_host));
+            sink_host(raw(t, last_host));
+        }
+        tick(2_995_000_000);
+        assert_eq!(state.degraded(state.now_ns()), None);
+        assert_eq!(state.raw_rate_hz(state.now_ns()), Some(100.0));
+        assert_eq!(
+            host.degraded(last_host),
+            Some(ImuFeedReason::Starved),
+            "on wall time the same stream reads starved"
+        );
+        // A lockstep hold: wall time passes, sim time and the stream stand still.
+        std::thread::sleep(std::time::Duration::from_millis(1_500));
+        assert_eq!(state.degraded(state.now_ns()), None, "a hold is no stall");
+        assert_eq!(
+            host.degraded(ados_mapping_pose::clock::mono_ns()),
+            Some(ImuFeedReason::Stalled),
+            "on wall time a hold reads stalled"
+        );
+        // Sim time runs on 300 ms with no frame: stalled.
+        tick(3_300_000_000);
+        assert_eq!(state.degraded(state.now_ns()), Some(ImuFeedReason::Stalled));
     }
 
     /// No yaw rate reaching the matcher (the stand-in, a stalled feed) loses
