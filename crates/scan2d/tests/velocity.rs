@@ -465,3 +465,64 @@ fn a_pose_that_slid_against_the_flow_is_flagged_until_they_agree_again() {
     );
     assert!(doubled.iter().all(|p| !p.map_restarted), "no restart");
 }
+
+/// Down a bare corridor at 1.5 m/s, a flow sensor losing the ground reads
+/// near zero (its quality still over the floor). Along the corridor's axis
+/// the walls cannot judge it, so it agreed and the pose froze, never
+/// unmeasured. It now stalls: the stretch is unmeasured from the first
+/// degenerate scan, named past 0.3 s and lost past 1 s. Agreeing flow is
+/// followed as before.
+#[test]
+fn a_flow_stalling_along_the_corridor_leaves_it_unmeasured() {
+    let (world, _) = bare_corridor();
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(1.5, 1.0)
+        .line(20.0)
+        .speed_to(0.0, 1.0)
+        .wait(1.0);
+    let (scans, imu, truth) = walk(&world, &path, C1, 11);
+    let ratio = cfg().degenerate_ratio;
+
+    let good = replay(&scans, &imu, &flow(&path, 1.0, 0.0, 5));
+    let worst = good.iter().map(|p| p.unmeasured_free_s).fold(0.0, f64::max);
+    let (end, walked) = (good.last().unwrap(), truth.last().unwrap().x);
+    assert_eq!(worst, 0.0, "agreeing flow measures the corridor");
+    assert!(
+        (end.x - walked).abs() < 0.3,
+        "ended at {:.2} of {walked:.2}",
+        end.x
+    );
+
+    let stalled = replay(&scans, &imu, &flow(&path, 0.0, 0.0, 5));
+    let lost = stalled
+        .iter()
+        .position(|p| p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S)
+        .expect("the stalled stretch loses the pose");
+    // The stretch that lost it starts at its first degenerate scan (which
+    // reports 0 s): the stalled flow covered none of it.
+    let start = (0..lost)
+        .rev()
+        .find(|&i| stalled[i].unmeasured_free_s == 0.0)
+        .expect("a scan starts the stretch");
+    assert!(stalled[start].degeneracy < ratio);
+    assert!(
+        stalled[start - 1].degeneracy >= ratio,
+        "a degenerate scan went uncounted"
+    );
+    let after = |i: usize| (stalled[i].t_ns - stalled[start].t_ns) as f64 * 1e-9;
+    let named = start
+        + stalled[start..]
+            .iter()
+            .position(|p| p.unmeasured_free_s >= 0.3)
+            .expect("named");
+    let off = (stalled[lost].x - truth[lost].x).abs();
+    eprintln!(
+        "stalled flow: degenerate at {:.1} m, named after {:.2} s, lost after {:.2} s, {off:.2} m off",
+        truth[start].x,
+        after(named),
+        after(lost)
+    );
+    assert!(after(named) <= 0.4, "named after {:.2} s", after(named));
+    assert!(after(lost) <= 1.1, "lost after {:.2} s", after(lost));
+}

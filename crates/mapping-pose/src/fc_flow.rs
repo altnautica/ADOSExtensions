@@ -42,16 +42,21 @@ pub fn ground_range(r: &DistanceSensor) -> Option<f64> {
         .then_some(r.distance_m)
 }
 
+/// The lowest flow quality the matcher follows. A downward sensor over
+/// dusty or bare ground reads a sound rate at a few tens (a recorded mine
+/// drift at 18 to 68); under that it is losing the ground and its rate
+/// falls toward zero. Along a corridor's axis nothing else checks the
+/// flow: the scans constrain only across it.
+pub const MIN_QUALITY: u8 = 16;
+
 /// The body velocity along x and y (FLU), m/s, of a flow sample over
-/// `range_m`; `None` at quality 0 (the sensor tracks nothing). Any other
-/// quality is used, as the flight controller's EKF uses it: over dusty or
-/// bare ground the quality falls to a few tens while the rate stays sound,
-/// and that is where a corridor needs it most. A bad rate is kept out by
-/// its consistency with the scans (`ados_scan2d::LocalSlam::feed_velocity`),
-/// not by a quality floor.
+/// `range_m`; `None` under [`MIN_QUALITY`]. Above it a bad rate across the
+/// scans' constraints is kept out by its consistency with them, and one
+/// stalling along a free direction by the matcher's stall check
+/// (`ados_scan2d::LocalSlam::feed_velocity`).
 pub fn body_velocity(flow: &OpticalFlow, range_m: f64) -> Option<[f64; 2]> {
     let v = [flow.comp[1] * range_m, flow.comp[0] * range_m];
-    (flow.quality > 0 && v.iter().all(|x| x.is_finite())).then_some(v)
+    (flow.quality >= MIN_QUALITY && v.iter().all(|x| x.is_finite())).then_some(v)
 }
 
 #[cfg(test)]
@@ -77,13 +82,17 @@ mod tests {
     }
 
     /// A downward flow sensor over dusty mine floor reads quality 18 to 68
-    /// at a sound rate; only quality 0 (nothing tracked) is dropped.
+    /// at a sound rate and is used; under 16 it is losing the ground (a
+    /// near-zero rate along a corridor would freeze the pose) and dropped.
     #[test]
-    fn dusty_mine_flow_is_used() {
+    fn dusty_mine_flow_is_used_and_lost_ground_is_not() {
         let v = body_velocity(&flow([0.0, 2.0], 41), 1.8).unwrap();
         assert!((v[0] - 3.6).abs() < 1e-9, "{v:?}");
-        assert!(body_velocity(&flow([0.1, 0.1], 1), 1.0).is_some());
-        assert_eq!(body_velocity(&flow([0.1, 0.1], 0), 1.0), None);
+        assert!(body_velocity(&flow([0.1, 0.1], 18), 1.0).is_some());
+        assert!(body_velocity(&flow([0.1, 0.1], 16), 1.0).is_some());
+        for q in [0, 1, 15] {
+            assert_eq!(body_velocity(&flow([0.0, 0.01], q), 1.0), None, "q {q}");
+        }
         assert_eq!(body_velocity(&flow([f64::NAN, 0.1], 200), 1.0), None);
     }
 

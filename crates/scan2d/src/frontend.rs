@@ -87,6 +87,14 @@ const FLOW_AGREE_FRAC: f64 = 0.2;
 /// firmly; along a rough drift the scans hold the pose only loosely and lag
 /// a fast flight, so the flow is not judged against them there.
 const FLOW_CHECK_RATIO: f64 = 0.3;
+/// Along the directions the check does not judge (a corridor's axis) a
+/// measured velocity that reads under this, m/s, ...
+const FLOW_STALL_MPS: f64 = 0.1;
+/// ... while the matched chord there still moves over this has stalled (a
+/// flow sensor losing the ground reads near zero at a low quality): it is
+/// not followed until the scans pin every direction again, and a degenerate
+/// stretch goes unmeasured.
+const FLOW_STALL_FROM_MPS: f64 = 0.5;
 /// A degenerate match with no measured velocity along its free direction
 /// leaves the pose unmeasured there; after this long, seconds, it is lost
 /// ([`PoseOut::unmeasured_free_s`]) and stays lost while the matches stay
@@ -258,6 +266,8 @@ struct Unobserved {
 struct Flow {
     used: Option<Vector2<f64>>,
     raw: Option<Vector2<f64>>,
+    /// The flow stalled along a loose direction ([`FLOW_STALL_MPS`]).
+    stalled: bool,
 }
 
 /// A climb or descent in progress ([`LocalSlam::skip_climbing`]).
@@ -454,6 +464,9 @@ pub struct LocalSlam {
     /// Since when a flagged slide's displacements have agreed again
     /// ([`FLOW_CLEAR_M`]).
     flow_agree_since: Option<u64>,
+    /// A measured velocity stalled along a loose direction
+    /// ([`FLOW_STALL_MPS`]), held until the scans pin every direction.
+    flow_stalled: bool,
     /// Projector onto the translation directions the last match pinned
     /// firmly (information at least [`FLOW_CHECK_RATIO`] of the largest),
     /// local frame: where a measured velocity is checked against the
@@ -503,6 +516,7 @@ impl LocalSlam {
             flow_track: VecDeque::new(),
             flow_disagrees: false,
             flow_agree_since: None,
+            flow_stalled: false,
             pinned: None,
         }
     }
@@ -610,6 +624,7 @@ impl LocalSlam {
         self.gyro_offsets.clear();
         self.unobserved = None;
         self.pinned = None;
+        self.flow_stalled = false;
         self.last_insert = None;
         self.inserted = 0;
         self.suspect = None;
@@ -969,6 +984,7 @@ impl LocalSlam {
         } else if measured && reached && self.suspect.is_none() {
             self.confirmed_vel = velocity;
         }
+        self.flow_stalled = flow.stalled;
         let motion = Motion {
             roll,
             pitch,
@@ -1300,7 +1316,7 @@ impl LocalSlam {
         // over the same window turned by its middle heading: the two the
         // consistency check compares (a single scan interval's few flow
         // samples are too noisy to judge).
-        let (vel, omega, agree) = match self.history.front() {
+        let (vel, omega, agree, chord) = match self.history.front() {
             Some(&(t0, p0)) if t1 > t0 => {
                 let d = (t1 - t0) as f64 * 1e-9;
                 let turn = wrap(p1.th - p0.th);
@@ -1316,9 +1332,14 @@ impl LocalSlam {
                     }
                     _ => true,
                 };
-                ([c * cx + s * cy, -s * cx + c * cy], turn / d, agree)
+                ([c * cx + s * cy, -s * cx + c * cy], turn / d, agree, chord)
             }
-            _ => (self.restart_vel.unwrap_or([0.0, 0.0]), 0.0, true),
+            _ => (
+                self.restart_vel.unwrap_or([0.0, 0.0]),
+                0.0,
+                true,
+                Vector2::zeros(),
+            ),
         };
         let (dyaw, rate) = if self.att.has_data() {
             (heading - heading1, imu_rate)
@@ -1327,7 +1348,19 @@ impl LocalSlam {
         };
         let heading = Rotation2::new(p1.th + 0.5 * dyaw);
         let raw = self.measured_velocity(t1, t + span_ns).map(|m| heading * m);
-        let used = raw.filter(|_| agree);
+        // Along the directions the matches leave loose they cannot judge
+        // the flow; one that reads near zero there while the matched chord
+        // still moves has stalled, and stays unfollowed until the scans pin
+        // every direction again.
+        let loose = self.pinned.map(|p| Matrix2::identity() - p);
+        let stalled = loose.is_some_and(|l| {
+            l.norm() > 1e-6
+                && (self.flow_stalled
+                    || raw.is_some_and(|m| {
+                        (l * m).norm() < FLOW_STALL_MPS && (l * chord).norm() > FLOW_STALL_FROM_MPS
+                    }))
+        });
+        let used = raw.filter(|_| agree && !stalled);
         let measured = used.map(|m| heading.inverse() * m);
         let mut v = heading * measured.unwrap_or(Vector2::new(vel[0], vel[1]));
         if let (None, Some(u)) = (measured, &self.unobserved) {
@@ -1340,7 +1373,7 @@ impl LocalSlam {
             [vel[0], vel[1]],
             rate,
             v,
-            Flow { used, raw },
+            Flow { used, raw, stalled },
         )
     }
 

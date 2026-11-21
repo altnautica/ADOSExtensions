@@ -764,19 +764,24 @@ impl NavMap {
         fc_up: Option<f64>,
     ) -> ScanOut {
         ScanOut {
-            scan: Some(self.body_scan(scan, t_body_sensor, &[])),
+            scan: Some(self.body_scan(scan, t_body_sensor, &[], None)),
             polar: self.place_scan(scan, t_body_sensor, world, fc_up),
         }
     }
 
-    /// The binned body-frame scan; it needs no pose.
+    /// The binned body-frame scan; it needs no pose. `r_ned_frd` is the
+    /// flight controller's attitude at the scan, when known: it levels the
+    /// returns for the cut over the band ([`frames::body_scan`]).
     pub fn body_scan(
         &self,
         scan: &LidarScan,
         t_body_sensor: &[f64; 16],
         blocked_azimuth_deg: &[[f64; 2]],
+        r_ned_frd: Option<&[f64; 9]>,
     ) -> ScanDescriptor {
-        frames::body_scan(scan, t_body_sensor, blocked_azimuth_deg)
+        // World up in body FLU: minus the NED down row, FRD turned to FLU.
+        let up_body = r_ned_frd.map(|r| [-r[6], r[7], r[8]]);
+        frames::body_scan(scan, t_body_sensor, blocked_azimuth_deg, up_body)
     }
 
     /// Place one LiDAR scan. `world` is the provider's body pose at the scan
