@@ -139,6 +139,18 @@ describe("FollowMeTab", () => {
     expect(screen.getByTestId("fm-height-setpoint").textContent).toBe("4.0 m");
   });
 
+  it("names the phone position or a prediction as the subject source, nothing on vision", () => {
+    const h = harnessCtx();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...commandingFollow, subjectSource: "beacon" }} />);
+    expect(screen.getByTestId("fm-subject-source").textContent).toBe("Following on phone position");
+    cleanup();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...commandingFollow, subjectSource: "predicted" }} />);
+    expect(screen.getByTestId("fm-subject-source").textContent).toBe("Predicted");
+    cleanup();
+    render(<FollowMeTab ctx={h.ctx} followOverride={{ ...commandingFollow, subjectSource: "vision" }} />);
+    expect(screen.queryByTestId("fm-subject-source")).toBeNull();
+  });
+
   it.each([
     ["camera-range", "5.0 m · at least 5.0 m with camera-only range"],
     ["range-unknown", "5.0 m · held at 5.0 m until the range is measured"],

@@ -86,6 +86,14 @@ describe("normalizeFollowState", () => {
     expect(normalizeFollowState({}).heightReason).toBeNull();
   });
 
+  it("reads the subject source the follow flies on, and nothing else", () => {
+    expect(normalizeFollowState({ subject_source: "beacon" }).subjectSource).toBe("beacon");
+    expect(normalizeFollowState({ subject_source: "predicted" }).subjectSource).toBe("predicted");
+    expect(normalizeFollowState({ subject_source: "vision" }).subjectSource).toBe("vision");
+    expect(normalizeFollowState({ subject_source: "radar" }).subjectSource).toBeNull();
+    expect(normalizeFollowState({}).subjectSource).toBeNull();
+  });
+
   it("reads the range's shortest standoff, whether it is held there and why", () => {
     const s = normalizeFollowState({ standoff_min_m: 5, standoff_raised: true, standoff_reason: "subject-standing" });
     expect([s.standoffMinM, s.standoffRaised, s.standoffReason]).toEqual([5, true, "subject-standing"]);

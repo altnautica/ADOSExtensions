@@ -170,6 +170,9 @@ export interface FollowState {
   heightRaised: boolean;
   /** The height flown is lowered under trees the pilot reports ahead (null when not). */
   heightReason: HeightReason | null;
+  /** The agent's subject estimate in use: vision cues, the operator's phone
+   * alone, or its prediction; null on the follow's own estimate. */
+  subjectSource: SubjectSource | null;
   /**
    * The shortest follow distance and orbit radius flown on the range the
    * follow has, whether the set one was shorter and is held at it, and why
@@ -252,6 +255,7 @@ export interface RawFollowState {
   height_setpoint_m?: number | null;
   height_raised?: boolean;
   height_reason?: string | null;
+  subject_source?: string | null;
   standoff_min_m?: number | null;
   standoff_raised?: boolean;
   standoff_reason?: string | null;
@@ -358,6 +362,7 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   heightSetpointM: null,
   heightRaised: false,
   heightReason: null,
+  subjectSource: null,
   standoffMinM: null,
   standoffRaised: false,
   standoffReason: null,
@@ -419,6 +424,10 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     heightSetpointM: num(raw.height_setpoint_m),
     heightRaised: raw.height_raised === true,
     heightReason: normalizeHeightReason(raw.height_reason),
+    subjectSource:
+      raw.subject_source === "vision" || raw.subject_source === "beacon" || raw.subject_source === "predicted"
+        ? raw.subject_source
+        : null,
     standoffMinM: num(raw.standoff_min_m),
     standoffRaised: raw.standoff_raised === true,
     standoffReason: raw.standoff_raised === true ? normalizeStandoffReason(raw.standoff_reason) : null,
@@ -539,6 +548,8 @@ export type HeightReason = "canopy" | "canopy_floor";
 export function normalizeHeightReason(v: unknown): HeightReason | null {
   return v === "canopy" || v === "canopy_floor" ? v : null;
 }
+
+export type SubjectSource = "vision" | "beacon" | "predicted";
 
 function num(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? v : null;

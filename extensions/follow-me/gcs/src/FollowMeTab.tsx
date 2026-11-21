@@ -48,6 +48,7 @@ import {
   type FollowConfig,
   type FollowState,
   type HeightReason,
+  type SubjectSource,
   type StandoffReason,
 } from "./types";
 
@@ -65,6 +66,12 @@ const STANDOFF_REASON_KEYS: Record<StandoffReason, string> = {
 const HEIGHT_REASON_KEYS: Record<HeightReason, string> = {
   canopy: "metrics.heightCanopy",
   canopy_floor: "metrics.heightCanopyFloor",
+};
+
+/** The subject sources the panel names: not the camera's own (vision). */
+const SUBJECT_SOURCE_KEYS: Partial<Record<SubjectSource, string>> = {
+  beacon: "metrics.subjectSourceBeacon",
+  predicted: "metrics.subjectSourcePredicted",
 };
 
 /** A distance or radius flown farther than set, with why. */
@@ -323,6 +330,7 @@ function MetricsSection({
       ? t(`lock.${f.lockState}`)
       : t("lock.none");
   const orbit = f?.followMode === "orbit";
+  const sourceKey = f?.subjectSource ? SUBJECT_SOURCE_KEYS[f.subjectSource] : undefined;
   return (
     <section style={card} data-testid="fm-metrics">
       <h3 style={sectionTitle}>{t("metrics.title")}</h3>
@@ -474,6 +482,9 @@ function MetricsSection({
         }
         testId="fm-range"
       />
+      {sourceKey ? (
+        <MetricRow label={t("metrics.subjectSource")} value={t(sourceKey)} testId="fm-subject-source" />
+      ) : null}
       <MetricRow
         label={t("metrics.rangeCues")}
         value={
