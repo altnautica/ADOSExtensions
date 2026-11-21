@@ -423,6 +423,10 @@ pub struct PoseOut {
     /// read wrong). Held until the two have agreed within 1 m for 3 s while
     /// the matches pin every direction, or the map starts over.
     pub flow_disagrees: bool,
+    /// A direction the scans leave free rides a measured velocity nothing
+    /// judges: no specific force has reached the matcher
+    /// ([`LocalSlam::feed_specific_force`]).
+    pub flow_unjudged: bool,
 }
 
 /// Everything local SLAM built, for the offline back end.
@@ -894,6 +898,7 @@ impl LocalSlam {
             return;
         }
         self.height = Some(*s);
+        self.guard.feed_height(s.up_m);
         for (_, sm) in &mut self.active {
             sm.height_m.get_or_insert(s.up_m);
         }
@@ -994,8 +999,11 @@ impl LocalSlam {
         if self.measured.back().is_some_and(|&(t, _)| t >= s.t_ns) {
             return;
         }
-        self.measured.push_back((s.t_ns, Vector2::new(v[0], v[1])));
         let flow = Rotation2::new(self.att.heading_at(s.t_ns)) * Vector2::new(v[0], v[1]);
+        // The pose rides the flow over the scale the guard has learnt.
+        let scale = self.guard.flow_scale();
+        self.measured
+            .push_back((s.t_ns, Vector2::new(v[0], v[1]) / scale));
         self.guard.feed_flow(s.t_ns, flow);
         let horizon = s.t_ns.saturating_sub(VELOCITY_KEEP_NS);
         while self.measured.front().is_some_and(|&(t, _)| t < horizon) {
@@ -1156,6 +1164,7 @@ impl LocalSlam {
             map_restarted: restarted,
             unmeasured_free_s: 0.0,
             flow_disagrees: false,
+            flow_unjudged: false,
         };
         // Riding the prior: it carried the pose `speed × dt` since the last
         // scan without a match to check it.
@@ -1355,9 +1364,10 @@ impl LocalSlam {
         }
         // Along a loose direction the position is as good as the filter
         // following the accelerometer and the flow there says.
-        if let Some(u) = flow.loose_dir.filter(|_| self.guard.active()) {
+        if let Some(u) = flow.loose_dir {
             out.sigma_xy_m = out.sigma_xy_m.max(self.guard.sigma_along(&u));
         }
+        out.flow_unjudged = flow.loose_dir.is_some() && !self.guard.active();
         self.sigma_xy_m = out.sigma_xy_m;
         // The scans (or a measured velocity that agrees with them) measure a
         // direction again that went unmeasured long enough to lose the pose,

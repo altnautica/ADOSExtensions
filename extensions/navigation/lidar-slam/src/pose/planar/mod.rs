@@ -184,11 +184,14 @@ pub const CORRIDOR_REASON_AFTER_S: f64 = 0.3;
 /// Health of one matcher pose, `inserted` scans into the first submap. A
 /// pose whose own sigma is past [`UNMEASURED_FREE_MAX_SIGMA_M`] is degraded
 /// at best (the matcher's filter along a corridor reports it, measured or
-/// not), lost when the direction also goes unmeasured.
+/// not), lost when the direction also goes unmeasured long enough to be
+/// named ([`CORRIDOR_REASON_AFTER_S`]): a single noisy flow window coasts
+/// the pose 0.1 s, which a sound corridor flown far on a wide sigma sees
+/// now and then and which loses nothing.
 pub fn health_of(p: &PoseOut, inserted: usize, degenerate_ratio: f64) -> VioHealth {
     let wide = p.sigma_xy_m > UNMEASURED_FREE_MAX_SIGMA_M;
-    let unmeasured =
-        p.unmeasured_free_s >= UNMEASURED_FREE_LOST_S || (p.unmeasured_free_s > 0.0 && wide);
+    let unmeasured = p.unmeasured_free_s >= UNMEASURED_FREE_LOST_S
+        || (p.unmeasured_free_s >= CORRIDOR_REASON_AFTER_S && wide);
     if inserted < MIN_SUBMAP_SCANS || p.heading_unconfirmed || unmeasured {
         VioHealth::Lost
     } else if p.score <= 0.0
@@ -214,18 +217,31 @@ pub fn pose_cov(health: VioHealth, sigma_xy_m: f64) -> [f64; 36] {
     cov
 }
 
-/// Why a matcher pose is not good beyond the matcher's routine states
-/// ([`PoseEstimate::health_reason`]): unmeasured along a corridor for
-/// [`CORRIDOR_REASON_AFTER_S`], or slid against the flight controller's
-/// optical flow.
-pub fn reason_of(p: &PoseOut) -> Option<PoseHealthReason> {
-    if p.unmeasured_free_s >= CORRIDOR_REASON_AFTER_S {
-        Some(PoseHealthReason::CorridorUnmeasured)
+/// Why a matcher pose of `inserted` scans is not good ([`health_of`],
+/// [`PoseEstimate::health_reason`]): every lost or degraded pose carries
+/// one, the cause [`health_of`] weighs first named first. `None` for a good
+/// pose.
+pub fn reason_of(p: &PoseOut, inserted: usize, degenerate_ratio: f64) -> Option<PoseHealthReason> {
+    let wide = p.sigma_xy_m > UNMEASURED_FREE_MAX_SIGMA_M;
+    Some(if inserted < MIN_SUBMAP_SCANS {
+        PoseHealthReason::MapWarmup
+    } else if p.heading_unconfirmed {
+        PoseHealthReason::HeadingUnconfirmed
+    } else if p.unmeasured_free_s >= CORRIDOR_REASON_AFTER_S {
+        PoseHealthReason::CorridorUnmeasured
     } else if p.flow_disagrees {
-        Some(PoseHealthReason::FlowDisagrees)
+        PoseHealthReason::FlowDisagrees
+    } else if wide {
+        PoseHealthReason::PoseSigmaWide
+    } else if !p.heading_ok || p.score <= 0.0 {
+        PoseHealthReason::ScanUnmatched
+    } else if p.degeneracy < degenerate_ratio && p.flow_unjudged {
+        PoseHealthReason::CorridorFlowUnjudged
+    } else if p.degeneracy < degenerate_ratio {
+        PoseHealthReason::CorridorFlow
     } else {
-        None
-    }
+        return None;
+    })
 }
 
 impl PlanarLidarPose {
@@ -363,7 +379,7 @@ fn run(
             health,
             sigma_xy_m: Some(out.sigma_xy_m),
             heading_ok: out.heading_ok,
-            health_reason: reason_of(&out),
+            health_reason: reason_of(&out, slam.inserted_scans(), ratio),
         });
         counters.queued_scans.fetch_sub(1, Ordering::Release);
         counters.scans_processed.fetch_add(1, Ordering::Release);

@@ -49,7 +49,7 @@ use std::path::PathBuf;
 use ados_livemap::LiveMap;
 use ados_mapping_protocol::capture::{
     ComputePlacement, LiveOccupancy, LivePointCloud, MapNorth, MapStatus, NavFrame, NavPoseSource,
-    PolarScan, Pose, PoseDescriptor, PoseSource, ScanDescriptor, VioHealth,
+    PolarScan, Pose, PoseDescriptor, PoseHealthReason, PoseSource, ScanDescriptor, VioHealth,
 };
 
 use ados_mapping_pose::align::MapAlign;
@@ -699,10 +699,14 @@ impl NavMap {
         } else {
             e.health
         };
-        // A pose coasting along an unmeasured corridor, or one the matcher
-        // found sliding against the optical flow, is not where the drone is:
-        // it never places a restarted map.
-        if health != VioHealth::Lost && e.heading_ok && e.health_reason.is_none() {
+        // A pose coasting along an unmeasured corridor, one the matcher
+        // found sliding against the optical flow, or one whose sigma passed a
+        // metre, is not where the drone is: it never places a restarted map.
+        // A corridor flown on its flow, or a scan that matched nothing, is.
+        if health != VioHealth::Lost
+            && e.heading_ok
+            && e.health_reason.is_none_or(PoseHealthReason::is_routine)
+        {
             let at = Some((e.t_ns, [t[0], t[1]], frd_yaw(&r)));
             self.measured = at;
             if health == VioHealth::Good {

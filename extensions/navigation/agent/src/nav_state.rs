@@ -7,7 +7,7 @@
 //! {"mode": "external_nav", "active_set": 1, "extnav_health": "good",
 //!  "odom_rate_hz": 30.0, "last_reset_counter": 0, "obstacle_rate_hz": 10.0,
 //!  "min_obstacle_m": 3.2, "gps_fix": 0, "source_hold": null,
-//!  "health_reason": null}
+//!  "health_reason": null, "pose_sigma_m": 0.4}
 //! ```
 //!
 //! Fields a mode does not produce are `null`. `source_hold` names why the
@@ -17,7 +17,9 @@
 //! ([`crate::flow_monitor::health_reason`]): `ekf_flow_disagree` (the FC's
 //! optical flow and EKF velocity parted), `corridor_unmeasured` or
 //! `flow_disagrees` (the pose publisher's own), else the publisher's FC IMU
-//! feed (`heading_unconfirmed`, `imu_feed_<reason>`).
+//! feed (`heading_unconfirmed`, `imu_feed_<reason>`). `pose_sigma_m` is
+//! the fresh pose's own horizontal one-sigma uncertainty, metres (along a
+//! corridor its along-track sigma), `null` when the publisher gives none.
 
 use rmpv::Value;
 
@@ -38,6 +40,8 @@ pub struct NavState {
     pub gps_fix: u8,
     pub source_hold: Option<&'static str>,
     pub health_reason: Option<&'static str>,
+    /// The fresh pose's horizontal one-sigma uncertainty, metres.
+    pub pose_sigma_m: Option<f32>,
 }
 
 impl NavState {
@@ -68,6 +72,7 @@ impl NavState {
                 Value::from("health_reason"),
                 self.health_reason.map_or(Value::Nil, Value::from),
             ),
+            (Value::from("pose_sigma_m"), f(self.pose_sigma_m)),
         ])
     }
 }
@@ -170,6 +175,7 @@ mod tests {
             gps_fix: 0,
             source_hold: Some("no_origin"),
             health_reason: Some("ekf_flow_disagree"),
+            pose_sigma_m: Some(2.5),
         };
         let v = s.to_value();
         assert_eq!(field(&v, "mode").as_str(), Some("external_nav"));
@@ -184,8 +190,9 @@ mod tests {
             field(&v, "health_reason").as_str(),
             Some("ekf_flow_disagree")
         );
+        assert_eq!(field(&v, "pose_sigma_m").as_f64(), Some(2.5));
         let Value::Map(e) = &v else { unreachable!() };
-        assert_eq!(e.len(), 10);
+        assert_eq!(e.len(), 11);
     }
 
     #[test]
@@ -199,6 +206,7 @@ mod tests {
         assert!(field(&v, "extnav_health").is_nil());
         assert!(field(&v, "min_obstacle_m").is_nil());
         assert!(field(&v, "health_reason").is_nil());
+        assert!(field(&v, "pose_sigma_m").is_nil());
     }
 
     #[test]

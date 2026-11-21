@@ -395,10 +395,15 @@ fn health_and_frames_follow_the_matcher() {
         map_restarted: false,
         unmeasured_free_s: 0.0,
         flow_disagrees: false,
+        flow_unjudged: false,
     };
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS - 1, 0.05), VioHealth::Lost);
+    assert_eq!(
+        reason_of(&p, MIN_SUBMAP_SCANS - 1, 0.05),
+        Some(PoseHealthReason::MapWarmup)
+    );
     assert_eq!(health_of(&p, MIN_SUBMAP_SCANS, 0.05), VioHealth::Good);
-    assert_eq!(reason_of(&p), None);
+    assert_eq!(reason_of(&p, MIN_SUBMAP_SCANS, 0.05), None);
     // A corridor with no measured velocity along it: degraded at first,
     // lost once it has gone unmeasured a second or its sigma passed 1 m.
     let unmeasured = PoseOut {
@@ -409,7 +414,7 @@ fn health_and_frames_follow_the_matcher() {
     };
     assert_eq!(health_of(&unmeasured, 30, 0.05), VioHealth::Degraded);
     assert_eq!(
-        reason_of(&unmeasured),
+        reason_of(&unmeasured, 30, 0.05),
         Some(PoseHealthReason::CorridorUnmeasured)
     );
     let long = PoseOut {
@@ -430,6 +435,10 @@ fn health_and_frames_follow_the_matcher() {
         ..p
     };
     assert_eq!(health_of(&uncertain, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(
+        reason_of(&uncertain, 30, 0.05),
+        Some(PoseHealthReason::PoseSigmaWide)
+    );
     let cov = pose_cov(VioHealth::Degraded, uncertain.sigma_xy_m);
     assert!(
         (cov[0] - 1.44).abs() < 1e-12 && (cov[7] - 1.44).abs() < 1e-12,
@@ -445,27 +454,71 @@ fn health_and_frames_follow_the_matcher() {
         ..p
     };
     assert_eq!(health_of(&slid, 30, 0.05), VioHealth::Degraded);
-    assert_eq!(reason_of(&slid), Some(PoseHealthReason::FlowDisagrees));
-    // A corridor unmeasured for under CORRIDOR_REASON_AFTER_S names no
-    // reason, whatever its sigma below the loss bound.
+    assert_eq!(
+        reason_of(&slid, 30, 0.05),
+        Some(PoseHealthReason::FlowDisagrees)
+    );
+    // A corridor unmeasured for under CORRIDOR_REASON_AFTER_S is named a
+    // corridor on its flow, whatever its sigma below the loss bound.
     let brief = PoseOut {
         unmeasured_free_s: 0.2,
         ..unmeasured
     };
     assert_eq!(health_of(&brief, 30, 0.05), VioHealth::Degraded);
-    assert_eq!(reason_of(&brief), None);
+    assert_eq!(
+        reason_of(&brief, 30, 0.05),
+        Some(PoseHealthReason::CorridorFlow)
+    );
+    // Flown far down a sound corridor on a wide sigma, one noisy flow
+    // window's coast loses nothing; named unmeasured, it is lost.
+    let wide_blip = PoseOut {
+        unmeasured_free_s: 0.1,
+        sigma_xy_m: 2.5,
+        ..unmeasured
+    };
+    assert_eq!(health_of(&wide_blip, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(
+        reason_of(&wide_blip, 30, 0.05),
+        Some(PoseHealthReason::PoseSigmaWide)
+    );
+    let wide_named = PoseOut {
+        unmeasured_free_s: CORRIDOR_REASON_AFTER_S,
+        ..wide_blip
+    };
+    assert_eq!(health_of(&wide_named, 30, 0.05), VioHealth::Lost);
     let corridor = PoseOut {
         degeneracy: 0.01,
         ..p
     };
     assert_eq!(health_of(&corridor, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(
+        reason_of(&corridor, 30, 0.05),
+        Some(PoseHealthReason::CorridorFlow)
+    );
+    // No specific force reaches the matcher: nothing judges the flow.
+    let unjudged = PoseOut {
+        flow_unjudged: true,
+        ..corridor
+    };
+    assert_eq!(
+        reason_of(&unjudged, 30, 0.05),
+        Some(PoseHealthReason::CorridorFlowUnjudged)
+    );
     let unmatched = PoseOut { score: 0.0, ..p };
     assert_eq!(health_of(&unmatched, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(
+        reason_of(&unmatched, 30, 0.05),
+        Some(PoseHealthReason::ScanUnmatched)
+    );
     let unchecked = PoseOut {
         heading_ok: false,
         ..p
     };
     assert_eq!(health_of(&unchecked, 30, 0.05), VioHealth::Degraded);
+    assert_eq!(
+        reason_of(&unchecked, 30, 0.05),
+        Some(PoseHealthReason::ScanUnmatched)
+    );
     // A heading the IMU left unmeasured, not yet re-confirmed, is no
     // navigation heading.
     let unconfirmed = PoseOut {
@@ -474,6 +527,10 @@ fn health_and_frames_follow_the_matcher() {
         ..p
     };
     assert_eq!(health_of(&unconfirmed, 30, 0.05), VioHealth::Lost);
+    assert_eq!(
+        reason_of(&unconfirmed, 30, 0.05),
+        Some(PoseHealthReason::HeadingUnconfirmed)
+    );
     // T_w_l: the planar pose at z 0, yawed +90 degrees.
     let (r, t) = se3::from_mat4(&t_w_l(&p));
     assert_eq!(t, [1.0, 2.0, 0.0]);
@@ -514,21 +571,31 @@ fn a_single_noisy_flow_window_names_no_corridor() {
         map_restarted: false,
         unmeasured_free_s,
         flow_disagrees: false,
+        flow_unjudged: false,
     };
     // The recorded stretch, between scans that followed the flow.
     for p in [scan(0.0, 0.26), scan(0.1, 0.41), scan(0.0, 0.26)] {
-        assert_eq!(reason_of(&p), None, "{p:?}");
+        assert_eq!(
+            reason_of(&p, 30, 0.05),
+            Some(PoseHealthReason::CorridorFlow),
+            "{p:?}"
+        );
         assert_eq!(health_of(&p, 30, 0.05), VioHealth::Degraded);
     }
     // A stretch that goes on: named from 0.3 s, lost from 1 s.
     let named: Vec<_> = (0..=10)
         .map(|k| {
             let p = scan(k as f64 * 0.1, 0.26 + 0.05 * k as f64);
-            (reason_of(&p), health_of(&p, 30, 0.05))
+            (reason_of(&p, 30, 0.05), health_of(&p, 30, 0.05))
         })
         .collect();
     for (k, (reason, health)) in named.iter().enumerate() {
-        let want = (k >= 3).then_some(PoseHealthReason::CorridorUnmeasured);
+        let want = if k >= 3 {
+            PoseHealthReason::CorridorUnmeasured
+        } else {
+            PoseHealthReason::CorridorFlow
+        };
+        let want = Some(want);
         assert_eq!(*reason, want, "{k} scans in");
         let lost = k >= 10;
         assert_eq!(*health == VioHealth::Lost, lost, "{k} scans in");

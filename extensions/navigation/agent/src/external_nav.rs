@@ -235,23 +235,49 @@ pub enum PoseReason {
     /// The matched motion left the flight controller's optical flow: the
     /// scans re-locked where the vehicle did not fly.
     FlowDisagrees,
+    /// The pose's own sigma passed a metre.
+    PoseSigmaWide,
+    /// The map holds too few scans yet.
+    MapWarmup,
+    /// The heading is not confirmed against the map.
+    HeadingUnconfirmed,
+    /// The last scan matched nothing.
+    ScanUnmatched,
+    /// A corridor flown on its judged flow.
+    CorridorFlow,
+    /// A corridor flown on a flow nothing judges (no specific force).
+    CorridorFlowUnjudged,
 }
 
 impl PoseReason {
+    /// Every reason, for [`crate::flow_monitor::NAV_REASONS`].
+    pub const ALL: [PoseReason; 8] = [
+        PoseReason::CorridorUnmeasured,
+        PoseReason::FlowDisagrees,
+        PoseReason::PoseSigmaWide,
+        PoseReason::MapWarmup,
+        PoseReason::HeadingUnconfirmed,
+        PoseReason::ScanUnmatched,
+        PoseReason::CorridorFlow,
+        PoseReason::CorridorFlowUnjudged,
+    ];
+
     fn parse(s: &str) -> Option<Self> {
-        Some(match s {
-            "corridor_unmeasured" => PoseReason::CorridorUnmeasured,
-            "flow_disagrees" => PoseReason::FlowDisagrees,
-            _ => return None,
-        })
+        Self::ALL.into_iter().find(|r| r.as_str() == s)
     }
 
     /// The `degradedReasons` / `plugin.navigation.state` `health_reason`
     /// key.
-    pub fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             PoseReason::CorridorUnmeasured => "corridor_unmeasured",
             PoseReason::FlowDisagrees => "flow_disagrees",
+            PoseReason::PoseSigmaWide => "pose_sigma_wide",
+            PoseReason::MapWarmup => "map_warmup",
+            PoseReason::HeadingUnconfirmed => "heading_unconfirmed",
+            PoseReason::ScanUnmatched => "scan_unmatched",
+            PoseReason::CorridorFlow => "corridor_flow",
+            PoseReason::CorridorFlowUnjudged => "corridor_flow_unjudged",
         }
     }
 }

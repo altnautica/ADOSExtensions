@@ -290,8 +290,8 @@ impl ImuFeedReason {
     }
 }
 
-/// Why the pose estimator itself reports a pose lost or degraded, beyond
-/// its routine states (`PoseDescriptor::health_reason`).
+/// Why the pose estimator itself reports a pose lost or degraded
+/// (`PoseDescriptor::health_reason`): every pose not good carries one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PoseHealthReason {
@@ -304,6 +304,21 @@ pub enum PoseHealthReason {
     /// the vehicle did not fly. Degraded until the two agree within 1 m for
     /// 3 s with every direction pinned, or the map starts over.
     FlowDisagrees,
+    /// The pose's own sigma passed a metre: flown far down a corridor on
+    /// the flow alone, or riding the accelerometer.
+    PoseSigmaWide,
+    /// The map still holds too few scans to match against.
+    MapWarmup,
+    /// The heading is not confirmed against the map, or not measured.
+    HeadingUnconfirmed,
+    /// The last scan matched nothing, or did not check its heading.
+    ScanUnmatched,
+    /// A corridor: its free axis rides the measured velocity (sound, and
+    /// judged against the accelerometer).
+    CorridorFlow,
+    /// A corridor whose free axis rides a measured velocity nothing judges:
+    /// no specific force reaches the matcher (no attitude near the IMU).
+    CorridorFlowUnjudged,
 }
 
 impl PoseHealthReason {
@@ -311,7 +326,25 @@ impl PoseHealthReason {
         match self {
             PoseHealthReason::CorridorUnmeasured => "corridor_unmeasured",
             PoseHealthReason::FlowDisagrees => "flow_disagrees",
+            PoseHealthReason::PoseSigmaWide => "pose_sigma_wide",
+            PoseHealthReason::MapWarmup => "map_warmup",
+            PoseHealthReason::HeadingUnconfirmed => "heading_unconfirmed",
+            PoseHealthReason::ScanUnmatched => "scan_unmatched",
+            PoseHealthReason::CorridorFlow => "corridor_flow",
+            PoseHealthReason::CorridorFlowUnjudged => "corridor_flow_unjudged",
         }
+    }
+
+    /// A routine state the pose is still where the vehicle is in (a
+    /// corridor flown on its flow, a scan that matched nothing), against
+    /// one that says it may not be.
+    pub fn is_routine(self) -> bool {
+        matches!(
+            self,
+            PoseHealthReason::CorridorFlow
+                | PoseHealthReason::CorridorFlowUnjudged
+                | PoseHealthReason::ScanUnmatched
+        )
     }
 }
 

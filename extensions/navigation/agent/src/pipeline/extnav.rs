@@ -294,6 +294,7 @@ pub fn spawn_external_nav(task: ExtnavTask) -> JoinHandle<()> {
                 s.odom_rate_hz = Some(rate);
                 s.last_reset_counter = Some(builder.reset_counter());
                 s.health_reason = reason;
+                s.pose_sigma_m = fresh.and_then(|(p, _)| p.sigma_xy_m);
             });
         }
     })
@@ -327,8 +328,7 @@ pub fn spawn_obstacle(
 ) -> JoinHandle<()> {
     let ctx = ctx.clone();
     tokio::spawn(async move {
-        let mut interval =
-            ados_sdk::clock().interval(Duration::from_secs_f32(1.0 / cfg.rate_hz));
+        let mut interval = ados_sdk::clock().interval(Duration::from_secs_f32(1.0 / cfg.rate_hz));
         let mut rate = RateMeter::new(RATE_WINDOW_NS);
         let mut last_seq = 0u64;
         let mut min_obstacle = None;

@@ -163,7 +163,10 @@ mod tests {
         let (mut rule, fc) = (OriginRule::default(), FcNavSink::default());
         // The plugin started 20 s before the flight controller booted: the
         // wait counts from the FC's boot, not from the plugin's start.
-        assert!(rule.tick(0, &fc.snapshot(0), &cfg(false), &ext()).set.is_none());
+        assert!(rule
+            .tick(0, &fc.snapshot(0), &cfg(false), &ext())
+            .set
+            .is_none());
         let sent = run(&mut rule, &fc, &cfg(false), false, 20 * S, 26 * S);
         assert_eq!(sent, vec![25 * S]);
         // The origin the flight controller then reports is the plugin's.
@@ -196,7 +199,12 @@ mod tests {
         let silent = FcNavSink::default();
         for t in 0..100 {
             assert!(rule
-                .tick(t * S / 10, &silent.snapshot(t * S / 10), &cfg(false), &ext())
+                .tick(
+                    t * S / 10,
+                    &silent.snapshot(t * S / 10),
+                    &cfg(false),
+                    &ext()
+                )
                 .set
                 .is_none());
         }
@@ -242,7 +250,10 @@ mod tests {
             if t % S == 0 {
                 fc.on_heartbeat(false, t);
             }
-            sent |= rule.tick(t, &fc.snapshot(t), &cfg(false), params).set.is_some();
+            sent |= rule
+                .tick(t, &fc.snapshot(t), &cfg(false), params)
+                .set
+                .is_some();
             t += S / 10;
         }
         sent

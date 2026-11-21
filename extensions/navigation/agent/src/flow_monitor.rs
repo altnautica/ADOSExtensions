@@ -69,11 +69,16 @@ impl FlowEkf {
 
 /// Every reason key the external-nav tick reports, so a stale one is
 /// dropped from `degradedReasons` before the current ones go in.
-pub const NAV_REASONS: [&str; 7] = [
+pub const NAV_REASONS: [&str; 12] = [
     FlowEkf::REASON,
     "corridor_unmeasured",
     "flow_disagrees",
     "heading_unconfirmed",
+    "pose_sigma_wide",
+    "map_warmup",
+    "scan_unmatched",
+    "corridor_flow",
+    "corridor_flow_unjudged",
     "imu_feed_attitude_stand_in",
     "imu_feed_stalled",
     "imu_feed_starved",
@@ -96,9 +101,22 @@ pub fn health_reason(
 ) -> Option<&'static str> {
     match monitor {
         FlowEkf::Disagree | FlowEkf::Lost => Some(FlowEkf::REASON),
-        FlowEkf::Agree => pose
-            .map(PoseReason::as_str)
-            .or(imu.map(ImuFeed::reason_key)),
+        // A routine corridor or warm-up reason yields to the IMU feed's.
+        FlowEkf::Agree => {
+            let routine = |r: &PoseReason| {
+                matches!(
+                    r,
+                    PoseReason::CorridorFlow
+                        | PoseReason::CorridorFlowUnjudged
+                        | PoseReason::ScanUnmatched
+                        | PoseReason::MapWarmup
+                )
+            };
+            pose.filter(|r| !routine(r))
+                .map(PoseReason::as_str)
+                .or(imu.map(ImuFeed::reason_key))
+                .or(pose.map(PoseReason::as_str))
+        }
     }
 }
 

@@ -291,7 +291,10 @@ fn the_measurement_time_comes_from_the_pose_stamp() {
         measured_at_ns(1_700_000_000_020, now_unix, now, recv, real),
         10_020_000_000
     );
-    assert_eq!(measured_at_ns(1_700_000_000_190, now_unix, now, recv, real), recv);
+    assert_eq!(
+        measured_at_ns(1_700_000_000_190, now_unix, now, recv, real),
+        recv
+    );
     assert_eq!(
         measured_at_ns(1_699_999_990_000, now_unix, now, recv, real),
         recv - MAX_POSE_AGE_NS
@@ -309,8 +312,14 @@ fn a_sim_clock_scales_the_pose_age() {
         measured_at_ns(1_700_000_000_150, now_unix, now, recv, Some(3.0)),
         10_050_000_000
     );
-    assert_eq!(measured_at_ns(1_700_000_000_150, now_unix, now, recv, None), recv);
-    assert_eq!(measured_at_ns(1_700_000_000_150, now_unix, now, recv, Some(0.0)), recv);
+    assert_eq!(
+        measured_at_ns(1_700_000_000_150, now_unix, now, recv, None),
+        recv
+    );
+    assert_eq!(
+        measured_at_ns(1_700_000_000_150, now_unix, now, recv, Some(0.0)),
+        recv
+    );
 }
 
 #[test]
