@@ -49,13 +49,21 @@ fn reports_from_the_second_scan_half_a_period_past_the_next_arrival() {
 }
 
 #[test]
-fn a_missed_scan_or_a_jittered_stamp_keeps_the_period() {
+fn a_missed_scan_or_a_long_first_interval_is_no_period() {
     let mut p = ScanPacing::default();
+    // A missed scan (100 -> 300) and a jittered stamp (404).
     for (i, t) in [0, 100, 300, 404, 500].into_iter().enumerate() {
         p.fed(t * MS, i as u64);
     }
     let period = p.period_ns().unwrap();
-    assert!((99 * MS..=102 * MS).contains(&period), "{period}");
+    assert!((95 * MS..=101 * MS).contains(&period), "{period}");
+    // A driver's first interval a second long while its clock mapping
+    // settles gives way at the next one.
+    let mut p = ScanPacing::default();
+    for t in [0, 1_021, 1_121] {
+        p.fed(t * MS, 0);
+    }
+    assert_eq!(p.period_ns(), Some(100 * MS));
 }
 
 #[test]

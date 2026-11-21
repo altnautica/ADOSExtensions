@@ -51,8 +51,10 @@ pub const SCAN_SILENCE_MS: u64 = 1_000;
 /// Wall time, ms, a scan may stay with the pose provider before the lane
 /// stops holding the simulator for it.
 pub const SCAN_BUDGET_MS: u64 = 500;
-/// Weight of the newest scan interval in the learned period.
-const PERIOD_ALPHA: f64 = 0.25;
+/// Scan intervals the period is learned over: the least of them, so a missed
+/// scan's double interval, or a long first one while a driver's clock mapping
+/// settles, never stands for the period.
+const PERIOD_WINDOW: usize = 8;
 
 /// What [`ScanPacing::check`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +74,8 @@ pub enum Paced {
 #[derive(Debug, Clone)]
 pub struct ScanPacing {
     last_ns: Option<u64>,
-    period_ns: Option<u64>,
+    /// The latest scan intervals, ns, at most [`PERIOD_WINDOW`].
+    intervals: VecDeque<u64>,
     depth: u64,
     /// `(stamp, wall ms fed)` of the scans the provider has not answered.
     inflight: VecDeque<(u64, u64)>,
@@ -84,7 +87,7 @@ impl Default for ScanPacing {
     fn default() -> Self {
         Self {
             last_ns: None,
-            period_ns: None,
+            intervals: VecDeque::new(),
             depth: SOURCE_DEPTH_SCANS,
             inflight: VecDeque::new(),
             overdue_since_ms: None,
@@ -93,9 +96,9 @@ impl Default for ScanPacing {
 }
 
 impl ScanPacing {
-    /// The learned scan period, ns.
+    /// The learned scan period, ns: the least of the latest intervals.
     pub fn period_ns(&self) -> Option<u64> {
-        self.period_ns
+        self.intervals.iter().copied().min()
     }
 
     /// The source depth, scans.
@@ -117,13 +120,10 @@ impl ScanPacing {
             self.restart();
         }
         if let Some(last) = self.last_ns.filter(|l| stamp_ns > *l) {
-            let dt = stamp_ns - last;
-            self.period_ns = Some(match self.period_ns {
-                None => dt,
-                // A missed scan's double interval is no period.
-                Some(p) if dt * 2 < p || dt > p + p / 2 => p,
-                Some(p) => (PERIOD_ALPHA * dt as f64 + (1.0 - PERIOD_ALPHA) * p as f64) as u64,
-            });
+            if self.intervals.len() == PERIOD_WINDOW {
+                self.intervals.pop_front();
+            }
+            self.intervals.push_back(stamp_ns - last);
         }
         self.last_ns = Some(self.last_ns.map_or(stamp_ns, |l| l.max(stamp_ns)));
         self.overdue_since_ms = None;
@@ -143,7 +143,7 @@ impl ScanPacing {
 
     /// When the scan after the last one reaches the lane.
     fn expected_ns(&self) -> Option<u64> {
-        Some(self.last_ns? + self.period_ns? * (1 + self.depth))
+        Some(self.last_ns? + self.period_ns()? * (1 + self.depth))
     }
 
     /// What the lane reports done to: `None` while a scan is with the
@@ -153,7 +153,7 @@ impl ScanPacing {
         if !self.inflight.is_empty() {
             return None;
         }
-        Some(self.expected_ns()? + self.period_ns? / 2)
+        Some(self.expected_ns()? + self.period_ns()? / 2)
     }
 
     /// At sim time `sim_now_ns` and wall time `wall_ms`: scans with the
