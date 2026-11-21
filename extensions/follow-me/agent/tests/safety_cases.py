@@ -60,6 +60,38 @@ def _straight(speed: float) -> Any:
     return lambda t: (speed * t, 0.0)
 
 
+STILL_S = 30.0
+STILL_DRIFT_MPS = 0.45
+STILL_SEARCH_S = 60.0
+
+
+async def still_then_lost(mp: Any, seed: int, brake: bool, hz: float = 3.0) -> Flight:
+    # A subject standing at the origin, followed from 6 m south, for
+    # STILL_S; over its last 3 s the boxes put it drifting away at
+    # STILL_DRIFT_MPS (range noise the filter reads as a slow walk), then
+    # every frame misses it: the lock is lost 3 s on, and the search runs
+    # its full 60 s with the vantage points the stand-in pilot picks.
+    drift = _frames(hz, STILL_S - 3.0, 3.0)
+    errors = {k: STILL_DRIFT_MPS * (i + 1) / hz for i, k in enumerate(drift)}
+    lost = _frames(hz, STILL_S, STILL_SEARCH_S + 10.0)
+    return await fly(
+        mp,
+        subject=lambda _t: (0.0, 0.0),
+        start=(-STANDOFF_M, 0.0),
+        duration_s=STILL_S + 3.0 + STILL_SEARCH_S,
+        config={"search_budget_s": STILL_SEARCH_S},
+        fix_hz=hz,
+        seed=seed,
+        box_jitter=BOX_JITTER,
+        profile=SPORT,
+        lag_s=LAG_S,
+        miss_frames=lost,
+        range_errors=errors,
+        subject_brake=brake,
+        vantage_pilot=True,
+    )
+
+
 async def coast_ahead(
     mp: Any, seed: int, *, hz: float, speed: float, spell_s: float, angle_deg: float, brake: bool
 ) -> float:

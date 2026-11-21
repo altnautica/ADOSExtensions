@@ -17,6 +17,8 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+from follow_me.stillness import SpeedHistory
+
 Mat = list[list[float]]
 
 # Process noise, the 1-sigma white acceleration, m/s^2: a walker or runner
@@ -30,7 +32,8 @@ _INIT_VEL_SIGMA_MPS = 3.0
 # update: long enough for the longest search (60 s) plus the tracker's coast
 # and an unsure spell before the loss. Past it, a search still has the last
 # estimate with a spread bounded by how far the subject can have gone (see
-# :meth:`TargetFilter.search_predicted`).
+# :meth:`TargetFilter.search_predicted`). A search never flies on it
+# undecayed: it uses the coast (see :meth:`TargetFilter.coasted`).
 MAX_PREDICT_S = 70.0
 # A coast: with no fix fused for COAST_GRACE_FIXES of the track's usual
 # intervals between fixes, and at least COAST_GRACE_S (a few missed frames
@@ -229,6 +232,8 @@ class TargetFilter:
         # The running mean interval between consecutive fixes fused (the
         # detector's cadence, misses included), or None before two.
         self._interval_s: float | None = None
+        # The estimates fused lately, for whether the subject stood still.
+        self._history = SpeedHistory()
 
     @property
     def initialized(self) -> bool:
@@ -294,6 +299,7 @@ class TargetFilter:
         if self._x is not None:
             self._x[0] += dn
             self._x[1] += de
+        self._history.shift(dn, de)
 
     def reset(self) -> None:
         self._x = None
@@ -307,6 +313,7 @@ class TargetFilter:
         self._scatter_s = 0.0
         self._scatter_n = 0
         self._interval_s = None
+        self._history.clear()
 
     def stop(self, t: float) -> None:
         """Stop the estimate where it is predicted at ``t``, with no velocity.
@@ -450,28 +457,43 @@ class TargetFilter:
             return 0.0
         return math.sqrt(max(0.0, position_sigma(now[1]) ** 2 - position_sigma(then[1]) ** 2))
 
+    def still_centre(self) -> tuple[float, float] | None:
+        """Where the subject stood at the last fix fused, or ``None`` when
+        it was not standing still then (the rule is
+        :mod:`follow_me.stillness`'s)."""
+        return self._history.still_centre()
+
     def search_predicted(self, t: float) -> tuple[list[float], Mat] | None:
-        """What a search uses at ``t``: the prediction while there is one;
-        past :data:`MAX_PREDICT_S`, the last estimate standing still with a
-        spread of the reachable distance. ``None`` before the first update,
-        or past the horizon for a subject with no speed cap."""
-        pred = self.predicted(t)
-        if pred is not None or self._x is None:
+        """What a search uses at ``t``: for a subject that stood still at its
+        last fix (:meth:`still_centre`), the still centre with no velocity;
+        for one that moved, the coast (:meth:`coasted`: the last velocity
+        decays, so a velocity range noise left is not run on for the whole
+        search). The spread is the prediction's; past :data:`MAX_PREDICT_S`,
+        it is the reachable distance round the last estimate (or the still
+        centre), standing. ``None`` before the first update, or past the
+        horizon for a subject with no speed cap."""
+        pred = self.coasted(t)
+        if pred is None:
+            if self._x is None:
+                return None
+            reach = self._reach_m(t)
+            if reach is None:
+                return None
+            var = (reach / 3.0) ** 2
+            cap2 = (self.max_speed_mps or 0.0) ** 2
+            pred = (
+                [self._x[0], self._x[1], 0.0, 0.0],
+                [
+                    [var, 0.0, 0.0, 0.0],
+                    [0.0, var, 0.0, 0.0],
+                    [0.0, 0.0, cap2, 0.0],
+                    [0.0, 0.0, 0.0, cap2],
+                ],
+            )
+        centre = self.still_centre()
+        if centre is None:
             return pred
-        reach = self._reach_m(t)
-        if reach is None:
-            return None
-        var = (reach / 3.0) ** 2
-        cap2 = (self.max_speed_mps or 0.0) ** 2
-        return (
-            [self._x[0], self._x[1], 0.0, 0.0],
-            [
-                [var, 0.0, 0.0, 0.0],
-                [0.0, var, 0.0, 0.0],
-                [0.0, 0.0, cap2, 0.0],
-                [0.0, 0.0, 0.0, cap2],
-            ],
-        )
+        return [centre[0], centre[1], 0.0, 0.0], pred[1]
 
     def mahalanobis(self, t: float, north: float, east: float, r: Cov2) -> float | None:
         """Mahalanobis distance of a position measurement from the search
@@ -576,6 +598,7 @@ class TargetFilter:
             self._interval_s = prev + (gap - prev) / _INTERVAL_FIXES
         self._t_meas = max(self._t_meas, t)
         self._sigma_meas = position_sigma(self._p)
+        self._history.add(t, self._x[0], self._x[1], math.hypot(self._x[2], self._x[3]))
         return True
 
     def _restart(self, t: float, north: float, east: float, r: Cov2) -> None:
@@ -597,6 +620,9 @@ class TargetFilter:
         self._rejected.clear()
         self._jumps.clear()
         self.restarts += 1
+        # A new estimate: whether the old one stood says nothing of it.
+        self._history.clear()
+        self._history.add(t, north, east, 0.0)
 
     def _reacquire_chi2(self, t: float, y: list[float], r: Cov2) -> float | None:
         """For a fix at ``t``, ``y`` off the prediction, REACQUIRE_GAP_S or

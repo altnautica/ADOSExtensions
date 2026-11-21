@@ -16,11 +16,22 @@ def _walking_north(speed: float = 1.4) -> TargetFilter:
     return f
 
 
-def test_prediction_carries_on_at_the_walking_velocity() -> None:
-    p = predict_target(_walking_north(), 1.9 + 2.0)
+def test_prediction_carries_on_at_the_walking_velocity_then_lets_it_fade() -> None:
+    f = _walking_north()
+    # Inside the coast's grace the walk carries on as it was.
+    early = predict_target(f, 1.9 + 0.5)
+    assert early is not None
+    assert early.mean_ne[0] == pytest.approx(1.4 * 2.4, abs=0.3)
+    assert early.vel_ne[0] == pytest.approx(1.4, abs=0.15)
+    # Past it the lost subject's predicted walk slows (the coast), short of
+    # where the last velocity run on would put it.
+    p = predict_target(f, 1.9 + 2.0)
     assert p is not None
-    assert p.mean_ne[0] == pytest.approx(1.4 * 3.9, abs=0.3)
-    assert p.vel_ne[0] == pytest.approx(1.4, abs=0.15)
+    coast = f.coasted(3.9)
+    assert coast is not None
+    assert p.mean_ne[0] == pytest.approx(coast[0][0])
+    assert 1.4 * 2.4 < p.mean_ne[0] < 1.4 * 3.9
+    assert p.vel_ne[0] < 1.4
 
 
 def test_path_is_half_second_spaced_and_at_most_ten_points() -> None:

@@ -25,6 +25,11 @@ the pilot, its fixes drawn from a scripted subject with recorded noise.
 * **Detector.** Batches at ``fix_hz``; a fraction ``miss`` of them carry
   the subject as ``uncertain`` with no fresh box (the engine's tracker on a
   missed frame).
+* **Vantage.** With ``vantage_pilot`` a ``vantage`` goal is flown to a
+  point the stand-in picks as the pilot does in the open: on the ring of
+  ``standoff_m`` round the goal's ``predicted_ne`` (every 30°), within
+  ``max_radius_m`` of its anchor, the one nearest the vehicle. Without it
+  the vehicle holds where the goal names, as before the pilot answers.
 
 Pure and seeded: the same arguments fly the same flight.
 """
@@ -151,6 +156,11 @@ class Flight:
     braked: list[bool] = field(default_factory=list)
     # The follow's published state each tick.
     state: list[dict[str, Any]] = field(default_factory=list)
+    # The vantage point the stand-in flew to each tick (``vantage_pilot``),
+    # or None.
+    vantage: list[Point | None] = field(default_factory=list)
+    # The plugin flown, for reading its state after the flight.
+    plugin: Any = None
 
     def speed(self, i: int) -> float:
         return math.hypot(*self.vel[i])
@@ -196,7 +206,14 @@ class _Pilot:
     """The stand-in for the pilot's shaper and the flight controller."""
 
     def __init__(
-        self, pos: Point, yaw: float, *, height: float, profile: Profile, subject_brake: bool
+        self,
+        pos: Point,
+        yaw: float,
+        *,
+        height: float,
+        profile: Profile,
+        subject_brake: bool,
+        vantage_pilot: bool = False,
     ) -> None:
         self.pos = pos
         self.vel: Point = (0.0, 0.0)
@@ -207,6 +224,8 @@ class _Pilot:
         self.vz = 0.0
         self.profile = profile
         self.subject_brake = subject_brake
+        self.vantage_pilot = vantage_pilot
+        self.vantage: Point | None = None
         self.braked = False
         self.t = 0.0
         # The subject as the goals name it, when, its velocity, and since
@@ -214,6 +233,19 @@ class _Pilot:
         self._subject: tuple[Point, float] | None = None
         self._subject_v: Point = (0.0, 0.0)
         self._subject_since = 0.0
+
+    def _pick_vantage(self, v: dict[str, Any]) -> Point:
+        """The ring point round ``predicted_ne`` at ``standoff_m``, within
+        ``max_radius_m`` of ``anchor_ne``, nearest the vehicle."""
+        pn, pe = (float(c) for c in v["predicted_ne"])
+        an, ae = (float(c) for c in v["anchor_ne"])
+        r, reach = float(v["standoff_m"]), float(v["max_radius_m"])
+        ring = [
+            (pn + r * math.cos(math.radians(a)), pe + r * math.sin(math.radians(a)))
+            for a in range(0, 360, 30)
+        ]
+        inside = [p for p in ring if math.hypot(p[0] - an, p[1] - ae) <= reach] or ring
+        return min(inside, key=lambda p: math.hypot(p[0] - self.pos[0], p[1] - self.pos[1]))
 
     def _track_subject(self, goal: dict[str, Any]) -> tuple[Point, float, float, Point] | None:
         """The armed subject this tick: the unit vector toward it, its
@@ -271,6 +303,10 @@ class _Pilot:
 
     def fly(self, goal: dict[str, Any] | None) -> None:
         z_target = self.z
+        self.vantage = None
+        if goal is not None and self.vantage_pilot and goal.get("kind") == "vantage":
+            self.vantage = self._pick_vantage(goal["vantage"])
+            goal = {**goal, "n": self.vantage[0], "e": self.vantage[1]}
         if goal is None:
             want: Point = (0.0, 0.0)
             limit = 0.0
@@ -389,6 +425,7 @@ async def fly(
     box_jitter: float | None = None,
     lag_s: float = 0.0,
     range_errors: dict[int, float] | None = None,
+    vantage_pilot: bool = False,
 ) -> Flight:
     """Fly the plugin for ``duration_s`` from ``start``, facing the subject,
     at the follow height. ``miss`` is the share of batches that miss the
@@ -399,7 +436,8 @@ async def fly(
     :func:`_fix`); ``lag_s`` delays every goal before the pilot flies it;
     ``range_errors`` maps batch numbers to the range error their fix
     carries instead of a drawn one (metres along the line of sight,
-    negative nearer the vehicle; a false lock's box is a large one)."""
+    negative nearer the vehicle; a false lock's box is a large one);
+    ``vantage_pilot`` flies vantage goals to a point the stand-in picks."""
     rnd = random.Random(seed)
     lagged: deque[dict[str, Any] | None] = deque()
     lag_ticks = int(round(lag_s / DT))
@@ -423,6 +461,7 @@ async def fly(
         height=float(cfg["follow_height_m"]),
         profile=profile,
         subject_brake=subject_brake,
+        vantage_pilot=vantage_pilot,
     )
     pending: list[projection.TargetFix] = []
 
@@ -430,7 +469,7 @@ async def fly(
         return pending.pop() if pending else None
 
     monkeypatch.setattr(plugin, "_measure_box", measure)
-    flight = Flight()
+    flight = Flight(plugin=plugin)
     t0 = clock.now
     next_fix = 0.0
     frame = 0
@@ -495,6 +534,7 @@ async def fly(
         flight.height.append(pilot.z)
         flight.braked.append(pilot.braked)
         flight.state.append(states[-1] if states else {})
+        flight.vantage.append(pilot.vantage)
         clock.advance(DT)
         t = clock.now - t0
     return flight

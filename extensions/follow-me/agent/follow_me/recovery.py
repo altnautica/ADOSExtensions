@@ -59,7 +59,7 @@ from follow_me.state import (
     REACQUIRE_SMART,
     FollowConfig,
 )
-from follow_me.standoff import keep_clear
+from follow_me.standoff import SEPARATION_SIGMAS, keep_clear, pilot_subject_sigma
 from follow_me.target_filter import position_sigma
 
 # The prediction phase lasts at most this long, and ends early once the
@@ -499,7 +499,9 @@ class RecoveryMixin:
         assert rec.step_index is not None
         step = rec.steps[rec.step_index]
         pn, pe = x[0], x[1]
-        if await self._keep_clear_of_prediction(cfg, now, x):
+        cands = self._guard_candidates(now, x)
+        sigma = self._search_sigma(cfg, x, p, cands)
+        if await self._keep_clear_of_prediction(cfg, now, x, cands, sigma):
             return
         yaw: float | None = None
         if rec.phase == PHASE_SEARCHING:
@@ -524,6 +526,7 @@ class RecoveryMixin:
                 "yaw": yaw,
                 "yaw_rate": None,
                 "subject_ne": [pn, pe],
+                "subject_sigma_m": sigma,
                 "max_speed_mps": min(cfg.search_speed_mps, cfg.max_speed_mps),
                 "candidates": None,
                 "margin_m": cfg.obstacle_margin_m,
@@ -547,8 +550,49 @@ class RecoveryMixin:
         )
 
     def _hypotheses(self) -> list[tuple[float, float]]:
+        centre = self._filter.still_centre()
+        if centre is not None:
+            # It stood still: where it stood, not back along a velocity
+            # range noise left.
+            return [centre]
         last = self._filter.last_estimate()
         return [] if last is None else search_hypotheses(last)
+
+    def _guard_candidates(
+        self, now: float, x: list[float]
+    ) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+        """Every place the lost subject may be, with its velocity: the
+        search's prediction ``x``, the last estimate, the still centre, the
+        search hypotheses and, for a subject that was moving, the undecayed
+        prediction (one coming toward the vehicle keeps coming). The guard
+        keeps clear of the nearest: the prediction alone can drift metres off
+        a subject the search then flies onto."""
+        cands = [((x[0], x[1]), (x[2], x[3]))]
+        last = self._filter.last_estimate()
+        if last is not None:
+            cands.append(((last[0], last[1]), (0.0, 0.0)))
+        cands.extend((h, (0.0, 0.0)) for h in self._hypotheses())
+        if self._filter.still_centre() is None:
+            raw = self._filter.predicted(now)
+            if raw is not None:
+                cands.append(((raw[0][0], raw[0][1]), (raw[0][2], raw[0][3])))
+        return cands
+
+    @staticmethod
+    def _search_sigma(
+        cfg: FollowConfig,
+        x: list[float],
+        p: Any,
+        cands: list[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> float:
+        """The subject range error the search's goals name for the pilot's
+        subject brake: the prediction's spread, and at least the reach of
+        the farthest place the subject may be over SEPARATION_SIGMAS, as
+        much as the standoff leaves room for (:func:`pilot_subject_sigma`)."""
+        far = max(math.hypot(c[0][0] - x[0], c[0][1] - x[1]) for c in cands)
+        return pilot_subject_sigma(
+            cfg.follow_distance_m, max(position_sigma(p), far / SEPARATION_SIGMAS)
+        )
 
     def _on_goal_status(self, payload: dict[str, Any]) -> None:
         """The pilot's report on the vantage goal (``flight.goal.status``)."""
@@ -643,17 +687,25 @@ class RecoveryMixin:
             phase=rec.phase,
         )
 
-    async def _keep_clear_of_prediction(self, cfg: FollowConfig, now: float, x: list[float]) -> bool:
-        """While the search's prediction of the lost subject (the undecayed
-        one: a subject the follow led or flew beside keeps coming toward the
-        vehicle) would bring it inside the clear distance, back away from it
-        rather than hold for a vantage: whether a goal went out."""
+    async def _keep_clear_of_prediction(
+        self,
+        cfg: FollowConfig,
+        now: float,
+        x: list[float],
+        cands: list[tuple[tuple[float, float], tuple[float, float]]],
+        sigma: float,
+    ) -> bool:
+        """While the nearest place the lost subject may be (``cands``, see
+        :meth:`_guard_candidates`) lies inside the clear distance, or would
+        come inside it, back away from it rather than hold for a vantage:
+        whether a goal went out."""
         dn, de = self._pose.north_m, self._pose.east_m
         own_v = (self._pose.vn_mps, self._pose.ve_mps)
+        near_ne, near_v = min(cands, key=lambda c: math.hypot(c[0][0] - dn, c[0][1] - de))
         vel, _side, limited = keep_clear(
-            rel_ne=(x[0] - dn, x[1] - de),
-            subject_v_ne=(x[2], x[3]),
-            pace_v_ne=(x[2], x[3]),
+            rel_ne=(near_ne[0] - dn, near_ne[1] - de),
+            subject_v_ne=near_v,
+            pace_v_ne=near_v,
             want_ne=(0.0, 0.0),
             command_v_ne=own_v,
             range_sigma_m=0.0,
@@ -679,7 +731,8 @@ class RecoveryMixin:
                 "vel_mode": "command",
                 "yaw": math.atan2(x[1] - de, x[0] - dn),
                 "yaw_rate": None,
-                "subject_ne": [x[0], x[1]],
+                "subject_ne": [near_ne[0], near_ne[1]],
+                "subject_sigma_m": sigma,
                 "max_speed_mps": cfg.max_speed_mps,
                 "candidates": None,
                 "margin_m": cfg.obstacle_margin_m,

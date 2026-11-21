@@ -263,13 +263,27 @@ longer than 3 s is handled as a loss.
      a wider vantage, step by step. The last step sweeps all the way round,
      and repeats until the budget is spent.
 
+  The search is centred on where the subject was still, with no velocity,
+  when it stood still at the last sighting: over the last 6 s it was seen
+  (at least 6 sightings over 5 s) its estimated speed was at most 0.3 m/s
+  at the median, the estimate got no further than 0.3 m/s would take it,
+  and its speed at the last sighting was at most 0.6 m/s. Range noise on a
+  standing subject leaves the estimate a slow walk's speed, and a search
+  that ran it on would carry its vantage points onto the subject. A subject
+  that was moving is searched on the prediction whose velocity fades after
+  the last sighting (the coast), never on the last velocity run on. While
+  searching, the follow backs away from the nearest place the subject may
+  be (the prediction, the last estimate, where it stood, the places the
+  search looks), and its goals name the search's spread as
+  `subject_sigma_m`, so the pilot's subject brake keeps a wider distance.
+
   The prediction's spread is bounded by how far the subject can have gone
   (its class speed cap, 5 m/s for a person, times the time since it was last
   seen, plus that sighting's own spread), so the position check and the
-  search area stay meaningful in a long gap. The constant-velocity
-  extrapolation stops 70 s after the last sighting, past the longest budget;
-  after that a search (a Resume after a long wait, for one) looks around the
-  last estimate with the bounded spread.
+  search area stay meaningful in a long gap. The prediction stops 70 s
+  after the last sighting, past the longest budget; after that a search (a
+  Resume after a long wait, for one) looks around the last estimate, or
+  where the subject stood, with the bounded spread.
 
   In each new batch it looks for a `person` that passes two checks:
   - its re-identification embedding has cosine similarity of at least

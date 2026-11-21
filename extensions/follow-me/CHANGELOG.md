@@ -6,11 +6,21 @@ uses independent semantic versioning per extension.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-21
+
 ### Added
 
 - Follow-Me flies under a canopy. The pilot reports the leaves its leaning scans meet over the subject's path as the highest height that clears them (`flight.overhead`, `fly_under_agl_m`, from an agent whose pilot publishes `overhead_ahead`); the follow flies the highest height between the lowest follow height (3.4 m) and the one set that stays under them, for 5 s after the last such report. A report of nothing overhead that follows one of leaves is not taken as clear air: the lowered height holds until the copter has flown past the last overhead point by twice its reported distance ahead (at least 6 m). When even 3.4 m does not clear them it holds 3.4 m. The read-back says so: `height_lowered` and `height_reason` (`canopy`, `canopy_floor`).
 
 - Follow-Me flies on the agent's estimate of the designated subject when the agent publishes one (`vision.subject.v1`, read with `event.subscribe` and the new optional permission `vision.subject.read`). While a state is at most 0.5 s old and names the locked track on the follow camera, the goals, the gimbal, the read-back's `target_ned`, `target_vel_ned` and `predicted_ned`, and a recovery's predicted position, search area and vantage request are built on its position, velocity, spread and obstacle-aware predictions, and a lock commands on it without a range fix of the follow's own; otherwise the follow flies its own estimate as before. A release of the locked track is a lost lock. When the operator's phone alone feeds the estimate (vision has lost the subject), Smart with `uncertain_mode` `follow` keeps following an unsure or lost lock on it within the same separation guard, the phone's spread widening the clear distance, until its fixes stop for 0.5 s. The read-back names the estimate in use: `subject_source` (`vision`, `beacon`, `predicted`, or null on the follow's own).
+
+### Fixed
+
+- A search for a subject lost while standing still no longer drifts onto them. Range noise on a standing subject can leave the estimate a slow walk's speed, and the search used to run that speed on for its whole length: within a few seconds its predicted position was metres away, and the vantage points the pilot chose a set distance from it came round onto the real person. Now the search centres on where a still subject stood, with no speed, and a subject that was moving is searched on the prediction that lets its last speed fade, never on that speed run on. The subject counts as still when, over the last 6 s it was seen (at least 6 sightings over 5 s), its estimated speed was at most 0.3 m/s at the median, the estimate got no further than 0.3 m/s would take it, and its speed at the last sighting was at most 0.6 m/s.
+
+- While searching, the follow keeps clear of the nearest place the subject may be: the predicted position, where it was last seen, where it stood, and where the search looks for it, not of the prediction alone. The search's goals tell the pilot how far the subject may be from the predicted position, so the pilot's own subject brake keeps a wider distance.
+
+  Flown in simulation (a subject standing 30 s, the boxes putting it drifting off at about 0.45 m/s for its last 3 s, then lost and searched for 60 s; box-height range, the pilot answering 0.8 s late), the least horizontal distance to the subject over 3 noise draws went from 0.06 m to 5.5 m, and stays above 5.4 m over 10.
 
 ## [0.6.0] - 2026-11-21
 
