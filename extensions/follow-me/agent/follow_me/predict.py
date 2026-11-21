@@ -29,12 +29,15 @@ class PredictedTarget:
     t_s: float
 
 
-def predict_target(filt: TargetFilter, t: float) -> PredictedTarget | None:
-    pred = filt.search_predicted(t)
-    if pred is None:
-        return None
+def target_of(pred: tuple[list[float], list[list[float]]], t: float) -> PredictedTarget:
+    """A ``(state, covariance)`` prediction at ``t`` as a :class:`PredictedTarget`."""
     x, p = pred
     return PredictedTarget((x[0], x[1]), (x[2], x[3]), (p[0][0], p[0][1], p[1][1]), t)
+
+
+def predict_target(filt: TargetFilter, t: float) -> PredictedTarget | None:
+    pred = filt.search_predicted(t)
+    return None if pred is None else target_of(pred, t)
 
 
 def predicted_path(
@@ -67,4 +70,5 @@ __all__ = [
     "predict_target",
     "predicted_path",
     "search_ellipse",
+    "target_of",
 ]

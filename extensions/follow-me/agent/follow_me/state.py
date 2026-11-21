@@ -402,6 +402,12 @@ class FollowState:
     # follow's ``max_speed_mps``) for OUTPACED_AFTER_S: it is pulling away.
     outpaced: bool = False
     speed_limit_mps: float | None = None
+    # The subject estimate the follow uses (its goals, `target_ned` and the
+    # predictions): the engine's subject state fed by vision (`vision`, a
+    # phone beacon may have fed it too), by the operator's phone alone while
+    # vision has lost the subject (`beacon`), or by no cue within the last
+    # second (`predicted`); None on the follow's own estimate from the boxes.
+    subject_source: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

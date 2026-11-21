@@ -73,6 +73,7 @@ from follow_me.state import (
     FollowConfig,
 )
 from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject, pilot_subject_sigma
+from follow_me.subject import SubjectFeed, SubjectView
 from follow_me.target_filter import Cov2, TargetFilter, subject_max_speed_mps
 
 # The fixed cadence the follow loop commands at, decoupled from the
@@ -233,6 +234,8 @@ class FollowLoopMixin:
     _fused_s: float
     # The filter's restart count the follow last smoothed from.
     _restarts_seen: int
+    # The engine's state of the designated subject (see follow_me.subject).
+    _subject: SubjectFeed
 
     async def _follow_loop(self) -> None:
         while True:
@@ -335,8 +338,14 @@ class FollowLoopMixin:
         if not self._tracker.has_lock:
             await self._hold(cfg, now, phase=PHASE_ACQUIRING, hold_reason=HOLD_NO_LOCK)
             return
+        if self._subject.take_release(self._tracker.track_id, self._follow_camera()):
+            # The engine released the subject: the same loss as a lost lock.
+            await self._on_lock_lost(cfg, now)
+            return
         lock = self._tracker.effective_lock(now)
         if lock is EffectiveLock.LOST:
+            if await self._follow_beacon(cfg, now, LOCK_LOST):
+                return
             await self._on_lock_lost(cfg, now)
             return
         target = self._tracker.locked_target(now)
@@ -357,7 +366,8 @@ class FollowLoopMixin:
         # the same object; it is never re-projected through fresh attitude.
         if target.bbox is not self._measured_bbox:
             self._measure_sighting(cfg, now, target.bbox)
-        if not self._filter.initialized or (now - self._fused_s) > _MEASUREMENT_STALE_S:
+        stale = not self._filter.initialized or (now - self._fused_s) > _MEASUREMENT_STALE_S
+        if stale and not self._subject_measured(now, _MEASUREMENT_STALE_S):
             await self._hold(
                 cfg,
                 now,
@@ -400,6 +410,8 @@ class FollowLoopMixin:
         feed-forward is reduced, as for a prediction after a loss."""
         if self._uncertain_since_s is None:
             self._uncertain_since_s = now
+        if await self._follow_beacon(cfg, now, LOCK_UNCERTAIN):
+            return
         if now - self._uncertain_since_s > UNCERTAIN_FOLLOW_MAX_S:
             await self._on_lock_lost(cfg, now)
             return
@@ -411,7 +423,9 @@ class FollowLoopMixin:
                     cfg, now, phase=PHASE_HOLDING, hold_reason=gate, lock_state=LOCK_UNCERTAIN
                 )
                 return
-            fresh = (now - self._fused_s) <= _MEASUREMENT_STALE_S
+            fresh = (now - self._fused_s) <= _MEASUREMENT_STALE_S or self._subject_measured(
+                now, _MEASUREMENT_STALE_S
+            )
             await self._command(
                 cfg,
                 now,
@@ -619,8 +633,17 @@ class FollowLoopMixin:
         return max(0.0, min(dt, 0.5))
 
     def _goal(
-        self, cfg: FollowConfig, now: float, x: list[float], p: list[list[float]], ff_scale: float
+        self,
+        cfg: FollowConfig,
+        now: float,
+        x: list[float],
+        p: list[list[float]],
+        ff_scale: float,
+        subject: SubjectView | None = None,
     ) -> dict[str, Any]:
+        """The goal round the estimate ``x``/``p``: the engine's subject state
+        when ``subject`` is given (its spread as it states it), else the
+        follow's own filter."""
         agl, _src = self._agl(now)
         dt = self._geometry_dt(cfg, now)
         if self._filter.restarts != self._restarts_seen:
@@ -633,7 +656,8 @@ class FollowLoopMixin:
         ref = self._still.reference((x[0], x[1], x[2], x[3]))
         tn, te = ref.north_m, ref.east_m
         dn, de = self._pose.north_m, self._pose.east_m
-        range_sigma, pace_sigma = _estimate_error(x, p, dn, de, self._filter.scatter_ratio)
+        scatter = 1.0 if subject is not None else self._filter.scatter_ratio
+        range_sigma, pace_sigma = _estimate_error(x, p, dn, de, scatter)
         # The subject's velocity fed forward, smoothed by how uncertain it
         # is; the reference heading still turns on the filter's own.
         tvn, tve = self._standoff.pace(
@@ -719,7 +743,7 @@ class FollowLoopMixin:
         # standing subject's centre. (The newest fixes' range, which a run
         # of range outliers drags in, is the soft guard's.)
         standoff_m = cfg.orbit_radius_m if kind == "orbit" else cfg.follow_distance_m
-        raw = self._filter.predicted(now)
+        raw = subject.at(now) if subject is not None else self._filter.predicted(now)
         if ref.still:
             # A standing subject's centre: its estimate swings a metre on
             # range noise, and a step toward the vehicle shows in the newest
@@ -737,7 +761,12 @@ class FollowLoopMixin:
         # the vehicle (a walk the estimate puts 10 % slow closes a metre in
         # five seconds), and no credit for the pace fed forward, which
         # decays with the coast.
-        coast_sigma = 0.0 if ref.still else self._filter.coast_spread_m(now)
+        if ref.still:
+            coast_sigma = 0.0
+        elif subject is not None:
+            coast_sigma = subject.coast_spread_m(now)
+        else:
+            coast_sigma = self._filter.coast_spread_m(now)
         gr = math.hypot(guard_ne[0] - dn, guard_ne[1] - de)
         if coast_sigma > 0.0 and raw is not None and gr > 1e-6:
             un, ue = (guard_ne[0] - dn) / gr, (guard_ne[1] - de) / gr
@@ -817,9 +846,11 @@ class FollowLoopMixin:
         lock_state: str,
         predicted_bbox: dict[str, object] | None = None,
     ) -> None:
-        # Flown on the coast: a velocity no fix has confirmed for a while
+        # The engine's subject state while it is fresh; else the own filter,
+        # flown on the coast: a velocity no fix has confirmed for a while
         # decays (see TargetFilter.coasted).
-        pred = self._filter.coasted(now)
+        subject = self._subject_view(now)
+        pred = subject.at(now) if subject is not None else self._filter.coasted(now)
         if pred is None:
             await self._hold(
                 cfg, now, phase=PHASE_HOLDING, hold_reason=HOLD_NO_RANGE, lock_state=lock_state
@@ -842,7 +873,7 @@ class FollowLoopMixin:
             )
             cfg = self._range_tier.apply_to(cfg)
         agl, _src = self._agl(now)
-        await self._send_goal(self._goal(cfg, now, x, p, ff_scale), now)
+        await self._send_goal(self._goal(cfg, now, x, p, ff_scale, subject), now)
         if self._pending_latency_ts_ms is not None:
             # Both clocks are the host's monotonic clock (the engine stamps
             # frames with CLOCK_MONOTONIC).

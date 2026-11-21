@@ -223,7 +223,7 @@ class RecoveryMixin:
             deadline_s=now + cfg.search_budget_s,
             lost_s=lost_s,
             anchor_ne=(self._pose.north_m, self._pose.east_m),
-            sigma_at_start_m=_sigma_now(self._filter, now),
+            sigma_at_start_m=_sigma_of(self._search_prediction(now)),
             steps=tuple(search_steps(budget)),
             resume_seq_seen=cfg.operator_resume_seq,
         )
@@ -340,7 +340,7 @@ class RecoveryMixin:
             await self._try_reacquire(cfg, now, rec)
         # Past the filter's horizon the search goes on around the last
         # estimate, with the spread the subject's speed allows.
-        pred = self._filter.search_predicted(now)
+        pred = self._search_prediction(now)
         if pred is None:
             await self._await_operator(cfg, now, rec, reason=REASON_SEARCH_EXHAUSTED)
             return
@@ -349,7 +349,7 @@ class RecoveryMixin:
             young = (now - rec.started_s) < PREDICT_MAX_S
             spread = position_sigma(p) - rec.sigma_at_start_m
             # With nothing left to extrapolate there is no leg to fly.
-            moving = self._filter.predicted(now) is not None
+            moving = self._subject_view(now) is not None or self._filter.predicted(now) is not None
             if young and moving and spread <= PREDICT_SIGMA_M:
                 # The prediction leg is held to the search speed, so it cannot
                 # carry the vehicle past the search radius before the first
@@ -419,12 +419,23 @@ class RecoveryMixin:
         speed = max(0.1, min(cfg.search_speed_mps, cfg.max_speed_mps))
         return now - rec.vantage_seen_s > dist / speed + REPOSITION_SLACK_S
 
+    def _search_prediction(self, now: float) -> tuple[list[float], Any] | None:
+        """Where the lost subject is predicted now: the engine's state of it
+        while that is fresh (its predictions keep out of mapped obstacles),
+        else the follow's own filter's search prediction."""
+        subject = self._subject_view(now)
+        if subject is not None:
+            return subject.at(now)
+        return self._filter.search_predicted(now)
+
     def _on_frame_shift(self, dn: float, de: float, dd: float) -> None:
         """The local frame jumped (an EKF position reset): move every point
         held in it by the same step, so each stays put in the world."""
         self._filter.shift(dn, de)
         self._still.shift(dn, de)
         self._standoff.shift(dn, de)
+        # The engine's state is in the old frame until its next update.
+        self._subject.clear()
         if self._hold_point is not None:
             hn, he, hd, hyaw = self._hold_point
             self._hold_point = (hn + dn, he + de, hd + dd, hyaw)
@@ -686,8 +697,7 @@ class RecoveryMixin:
         rec.designated_mahalanobis = cand.mahalanobis
 
 
-def _sigma_now(filt: Any, now: float) -> float:
-    pred = filt.search_predicted(now)
+def _sigma_of(pred: tuple[list[float], Any] | None) -> float:
     return 0.0 if pred is None else position_sigma(pred[1])
 
 

@@ -86,6 +86,7 @@ from follow_me.state import (
     FollowConfig,
     FollowState,
 )
+from follow_me.subject import SubjectFeed, SubjectMixin
 from follow_me.target_filter import TargetFilter
 
 PLUGIN_ID = "com.altnautica.follow-me"
@@ -148,7 +149,7 @@ def parse_scan(payload: dict[str, Any]) -> Scan | None:
     return Scan(angle_start_rad=start, angle_increment_rad=inc, ranges_m=values)
 
 
-class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin):
+class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, SubjectMixin, FollowLoopMixin):
     """Lifecycle-hook plugin class the runner instantiates with no args."""
 
     def __init__(self) -> None:
@@ -209,6 +210,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         # The follow height under leaves the pilot reports ahead (see
         # follow_me.canopy).
         self._canopy = CanopyHeight()
+        # The engine's state of the designated subject, flown on while fresh
+        # (see follow_me.subject).
+        self._subject = SubjectFeed()
         # The arm-edge write of predictive_search, kept so it is not
         # collected before it runs.
         self._arm_reset_task: asyncio.Task | None = None
@@ -286,6 +290,8 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
             self._on_batch, camera_id=None, embeddings=True
         )
         await self._subscribe_scan(fc_state.monotonic())
+        # The engine's world state of the designated subject (optional).
+        await self._subscribe_subject(ctx)
 
         # The pilot revokes the motion lease (pause, stick takeover, land,
         # RTH, FC mode change) and forwards the operator's sticks while it is

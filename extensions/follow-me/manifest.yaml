@@ -49,6 +49,7 @@ features:
   - "Stick nudges for angle, distance, height, orbit radius and rate while following"
   - "Terrain-following height from a downward rangefinder, barometric fallback"
   - "Range from the feet ray, the box height and an optional planar lidar, fused by uncertainty"
+  - "Flies on the agent's own estimate of the designated subject when it publishes one, and on the operator's phone position alone while vision has lost the subject"
   - "Strict or Smart re-acquire after an occlusion, operator selectable"
   - "Predictive search: the pilot repositions to a vantage point that sees past the obstacle, then the camera sweeps"
   - "Holds for the operator when the search runs out: resume, designate again, return home, land or stop"
@@ -105,6 +106,11 @@ agent:
     # (plugin.navigation.scan, subscribe capability telemetry.read).
     - id: event.subscribe
     - id: telemetry.read
+    # The agent's world state of the designated subject
+    # (vision.subject.v1, read with event.subscribe).
+    - id: vision.subject.read
+      required: false
+      degraded_behavior: "No subject state from the agent: the follow flies on its own estimate from the boxes, and a lost lock is not followed on the operator's phone position."
     - id: mcp.expose
   mavlink_components:
     # The companion's own component id: the gimbal pitch/yaw frames are

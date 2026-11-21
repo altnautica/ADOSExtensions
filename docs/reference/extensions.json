@@ -72,6 +72,7 @@
         "ui.slot.flight-skill",
         "ui.slot.node-detail-tab",
         "vision.detection.subscribe",
+        "vision.subject.read",
         "vision.track.designate"
       ],
       "halves": [

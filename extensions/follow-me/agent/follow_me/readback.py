@@ -9,7 +9,7 @@ from typing import Any
 from follow_me import fc_state, projection
 from follow_me.camera import CameraGeometry, configured_geometry, geometry_of
 from follow_me.loop import SETPOINT_RATE_WINDOW_S
-from follow_me.predict import predict_target, predicted_path, search_ellipse
+from follow_me.predict import MAX_PATH_POINTS, predicted_path, search_ellipse, target_of
 from follow_me.projection import CameraPose, TargetFix
 from follow_me.ranging import Scan
 from follow_me.speed_limit import effective_limit, faster_than
@@ -59,6 +59,7 @@ _DISCRETE_KEYS = (
     "operator_resume_seq",
     "outpaced",
     "height_reason",
+    "subject_source",
 )
 
 
@@ -363,13 +364,20 @@ class ReadbackMixin:
             agl, source = self._agl(now)
             state.agl_m = _r(agl)
             state.agl_source = source
-        pred = self._filter.predicted(now) if self._filter.initialized else None
+        # The estimate the goals are built on: the engine's subject state
+        # while it is fresh, else the follow's own filter.
+        subject = self._subject_view(now)
+        state.subject_source = None if subject is None else subject.source
+        if subject is not None:
+            pred = subject.at(now)
+        else:
+            pred = self._filter.predicted(now) if self._filter.initialized else None
         if pred is not None:
             x, p = pred
             state.target_ned = [round(x[0], 2), round(x[1], 2)]
             state.target_vel_ned = [round(x[2], 2), round(x[3], 2)]
             state.target_speed_mps = _r(math.hypot(x[2], x[3]))
-            state.predicted_ned = _predicted_ned(self._filter, now)
+            state.predicted_ned = subject.path_ne(now) if subject is not None else _predicted_ned(self._filter, now)
         if cfg is not None:
             limit = effective_limit(cfg.max_speed_mps, self._nav_feed, now)
             state.speed_limit_mps = limit
@@ -382,7 +390,10 @@ class ReadbackMixin:
                 self._outpaced_since_s = None
         fix = self._last_fix
         self._recovery_readback(state, now, phase)
-        if phase in RECOVERY_PHASES and pred is not None:
+        # On the beacon alone the newest box's range is stale: the range is
+        # the beacon's estimate's, as in a recovery.
+        beacon = subject is not None and subject.beacon_only
+        if (phase in RECOVERY_PHASES or beacon) and pred is not None:
             x, p = pred
             dn = x[0] - self._pose.north_m
             de = x[1] - self._pose.east_m
@@ -416,17 +427,22 @@ class ReadbackMixin:
         state.reacquire_remaining_s = round(rec.remaining_s(now), 2)
         if phase == PHASE_SEARCHING:
             state.search_step = rec.step_index
-        p = predict_target(self._filter, now)
-        if p is None:
+        pred = self._search_prediction(now)
+        if pred is None:
             return
-        area = search_ellipse(p, rec.sigma_k)
+        area = search_ellipse(target_of(pred, now), rec.sigma_k)
         state.search_area = {
             "center_ne": [round(area.center_ne[0], 2), round(area.center_ne[1], 2)],
             "semi_major_m": round(area.semi_major_m, 2),
             "semi_minor_m": round(area.semi_minor_m, 2),
             "heading_deg": round(area.heading_deg, 1),
         }
-        state.predicted_path_ne = [[n, e] for n, e in predicted_path(self._filter, now)] or None
+        subject = self._subject_view(now)
+        if subject is not None:
+            path = subject.path_ne(now)[:MAX_PATH_POINTS]
+        else:
+            path = [[n, e] for n, e in predicted_path(self._filter, now)]
+        state.predicted_path_ne = path or None
 
 
 # The read-back's predicted subject positions: every PREDICTED_STEP_S over

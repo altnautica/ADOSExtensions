@@ -189,6 +189,27 @@ recovery is kept through it, so a follow waiting for the operator still
 waits when the frames return; meanwhile it keeps the phase
 `holding-await-operator` and holds at the latched point.
 
+### The agent's subject estimate
+
+An agent that publishes the designated subject's world state
+(`vision.subject.v1`, read with `event.subscribe` and the optional
+`vision.subject.read`) gives the follow a second estimate: the subject's
+position, velocity and spread from every cue the agent fuses, and its
+predictions 0.5-3 s ahead, kept out of mapped obstacles. While a state is
+at most 0.5 s old and names the locked track on the follow camera, the
+goals, the gimbal, the read-back's `target_ned` and predictions, and a
+recovery's predicted position and vantage request are built on it, and a
+lock commands on it without a range fix of the follow's own. Otherwise the
+follow flies its own estimate as above. A release of the locked track (the
+designation ended, or the agent lost the subject) is a lost lock.
+
+When the state is fed by the operator's phone alone (vision has lost the
+subject), Smart with `uncertain_mode` `follow` keeps following an unsure or
+lost lock on it, within the same separation guard, the phone's spread
+widening the clear distance; the read-back says `subject_source: beacon`.
+Once the phone's fixes stop for 0.5 s the loss is handled as usual. Strict,
+and `hold`, never fly on the phone.
+
 ### Pilot lease, sticks and stopping
 
 - The lease is asked for on the first goal. If another skill holds it the
@@ -357,8 +378,11 @@ The other `follow.state` fields:
 - **Range:** `range_m`, `range_sigma_m`, `range_cues`.
 - **Subject:** `target_speed_mps`, `bearing_deg`, `depression_deg`,
   `target_ned`, `target_vel_ned`, `predicted_ned` (every 0.5 s over the
-  next 5 s), `predicted_bbox`, `target_bbox` (the locked box with its
-  frame's capture times `ts_ms` and `ts_sensor_ms`).
+  next 5 s, over the agent's 3 s on its subject state), `predicted_bbox`,
+  `target_bbox` (the locked box with its frame's capture times `ts_ms` and
+  `ts_sensor_ms`), `subject_source` (the estimate in use: `vision`,
+  `beacon` or `predicted` from the agent's subject state, null on the
+  follow's own).
 - **Frame:** `frame`, `fc_local_ned`: every position above is in the flight
   controller's local NED.
 - **Height:** `agl_m`, `agl_source`, `height_raised`, `height_lowered`,
