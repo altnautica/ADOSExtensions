@@ -422,6 +422,38 @@ fn a_map_restarted_without_the_fc_turn_stays_lost() {
     assert!(nav.north_unknown());
 }
 
+/// The logged take: on the ground at rest the map tracked good, then the
+/// FC's IMU feed stalled, the heading went unconfirmed and the matcher
+/// started its map over a few millimetres from where it stood, with no FC
+/// attitude reaching back to the good pose. Still on the take-off spot the
+/// north is the FC heading, as at the first pose: the map starts over and
+/// latches it afresh. (Blind there, every pose stayed lost, `ODOMETRY`
+/// stopped and ArduPilot's VisOdom pre-arm check never passed again.)
+#[test]
+fn a_map_restarted_on_the_spot_after_a_trusted_pose_latches_its_north_afresh() {
+    let heading = 17.2f64.to_radians();
+    let mut nav = NavMap::new(settings(ComputePlacement::Onboard));
+    let pose = |nav: &mut NavMap, e: &PoseEstimate| {
+        let t_ms = (e.t_ns / 1_000_000) as i64;
+        nav.on_pose(e, Some(0.0), Some(heading), t_ms, 0)
+            .expect("due")
+    };
+    for k in 0..10 {
+        assert_eq!(
+            pose(&mut nav, &at(estimate(0.0, 0.0, 0.0), k * 100)).health,
+            VioHealth::Good
+        );
+    }
+    let mut restart = at(estimate(-0.02, 0.004, 0.0), 1_500);
+    restart.health = VioHealth::Lost;
+    nav.on_matcher_pose(&restart, true, Some(0.0), None);
+    assert!(!nav.north_unknown(), "blind on the take-off spot");
+    let pd = pose(&mut nav, &at(estimate(-0.02, 0.004, 0.0), 2_000));
+    assert_eq!(pd.health, VioHealth::Good);
+    assert_eq!(pd.north, Some(MapNorth::FcHeading));
+    assert!(wrap_pi(frd_yaw(&pd.pose.r) - heading).abs() < 1e-9);
+}
+
 /// Without the FC's position over the outage, the restarted map keeps the
 /// pose where the old map had it: `map_ned` does not jump.
 #[test]

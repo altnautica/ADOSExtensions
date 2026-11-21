@@ -344,7 +344,13 @@ impl NavMap {
     /// `RAW_IMU` ([`Self::restart_heading_at`]), and the next pose latches
     /// the north afresh: on the take-off spot as at the first pose, off it
     /// from the FC heading even with a declared take-off heading, which holds
-    /// only on that spot.
+    /// only on that spot. A restart still on the spot of the first heading
+    /// starts over the same way after a trusted pose too: there the north is
+    /// the FC heading (or the declared one) at every pose anyway, so it needs
+    /// no turn across the outage. Blind there (an IMU feed stall on the
+    /// ground, no FC attitude reaching back to the good pose), every pose
+    /// stayed lost, `ODOMETRY` stopped and ArduPilot's VisOdom pre-arm
+    /// check never passed again.
     pub fn restart_in_flight(
         &mut self,
         e: &PoseEstimate,
@@ -352,15 +358,21 @@ impl NavMap {
         fc: Option<&FcEkfPose>,
     ) {
         let (r_frd, t_frd) = self.place_frd(&e.r, e.t, fc_up);
+        let on_spot = self.spot.is_some_and(|spot| from_spot(spot, t_frd).2);
         if self.good.is_none() && self.measured.is_none() {
             // The restart pose may have left the spot since the last pose.
-            if self.spot.is_some_and(|spot| !from_spot(spot, t_frd).2) {
+            if self.spot.is_some() && !on_spot {
                 self.left_takeoff = true;
             }
             tracing::warn!(
                 left_takeoff = self.left_takeoff,
                 "nav_map_restarted_before_a_trusted_pose"
             );
+            self.start_over();
+            return;
+        }
+        if on_spot && !self.left_spot {
+            tracing::warn!("nav_map_restarted_on_the_spot");
             self.start_over();
             return;
         }
