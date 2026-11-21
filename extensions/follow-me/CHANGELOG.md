@@ -4,6 +4,12 @@ All notable changes to ADOS Follow-Me are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/) and the project
 uses independent semantic versioning per extension.
 
+## [Unreleased]
+
+### Added
+
+- Follow-Me flies under a canopy. The pilot reports the leaves its leaning scans meet over the subject's path as the highest height that clears them (`flight.overhead`, `fly_under_agl_m`, from an agent whose pilot publishes `overhead_ahead`); the follow flies the highest height between the lowest follow height (3.4 m) and the one set that stays under them, for 5 s after the last such report or until the pilot reports clear air. When even 3.4 m does not clear them it holds 3.4 m. The read-back says so: `height_lowered` and `height_reason` (`canopy`, `canopy_floor`).
+
 ## [0.6.0] - 2026-11-21
 
 ### Added

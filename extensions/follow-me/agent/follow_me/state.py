@@ -173,6 +173,10 @@ class FollowConfig:
     # The operator asked for a follow height below MIN_FOLLOW_HEIGHT_M, and
     # it is held at that instead.
     follow_height_raised: bool = False
+    # The follow height is flown lower than set, under leaves the pilot
+    # reports ahead, and why: canopy or canopy_floor (see follow_me.canopy).
+    follow_height_lowered: bool = False
+    follow_height_reason: str | None = None
     # The shortest standoff (follow distance and orbit radius) flown on the
     # range the follow has, whether the one flown was set shorter and is
     # held at it, and why (see follow_me.range_tier).
@@ -319,6 +323,11 @@ class FollowState:
     # The configured follow height was below MIN_FOLLOW_HEIGHT_M and is held
     # at it (surfaces say so: kept above head height).
     height_raised: bool = False
+    # The follow height flown is lower than the one set, under a canopy the
+    # pilot reports ahead: canopy (under it), canopy_floor (held at the
+    # lowest follow height, the leaves lower still). Surfaces say which.
+    height_lowered: bool = False
+    height_reason: str | None = None
     # The shortest standoff flown on the range the follow has, whether the
     # configured one was shorter and is held at it, and why: camera-range,
     # range-unknown, subject-standing or closing-in (surfaces say which).

@@ -79,6 +79,13 @@ describe("normalizeFollowState", () => {
     expect(normalizeFollowState({ height_setpoint_m: 4 }).heightRaised).toBe(false);
   });
 
+  it("reads why the height flown is lowered under trees, and nothing else", () => {
+    expect(normalizeFollowState({ height_setpoint_m: 3.8, height_reason: "canopy" }).heightReason).toBe("canopy");
+    expect(normalizeFollowState({ height_reason: "canopy_floor" }).heightReason).toBe("canopy_floor");
+    expect(normalizeFollowState({ height_reason: "weather" }).heightReason).toBeNull();
+    expect(normalizeFollowState({}).heightReason).toBeNull();
+  });
+
   it("reads the range's shortest standoff, whether it is held there and why", () => {
     const s = normalizeFollowState({ standoff_min_m: 5, standoff_raised: true, standoff_reason: "subject-standing" });
     expect([s.standoffMinM, s.standoffRaised, s.standoffReason]).toEqual([5, true, "subject-standing"]);

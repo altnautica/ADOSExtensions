@@ -58,6 +58,7 @@ _DISCRETE_KEYS = (
     "predictive_search",
     "operator_resume_seq",
     "outpaced",
+    "height_reason",
 )
 
 
@@ -344,6 +345,8 @@ class ReadbackMixin:
             state.operator_resume_seq = cfg.operator_resume_seq
             state.search_budget_s = cfg.search_budget_s
             state.height_raised = cfg.follow_height_raised
+            state.height_lowered = cfg.follow_height_lowered
+            state.height_reason = cfg.follow_height_reason
             state.standoff_min_m = _r(cfg.standoff_min_m)
             state.standoff_raised = cfg.standoff_raised
             state.standoff_reason = cfg.standoff_reason

@@ -11,6 +11,7 @@ use std::f32::consts::TAU;
 use ados_mapping_protocol::capture::nav::SCAN_BINS;
 use ados_mapping_protocol::capture::{NavFrame, PolarScan, ScanDescriptor, VioHealth};
 
+use ados_livemap::BAND_TOP_M;
 use ados_mapping_pose::lidar_scan::LidarScan;
 use ados_mapping_pose::se3;
 
@@ -34,9 +35,14 @@ fn frd_azimuth(x: f32, y_flu: f32) -> f32 {
 }
 
 /// The scan binned to [`SCAN_BINS`] 1° bins in the body FRD frame, nearest
-/// horizontal range per bin. Every return is kept, airframe, blocked
-/// sectors and floor included: the agent pilot reads a bin with no return
-/// as free space out to its horizon, so such a return must stay a bound.
+/// horizontal range per bin. Every return up to [`BAND_TOP_M`] over the
+/// sensor's plane (body frame) is kept, airframe, blocked sectors and floor
+/// included: the agent pilot reads a bin with no return as free space out
+/// to its horizon, so such a return must stay a bound. A return of a 3D
+/// lidar higher than that met something over the drone (a canopy's
+/// underside) and is no wall at flight height: flattened, it would read as
+/// one at its horizontal range. A planar lidar's returns all lie in the
+/// plane.
 /// A consumer that wants obstacles only (the navigation extension's `OBSTACLE_DISTANCE`)
 /// filters them itself. `t_body_sensor` is the LiDAR mount (FLU);
 /// `blocked_azimuth_deg` the rig's sensor-frame blocked sectors, published
@@ -51,6 +57,9 @@ pub fn body_scan(
     let inc = TAU / SCAN_BINS as f32;
     for p in &scan.points {
         let b = se3::mat_vec(&r, [p[0] as f64, p[1] as f64, p[2] as f64]);
+        if b[2] as f32 > BAND_TOP_M {
+            continue;
+        }
         let (x, y) = ((b[0] + t[0]) as f32, (b[1] + t[1]) as f32);
         let range = x.hypot(y);
         if !range.is_finite() || range <= 0.0 {
@@ -92,7 +101,9 @@ fn blocked_bins(r_body_sensor: &[f64; 9], blocked_azimuth_deg: &[[f64; 2]]) -> V
 
 /// The scan in its sensor FRD frame as [`POLAR_BINS`] polar bins (nearest
 /// return, its reflectivity as quality), stamped with the sensor's pose in
-/// `map_ned` (`r_world_sensor`, `t_world_sensor` already in it).
+/// `map_ned` (`r_world_sensor`, `t_world_sensor` already in it). Returns
+/// over [`BAND_TOP_M`] above the sensor plane are left out, as in
+/// [`body_scan`].
 pub fn polar_scan(
     scan: &LidarScan,
     t_ns: u64,
@@ -105,7 +116,7 @@ pub fn polar_scan(
     let inc = TAU / POLAR_BINS as f32;
     for (i, p) in scan.points.iter().enumerate() {
         let range = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
-        if !range.is_finite() || range <= 0.0 {
+        if !range.is_finite() || range <= 0.0 || p[2] > BAND_TOP_M {
             continue;
         }
         let mm = (range * 1000.0).round().clamp(1.0, u16::MAX as f32) as u16;
@@ -239,5 +250,19 @@ mod tests {
         assert!(body_scan(&ring_scan(vec![]), &mount, &[])
             .blocked_bins
             .is_empty());
+    }
+
+    /// A 3D lidar under a canopy: a crown 1.5 m over the sensor 2 m ahead
+    /// is no wall in either flattening; the trunk behind it, in the band,
+    /// still bounds the bin.
+    #[test]
+    fn returns_over_the_flight_band_are_not_flattened_into_walls() {
+        let scan = ring_scan(vec![[2.0, 0.0, 1.5], [5.0, 0.0, 0.2], [0.0, -3.0, 2.0]]);
+        let d = body_scan(&scan, &se3::to_mat4(&se3::IDENTITY, [0.0; 3]), &[]);
+        assert!((d.ranges_m[0] - 5.0).abs() < 1e-6, "{}", d.ranges_m[0]);
+        assert_eq!(d.ranges_m[90], 0.0);
+        let p = polar_scan(&scan, 0, &se3::IDENTITY, [0.0; 3], VioHealth::Good);
+        assert_eq!(p.range_mm[0], 5004);
+        assert_eq!(p.range_mm[180], 0);
     }
 }

@@ -168,6 +168,8 @@ export interface FollowState {
   heightSetpointM: number | null;
   /** The set follow height was below the lowest allowed and is held there. */
   heightRaised: boolean;
+  /** The height flown is lowered under trees the pilot reports ahead (null when not). */
+  heightReason: HeightReason | null;
   /**
    * The shortest follow distance and orbit radius flown on the range the
    * follow has, whether the set one was shorter and is held at it, and why
@@ -249,6 +251,7 @@ export interface RawFollowState {
   distance_setpoint_m?: number | null;
   height_setpoint_m?: number | null;
   height_raised?: boolean;
+  height_reason?: string | null;
   standoff_min_m?: number | null;
   standoff_raised?: boolean;
   standoff_reason?: string | null;
@@ -354,6 +357,7 @@ export const EMPTY_FOLLOW_STATE: FollowState = {
   distanceSetpointM: null,
   heightSetpointM: null,
   heightRaised: false,
+  heightReason: null,
   standoffMinM: null,
   standoffRaised: false,
   standoffReason: null,
@@ -414,6 +418,7 @@ export function normalizeFollowState(raw: RawFollowState | null): FollowState {
     distanceSetpointM: num(raw.distance_setpoint_m),
     heightSetpointM: num(raw.height_setpoint_m),
     heightRaised: raw.height_raised === true,
+    heightReason: normalizeHeightReason(raw.height_reason),
     standoffMinM: num(raw.standoff_min_m),
     standoffRaised: raw.standoff_raised === true,
     standoffReason: raw.standoff_raised === true ? normalizeStandoffReason(raw.standoff_reason) : null,
@@ -521,6 +526,18 @@ const STANDOFF_REASONS: readonly StandoffReason[] = ["camera-range", "range-unkn
 /** A reason the agent names, or null for one this panel does not know. */
 export function normalizeStandoffReason(v: unknown): StandoffReason | null {
   return STANDOFF_REASONS.find((r) => r === v) ?? null;
+}
+
+/**
+ * Why the follow height flown is lower than the one set: `canopy` (under
+ * trees the pilot reports ahead) or `canopy_floor` (held at the lowest
+ * follow height, the trees lower still).
+ */
+export type HeightReason = "canopy" | "canopy_floor";
+
+/** A reason the agent names, or null for none or one this panel does not know. */
+export function normalizeHeightReason(v: unknown): HeightReason | null {
+  return v === "canopy" || v === "canopy_floor" ? v : null;
 }
 
 function num(v: unknown): number | null {

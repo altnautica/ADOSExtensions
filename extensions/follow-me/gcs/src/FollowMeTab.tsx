@@ -47,6 +47,7 @@ import {
   modeSummary,
   type FollowConfig,
   type FollowState,
+  type HeightReason,
   type StandoffReason,
 } from "./types";
 
@@ -59,6 +60,11 @@ const STANDOFF_REASON_KEYS: Record<StandoffReason, string> = {
   "range-unknown": "metrics.standoffRangeUnknown",
   "subject-standing": "metrics.standoffSubjectStanding",
   "closing-in": "metrics.standoffClosingIn",
+};
+
+const HEIGHT_REASON_KEYS: Record<HeightReason, string> = {
+  canopy: "metrics.heightCanopy",
+  canopy_floor: "metrics.heightCanopyFloor",
 };
 
 /** A distance or radius flown farther than set, with why. */
@@ -540,9 +546,11 @@ function MetricsSection({
       <MetricRow
         label={t("metrics.heightSetpoint")}
         value={
-          f?.heightRaised
-            ? `${meters(f.heightSetpointM)} · ${t("metrics.heightRaised")}`
-            : meters(f?.heightSetpointM ?? null)
+          f?.heightReason
+            ? `${meters(f.heightSetpointM)} · ${t(HEIGHT_REASON_KEYS[f.heightReason])}`
+            : f?.heightRaised
+              ? `${meters(f.heightSetpointM)} · ${t("metrics.heightRaised")}`
+              : meters(f?.heightSetpointM ?? null)
         }
         testId="fm-height-setpoint"
       />

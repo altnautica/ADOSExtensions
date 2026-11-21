@@ -101,7 +101,16 @@ then on the agent runs a 20 Hz loop:
      a terrain-following height of `follow_height_m` above the ground, never
      below 3.4 m (a 2 m subject, the rotors' 0.4 m reach and 1 m between
      them; a lower setting is flown at 3.4 m and read back as
-     `height_raised`);
+     `height_raised`). Under a canopy the height is lowered: the pilot
+     reports the leaves its leaning scans reach over the way to the subject
+     (the `flight.overhead` event to the lease holder, `fly_under_agl_m`:
+     the highest height whose swept band, the airframe's top plus 0.3 m,
+     stays under them), and the follow flies the highest height between
+     3.4 m and the one set that clears them, for 5 s after the last such
+     report or until the pilot reports clear air; when 3.4 m does not
+     clear them it holds 3.4 m and the pilot's brake keeps it out of the
+     leaves. Read back as `height_lowered` and `height_reason`
+     (`canopy`, `canopy_floor`);
    - the subject's position, with the error its range carries
      (`subject_sigma_m`, bounded so the distance the pilot's subject brake
      keeps stays 2 m inside the standoff), and the ring the pilot's planner searches for a
@@ -352,7 +361,9 @@ The other `follow.state` fields:
   frame's capture times `ts_ms` and `ts_sensor_ms`).
 - **Frame:** `frame`, `fc_local_ned`: every position above is in the flight
   controller's local NED.
-- **Height:** `agl_m`, `agl_source`, `height_raised`.
+- **Height:** `agl_m`, `agl_source`, `height_raised`, `height_lowered`,
+  `height_reason` (`canopy`: flown under leaves the pilot reports ahead;
+  `canopy_floor`: held at 3.4 m, the leaves lower still).
 - **Re-acquire:** `reacquire_mode`, `uncertain_mode`, `predictive_search`,
   `reacquire_remaining_s`, `search_budget_s`, `search_step`, `search_area`,
   `predicted_path_ne`, `vantage_ne`, `vantage_state`, `occluder`, `hold_ne`,

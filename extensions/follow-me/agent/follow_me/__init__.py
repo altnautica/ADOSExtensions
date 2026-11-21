@@ -65,6 +65,7 @@ from follow_me.fc_state import (
     Pose,
     Rangefinder,
 )
+from follow_me.canopy import OVERHEAD_TOPIC, CanopyHeight
 from follow_me.loop import FollowLoopMixin, Sighting
 from follow_me.motion import (
     GOAL_STATUS_TOPIC,
@@ -205,6 +206,9 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         # The shortest standoff flown on the range the follow has (see
         # follow_me.range_tier).
         self._range_tier = RangeTier()
+        # The follow height under leaves the pilot reports ahead (see
+        # follow_me.canopy).
+        self._canopy = CanopyHeight()
         # The arm-edge write of predictive_search, kept so it is not
         # collected before it runs.
         self._arm_reset_task: asyncio.Task | None = None
@@ -296,6 +300,12 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
             await ctx.events.subscribe(GOAL_STATUS_TOPIC, self._on_goal_status)
         except Exception as exc:  # noqa: BLE001
             ctx.log.warning("follow_me_goal_status_unavailable", reason=str(exc))
+        # The pilot's report of leaves overhead ahead, to the holder only.
+        # Without it the follow flies its set height.
+        try:
+            await ctx.events.subscribe(OVERHEAD_TOPIC, self._on_overhead)
+        except Exception as exc:  # noqa: BLE001
+            ctx.log.info("follow_me_overhead_unavailable", reason=str(exc))
         # The navigation extension's navigation state names the active EKF
         # source set, which decides the pilot's GNSS-denied cap with the GPS
         # fix. Optional; without it the boot set 1 and the GPS fix decide.
@@ -473,7 +483,15 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         # Flown no nearer than the range the follow has allows; the
         # configured values (and the stick nudges on them) are kept.
         self._range_tier.step(now, still=self._still.still)
-        return self._range_tier.apply_to(self._cfg)
+        # Flown under leaves the pilot reports ahead, never under the
+        # lowest follow height (see follow_me.canopy).
+        return self._canopy.apply_to(self._range_tier.apply_to(self._cfg), now)
+
+    def _on_overhead(self, payload: dict[str, Any]) -> None:
+        """The pilot's overhead report (``flight.overhead``) for our lease."""
+        if self._lease_id is None or str(payload.get("lease_id")) != str(self._lease_id):
+            return
+        self._canopy.on_overhead(payload, fc_state.monotonic())
 
     # -- detections --------------------------------------------------
 
