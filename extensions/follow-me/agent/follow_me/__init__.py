@@ -485,13 +485,22 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, FollowLoopMixin
         self._range_tier.step(now, still=self._still.still)
         # Flown under leaves the pilot reports ahead, never under the
         # lowest follow height (see follow_me.canopy).
-        return self._canopy.apply_to(self._range_tier.apply_to(self._cfg), now)
+        return self._canopy.apply_to(
+            self._range_tier.apply_to(self._cfg), now, self._pose_ne(now)
+        )
+
+    def _pose_ne(self, now: float) -> tuple[float, float] | None:
+        """The vehicle's local north, east while the position is fresh."""
+        if not self._pose.position.is_fresh(now):
+            return None
+        return (self._pose.north_m, self._pose.east_m)
 
     def _on_overhead(self, payload: dict[str, Any]) -> None:
         """The pilot's overhead report (``flight.overhead``) for our lease."""
         if self._lease_id is None or str(payload.get("lease_id")) != str(self._lease_id):
             return
-        self._canopy.on_overhead(payload, fc_state.monotonic())
+        now = fc_state.monotonic()
+        self._canopy.on_overhead(payload, now, self._pose_ne(now))
 
     # -- detections --------------------------------------------------
 

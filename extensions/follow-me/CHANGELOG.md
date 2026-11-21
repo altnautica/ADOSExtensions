@@ -8,7 +8,7 @@ uses independent semantic versioning per extension.
 
 ### Added
 
-- Follow-Me flies under a canopy. The pilot reports the leaves its leaning scans meet over the subject's path as the highest height that clears them (`flight.overhead`, `fly_under_agl_m`, from an agent whose pilot publishes `overhead_ahead`); the follow flies the highest height between the lowest follow height (3.4 m) and the one set that stays under them, for 5 s after the last such report or until the pilot reports clear air. When even 3.4 m does not clear them it holds 3.4 m. The read-back says so: `height_lowered` and `height_reason` (`canopy`, `canopy_floor`).
+- Follow-Me flies under a canopy. The pilot reports the leaves its leaning scans meet over the subject's path as the highest height that clears them (`flight.overhead`, `fly_under_agl_m`, from an agent whose pilot publishes `overhead_ahead`); the follow flies the highest height between the lowest follow height (3.4 m) and the one set that stays under them, for 5 s after the last such report. A report of nothing overhead that follows one of leaves is not taken as clear air: the lowered height holds until the copter has flown past the last overhead point by twice its reported distance ahead (at least 6 m). When even 3.4 m does not clear them it holds 3.4 m. The read-back says so: `height_lowered` and `height_reason` (`canopy`, `canopy_floor`).
 
 ## [0.6.0] - 2026-11-21
 

@@ -45,7 +45,7 @@ def test_leaves_below_the_floor_hold_the_floor_and_say_so() -> None:
     assert cfg.follow_height_reason == HEIGHT_CANOPY_FLOOR
 
 
-def test_a_report_holds_between_leans_and_clear_air_ends_it() -> None:
+def test_a_report_holds_between_leans() -> None:
     c = CanopyHeight()
     c.on_overhead({"fly_under_agl_m": 3.8}, 10.0)
     c.on_overhead({"fly_under_agl_m": 3.6}, 11.0)
@@ -54,9 +54,37 @@ def test_a_report_holds_between_leans_and_clear_air_ends_it() -> None:
     assert abs(c.apply_to(_cfg(), 12.0).follow_height_m - 3.6) < 1e-9
     # No report for the hold: back to the set height.
     assert c.apply_to(_cfg(), 12.0 + HOLD_S + 0.1).follow_height_m == 4.0
-    c.on_overhead({"fly_under_agl_m": 3.8}, 20.0)
-    c.on_overhead({"fly_under_agl_m": None}, 20.5)
-    assert c.apply_to(_cfg(), 20.6).follow_height_m == 4.0
+    # A null with nothing reported before is clear air.
+    c.on_overhead({"fly_under_agl_m": None}, 20.0)
+    assert c.apply_to(_cfg(), 20.1).follow_height_m == 4.0
+
+
+def test_a_null_after_leaves_holds_until_flown_past_them() -> None:
+    c = CanopyHeight()
+    # Leaves 4 m ahead along the way, reported at the origin.
+    c.on_overhead({"fly_under_agl_m": 3.6, "ahead_m": 4.0}, 10.0, (0.0, 0.0))
+    # The pilot forgets them in level flight (its returns lapse while it
+    # still reports): null, still under the crowns.
+    c.on_overhead({"fly_under_agl_m": None, "ahead_m": None}, 13.0, (5.0, 0.0))
+    # Long after the time hold, short of 4 + max(2 x 4, 6) = 12 m flown.
+    assert abs(c.apply_to(_cfg(), 40.0, (11.9, 0.0)).follow_height_m - 3.6) < 1e-9
+    # With no position known it holds too.
+    assert abs(c.apply_to(_cfg(), 40.0).follow_height_m - 3.6) < 1e-9
+    # Past the last overhead point by twice its distance: back up.
+    assert c.apply_to(_cfg(), 40.0, (12.0, 0.0)).follow_height_m == 4.0
+    assert c.apply_to(_cfg(), 40.0, (0.0, 0.0)).follow_height_m == 4.0
+
+
+def test_a_near_overhead_point_is_held_for_at_least_six_metres_past() -> None:
+    c = CanopyHeight()
+    c.on_overhead({"fly_under_agl_m": 3.7, "ahead_m": 0.5}, 10.0, (0.0, 0.0))
+    c.on_overhead({"fly_under_agl_m": None}, 10.2, (0.2, 0.0))
+    assert abs(c.apply_to(_cfg(), 30.0, (0.0, 6.4)).follow_height_m - 3.7) < 1e-9
+    assert c.apply_to(_cfg(), 30.0, (0.0, 6.5)).follow_height_m == 4.0
+    # New leaves end the post-null hold and start a fresh report.
+    c.on_overhead({"fly_under_agl_m": 3.9, "ahead_m": 2.0}, 31.0, (0.0, 7.0))
+    assert abs(c.apply_to(_cfg(), 31.1, (0.0, 7.0)).follow_height_m - 3.9) < 1e-9
+    assert c.apply_to(_cfg(), 31.0 + HOLD_S + 0.1, (0.0, 7.0)).follow_height_m == 4.0
 
 
 def test_a_malformed_report_changes_nothing() -> None:
