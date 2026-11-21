@@ -144,6 +144,16 @@ fn the_reason_falls_back_to_the_imu_feed() {
         health_reason(FlowEkf::Disagree, corridor, starved),
         Some(FlowEkf::REASON)
     );
+    // A wide sigma is informational: the IMU feed's reason outranks it.
+    let wide = Some(PoseReason::PoseSigmaWide);
+    assert_eq!(
+        health_reason(FlowEkf::Agree, wide, starved),
+        Some("imu_feed_starved")
+    );
+    assert_eq!(
+        health_reason(FlowEkf::Agree, wide, None),
+        Some("pose_sigma_wide")
+    );
     assert_eq!(health_reason(FlowEkf::Agree, None, None), None);
     for feed in [
         ImuFeed::AttitudeStandIn,

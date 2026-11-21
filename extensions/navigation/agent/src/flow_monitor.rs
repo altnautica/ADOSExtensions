@@ -91,7 +91,10 @@ pub const NAV_REASONS: [&str; 12] = [
 /// 2. the publisher's own estimator reason (`corridor_unmeasured`,
 ///    `flow_disagrees`);
 /// 3. the publisher's FC IMU feed (`heading_unconfirmed`, or
-///    `imu_feed_<reason>`: `attitude_stand_in`, `stalled`, `starved`).
+///    `imu_feed_<reason>`: `attitude_stand_in`, `stalled`, `starved`);
+/// 4. the publisher's routine reasons (`corridor_flow`,
+///    `corridor_flow_unjudged`, `scan_unmatched`, `map_warmup`,
+///    `pose_sigma_wide`).
 ///
 /// `None` while there is none.
 pub fn health_reason(
@@ -101,7 +104,9 @@ pub fn health_reason(
 ) -> Option<&'static str> {
     match monitor {
         FlowEkf::Disagree | FlowEkf::Lost => Some(FlowEkf::REASON),
-        // A routine corridor or warm-up reason yields to the IMU feed's.
+        // A routine corridor or warm-up reason, or a wide sigma (honest
+        // along a corridor, for the operator), yields to the IMU feed's,
+        // which the pilot reads as unverifying.
         FlowEkf::Agree => {
             let routine = |r: &PoseReason| {
                 matches!(
@@ -110,6 +115,7 @@ pub fn health_reason(
                         | PoseReason::CorridorFlowUnjudged
                         | PoseReason::ScanUnmatched
                         | PoseReason::MapWarmup
+                        | PoseReason::PoseSigmaWide
                 )
             };
             pose.filter(|r| !routine(r))

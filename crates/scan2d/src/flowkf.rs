@@ -44,8 +44,9 @@
 //! scale's uncertainty through their covariance, so it grows with the way
 //! flown on a scale no pinned stretch or acceleration has taught, plus how
 //! far the pose has moved from the fused filter since the scans last
-//! pinned; while it is stalled, the reference's own error plus how far the
-//! pose had moved from it on the flow.
+//! pinned; while it is stalled, that sigma at the stall plus what the
+//! reference's own error, and the pose's distance from it, have grown by
+//! since.
 //!
 //! Limits.
 //! - Along a bare corridor a step in the accelerometer's bias and a flow
@@ -353,6 +354,17 @@ pub struct Judgement {
     pub alive: bool,
 }
 
+/// The guard at a stall: the fused filter's position covariance and the
+/// pose's distance from it, the reference's position covariance and the
+/// pose's distance from it, attitude frame.
+#[derive(Debug, Clone, Copy)]
+struct StallBase {
+    fused: Matrix2<f64>,
+    fused_drift: Vector2<f64>,
+    reference: Matrix2<f64>,
+    off_ref: Vector2<f64>,
+}
+
 /// The two filters and the recent flow ([`crate::frontend`]'s check of a
 /// measured velocity along a corridor).
 #[derive(Debug, Clone)]
@@ -370,6 +382,8 @@ pub struct FlowGuard {
     flow_learnt: usize,
     samples: VecDeque<Sample>,
     stalled: bool,
+    /// What the newest stall started from ([`Self::sigma_along`]).
+    stall_base: Option<StallBase>,
     /// The fused filter's scale and its variance when the scans last
     /// pinned every direction (else the prior): what the reference tests
     /// take the flow's scale for, as a fade the fused filter follows into
@@ -401,6 +415,7 @@ impl Default for FlowGuard {
             flow_learnt: 0,
             samples: VecDeque::new(),
             stalled: false,
+            stall_base: None,
             pin: (1.0, SCALE_PRIOR * SCALE_PRIOR),
             height_m: None,
             pose: Vector2::zeros(),
@@ -636,6 +651,15 @@ impl FlowGuard {
                 self.fused.p[(K, K)] = var;
             }
         }
+        if stalled && !self.stalled {
+            let block = |kf: &Kf| kf.p.fixed_view::<2, 2>(0, 0).into_owned();
+            self.stall_base = Some(StallBase {
+                fused: block(&self.fused),
+                fused_drift: self.pose - self.fused.position() - self.fused_offset,
+                reference: block(&self.reference),
+                off_ref: self.pose - self.reference.position() - self.pos_offset,
+            });
+        }
         self.stalled = stalled;
     }
 
@@ -662,12 +686,22 @@ impl FlowGuard {
     /// teaches the scale), plus how far the pose has moved from the fused
     /// filter since the scans last pinned every direction (the pose rides
     /// the flow's recent mean, the filter the accelerometer between
-    /// samples). While the flow is stalled, the reference's own error plus
-    /// how far the pose moved from it on the flow before.
+    /// samples). While the flow is stalled, that sigma at the stall, plus
+    /// what the reference's own error and the pose's distance from it have
+    /// grown by since (not the reference's whole error: without a rest its
+    /// bias is barely known, and a stall late in a long corridor would read
+    /// hundreds of metres it never flew).
     pub fn sigma_along(&self, u: &Vector2<f64>) -> f64 {
         if self.stalled {
-            let drift = u.dot(&(self.pose - self.reference.position() - self.pos_offset));
-            return (self.reference.var_along(0, u).max(0.0) + drift * drift).sqrt();
+            let off_ref = u.dot(&(self.pose - self.reference.position() - self.pos_offset));
+            let ref_var = self.reference.var_along(0, u).max(0.0);
+            let Some(base) = &self.stall_base else {
+                return (ref_var + off_ref * off_ref).sqrt();
+            };
+            let at_stall = u.dot(&(base.fused * u)).max(0.0) + u.dot(&base.fused_drift).powi(2);
+            let grown = (ref_var - u.dot(&(base.reference * u))).max(0.0);
+            let moved = off_ref - u.dot(&base.off_ref);
+            return (at_stall + grown + moved * moved).sqrt();
         }
         let drift = u.dot(&(self.pose - self.fused.position() - self.fused_offset));
         (self.fused.var_along(0, u).max(0.0) + drift * drift)
