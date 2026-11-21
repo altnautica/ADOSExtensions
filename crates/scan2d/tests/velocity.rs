@@ -611,3 +611,37 @@ fn a_flow_stalling_midway_down_the_corridor_leaves_it_unmeasured() {
         since(lost)
     );
 }
+
+/// The walker stops 14 m down the corridor and hovers 15 s on flow as noisy
+/// as a dusty floor reads (0.85 m/s a sample on each axis). Single noisy
+/// samples falling to zero from a noisy high are no stalled sensor: the
+/// hover stays measured.
+#[test]
+fn a_noisy_hover_in_the_corridor_stays_measured() {
+    let (world, _) = bare_corridor();
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(1.5, 1.0)
+        .line(14.0)
+        .speed_to(0.0, 1.0)
+        .wait(15.0);
+    let (scans, imu, _) = walk(&world, &path, C1, 11);
+    let mut rng = Rng::new(17);
+    let mut vel = flow(&path, 1.0, 0.0, 5);
+    for s in vel.iter_mut() {
+        s.v = [s.v[0] + 0.85 * rng.gauss(), s.v[1] + 0.85 * rng.gauss()];
+    }
+    let est = replay(&scans, &imu, &vel);
+    let t_stop = 1.0 + 1.0 + 14.0 / 1.5 + 1.0;
+    let hover: Vec<_> = est
+        .iter()
+        .filter(|p| p.t_ns as f64 * 1e-9 > t_stop + 1.0)
+        .collect();
+    let lost = hover
+        .iter()
+        .filter(|p| p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S)
+        .count();
+    eprintln!("noisy hover: {lost} of {} hover scans lost", hover.len());
+    assert!(hover.len() > 100);
+    assert_eq!(lost, 0, "the noisy hover is never lost");
+}
