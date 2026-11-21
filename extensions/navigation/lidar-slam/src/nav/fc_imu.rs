@@ -53,6 +53,7 @@ use ados_mapping_pose::geodesy::{R_ENU_NED, R_FRD_FLU};
 use ados_mapping_pose::mavlink_msg::RawImu;
 use ados_mapping_pose::{se3, PoseProvider};
 use ados_mapping_protocol::capture::{ImuFeedReason, ImuFeedState, VioHealth};
+use ados_protocol::simclock::Clock;
 
 /// The `navigation.lidar.imu` id that selects this stream.
 pub const FC_IMU_ID: &str = "fc";
