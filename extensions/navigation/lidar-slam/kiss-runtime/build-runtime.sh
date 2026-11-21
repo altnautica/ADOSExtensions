@@ -34,6 +34,8 @@
 # `build-runtime.sh --arch <leg arch>` natively and stages the zip as the
 # asset named in scripts/navigation-payloads.tsv.
 set -euo pipefail
+# One collation and encoding for every sort and tool, whatever the host's.
+export LC_ALL=C
 
 # python-build-standalone release and its install_only_stripped archives.
 PBS_TAG="20261110"
