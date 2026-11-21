@@ -281,6 +281,9 @@ struct FeedInner {
     ned: VecDeque<(u64, [f64; 2])>,
     /// Each attitude's heading, the last [`crate::pose::TRACK_HISTORY_NS`].
     headings: VecDeque<Heading>,
+    /// Each attitude on the host clock, `(host ns, R_ned_frd)`, the last
+    /// [`ATTITUDE_HISTORY_NS`] ([`FcEkfPose::attitudes_around`]).
+    attitudes: VecDeque<(u64, [f64; 9])>,
     /// Newest downward ground range ([`fc_flow::ground_range`]): FC boot ms,
     /// metres.
     range: Option<(u32, f64)>,
@@ -312,6 +315,8 @@ struct Heading {
 
 /// The longest gap between attitudes their rates are integrated across.
 const TURN_MAX_STEP_NS: u64 = 250_000_000;
+/// How long each attitude is kept for [`FcEkfPose::attitudes_around`], ns.
+const ATTITUDE_HISTORY_NS: u64 = 1_000_000_000;
 
 impl Heading {
     /// The next attitude's heading: `yaw` (within ±π) unwrapped onto this
@@ -415,6 +420,20 @@ impl FcEkfPose {
     /// heading source (the compass).
     pub fn attitude(&self) -> Option<(u64, [f64; 9])> {
         self.inner.lock().host_attitude()
+    }
+
+    /// The FC attitudes on the host clock, `(host ns, R_ned_frd)`, oldest
+    /// first, from host `from_ns` to `to_ns` plus the one either side, so a
+    /// time inside the span lies between two of them when the feed covers
+    /// it. The last second is kept.
+    pub fn attitudes_around(&self, from_ns: u64, to_ns: u64) -> Vec<(u64, [f64; 9])> {
+        let g = self.inner.lock();
+        let a = g
+            .attitudes
+            .partition_point(|&(t, _)| t < from_ns)
+            .saturating_sub(1);
+        let b = (g.attitudes.partition_point(|&(t, _)| t <= to_ns) + 1).min(g.attitudes.len());
+        g.attitudes.range(a..b).copied().collect()
     }
 
     /// Whether the autopilot's last `HEARTBEAT` said armed; `None` before
@@ -536,6 +555,16 @@ impl FcEkfPose {
                         Some(_) => None,
                     };
                     g.headings.extend(next);
+                    if g.attitudes.back().is_none_or(|&(t, _)| t < t_ns) {
+                        g.attitudes.push_back((t_ns, r));
+                    }
+                    while g
+                        .attitudes
+                        .front()
+                        .is_some_and(|&(t, _)| t + ATTITUDE_HISTORY_NS < t_ns)
+                    {
+                        g.attitudes.pop_front();
+                    }
                     while g
                         .headings
                         .front()
@@ -1315,6 +1344,24 @@ mod tests {
             deg(3_000).is_none(),
             "past the newest by more than the extrapolation"
         );
+    }
+
+    /// The attitudes around a span are the ones inside it plus one either
+    /// side, each at the host time the FC reported it.
+    #[test]
+    fn the_attitudes_around_a_span_bracket_it() {
+        let p = FcEkfPose::new();
+        for k in 0..10u32 {
+            let ms = 1_000 + 20 * k;
+            p.on_frame(&att(ms, [1.0, 0.0, 0.0, 0.0]), ms as u64 * 1_000_000);
+        }
+        let ts: Vec<u64> = p
+            .attitudes_around(1_050_000_000, 1_090_000_000)
+            .iter()
+            .map(|&(t, _)| t / 1_000_000)
+            .collect();
+        assert_eq!(ts, [1_040, 1_060, 1_080, 1_100]);
+        assert_eq!(p.attitudes_around(5_000_000_000, 5_100_000_000).len(), 1);
     }
 
     /// The FC's turn is its heading rate integrated: a 7° EKF yaw reset at

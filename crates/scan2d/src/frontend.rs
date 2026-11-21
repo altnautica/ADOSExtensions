@@ -924,6 +924,40 @@ impl LocalSlam {
         }
     }
 
+    /// Whether the measured velocity up to `to`, along the loose directions
+    /// `loose` (local frame, samples turned by `heading`), fell into its
+    /// trailing run under [`FLOW_STALL_MPS`] from over
+    /// [`FLOW_STALL_FROM_MPS`] faster than [`FLOW_MAX_DECEL_MPS2`]: a flow
+    /// sensor losing the ground, not a vehicle braking.
+    fn flow_dropped_abruptly(
+        &self,
+        loose: &Matrix2<f64>,
+        heading: &Rotation2<f64>,
+        to: u64,
+    ) -> bool {
+        // The first sample of the trailing low run, and whether the walk
+        // back is still inside it.
+        let (mut run_from, mut in_run) = (None, true);
+        for &(ti, v) in self.measured.iter().rev().filter(|&&(ti, _)| ti <= to) {
+            let s = (loose * (heading * v)).norm();
+            if in_run {
+                if s < FLOW_STALL_MPS {
+                    run_from = Some(ti);
+                    continue;
+                }
+                in_run = false;
+            }
+            let Some(tl) = run_from else {
+                return false;
+            };
+            let dt = tl.saturating_sub(ti) as f64 * 1e-9;
+            if s > FLOW_STALL_FROM_MPS && s - FLOW_STALL_MPS > FLOW_MAX_DECEL_MPS2 * dt {
+                return true;
+            }
+        }
+        false
+    }
+
     /// The mean measured velocity over `(from, to]`, else the newest no more
     /// than [`MAX_VELOCITY_AGE_NS`] before `to`.
     fn measured_velocity(&self, from: u64, to: u64) -> Option<Vector2<f64>> {
@@ -1362,10 +1396,12 @@ impl LocalSlam {
         let heading = Rotation2::new(p1.th + 0.5 * dyaw);
         let raw = self.measured_velocity(t1, t + span_ns).map(|m| heading * m);
         // Along the directions the matches leave loose they cannot judge
-        // the flow; one that has read near zero there for longer than a
-        // stop explains while the matched chord still moves has stalled.
-        // It stays unfollowed until the scans pin every direction again or
-        // the chord, matched (not coasting a degenerate stretch), rests.
+        // the flow. One that falls there to near zero faster than braking
+        // explains (its own samples, [`Self::flow_dropped_abruptly`]), or
+        // that has read near zero for longer than a stop explains while the
+        // matched chord still moves, has stalled. It stays unfollowed until
+        // the scans pin every direction again or the chord, matched (not
+        // coasting a degenerate stretch), rests.
         let loose = self
             .pinned
             .map(|p| Matrix2::identity() - p)
@@ -1380,8 +1416,10 @@ impl LocalSlam {
                     !(self.unobserved.is_none() && lc < FLOW_STALL_MPS)
                 } else {
                     let stop_s = lc / FLOW_MAX_DECEL_MPS2 + VELOCITY_WINDOW_NS as f64 * 1e-9;
-                    lc > FLOW_STALL_FROM_MPS
-                        && low_since.is_some_and(|s| t.saturating_sub(s) as f64 * 1e-9 >= stop_s)
+                    (low && self.flow_dropped_abruptly(&l, &heading, t + span_ns))
+                        || (lc > FLOW_STALL_FROM_MPS
+                            && low_since
+                                .is_some_and(|s| t.saturating_sub(s) as f64 * 1e-9 >= stop_s))
                 };
                 (stalled, low_since)
             }

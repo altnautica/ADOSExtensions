@@ -44,9 +44,7 @@ pub const NAV_POLL: Duration = Duration::from_millis(10);
 pub const TRACK_EVERY: Duration = Duration::from_millis(100);
 /// The live-map tick.
 pub const SLOW_EVERY: Duration = Duration::from_secs(1);
-/// The FC attitude levels a scan only within this of the scan's stamp (both
 /// on the host clock).
-const SCAN_ATTITUDE_MAX_AGE_NS: u64 = 200_000_000;
 
 /// A request for the whole sweep cloud (packed triples, voxel edge, seq).
 pub type WholeSweep = oneshot::Sender<(Vec<u8>, f32, u64)>;
@@ -191,16 +189,11 @@ impl Lane {
         }
         let mount = self.lidar_mount(&scan.sensor_id);
         let blocked = self.blocked_azimuth_deg(&scan.sensor_id);
-        // The FC attitude levels the 3D returns for the band cut; one older
-        // than a few attitude frames is no attitude (nothing is cut).
-        let attitude = self
-            .fc
-            .attitude()
-            .filter(|(t_ns, _)| t_ns.abs_diff(scan.t_ns) <= SCAN_ATTITUDE_MAX_AGE_NS)
-            .map(|(_, r)| r);
-        let body = self
-            .nav
-            .body_scan(&scan, &mount, &blocked, attitude.as_ref());
+        // The FC attitudes around the scan level each 3D return at its
+        // capture for the band cut; a return none bracket is not cut.
+        let end = scan.t_ns + u64::from(scan.t_offset_ns.iter().copied().max().unwrap_or(0));
+        let attitudes = self.fc.attitudes_around(scan.t_ns, end);
+        let body = self.nav.body_scan(&scan, &mount, &blocked, &attitudes);
         self.out.scan(&body).await;
         self.scan_seq += 1;
         if self.capture.recording(std::time::Instant::now()) {

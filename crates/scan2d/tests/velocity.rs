@@ -555,3 +555,59 @@ fn a_hard_brake_with_sound_flow_stays_measured() {
         end.x
     );
 }
+
+/// Down the 2 m corridor at 1.5 m/s on sound flow, the flow sensor loses
+/// the ground 9 s in and reads zero from then on (its quality still over
+/// the floor). Followed, the zero would decay the chord inside its window
+/// before a stop's time ran out, and the pose froze unflagged. The drop is
+/// faster than braking explains: the corridor goes unmeasured at once,
+/// named after 0.3 s and lost after 1 s.
+#[test]
+fn a_flow_stalling_midway_down_the_corridor_leaves_it_unmeasured() {
+    let (world, _) = bare_corridor();
+    let path = Path::new(0.0, 0.0, 0.0)
+        .wait(1.0)
+        .speed_to(1.5, 1.0)
+        .line(20.0)
+        .speed_to(0.0, 1.0)
+        .wait(1.0);
+    let (scans, imu, truth) = walk(&world, &path, C1, 11);
+    let stall_ns = 9_000_000_000u64;
+    let vel: Vec<VelocitySample> = flow(&path, 1.0, 0.0, 5)
+        .into_iter()
+        .map(|s| VelocitySample {
+            v: if s.t_ns >= stall_ns { [0.0, 0.0] } else { s.v },
+            ..s
+        })
+        .collect();
+    let est = replay(&scans, &imu, &vel);
+    let since = |i: usize| (est[i].t_ns as f64 - stall_ns as f64) * 1e-9;
+    assert!(
+        est.iter()
+            .filter(|p| p.t_ns < stall_ns)
+            .all(|p| p.unmeasured_free_s == 0.0),
+        "measured while the flow is sound"
+    );
+    let named = est
+        .iter()
+        .position(|p| p.unmeasured_free_s >= 0.3)
+        .expect("the stalled stretch is named");
+    let lost = est
+        .iter()
+        .position(|p| p.unmeasured_free_s >= ados_scan2d::UNMEASURED_FREE_LOST_S)
+        .expect("the stalled stretch loses the pose");
+    let off = (est[lost].x - truth[lost].x).abs();
+    eprintln!(
+        "midway stall: named {:.2} s after, lost {:.2} s after, {off:.2} m off",
+        since(named),
+        since(lost)
+    );
+    // One scan to see it, 0.3 s to name it, a stop from 1.5 m/s at most.
+    let bound = 0.1 + 0.3 + 1.5 / 8.0 + 0.1;
+    assert!(since(named) <= bound, "named {:.2} s after", since(named));
+    assert!(
+        since(lost) <= bound + 0.7,
+        "lost {:.2} s after",
+        since(lost)
+    );
+}
