@@ -19,7 +19,10 @@
 //! `flow_disagrees` (the pose publisher's own), else the publisher's FC IMU
 //! feed (`heading_unconfirmed`, `imu_feed_<reason>`). `pose_sigma_m` is
 //! the fresh pose's own horizontal one-sigma uncertainty, metres (along a
-//! corridor its along-track sigma), `null` when the publisher gives none.
+//! corridor its along-track sigma), `null` when the publisher gives none
+//! or the pose is lost: a lost pose is not flown on, and its sigma (the
+//! accelerometer's drift since a stall, tens to hundreds of metres) is not
+//! for a surface to show.
 
 use rmpv::Value;
 
@@ -72,7 +75,12 @@ impl NavState {
                 Value::from("health_reason"),
                 self.health_reason.map_or(Value::Nil, Value::from),
             ),
-            (Value::from("pose_sigma_m"), f(self.pose_sigma_m)),
+            (
+                Value::from("pose_sigma_m"),
+                f(self
+                    .pose_sigma_m
+                    .filter(|_| self.extnav_health != Some(ExtnavHealth::Lost))),
+            ),
         ])
     }
 }
@@ -193,6 +201,15 @@ mod tests {
         assert_eq!(field(&v, "pose_sigma_m").as_f64(), Some(2.5));
         let Value::Map(e) = &v else { unreachable!() };
         assert_eq!(e.len(), 11);
+        // A lost pose's sigma is not published.
+        let lost = NavState {
+            extnav_health: Some(ExtnavHealth::Lost),
+            pose_sigma_m: Some(187.0),
+            ..s.clone()
+        }
+        .to_value();
+        assert!(field(&lost, "pose_sigma_m").is_nil());
+        assert_eq!(field(&lost, "extnav_health").as_str(), Some("lost"));
     }
 
     #[test]
