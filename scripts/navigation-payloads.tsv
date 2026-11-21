@@ -38,10 +38,12 @@ navigation-librealsense2-aarch64-linux.so       lib/aarch64-linux/librealsense2.
 navigation-librealsense2-x86_64-linux.so        lib/x86_64-linux/librealsense2.so             x86_64-linux  drone,visor
 navigation-librealsense2-LICENSE-aarch64-linux  lib/aarch64-linux/LICENSE-librealsense2.txt   aarch64-linux drone,visor
 navigation-librealsense2-LICENSE-x86_64-linux   lib/x86_64-linux/LICENSE-librealsense2.txt    x86_64-linux  drone,visor
-# uv runs the on-device `uv sync --frozen` of the KISS-ICP odometry
-# environment; the release workflow stages the pinned, checksum-verified
-# musl build and its MIT licence.
-navigation-uv-aarch64-linux                  bin/aarch64-linux/uv                            aarch64-linux drone,visor
-navigation-uv-x86_64-linux                   bin/x86_64-linux/uv                             x86_64-linux  drone,visor
-navigation-uv-LICENSE-aarch64-linux          bin/aarch64-linux/LICENSE-uv.txt                aarch64-linux drone,visor
-navigation-uv-LICENSE-x86_64-linux           bin/x86_64-linux/LICENSE-uv.txt                 x86_64-linux  drone,visor
+#   extensions/navigation/lidar-slam/kiss-runtime/build-runtime.sh --arch <arch> --out <dir>
+#     -> <dir>/kiss-icp-runtime-<arch>-linux.zip, the KISS-ICP runtime: a
+#        pinned python-build-standalone CPython with the wheels
+#        lidar-slam/python/kiss_icp_live/uv.lock pins (binary only,
+#        manylinux_2_28) and their licences; every leg, natively. The
+#        manifest entry carries `unpack: zip`, so the host unpacks it into
+#        the directory at the path below.
+navigation-kiss-icp-runtime-aarch64-linux.zip  lib/aarch64-linux/kiss-icp-runtime  aarch64-linux drone,visor
+navigation-kiss-icp-runtime-x86_64-linux.zip   lib/x86_64-linux/kiss-icp-runtime   x86_64-linux  drone,visor

@@ -261,9 +261,27 @@ release payloads with their licence texts. The Livox SDK2 library builds on
 every release leg (x86_64-linux and aarch64-linux) against glibc 2.28
 (`lidar-slam/livox/build-sdk2.sh`); basalt-ados builds for x86_64-linux only
 (`lidar-slam/basalt/README.md`). The LiDAR service links glibc dynamically so
-it can load the Livox library. The
-KISS-ICP odometry environment is built on the device by `uv sync --frozen` on
-the first LiDAR start, which needs network once.
+it can load the Livox library.
+
+KISS-ICP runtime: the 3D LiDAR odometry runs on a prebuilt runtime the
+release ships per arch (`lidar-slam/kiss-runtime/build-runtime.sh`): a
+python-build-standalone CPython pinned by sha256 whose own site-packages hold
+the wheels `lidar-slam/python/kiss_icp_live/uv.lock` pins (binary only,
+manylinux_2_28, so glibc 2.28 and newer), with their licences in
+`LICENSES.txt` (CPython PSF-2.0, kiss-icp MIT, numpy and scipy BSD-3). The
+host unpacks it into `lib/<arch>-linux/kiss-icp-runtime`
+(`navigation.lidar.runtime`), inside the install tree the plugin may execute
+from, so the odometry needs no network and writes nothing there; the child
+runs `-s -E -B` with one BLAS thread. A runtime tree writable by group or
+others, or owned by another user, is refused and the status says why
+(`pose_note` in `GET /navigation/status`). Without a runtime (a developer
+checkout), `uv sync --frozen` builds the environment in the data dir with the
+`uv` named by `navigation.lidar.uv` (default: `uv` on `PATH`), which needs the
+package index; `pose_note` names that fallback. To measure the odometry on a
+synthetic Mid-360-like stream (20 000 points per scan at 10 Hz):
+`python3 lidar-slam/kiss-runtime/stream_check.py --python <runtime>/bin/python3
+--project lidar-slam/python/kiss_icp_live --seconds 30` prints the scans
+answered, the reply latency and the child's memory and CPU.
 
 ## Public docs
 

@@ -123,10 +123,22 @@ impl Run {
             .clone()
             .unwrap_or_else(std::env::temp_dir)
             .join("navigation");
+        let mut pose_note = None;
         let pose = crate::providers::wanted(&config, profile, rig.as_ref()).and_then(|want| {
-            crate::providers::start(want, &config, rig.as_ref(), &work_dir)
-                .map_err(|why| tracing::warn!(wanted = ?want, reason = %why, "navigation_pose_provider_unavailable"))
-                .ok()
+            match crate::providers::start(want, &config, rig.as_ref(), &work_dir) {
+                Ok(started) => {
+                    if let Some(note) = &started.note {
+                        tracing::warn!(wanted = ?want, note = %note, "navigation_pose_provider_fallback");
+                    }
+                    pose_note = started.note;
+                    Some(started.provider)
+                }
+                Err(why) => {
+                    tracing::warn!(wanted = ?want, reason = %why, "navigation_pose_provider_unavailable");
+                    pose_note = Some(why);
+                    None
+                }
+            }
         });
         let cancel = Shutdown::new();
         let (bus_tx, bus_rx) = mpsc::channel(1024);
@@ -156,6 +168,7 @@ impl Run {
         });
         let voxfeed = start_voxfeed(&config, lidar_rx.is_some(), lidar_planar);
         feeds.shared.reset_run();
+        feeds.shared.view.lock().pose_note = pose_note;
         let deps = LaneDeps {
             settings: nav_settings(&config),
             cfg: config.clone(),

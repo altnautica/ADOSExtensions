@@ -1,7 +1,7 @@
 //! Building a run's pose provider and LiDAR source from the config and the
 //! rig.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ados_capture_contract::{LidarModelPattern, Rig};
@@ -11,7 +11,7 @@ use ados_mapping_protocol::capture::PoseSource;
 
 use crate::install_path;
 use crate::lidar_source::{self, LidarRunner};
-use crate::pose::lidar::{kiss_config, Launcher, LidarPose, LidarPoseConfig};
+use crate::pose::lidar::{kiss_config, runtime, LidarPose, LidarPoseConfig};
 use crate::pose::planar::{PlanarLidarConfig, PlanarLidarPose};
 use crate::pose::vio::{VioConfig, VioPose};
 use crate::settings::{resolve_pose_provider, NavConfig};
@@ -27,15 +27,24 @@ pub fn wanted(cfg: &NavConfig, profile: &str, rig: Option<&Rig>) -> Option<PoseS
     resolve_pose_provider(cfg.pose_provider, profile, stereo, lidar_imu)
 }
 
+/// A started pose provider, with why it runs a fallback when it does.
+pub struct Started {
+    pub provider: Arc<dyn PoseProvider>,
+    /// For the status: set when the provider runs other than as released (the
+    /// KISS-ICP developer fallback).
+    pub note: Option<String>,
+}
+
 /// Start the provider `want` names; why it could not start otherwise (no
-/// rig, a missing binary, no such LiDAR). Navigation has no fallback pose:
-/// the flight controller's own EKF is its own fallback source set.
+/// rig, a missing binary, no such LiDAR, a refused KISS-ICP runtime).
+/// Navigation has no fallback pose: the flight controller's own EKF is its
+/// own fallback source set.
 pub fn start(
     want: PoseSource,
     cfg: &NavConfig,
     rig: Option<&Rig>,
     work_dir: &Path,
-) -> Result<Arc<dyn PoseProvider>, String> {
+) -> Result<Started, String> {
     let rig = rig.ok_or("no rig document")?;
     match want {
         PoseSource::Vio => VioPose::spawn(VioConfig {
@@ -47,7 +56,10 @@ pub fn start(
             imu_id: cfg.vio.imu.clone(),
             work_dir: work_dir.join("vio"),
         })
-        .map(|v| Arc::new(v) as Arc<dyn PoseProvider>)
+        .map(|v| Started {
+            provider: Arc::new(v),
+            note: None,
+        })
         .map_err(|e| e.to_string()),
         PoseSource::Lidar => lidar_pose(cfg, rig, work_dir),
         other => Err(format!("{other:?} is not a navigation pose provider")),
@@ -56,11 +68,7 @@ pub fn start(
 
 /// LiDAR odometry for the rig's configured LiDAR, picked by its scan pattern:
 /// 2D scan matching for a planar LiDAR, KISS-ICP for a 3D one.
-fn lidar_pose(
-    cfg: &NavConfig,
-    rig: &Rig,
-    work_dir: &Path,
-) -> Result<Arc<dyn PoseProvider>, String> {
+fn lidar_pose(cfg: &NavConfig, rig: &Rig, work_dir: &Path) -> Result<Started, String> {
     let id = &cfg.lidar.lidar_id;
     let (_, model) = ados_mapping_pose::rig::lidar_sensor(rig, id)
         .ok_or_else(|| format!("rig has no lidar sensor `{id}` with a scan model"))?;
@@ -70,18 +78,32 @@ fn lidar_pose(
             lidar_id: id.clone(),
             imu_id: cfg.lidar.imu.clone(),
         })
-        .map(|p| Arc::new(p) as Arc<dyn PoseProvider>)
+        .map(|p| Started {
+            provider: Arc::new(p),
+            note: None,
+        })
         .map_err(|e| e.to_string()),
         LidarModelPattern::Solid | LidarModelPattern::Spinning => {
+            // A bare `uv` is looked up on PATH; a path is install-relative.
+            let uv = if cfg.lidar.uv.contains('/') {
+                install_path(&cfg.lidar.uv)
+            } else {
+                PathBuf::from(&cfg.lidar.uv)
+            };
+            let resolved = runtime::resolve(&install_path(&cfg.lidar.runtime), &uv)
+                .map_err(|e| e.to_string())?;
             LidarPose::spawn(LidarPoseConfig {
-                launcher: Launcher::Uv(install_path(&cfg.lidar.uv)),
+                launcher: resolved.launcher,
                 project_dir: install_path(&cfg.lidar.project_dir),
                 rig: rig.clone(),
                 lidar_id: id.clone(),
                 work_dir: work_dir.join("lidar"),
                 kiss: kiss_config(model),
             })
-            .map(|p| Arc::new(p) as Arc<dyn PoseProvider>)
+            .map(|p| Started {
+                provider: Arc::new(p),
+                note: resolved.note,
+            })
             .map_err(|e| e.to_string())
         }
     }

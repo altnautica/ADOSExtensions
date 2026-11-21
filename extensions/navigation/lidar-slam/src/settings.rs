@@ -163,8 +163,12 @@ pub struct LidarSettings {
     pub lidar_id: String,
     /// The rig IMU the planar scan matcher levels scans with.
     pub imu: String,
-    /// The `uv` binary that provisions the pinned 3D odometry project
-    /// (relative to the install directory; the release ships it as a payload).
+    /// The prebuilt KISS-ICP runtime the 3D odometry runs on (relative to the
+    /// install directory; the release ships it as an unpacked payload).
+    pub runtime: String,
+    /// The developer fallback without a runtime: the `uv` that provisions the
+    /// pinned 3D odometry project into the data dir. A bare name is looked up
+    /// on `PATH`; a path is relative to the install directory.
     pub uv: String,
     /// The 3D odometry project directory (relative to the install directory).
     pub project_dir: String,
@@ -177,7 +181,8 @@ impl Default for LidarSettings {
         Self {
             lidar_id: "lidar0".into(),
             imu: "imu0".into(),
-            uv: format!("bin/{}-linux/uv", std::env::consts::ARCH),
+            runtime: format!("lib/{}-linux/kiss-icp-runtime", std::env::consts::ARCH),
+            uv: "uv".into(),
             project_dir: "lidar-slam/python/kiss_icp_live".into(),
             rplidar: RplidarSettings::default(),
             livox: LivoxSettings::default(),

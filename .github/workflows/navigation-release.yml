@@ -7,13 +7,15 @@
 #
 #   legs      list the binary legs (aarch64-linux, x86_64-linux).
 #   binaries  one leg per arch: build `navigation` and `navigation-lidar-slam`
-#             against the agent SDK pinned in ADOS_AGENT_REV, the pinned uv,
-#             the Livox SDK2 and librealsense2 libraries, and on the
-#             x86_64-linux leg basalt-ados; hand them to the release job.
+#             against the agent SDK pinned in ADOS_AGENT_REV, the KISS-ICP
+#             runtime (pinned CPython plus the locked wheels, smoke-run on a
+#             synthetic stream), the Livox SDK2 and librealsense2 libraries,
+#             and on the x86_64-linux leg basalt-ados; hand them to the
+#             release job.
 #   release   build and test the GCS bundle, write each payload's source,
 #             sha256 and size into the staged manifest, pack the small archive
 #             (manifest, GCS bundle, locales, config-schema.json, the
-#             lidar-slam uv project), sign it with the first-party key, then
+#             lidar-slam KISS-ICP project), sign it with the first-party key, then
 #             attach the payloads and the signed archive to the GitHub Release
 #             in one step, so a published archive never points at a missing
 #             payload.
@@ -212,7 +214,12 @@ jobs:
           } > payloads/navigation-basalt-ados-LICENSES-x86_64-linux
           file payloads/navigation-basalt-ados-x86_64-linux
 
-      - name: Stage uv (pinned, checksum-verified)
+      - name: Build the KISS-ICP runtime
+        # The pinned uv (checksum-verified) resolves the project's uv.lock to
+        # binary manylinux_2_28 wheels; the build pins CPython by sha256 and
+        # checks every ELF file against the glibc floor. The smoke run plays a
+        # synthetic 3D LiDAR stream through the runtime natively, so each
+        # arch's runtime is proven to run before it ships.
         env:
           UV_TRIPLE: ${{ matrix.uv_triple }}
           ARCH_OS: ${{ matrix.arch_os }}
@@ -227,8 +234,13 @@ jobs:
           curl -fsSLo "${RUNNER_TEMP}/${tgz}" "https://github.com/astral-sh/uv/releases/download/${v}/${tgz}"
           echo "${sum}  ${RUNNER_TEMP}/${tgz}" | sha256sum -c -
           tar -xzf "${RUNNER_TEMP}/${tgz}" -C "${RUNNER_TEMP}"
-          cp "${RUNNER_TEMP}/uv-${UV_TRIPLE}/uv" "payloads/navigation-uv-${ARCH_OS}"
-          curl -fsSLo "payloads/navigation-uv-LICENSE-${ARCH_OS}" "https://raw.githubusercontent.com/astral-sh/uv/${v}/LICENSE-MIT"
+          L=extensions/navigation/lidar-slam
+          out="${RUNNER_TEMP}/kiss-runtime"
+          bash "$L/kiss-runtime/build-runtime.sh" --arch "${ARCH_OS%-linux}" --out "$out" \
+            --uv "${RUNNER_TEMP}/uv-${UV_TRIPLE}/uv"
+          python3 "$L/kiss-runtime/stream_check.py" --python "$out/kiss-icp-runtime-${ARCH_OS}/bin/python3" \
+            --project "$L/python/kiss_icp_live" --seconds 5
+          cp "$out/kiss-icp-runtime-${ARCH_OS}.zip" "payloads/navigation-kiss-icp-runtime-${ARCH_OS}.zip"
 
       - name: Hand the binaries to the release job
         uses: actions/upload-artifact@v4

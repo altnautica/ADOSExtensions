@@ -225,8 +225,14 @@ async fn run_once(
 ) -> std::io::Result<ExitStatus> {
     let _ = std::fs::remove_file(&spec.socket);
     let listener = UnixListener::bind(&spec.socket)?;
+    // `-s -E -B`: no user site, no `PYTHON*` variables, no bytecode writes
+    // (the runtime is read-only and ships its bytecode). One BLAS thread: the
+    // odometry's 3x3 algebra gains nothing from a pool, and every thread
+    // counts against the unit's task cap.
     let mut child = Command::new(python)
-        .args(["-m", "kiss_icp_live"])
+        .args(["-s", "-E", "-B", "-m", "kiss_icp_live"])
+        .env("OPENBLAS_NUM_THREADS", "1")
+        .env("OMP_NUM_THREADS", "1")
         .arg("--socket")
         .arg(&spec.socket)
         .arg("--config")

@@ -129,15 +129,15 @@ fn lidar_settings_take_per_driver_blocks() {
     );
 }
 
-/// The default Livox SDK and `uv` paths, resolved for each release arch, name
-/// manifest payloads for that arch that a drone fetches, so a 3D LiDAR on
-/// either arch finds its driver library and its odometry launcher.
+/// The default Livox SDK and KISS-ICP runtime paths, resolved for each release
+/// arch, name manifest payloads for that arch that a drone fetches, so a 3D
+/// LiDAR on either arch finds its driver library and its odometry runtime.
 #[test]
 fn default_native_paths_are_drone_payloads_on_every_release_arch() {
     let manifest = include_str!("../../manifest.yaml");
     let d = LidarSettings::default();
     for arch in ["aarch64", "x86_64"] {
-        for here in [&d.livox.sdk_library, &d.uv] {
+        for here in [&d.livox.sdk_library, &d.runtime] {
             let path = here.replacen(std::env::consts::ARCH, arch, 1);
             let entry: Vec<&str> = manifest
                 .split("\n    - path: ")
@@ -154,6 +154,8 @@ fn default_native_paths_are_drone_payloads_on_every_release_arch() {
             );
             let profiles = entry.iter().find(|l| l.starts_with("profiles:"));
             assert!(profiles.is_none_or(|p| p.contains("drone")), "{path}");
+            // The runtime is a tree the host unpacks; the library one file.
+            assert_eq!(entry.contains(&"unpack: zip"), here == &d.runtime, "{path}");
         }
     }
 }

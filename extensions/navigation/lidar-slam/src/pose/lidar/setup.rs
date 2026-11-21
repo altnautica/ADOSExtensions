@@ -1,8 +1,8 @@
-//! Provisioning the `kiss_icp_live` environment on the device.
+//! Provisioning the `kiss_icp_live` environment with uv: the developer
+//! fallback when no prebuilt runtime is installed ([`super::runtime`]).
 //!
-//! The plugin host has no install hook and the plugin tree is read-only at
-//! run time, so the capture service builds the environment itself, in its
-//! writable data dir, the first time the LiDAR provider starts:
+//! The capture service builds the environment itself, in its writable data
+//! dir, the first time the LiDAR provider starts:
 //!
 //! ```text
 //! uv sync --project <project_dir> --frozen --no-dev

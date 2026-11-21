@@ -19,13 +19,19 @@
 //! [`supervise::INIT_POSES`] poses of a run and whenever
 //! `quality().degeneracy_ratio` (`eig_min / eig_max`) is below
 //! [`supervise::DEGENERATE_RATIO`]; `Good` otherwise.
+//!
+//! Interpreter: the prebuilt runtime in the install tree, or the developer
+//! uv fallback without one ([`runtime`]).
 
+pub mod runtime;
 pub mod setup;
 pub mod supervise;
 pub mod wire;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_runtime;
 #[cfg(test)]
 mod tests_setup;
 
@@ -55,12 +61,13 @@ pub const ENV_DIR: &str = "env";
 /// How the `kiss_icp_live` project's interpreter is found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launcher {
-    /// The `uv` binary: before the first run (and whenever the shipped lock
-    /// changes) `uv sync --frozen --no-dev` builds the environment in
-    /// `<work_dir>/env` ([`setup`]); the child is that environment's python.
+    /// The `uv` binary (the developer fallback): before the first run (and
+    /// whenever the shipped lock changes) `uv sync --frozen --no-dev` builds
+    /// the environment in `<work_dir>/env` ([`setup`]); the child is that
+    /// environment's python.
     Uv(PathBuf),
     /// `<python> -m kiss_icp_live` with an interpreter that already has the
-    /// project's dependencies.
+    /// project's dependencies: the prebuilt runtime ([`runtime::resolve`]).
     Python(PathBuf),
 }
 

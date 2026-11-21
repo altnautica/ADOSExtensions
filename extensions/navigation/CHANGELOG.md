@@ -7,7 +7,9 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 ### Added
 
-- Navigation drives a Livox Mid-360 on aarch64 drones: the Livox SDK2 library and the KISS-ICP environment tool ship in the drone profile for x86_64 and aarch64.
+- Navigation drives a Livox Mid-360 on aarch64 drones: the Livox SDK2 library and the KISS-ICP runtime ship in the drone profile for x86_64 and aarch64.
+
+- KISS-ICP runs offline from the first flight: the release ships a prebuilt runtime per arch (a pinned python-build-standalone CPython with the wheels the odometry project's `uv.lock` pins, binary only for glibc 2.28 and newer, licences in `LICENSES.txt`) as a zip payload the agent unpacks into the install tree (`lib/<arch>-linux/kiss-icp-runtime`, `navigation.lidar.runtime`), where the sandbox lets the plugin execute; it needs no network, nothing is written into it, and the child runs with one BLAS thread. A runtime tree writable by group or others, or owned by another user, is refused. Without a runtime, `uv sync` into the data dir stays as a developer fallback (`navigation.lidar.uv`, now `uv` on `PATH` by default); the uv payload is gone. `GET /navigation/status` gains `pose_note`: why the wanted pose provider failed to start, or the fallback it runs on. Needs ADOS 0.124.19 or newer (unpacked payloads).
 
 - Depth camera drivers for the LiDAR service, set by `navigation.depth`: an Intel RealSense D435i or D455 through librealsense2 (Apache-2.0, built for x86_64 and aarch64 against glibc 2.28 and shipped as a payload in the drone and Visor profiles), and the World Engine depth stream over UDP (its socket connected to the stream, so frames from any other address are never read). Each frame carries its intrinsics and the camera's mount, and turns into body-frame points; a missing library or camera reports the source unavailable.
 

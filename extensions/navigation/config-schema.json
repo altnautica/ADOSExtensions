@@ -248,8 +248,14 @@
           "type": "string",
           "default": "imu0"
         },
-        "uv": {
+        "runtime": {
+          "description": "Prebuilt KISS-ICP runtime the 3D LiDAR odometry runs on, relative to the install directory (default `lib/<arch>-linux/kiss-icp-runtime`, which the release installs per arch). A tree writable by group or others, or owned by another user, is refused.",
           "type": "string"
+        },
+        "uv": {
+          "description": "Developer fallback when no runtime is installed: the uv that syncs the odometry project into the data dir (needs the package index). A bare name is looked up on PATH; a path is relative to the install directory.",
+          "type": "string",
+          "default": "uv"
         },
         "project_dir": {
           "type": "string"

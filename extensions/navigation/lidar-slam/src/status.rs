@@ -18,6 +18,11 @@ pub struct StatusView {
     pub idle_reason: Option<String>,
     /// The pose provider running; null when none runs.
     pub provider: Option<NavPoseSource>,
+    /// Why the wanted pose provider is not running as released: the reason
+    /// it failed to start (a refused KISS-ICP runtime, a missing binary), or
+    /// the fallback it runs on (the developer `uv sync` of KISS-ICP); null
+    /// otherwise.
+    pub pose_note: Option<String>,
     pub health: Option<VioHealth>,
     /// Age of the newest estimate, ms.
     pub pose_age_ms: Option<u64>,

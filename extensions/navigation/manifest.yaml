@@ -118,8 +118,9 @@ license: "GPL-3.0-or-later"
 risk: high
 
 compatibility:
-  # ADOS time (ados_sdk::clock) from 0.124.0.
-  ados_version: ">=0.124.0"
+  # ADOS time (ados_sdk::clock) from 0.124.0; unpacked (`unpack: zip`)
+  # payloads, which the KISS-ICP runtime ships as, from 0.124.19.
+  ados_version: ">=0.124.19"
   gcs_version: ">=0.66.0"
   supported_boards: ["*"]
 
@@ -188,8 +189,7 @@ agent:
     # Native helpers with their licence texts: basalt-ados (x86_64-linux;
     # aarch64-linux is a manual release step, see lidar-slam/basalt/README.md),
     # the Livox SDK2 library a Mid-360 is driven through (every arch, drone
-    # and visor), and uv for the on-device KISS-ICP environment sync of a 3D
-    # LiDAR's odometry.
+    # and visor), and the KISS-ICP runtime a 3D LiDAR's odometry runs on.
     - path: bin/x86_64-linux/basalt-ados
       source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-basalt-ados-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -250,30 +250,23 @@ agent:
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
-    - path: bin/aarch64-linux/uv
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-aarch64-linux"
+    # The KISS-ICP runtime (every arch, drone and visor): a zip of CPython
+    # with the locked odometry wheels and their licences (LICENSES.txt),
+    # unpacked into the install tree, so the odometry runs offline.
+    - path: lib/aarch64-linux/kiss-icp-runtime
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-kiss-icp-runtime-aarch64-linux.zip"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
-    - path: bin/x86_64-linux/uv
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-x86_64-linux"
+      unpack: zip
+    - path: lib/x86_64-linux/kiss-icp-runtime
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-kiss-icp-runtime-x86_64-linux.zip"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
-    - path: bin/aarch64-linux/LICENSE-uv.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-LICENSE-aarch64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: aarch64-linux
-      profiles: [drone, visor]
-    - path: bin/x86_64-linux/LICENSE-uv.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-uv-LICENSE-x86_64-linux"
-      sha256: "0000000000000000000000000000000000000000000000000000000000000000"
-      size_bytes: 1
-      arch_os: x86_64-linux
-      profiles: [drone, visor]
+      unpack: zip
   permissions:
     # navigation (entrypoint): flow from the vision frame bus, the companion
     # rangefinder, the FC bridge. lidar-slam: the stereo frames VIO tracks

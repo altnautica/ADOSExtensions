@@ -419,6 +419,21 @@ for name, per in sorted(binaries.items()):
             fail(f"binaries.{name}.{arch} ({path}) has no payload entry")
 
 # ---- rewrite the staged payloads block --------------------------------------
+# `unpack` is the one payload field the asset list does not carry: it comes
+# from the manifest's own entry for the same path.
+span = key_block("payloads")
+unpack: dict = {}
+if span is not None:
+    current = None
+    for line in lines[span[0] + 1 : span[1]]:
+        key, _, value = line.strip().removeprefix("- ").partition(":")
+        if key == "path":
+            current = strip_scalar(value)
+        elif key == "unpack" and current is not None:
+            unpack[current] = strip_scalar(value)
+for path, fmt in unpack.items():
+    if fmt != "zip":
+        fail(f"payload {path}: unpack {fmt!r} is not a format the host unpacks (zip)")
 pad = " " * key_indent
 out = [f"{pad}payloads:"]
 for p in payloads:
@@ -430,7 +445,8 @@ for p in payloads:
         out.append(f'{pad}    arch_os: {p["arch_os"]}')
     if p["profiles"]:
         out.append(f'{pad}    profiles: [{", ".join(p["profiles"])}]')
-span = key_block("payloads")
+    if p["path"] in unpack:
+        out.append(f'{pad}    unpack: {unpack[p["path"]]}')
 if span is None:
     insert_at = agent_end
     while insert_at > agent_start + 1 and not lines[insert_at - 1].strip():
