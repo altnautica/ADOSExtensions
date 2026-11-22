@@ -6,6 +6,22 @@ uses independent semantic versioning per extension.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-22
+
+### Added
+
+- The read-back names the kind of goal the follow last sent the pilot (`goal_kind`: `follow_intent` when the pilot picks the viewpoint, `follow` or `orbit` for the follow's own point, `position` for a hold, `vantage` for a search) while goals keep going out under the lease, so which of the two flights is in use is reported rather than inferred. A goal the pilot or the host refused names no kind.
+
+### Fixed
+
+- A goal the pilot or the host refuses is now logged (`follow_me_goal_refused` with the goal kind and the host's reason, once per kind and reason, and `follow_me_goal_accepted` when goals are taken again) instead of being dropped without a trace; a goal the host rejects outright no longer fails the whole tick.
+
+- While the drone waits for the operator after losing the subject (including once the search runs out), it now turns to face where the subject was last seen instead of keeping the heading it stopped with, so a subject walking back the way they came comes into the camera's view rather than passing outside it. With no last position, or one right under the drone, the heading stays as it was.
+
+### Security
+
+- The repository's lockfile takes `url` 2.5.9 (RUSTSEC-2026-0592) for the extensions' Rust builds.
+
 ## [0.7.0] - 2026-11-22
 
 ### Added

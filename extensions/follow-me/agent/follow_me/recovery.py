@@ -63,6 +63,11 @@ from follow_me.standoff import SEPARATION_SIGMAS, keep_clear, pilot_subject_sigm
 from follow_me.stillness import STILL_RESIDUAL_MPS
 from follow_me.target_filter import position_sigma
 
+# Holding for the operator, the vehicle faces the subject's last fix while it
+# lies at least this far from the hold point; nearer, the bearing means
+# nothing and the heading the hold began with stays, m.
+FACE_FIX_MIN_M = 1.0
+
 # The prediction phase lasts at most this long, and ends early once the
 # prediction has spread by more than PREDICT_SIGMA_M (1 sigma) since the
 # recovery began: the spread at the loss is the measurement's, not the
@@ -279,6 +284,16 @@ class RecoveryMixin:
     async def _hold_for_operator(
         self, cfg: FollowConfig, now: float, rec: Recovery, *, force: bool = False
     ) -> None:
+        """Hold where the wait began, facing the subject's last fix: a
+        subject walking back the way it went comes on into the camera's view
+        rather than past its edge. With no fix, or one too near, the heading
+        the hold began with stays."""
+        yaw = None
+        last = self._filter.last_estimate()
+        if last is not None and rec.hold_ne is not None:
+            dn, de = last[0] - rec.hold_ne[0], last[1] - rec.hold_ne[1]
+            if math.hypot(dn, de) >= FACE_FIX_MIN_M:
+                yaw = math.atan2(de, dn)
         await self._hold(
             cfg,
             now,
@@ -288,6 +303,7 @@ class RecoveryMixin:
             hold_ne=rec.hold_ne,
             hold_d=rec.hold_d,
             force=force,
+            yaw_rad=yaw,
         )
 
     async def _tick_recovery(self, cfg: FollowConfig, now: float) -> None:

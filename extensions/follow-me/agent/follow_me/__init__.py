@@ -174,6 +174,11 @@ class FollowMePlugin(FcStateMixin, ReadbackMixin, RecoveryMixin, SubjectMixin, F
         # Send times of the pilot goals, for the published send rate
         # (bounded: 20 Hz over a 2 s window is 40 entries).
         self._setpoint_times: deque[float] = deque(maxlen=256)
+        # The kind of the last goal sent, for the read-back's `goal_kind`.
+        self._goal_kind: str | None = None
+        # The last refused goal's (kind, reason), so a refusal repeated at the
+        # loop rate is logged once.
+        self._goal_refusal: tuple[str | None, str] | None = None
         # The real source-frame size from the most recent detection batch that
         # carried one; None until the first sized batch arrives.
         self._last_frame_wh: tuple[int, int] | None = None

@@ -427,7 +427,12 @@ The other `follow.state` fields:
 - **Setpoints:** `distance_setpoint_m`, `height_setpoint_m`.
 - **Mode:** `follow_mode`, `follow_angle_deg`, `orbit_radius_m`, `orbit_rate_dps`,
   `orbit_direction`, `orbit_phase_deg`.
-- **Pilot:** `lease_id`, `nudged`.
+- **Pilot:** `lease_id`, `nudged`, `goal_kind` (the last goal sent, while
+  goals have gone out under the lease within the last second: `follow_intent`
+  when the pilot picks the viewpoint, `follow` or `orbit` for the follow's own
+  point, `position` for a hold, `vantage` for a search; null otherwise, or
+  when the pilot or the host refused the last goal, which the follow logs as
+  `follow_me_goal_refused`).
 - **Camera:** `camera_hfov_deg`, `camera_mount_pitch_deg` (negative below the
   nose), `camera_geometry_source` (`roster`, `settings` or `default`).
 - **Speed:** `outpaced`, `speed_limit_mps`.

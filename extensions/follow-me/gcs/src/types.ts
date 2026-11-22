@@ -290,6 +290,8 @@ export interface RawFollowState {
   orbit_direction?: string;
   orbit_phase_deg?: number | null;
   lease_id?: number | string | null;
+  /** The kind of the last goal sent to the pilot while commanding. */
+  goal_kind?: string | null;
   /** Agent wall-clock time of the report, when the host forwards it. */
   ts_ms?: number;
   nudged?: boolean;

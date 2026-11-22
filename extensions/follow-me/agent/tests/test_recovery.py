@@ -247,6 +247,36 @@ async def test_strict_goes_straight_to_awaiting_the_operator(monkeypatch: Any) -
 
 
 @pytest.mark.asyncio
+async def test_the_wait_for_the_operator_faces_the_last_fix(monkeypatch: Any) -> None:
+    # A subject walking back the way it went comes into the camera's view:
+    # the hold faces where it was last fixed, not the heading the hold began
+    # with. The hold point itself does not move.
+    ctx = _Ctx(config=_cfg(reacquire_mode="strict"))
+    plugin = _plugin(ctx)
+    clock = _install_clock(monkeypatch)
+    await _lose(plugin, clock)
+    rec = plugin._recovery
+    assert rec is not None and rec.phase == PHASE_AWAIT_OPERATOR
+    fix = plugin._filter.last_estimate()
+    assert fix is not None
+    # The fix lies 6 m west of the hold point: the hold faces west.
+    rec.hold_ne = (fix[0], fix[1] + 6.0)
+    await _step(plugin, clock, 0.05)
+    goal = ctx.flight.setpoints[-1]
+    assert goal["kind"] == "position"
+    assert (goal["n"], goal["e"]) == rec.hold_ne
+    assert goal["yaw"] == pytest.approx(-math.pi / 2)
+    st = _state_events(ctx)[-1]
+    # A hold is not commanding, yet the read-back names the goal it flies.
+    assert st["phase"] == PHASE_AWAIT_OPERATOR and st["commanding"] is False
+    assert st["goal_kind"] == "position"
+    # A fix under a metre off: the heading the hold began with stays.
+    rec.hold_ne = (fix[0] + 0.5, fix[1])
+    await _step(plugin, clock, 0.05)
+    assert ctx.flight.setpoints[-1]["yaw"] == plugin._hold_point[3]
+
+
+@pytest.mark.asyncio
 async def test_predictive_search_off_predicts_briefly_then_waits(monkeypatch: Any) -> None:
     ctx = _Ctx(config=_cfg(predictive_search=False))
     plugin = _plugin(ctx)

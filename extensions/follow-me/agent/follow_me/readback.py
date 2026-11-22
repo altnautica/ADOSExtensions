@@ -31,6 +31,9 @@ _DEFAULT_FRAME_H = 480
 # A planar scan is a range cue only while younger than this (three periods of
 # the 10 Hz scan topic).
 _SCAN_MAX_AGE_S = 0.3
+# The read-back names the last goal's kind while goals have gone out within
+# this (the pilot's lease window: a lease with no goal for 1 s is revoked).
+_GOAL_KIND_WINDOW_S = 1.0
 
 # A slow heartbeat for the read-back even when nothing changed, so the GCS
 # knows the agent is alive; and the fastest it is re-published when only the
@@ -90,6 +93,7 @@ class ReadbackMixin:
     _latency_ms: int | None
     _active_camera: str | None
     _setpoint_times: Any
+    _goal_kind: str | None
     _lease_id: str | None
     _nudges: Any
     _orbit_phase: float | None
@@ -321,6 +325,14 @@ class ReadbackMixin:
             setpoint_rate_hz=self._setpoint_rate_hz(now),
         )
         state.lease_id = self._lease_id
+        # Holds (`position`) and searches (`vantage`) included: commanding or
+        # not, the kind of what the pilot flies while goals keep going out.
+        sent = self._setpoint_times
+        state.goal_kind = (
+            self._goal_kind
+            if self._lease_id is not None and sent and now - sent[-1] <= _GOAL_KIND_WINDOW_S
+            else None
+        )
         state.nudged = self._nudges.nudged
         if self._orbit_phase is not None:
             state.orbit_phase_deg = _r(math.degrees(self._orbit_phase) % 360.0, 1)

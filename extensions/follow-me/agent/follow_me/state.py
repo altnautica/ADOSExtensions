@@ -412,6 +412,13 @@ class FollowState:
     # vision has lost the subject (`beacon`), or by no cue within the last
     # second (`predicted`); None on the follow's own estimate from the boxes.
     subject_source: str | None = None
+    # The kind of the last goal sent to the pilot, while goals have gone out
+    # under the lease within the last second: `follow_intent` (the pilot
+    # picks the viewpoint), `follow` or `orbit` (the follow's own point, sent
+    # to a pilot that takes no intents or whenever the hard guard trips),
+    # `position` (a hold) or `vantage` (a search); None otherwise, or when
+    # the last goal was refused.
+    goal_kind: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

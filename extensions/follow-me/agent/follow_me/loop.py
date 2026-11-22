@@ -217,6 +217,8 @@ class FollowLoopMixin:
     _latency_ms: int | None
     _last_gimbal_s: float
     _setpoint_times: deque[float]
+    _goal_kind: str | None
+    _goal_refusal: tuple[str | None, str] | None
     _latest_batch: Any
     _latest_batch_s: float
     _commanded_gimbal: tuple[float, float] | None
@@ -955,14 +957,31 @@ class FollowLoopMixin:
     async def _send_goal(self, goal: dict[str, Any], now: float) -> None:
         """Send one goal under the lease and count it toward the published
         send rate (the read-back is where a bench reads the rate). Any goal
-        but a hold ends the hold, so the next one latches where it begins."""
+        but a hold ends the hold, so the next one latches where it begins.
+        A refused goal is logged once per kind and reason and leaves no
+        `goal_kind`: the pilot is not flying it."""
         lease_id = self._lease_id
         if lease_id is None:
             return
-        if goal.get("kind") != "position":
+        kind = goal.get("kind")
+        if kind != "position":
             self._hold_point = None
-        await self._ctx.flight.goal_send(lease_id, goal)
+        try:
+            reply = await self._ctx.flight.goal_send(lease_id, goal)
+        except Exception as exc:  # noqa: BLE001 - the host rejected it at decode
+            reply = {"ok": False, "err": str(exc)}
         self._setpoint_times.append(now)
+        if isinstance(reply, dict) and not reply.get("ok", True):
+            refusal = (kind, lease_error_reason(reply))
+            if refusal != self._goal_refusal:
+                self._ctx.log.warning("follow_me_goal_refused", kind=kind, err=refusal[1])
+            self._goal_refusal = refusal
+            self._goal_kind = None
+            return
+        if self._goal_refusal is not None:
+            self._ctx.log.info("follow_me_goal_accepted", kind=kind)
+        self._goal_refusal = None
+        self._goal_kind = kind
 
     async def _point_gimbal(
         self, cfg: FollowConfig, now: float, north: float, east: float, agl: float

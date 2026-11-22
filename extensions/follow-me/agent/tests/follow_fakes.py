@@ -20,14 +20,19 @@ from follow_me.state import (
 
 
 class _Log:
-    def info(self, *_a: Any, **_k: Any) -> None:
-        pass
+    """Records every log call as ``(level, event, fields)``."""
 
-    def warning(self, *_a: Any, **_k: Any) -> None:
-        pass
+    def __init__(self) -> None:
+        self.records: list[tuple[str, str, dict[str, Any]]] = []
 
-    def debug(self, *_a: Any, **_k: Any) -> None:
-        pass
+    def info(self, event: str, *_a: Any, **k: Any) -> None:
+        self.records.append(("info", event, k))
+
+    def warning(self, event: str, *_a: Any, **k: Any) -> None:
+        self.records.append(("warning", event, k))
+
+    def debug(self, event: str, *_a: Any, **k: Any) -> None:
+        self.records.append(("debug", event, k))
 
 
 class _ConfigKv:
@@ -72,13 +77,15 @@ class _Flight:
     """The pilot's motion surface: a lease, goals under it, the stick feed.
 
     ``setpoints`` records every goal sent (the follow's only motion output);
-    ``acquire_reply`` is what the next ``lease_acquire`` returns.
+    ``acquire_reply`` is what the next ``lease_acquire`` returns and
+    ``goal_reply`` what every ``goal_send`` returns.
     """
 
     def __init__(self) -> None:
         self.setpoints: list[dict[str, Any]] = []
         self.goal_leases: list[str] = []
         self.acquire_reply: dict[str, Any] = {"ok": True, "lease_id": 7}
+        self.goal_reply: dict[str, Any] = {"ok": True}
         self.acquires: list[dict[str, Any]] = []
         self.releases: list[str] = []
         self.sticks_subscribed = False
@@ -94,7 +101,7 @@ class _Flight:
     async def goal_send(self, lease_id: int, goal: dict[str, Any]) -> dict:
         self.goal_leases.append(lease_id)
         self.setpoints.append(dict(goal))
-        return {"ok": True}
+        return dict(self.goal_reply)
 
     async def sticks_subscribe(self) -> dict:
         self.sticks_subscribed = True

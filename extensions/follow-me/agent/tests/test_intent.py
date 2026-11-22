@@ -15,6 +15,7 @@ from follow_fakes import (
     _install_clock,
     _level_pose,
     _make_plugin,
+    _state_events,
     _telemetry_config,
 )
 
@@ -125,11 +126,14 @@ def test_the_hard_guard_takes_back_the_goal(intents: None) -> None:
     assert g["kind"] == intent.KIND_FOLLOW_INTENT
 
 
-@pytest.mark.asyncio
-async def test_the_follow_sends_intents_to_a_pilot_that_takes_them(
-    monkeypatch: Any, intents: None
-) -> None:
+async def _follow_one_tick(
+    monkeypatch: Any, goal_reply: dict[str, Any] | None = None
+) -> _Ctx:
+    """One tick of a locked follow; the context it sent to. ``goal_reply`` is
+    what the pilot answers every goal with (accepted when None)."""
     ctx = _Ctx(config=_telemetry_config())
+    if goal_reply is not None:
+        ctx.flight.goal_reply = goal_reply
     plugin = _make_plugin(ctx)
     plugin._active_camera = "uvc-0"
     clock = _install_clock(monkeypatch)
@@ -155,6 +159,14 @@ async def test_the_follow_sends_intents_to_a_pilot_that_takes_them(
         )
     )
     await plugin._tick()
+    return ctx
+
+
+@pytest.mark.asyncio
+async def test_the_follow_sends_intents_to_a_pilot_that_takes_them(
+    monkeypatch: Any, intents: None
+) -> None:
+    ctx = await _follow_one_tick(monkeypatch)
     goal = ctx.flight.setpoints[-1]
     assert goal["kind"] == intent.KIND_FOLLOW_INTENT
     assert goal["bearing_pref_deg"] == -180.0
@@ -168,6 +180,84 @@ async def test_the_follow_sends_intents_to_a_pilot_that_takes_them(
         goal, cfg=cfg, pace_ne=(0.0, 0.0), standoff_m=6.0, subject_ref=None
     )
     assert auto["bearing_pref_deg"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("takes", [True, False], ids=["intent", "ring"])
+async def test_the_read_back_names_the_goal_kind_sent(
+    monkeypatch: Any, takes: bool
+) -> None:
+    # Which goal the pilot was sent is read back, not inferred from the
+    # pilot's flight.
+    monkeypatch.setattr(intent, "pilot_takes_intents", lambda: takes)
+    ctx = await _follow_one_tick(monkeypatch)
+    state = _state_events(ctx)[-1]
+    assert state["commanding"] is True
+    assert state["goal_kind"] == ctx.flight.setpoints[-1]["kind"]
+    assert state["goal_kind"] == (intent.KIND_FOLLOW_INTENT if takes else "follow")
+
+
+@pytest.mark.asyncio
+async def test_a_refused_goal_is_logged_and_names_no_goal_kind(
+    monkeypatch: Any, intents: None
+) -> None:
+    # A refused goal is not flown: the read-back must not claim it is.
+    ctx = await _follow_one_tick(
+        monkeypatch, goal_reply={"ok": False, "err": "not_holder"}
+    )
+    state = _state_events(ctx)[-1]
+    assert state["commanding"] is True
+    assert state["goal_kind"] is None
+    refused = [r for r in ctx.log.records if r[1] == "follow_me_goal_refused"]
+    assert refused == [
+        ("warning", "follow_me_goal_refused",
+         {"kind": intent.KIND_FOLLOW_INTENT, "err": "not_holder"})
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_refusal_is_logged_once_and_its_end_once() -> None:
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    plugin._lease_id = 7
+    goal = {"kind": "follow", "n": 0.0, "e": 0.0, "d": -4.0}
+    ctx.flight.goal_reply = {"ok": False}
+    for t in (1.0, 1.05, 1.1):
+        await plugin._send_goal(goal, t)
+    assert plugin._goal_kind is None
+    ctx.flight.goal_reply = {"ok": True}
+    await plugin._send_goal(goal, 1.15)
+    assert plugin._goal_kind == "follow"
+    names = ("follow_me_goal_refused", "follow_me_goal_accepted")
+    events = [r for r in ctx.log.records if r[1] in names]
+    assert events == [
+        ("warning", "follow_me_goal_refused", {"kind": "follow", "err": "unavailable"}),
+        ("info", "follow_me_goal_accepted", {"kind": "follow"}),
+    ]
+    # Every send counts toward the published rate, refused or not.
+    assert len(ctx.flight.setpoints) == 4
+
+
+@pytest.mark.asyncio
+async def test_a_goal_the_host_rejects_is_logged_once_and_names_no_kind() -> None:
+    ctx = _Ctx(config=_telemetry_config())
+    plugin = _make_plugin(ctx)
+    plugin._lease_id = 7
+    plugin._goal_kind = "follow"
+
+    async def reject(_lease_id: int, _goal: dict[str, Any]) -> dict:
+        raise RuntimeError("bad_args: unknown goal field")
+
+    ctx.flight.goal_send = reject  # type: ignore[method-assign]
+    goal = {"kind": "follow_intent", "n": 0.0, "e": 0.0, "d": -4.0}
+    for t in (1.0, 1.05):
+        await plugin._send_goal(goal, t)
+    assert plugin._goal_kind is None
+    refused = [r for r in ctx.log.records if r[1] == "follow_me_goal_refused"]
+    assert refused == [
+        ("warning", "follow_me_goal_refused",
+         {"kind": "follow_intent", "err": "bad_args: unknown goal field"})
+    ]
 
 
 def test_the_auto_angle_resolves_from_config() -> None:
