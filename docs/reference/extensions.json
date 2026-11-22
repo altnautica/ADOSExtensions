@@ -115,7 +115,7 @@
     {
       "id": "com.altnautica.navigation",
       "name": "ADOS Navigation",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "GNSS-denied navigation: optical flow, LiDAR SLAM and VIO poses, a live occupancy map, and the external-navigation bridge to the flight controller.",
       "category": null,
       "supported_boards": [

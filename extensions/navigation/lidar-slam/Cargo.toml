@@ -3,7 +3,7 @@
 # map. Runs as the extension's lidar-slam service.
 [package]
 name = "navigation-lidar-slam"
-version = "1.0.2"
+version = "1.0.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

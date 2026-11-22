@@ -5,6 +5,8 @@ All notable changes to the Navigation extension (Vision Navigation before
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-22
+
 ### Added
 
 - Navigation drives a Livox Mid-360 on aarch64 drones: the Livox SDK2 library and the KISS-ICP runtime ship in the drone profile for x86_64 and aarch64.

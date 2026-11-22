@@ -1,7 +1,7 @@
 schema_version: 3
 id: com.altnautica.navigation
 name: "ADOS Navigation"
-version: "1.0.2"
+version: "1.0.3"
 description: "GNSS-denied navigation: optical flow, LiDAR SLAM and VIO poses, a live occupancy map, and the external-navigation bridge to the flight controller."
 description_long: |
   Lets the drone hold position when GPS is unreliable — indoors, under bridges, in urban canyons. A downward camera and the flight controller's gyro feed a 30 Hz angular-flow measurement over MAVLink, so position-hold, loiter, and missions keep working unchanged.
@@ -119,8 +119,9 @@ risk: high
 
 compatibility:
   # ADOS time (ados_sdk::clock) from 0.124.0; unpacked (`unpack: zip`)
-  # payloads, which the KISS-ICP runtime ships as, from 0.124.19.
-  ados_version: ">=0.124.19"
+  # payloads, which the KISS-ICP runtime ships as, from 0.124.19; built
+  # against the 0.124.21 SDK.
+  ados_version: ">=0.124.21"
   gcs_version: ">=0.66.0"
   supported_boards: ["*"]
 
@@ -167,22 +168,22 @@ agent:
   # workflow writes the real source, sha256 and size_bytes.
   payloads:
     - path: bin/aarch64-linux/navigation
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
     - path: bin/x86_64-linux/navigation
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
     - path: bin/aarch64-linux/navigation-lidar-slam
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-lidar-slam-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-lidar-slam-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
     - path: bin/x86_64-linux/navigation-lidar-slam
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-lidar-slam-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-lidar-slam-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
@@ -191,35 +192,35 @@ agent:
     # the Livox SDK2 library a Mid-360 is driven through (every arch, drone
     # and visor), and the KISS-ICP runtime a 3D LiDAR's odometry runs on.
     - path: bin/x86_64-linux/basalt-ados
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-basalt-ados-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-basalt-ados-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
     - path: bin/x86_64-linux/LICENSE-basalt-ados.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-basalt-ados-LICENSES-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-basalt-ados-LICENSES-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
     - path: lib/x86_64-linux/liblivox_lidar_sdk_shared.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-x86_64-linux.so"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-livox-sdk2-x86_64-linux.so"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
     - path: lib/x86_64-linux/LICENSE-livox-sdk2.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-LICENSE-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-livox-sdk2-LICENSE-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
     - path: lib/aarch64-linux/liblivox_lidar_sdk_shared.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-aarch64-linux.so"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-livox-sdk2-aarch64-linux.so"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
     - path: lib/aarch64-linux/LICENSE-livox-sdk2.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-livox-sdk2-LICENSE-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-livox-sdk2-LICENSE-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
@@ -227,25 +228,25 @@ agent:
     # librealsense2, the RealSense depth camera library (every arch, drone
     # and visor; loads the board's libusb-1.0).
     - path: lib/x86_64-linux/librealsense2.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-x86_64-linux.so"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-librealsense2-x86_64-linux.so"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
     - path: lib/x86_64-linux/LICENSE-librealsense2.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-LICENSE-x86_64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-librealsense2-LICENSE-x86_64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
       profiles: [drone, visor]
     - path: lib/aarch64-linux/librealsense2.so
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-aarch64-linux.so"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-librealsense2-aarch64-linux.so"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
     - path: lib/aarch64-linux/LICENSE-librealsense2.txt
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-librealsense2-LICENSE-aarch64-linux"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-librealsense2-LICENSE-aarch64-linux"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
@@ -254,14 +255,14 @@ agent:
     # with the locked odometry wheels and their licences (LICENSES.txt),
     # unpacked into the install tree, so the odometry runs offline.
     - path: lib/aarch64-linux/kiss-icp-runtime
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-kiss-icp-runtime-aarch64-linux.zip"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-kiss-icp-runtime-aarch64-linux.zip"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: aarch64-linux
       profiles: [drone, visor]
       unpack: zip
     - path: lib/x86_64-linux/kiss-icp-runtime
-      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.2/navigation-kiss-icp-runtime-x86_64-linux.zip"
+      source: "https://github.com/altnautica/ADOSExtensions/releases/download/navigation-v1.0.3/navigation-kiss-icp-runtime-x86_64-linux.zip"
       sha256: "0000000000000000000000000000000000000000000000000000000000000000"
       size_bytes: 1
       arch_os: x86_64-linux
