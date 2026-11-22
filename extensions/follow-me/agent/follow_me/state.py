@@ -165,6 +165,9 @@ class FollowConfig:
     operator_resume_seq: int = 0
     follow_mode: str = FOLLOW_MODE_FOLLOW
     follow_angle_deg: float = 180.0
+    # Let the pilot pick the bearing that sees the subject best (a pilot that
+    # takes follow intents; otherwise the follow angle holds).
+    follow_angle_auto: bool = False
     orbit_radius_m: float = 8.0
     orbit_rate_dps: float = 10.0
     orbit_direction: str = ORBIT_CW
@@ -264,6 +267,7 @@ class FollowConfig:
                 pick("follow_angle_deg", cls.follow_angle_deg), cls.follow_angle_deg
             )
             % 360.0,
+            follow_angle_auto=bool(pick("follow_angle_auto", cls.follow_angle_auto)),
             orbit_radius_m=_clamped(
                 pick("orbit_radius_m", cls.orbit_radius_m),
                 cls.orbit_radius_m,

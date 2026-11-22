@@ -32,8 +32,9 @@ from typing import Any
 from ados.sdk import clock
 from ados.sdk.tracking import EffectiveLock, LockedTargetTracker
 
-from follow_me import fc_state, mavlink_frames, setpoint
+from follow_me import fc_state, intent, mavlink_frames, setpoint
 from follow_me.camera import DEFAULT_GEOMETRY, CameraGeometry, exposure_fc_s
+from follow_me.intent import VEL_MODE_COMMAND
 from follow_me.motion import LEASE_RETRY_S, SKILL_ID, Nudges, lease_error_reason
 from follow_me.projection import TargetFix
 from follow_me.ranging import range_bearing_covariance
@@ -46,6 +47,12 @@ from follow_me.reacquire import (
     template_may_update,
 )
 from follow_me.recovery import SEARCH_FF_SCALE, Recovery
+from follow_me.standoff import (
+    SEPARATION_SIGMAS,
+    StandoffController,
+    StillSubject,
+    pilot_subject_sigma,
+)
 from follow_me.state import (
     FOLLOW_MODE_ORBIT,
     FOLLOW_STOPPED_TOPIC,
@@ -72,7 +79,6 @@ from follow_me.state import (
     UNCERTAIN_FOLLOW_MAX_S,
     FollowConfig,
 )
-from follow_me.standoff import SEPARATION_SIGMAS, StandoffController, StillSubject, pilot_subject_sigma
 from follow_me.subject import SubjectFeed, SubjectView
 from follow_me.target_filter import Cov2, TargetFilter, subject_max_speed_mps
 
@@ -120,11 +126,6 @@ _MAX_EXPOSURE_AGE_S = 1.0
 # noise went straight into the estimate and the goal.
 _MIN_RANGE_SIGMA_M = 0.75
 _MIN_RANGE_SIGMA_FRAC = 0.06
-# Goals in which ``vn``/``ve`` are the follow's complete desired velocity:
-# the pilot shapes and caps it and adds no position loop toward ``n``/``e``
-# (pilot.v1 ``vel_mode``). A zero velocity stops on the pilot's profile and
-# holds where the vehicle stops.
-VEL_MODE_COMMAND = "command"
 # A goal point lies at least the standoff (or orbit radius) less this from
 # the subject's worst case (the nearest of its estimate as flown, its
 # undecayed prediction and a standing subject's centre).
@@ -813,23 +814,24 @@ class FollowLoopMixin:
                 on, oe = dn - guard_ne[0], de - guard_ne[1]
                 gd = max(1e-6, math.hypot(on, oe))
             gn, ge = guard_ne[0] + on / gd * least, guard_ne[1] + oe / gd * least
-        return {
-            "kind": kind,
-            "n": gn,
-            "e": ge,
-            "d": setpoint.height_down(self._pose.down_m, agl, cfg.follow_height_m),
-            "vn": cmd.vn_mps,
-            "ve": cmd.ve_mps,
-            "vd": 0.0,
-            "vel_mode": VEL_MODE_COMMAND,
-            "yaw": cmd.yaw_rad,
-            "yaw_rate": None,
-            "subject_ne": [keep_ne[0], keep_ne[1]],
-            "subject_sigma_m": subject_sigma,
-            "max_speed_mps": cfg.max_speed_mps,
-            "candidates": ring,
-            "margin_m": cfg.obstacle_margin_m,
-        }
+        goal = intent.ring_goal(
+            kind,
+            (gn, ge, setpoint.height_down(self._pose.down_m, agl, cfg.follow_height_m)),
+            cmd,
+            cfg,
+            ring=ring,
+            subject_ne=(keep_ne[0], keep_ne[1]),
+            subject_sigma_m=subject_sigma,
+        )
+        return intent.follow_goal(
+            goal,
+            cfg=cfg,
+            pace_ne=(tvn, tve),
+            standoff_m=standoff_m,
+            subject_ref=None if subject is None else subject.state.id,
+            drone=(dn, de, self._pose.vn_mps, self._pose.ve_mps),
+            guard=(guard_ne, guard_v, coast_sigma),
+        )
 
     async def _command(
         self,

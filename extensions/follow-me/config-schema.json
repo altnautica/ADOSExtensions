@@ -134,6 +134,12 @@
       "minimum": 0,
       "maximum": 355
     },
+    "follow_angle_auto": {
+      "type": "boolean",
+      "title": "Auto angle",
+      "description": "Let the pilot pick the angle round the subject that keeps it in view best, instead of the follow angle. Needs an agent whose pilot plans the view; an older one keeps the follow angle.",
+      "default": false
+    },
     "orbit_radius_m": {
       "type": "number",
       "title": "Orbit radius (m)",

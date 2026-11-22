@@ -6,6 +6,18 @@ uses independent semantic versioning per extension.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-22
+
+### Added
+
+- The pilot now picks where to fly to keep the subject in view. On an agent whose pilot plans the view itself, the follow no longer tells the pilot exactly where to be: it says how far to stay (one metre either side of the follow distance), which side it prefers (the follow angle), how high (from the follow height up to a metre above, never under 3.4 m) and who the subject is. The pilot then picks the spot, ten times a second, that keeps the subject in sight past trees and round corners, and flies there. Orbit works the same way, its angle advancing round the subject. On an older agent the follow flies exactly as before.
+
+- Auto angle: a new setting that leaves the side to the pilot, which picks the one with the clearest view.
+
+### Changed
+
+- The follow's own guard still watches the separation from the subject. Whenever the drone gets inside the distance it keeps, or is closing fast enough to be there within a second, the follow takes the goal back and flies its own command away from the subject until it is clear again.
+
 ## [0.6.1] - 2026-11-21
 
 ### Added

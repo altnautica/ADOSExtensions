@@ -125,6 +125,7 @@ _CONFIG_KEYS = (
     "max_speed_mps",
     "follow_mode",
     "follow_angle_deg",
+    "follow_angle_auto",
     "orbit_radius_m",
     "orbit_rate_dps",
     "orbit_direction",

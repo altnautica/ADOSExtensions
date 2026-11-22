@@ -317,6 +317,7 @@ export interface FollowConfig {
   max_speed_mps: number;
   follow_mode: FollowMode;
   follow_angle_deg: number;
+  follow_angle_auto: boolean;
   orbit_radius_m: number;
   orbit_rate_dps: number;
   orbit_direction: OrbitDirection;
@@ -339,6 +340,7 @@ export const DEFAULT_CONFIG: FollowConfig = {
   max_speed_mps: 6,
   follow_mode: "follow",
   follow_angle_deg: 180,
+  follow_angle_auto: false,
   orbit_radius_m: 8,
   orbit_rate_dps: 10,
   orbit_direction: "cw",

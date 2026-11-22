@@ -54,6 +54,7 @@ export function normalizeConfig(raw: unknown): FollowConfig {
     max_speed_mps: numberOr(r.max_speed_mps, DEFAULT_CONFIG.max_speed_mps),
     follow_mode: normalizeFollowMode(r.follow_mode),
     follow_angle_deg: numberOr(r.follow_angle_deg, DEFAULT_CONFIG.follow_angle_deg),
+    follow_angle_auto: r.follow_angle_auto === true,
     orbit_radius_m: numberOr(r.orbit_radius_m, DEFAULT_CONFIG.orbit_radius_m),
     orbit_rate_dps: numberOr(r.orbit_rate_dps, DEFAULT_CONFIG.orbit_rate_dps),
     orbit_direction: normalizeOrbitDirection(r.orbit_direction),

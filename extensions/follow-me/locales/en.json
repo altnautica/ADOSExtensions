@@ -114,6 +114,7 @@
   "geometry.default": "Built-in default",
   "settings.followMode": "Mode",
   "settings.followAngle": "Follow angle (deg)",
+  "settings.followAngleAuto": "Auto angle (best view)",
   "settings.orbitRadius": "Orbit radius (m)",
   "settings.orbitRate": "Orbit rate (deg/s)",
   "settings.orbitDirection": "Orbit direction",

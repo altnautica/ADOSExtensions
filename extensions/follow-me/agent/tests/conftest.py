@@ -24,6 +24,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import pytest
+
 _AGENT_ROOT = Path(__file__).resolve().parents[1]
 if str(_AGENT_ROOT) not in sys.path:
     sys.path.insert(0, str(_AGENT_ROOT))
@@ -193,3 +195,13 @@ def _install_sdk_stub() -> None:
 
 if not _try_real_host_sdk():
     _install_sdk_stub()
+
+
+@pytest.fixture(autouse=True)
+def _pilot_without_intents(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every test flies a pilot that takes no follow intents (the ring
+    goal and the follow's own command), unless it asks for intents
+    (``test_intent.py``): the closed-loop pilot model flies ring goals."""
+    from follow_me import intent
+
+    monkeypatch.setattr(intent, "pilot_takes_intents", lambda: False)
