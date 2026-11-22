@@ -6,7 +6,9 @@
 //! stream, and a compute node is reachable on the LAN, this loop starts and
 //! supervises the offload orchestrator: the drone streams its RTSP camera to the
 //! node, the node runs the detector, and detections return onto the drone's own
-//! `vision.detection` bus (transparent to every consumer). While a session is
+//! `vision.detection` stream under this plugin's model id: overlays and plugins
+//! read them, but the pilot places no obstacle or person from a plugin's
+//! batches. While a session is
 //! live it re-advertises the offload link to the host (`offload.advertise`) so
 //! the node's perception tier reads `offload`; when the session stops it
 //! advertises `paired: false` once.
