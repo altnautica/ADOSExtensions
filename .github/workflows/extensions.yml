@@ -144,11 +144,11 @@ jobs:
           git -C "${dest}" checkout "${AGENT_REV}"
 
       - name: Setup uv
-        if: hashFiles(format('extensions/{0}/agent/tests/**', matrix.ext)) != ''
+        if: hashFiles(format('extensions/{0}/agent/tests/**/*.py', matrix.ext)) != ''
         uses: astral-sh/setup-uv@v5
 
       - name: Python agent tests
-        if: hashFiles(format('extensions/{0}/agent/tests/**', matrix.ext)) != ''
+        if: hashFiles(format('extensions/{0}/agent/tests/**/*.py', matrix.ext)) != ''
         run: |
           uv sync --all-packages --all-extras --group dev
           uv run pytest "extensions/${EXT}/agent/tests"

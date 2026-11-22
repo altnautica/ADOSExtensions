@@ -15,6 +15,9 @@ fn pose(t_ns: u64, x: f64, y: f64, yaw: f64, roll: f64, pitch: f64) -> PoseOut {
         heading_ok: true,
         heading_unconfirmed: false,
         map_restarted: false,
+        unmeasured_free_s: 0.0,
+        flow_disagrees: false,
+        flow_unjudged: false,
     }
 }
 
