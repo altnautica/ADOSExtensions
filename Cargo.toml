@@ -136,3 +136,9 @@ strip = true
 lto = "thin"
 codegen-units = 1
 panic = "abort"
+
+# The scan matcher's recorded-flight and noise-draw tests take minutes
+# unoptimised (over an hour on an Arm CI runner), so its own code is optimised
+# in dev and test builds.
+[profile.dev.package.ados-scan2d]
+opt-level = 3
